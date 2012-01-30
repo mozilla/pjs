@@ -1,0 +1,25 @@
+#!/bin/bash
+DIR=$PWD/$(dirname $0)
+MC=$(cat $DIR/.MC.loc)
+BUILD=${DIR}/build
+INSTALL=${BUILD}/install
+
+mkdir -p ${BUILD}/js
+mkdir -p ${BUILD}/nspr
+mkdir -p ${BUILD}/install
+
+cd ${BUILD}/nspr
+${MC}/nsprpub/configure --enable-debug --enable-64bit --prefix="${INSTALL}"
+make
+make install
+
+cd ${BUILD}/js
+${MC}/js/src/configure --enable-debug --disable-optimize --enable-threadsafe --with-system-nspr --with-nspr-prefix="${INSTALL}" --prefix="${INSTALL}"
+make
+make install
+
+# Sadly, make install for js seems to be pretty messed up.
+mv ${INSTALL}/include/js ${INSTALL}/include/js.1
+ln -s ${BUILD}/js/dist/include ${INSTALL}/include/js
+
+touch ${BUILD}/MC

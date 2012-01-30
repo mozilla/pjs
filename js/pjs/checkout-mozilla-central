@@ -1,0 +1,10 @@
+#!/bin/bash
+DIR=$PWD/$(dirname $0)
+MC=${DIR}/mozilla-central
+
+hg clone http://hg.mozilla.org/mozilla-central ${MC}
+cd ${MC}/js/src
+autoconf213 || autoconf-2.13
+cd -
+
+echo -n ${MC} > ${DIR}/.MC.loc
