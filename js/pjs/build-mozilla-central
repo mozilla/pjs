@@ -1,6 +1,6 @@
 #!/bin/bash
 DIR=$PWD/$(dirname $0)
-MC=$(cat $DIR/.MC.loc)
+MC=${DIR}/../..
 BUILD=${DIR}/build
 INSTALL=${BUILD}/install
 

@@ -1,5 +1,15 @@
 namespace pjs {
 
+class AutoLock
+{
+  private:
+    PRLock *lock;
+
+  public:
+    AutoLock(PRLock *lock) : lock(lock) { PR_Lock(lock); }
+    ~AutoLock() { PR_Unlock(lock); }
+};
+
 template<class T>
 class auto_arr
 {

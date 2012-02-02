@@ -490,7 +490,7 @@ private:
     ThreadPool *_threadPool;
     int _index;
     TaskContextVec _toReawaken;
-    JSLock *_runnerLock;
+    PRLock *_runnerLock;
     PRCondVar *_runnerCondVar;
     JSRuntime *_rt;
     JSContext *_cx;
@@ -501,8 +501,8 @@ private:
            JSRuntime *aRt, JSContext *aCx)
       : _threadPool(aThreadPool)
       , _index(anIndex)
-      , _runnerLock(JS_NEW_LOCK())
-      , _runnerCondVar(JS_NEW_CONDVAR(_runnerLock))
+      , _runnerLock(PR_NewLock())
+      , _runnerCondVar(PR_NewCondVar(_runnerLock))
       , _rt(aRt)
       , _cx(aCx)
     {
@@ -514,9 +514,9 @@ public:
 
     ~Runner() {
         if (_runnerCondVar)
-            JS_DESTROY_CONDVAR(_runnerCondVar);
+            PR_DestroyCondVar(_runnerCondVar);
         if (_runnerLock)
-            JS_DESTROY_LOCK(_runnerLock);
+            PR_DestroyLock(_runnerLock);
     }
     
     JSRuntime *rt() { return _rt; }
@@ -533,7 +533,7 @@ class ThreadPool
 {
 private:
     int32_t _terminating;
-    JSLock *_masterLock;
+    PRLock *_masterLock;
     PRCondVar *_masterCondVar;
     int _threadCount;
     PRThread **_threads;
@@ -544,7 +544,7 @@ private:
         ((Runner*) arg)->start();
     }
 
-    explicit ThreadPool(JSLock *aLock, PRCondVar *aCondVar,
+    explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
                         int threadCount, PRThread **threads, Runner **runners)
       : _terminating(0)
       , _masterLock(aLock)
@@ -565,7 +565,7 @@ public:
         delete[] _runners;
     }
 
-    JSLock *masterLock() { return _masterLock; }
+    PRLock *masterLock() { return _masterLock; }
     PRCondVar *masterCondVar() { return _masterCondVar; }
     TaskHandleVec *toCreate() { return &_toCreate; }
 
@@ -1045,7 +1045,6 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
     JS_SetOptions(cx, JSOPTION_VAROBJFIX | JSOPTION_METHODJIT);
     JS_SetVersion(cx, JSVERSION_LATEST);
     JS_SetErrorReporter(cx, reportError);
-    JS_ClearContextThread(cx);
     JS_ClearRuntimeThread(rt);
     if(getenv("PJS_ZEAL") != NULL)
         JS_SetGCZeal(cx, 2, 1, false);
@@ -1071,14 +1070,14 @@ bool Runner::getWork(TaskContext **reawaken, TaskHandle **create) {
             return true;
         }
 
-        JS_WAIT_CONDVAR(_threadPool->masterCondVar(), JS_NO_TIMEOUT);
+        PR_WaitCondVar(_threadPool->masterCondVar(), PR_INTERVAL_NO_TIMEOUT);
     }
 }
 
 void Runner::reawaken(TaskContext *ctx) {
     AutoLock holdM(_threadPool->masterLock());
     _toReawaken.append(ctx);
-    JS_NOTIFY_ALL_CONDVAR(_threadPool->masterCondVar());
+    PR_NotifyAllCondVar(_threadPool->masterCondVar());
 }
 
 void Runner::enqueueTasks(TaskHandle **begin, TaskHandle **end) {
@@ -1086,14 +1085,13 @@ void Runner::enqueueTasks(TaskHandle **begin, TaskHandle **end) {
     if (!_threadPool->toCreate()->append(begin, end)) {
         check_null((void*)NULL);
     }
-    JS_NOTIFY_ALL_CONDVAR(_threadPool->masterCondVar());
+    PR_NotifyAllCondVar(_threadPool->masterCondVar());
 }
 
 void Runner::start() {
     TaskContext *reawaken = NULL;
     TaskHandle *create = NULL;
     JS_SetRuntimeThread(_rt);
-    JS_SetContextThread(_cx);
     while (getWork(&reawaken, &create)) {
         JS_BeginRequest(_cx);
         if (reawaken) {
@@ -1136,12 +1134,12 @@ void Runner::terminate() {
 // ThreadPool impl
 
 ThreadPool *ThreadPool::create() {
-    JSLock *lock = JS_NEW_LOCK();
+    PRLock *lock = PR_NewLock();
     if (!lock) {
         throw "FIXME";
     }
 
-    PRCondVar *condVar = JS_NEW_CONDVAR(lock);
+    PRCondVar *condVar = PR_NewCondVar(lock);
     if (!condVar) {
         throw "FIXME";
     }
@@ -1176,13 +1174,13 @@ void ThreadPool::start(RootTaskHandle *rth) {
     if (!_toCreate.append(rth)) {
         check_null((void*)NULL);
     }
-    JS_NOTIFY_ALL_CONDVAR(_masterCondVar);
+    PR_NotifyAllCondVar(_masterCondVar);
 }
 
 void ThreadPool::terminate() {
     AutoLock hold(_masterLock);
     _terminating = 1;
-    JS_NOTIFY_ALL_CONDVAR(_masterCondVar);
+    PR_NotifyAllCondVar(_masterCondVar);
 }
 
 void ThreadPool::shutdown() {
