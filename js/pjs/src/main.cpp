@@ -4,7 +4,7 @@
 int main(int argc, const char *argv[])
 {
     if (argc != 2) {
-        fprintf(stderr, "Usage: spork script.js\n");
+        fprintf(stderr, "Usage: %s script.js\n", argv[0]);
         return 1;
     } else {
         pjs::init(argv[1]);

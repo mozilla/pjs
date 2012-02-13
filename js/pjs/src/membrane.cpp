@@ -42,7 +42,8 @@
 #include "membrane.h"
 #include <vm/String.h>
 
-#include "js/src/jsobj.h"
+#include "jsobj.h"
+#include "jscompartment.h"
 
 using namespace JS;
 using namespace js;
@@ -203,7 +204,6 @@ bool Membrane::enter(JSContext *cx, JSObject *wrapper,
     }
 }
 
-#if 0
 #define PIERCE(cx, wrapper, mode, pre, op, post)            \
     JS_BEGIN_MACRO                                          \
         AutoCompartment call(cx, wrappedObject(wrapper));   \
@@ -237,6 +237,13 @@ Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
 }
 
 bool
+Membrane::defineProperty(JSContext *cx, JSObject *proxy, jsid id,
+                                     PropertyDescriptor *desc)
+{
+	return false;
+}
+
+bool
 Membrane::getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
 {
     PIERCE(cx, wrapper, GET,
@@ -244,6 +251,13 @@ Membrane::getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &pr
            Wrapper::getOwnPropertyNames(cx, wrapper, props),
            call.origin->wrap(cx, props));
 }
+
+bool
+Membrane::delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp)
+{
+	return false;
+}
+
 
 bool
 Membrane::enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
@@ -279,6 +293,13 @@ Membrane::get(JSContext *cx, JSObject *wrapper, JSObject *receiver, jsid id, Val
            call.destination->wrap(cx, &receiver) && call.destination->wrapId(cx, &id),
            Wrapper::get(cx, wrapper, receiver, id, vp),
            call.origin->wrap(cx, vp));
+}
+
+bool
+Membrane::set(JSContext *cx, JSObject *proxy, JSObject *receiver, jsid id, bool strict,
+                          Value *vp)
+{
+	return false;
 }
 
 bool
@@ -350,8 +371,32 @@ Membrane::construct(JSContext *cx, JSObject *wrapper, uintN argc, Value *argv,
     return call.origin->wrap(cx, rval);
 }
 
-extern JSBool
-js_generic_native_method_dispatcher(JSContext *cx, uintN argc, Value *vp);
+
+JSBool
+js_generic_native_method_dispatcher(JSContext *cx, uintN argc, Value *vp)
+{
+    JSFunctionSpec *fs = (JSFunctionSpec *)
+        vp->toObject().toFunction()->getExtendedSlot(0).toPrivate();
+    JS_ASSERT((fs->flags & JSFUN_GENERIC_NATIVE) != 0);
+
+    if (argc < 1) {
+        js_ReportMissingArg(cx, *vp, 0);
+        return JS_FALSE;
+    }
+
+    /*
+     * Copy all actual (argc) arguments down over our |this| parameter, vp[1],
+     * which is almost always the class constructor object, e.g. Array.  Then
+     * call the corresponding prototype native method with our first argument
+     * passed as |this|.
+     */
+    memmove(vp + 1, vp + 2, argc * sizeof(jsval));
+
+    /* Clear the last parameter in case too few arguments were passed. */
+    vp[2 + --argc].setUndefined();
+
+    return fs->call(cx, argc, vp);
+}
 
 bool
 Membrane::nativeCall(JSContext *cx, JSObject *wrapper, Class *clasp, Native native, CallArgs srcArgs)
@@ -360,7 +405,9 @@ Membrane::nativeCall(JSContext *cx, JSObject *wrapper, Class *clasp, Native nati
                  srcArgs.callee().toFunction()->native() == native ||
                  srcArgs.callee().toFunction()->native() == js_generic_native_method_dispatcher);
     JS_ASSERT(&srcArgs.thisv().toObject() == wrapper);
-    JS_ASSERT(!UnwrapObject(wrapper)->isMembrane());
+	//src/membrane.cpp:363: error: ‘struct JSObject’ has no member named ‘isMembrane’
+
+    //JS_ASSERT(!UnwrapObject(wrapper)->isMembrane());
 
     JSObject *wrapped = wrappedObject(wrapper);
     AutoCompartment call(cx, wrapped);
@@ -449,6 +496,16 @@ Membrane::defaultValue(JSContext *cx, JSObject *wrapper, JSType hint, Value *vp)
     call.leave();
     return call.origin->wrap(cx, vp);
 }
-#endif
+
+
+void
+Membrane::trace(JSTracer *trc, JSObject *wrapper)
+{
+	// TODO GC stuff
+	// Maybe not needed because it's known that the parent holds
+	// a reference to the wrapped object until the children are dead
+    //MarkCrossCompartmentValue(trc, wrappedObject(wrapper),
+    //                          "wrappedObject");
+}
 
 }

@@ -86,7 +86,6 @@ public:
 
     bool wrap(JSObject **objp);
 
-#if 0
     // ______________________________________________________________________
 
     /* ES5 Harmony fundamental wrapper traps. */
@@ -119,7 +118,6 @@ public:
     virtual bool defaultValue(JSContext *cx, JSObject *wrapper, JSType hint, Value *vp) MOZ_OVERRIDE;
 
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
-#endif
     
 };
 
