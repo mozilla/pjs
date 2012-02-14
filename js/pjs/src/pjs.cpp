@@ -783,14 +783,15 @@ Closure *Closure::create(JSContext *cx, JSString *str,
 
 JSBool Closure::execute(Membrane *m, JSContext *cx,
                         JSObject *global, jsval *rval) {
-    jsval fnval;
+    AutoValueRooter fnval(cx);
     if (!JS_EvaluateScript(cx, global, _text, strlen(_text),
-                           "fork", 1, &fnval))
+                           "fork", 1, fnval.addr()))
         return JS_FALSE;
 
 #   ifdef PJS_COPY_ARGUMENTS
 
-    auto_arr<jsval> argv(new jsval[_argc]);
+    auto_arr<jsval> argv(new jsval[_argc]);          // ensure it gets freed
+    AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
     for (int i = 0; i < _argc; i++) {
         if (!_argv[i]->unpack(cx, &argv[i])) {
             return JS_FALSE;
@@ -809,7 +810,8 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
 
 #   endif
 
-    return JS_CallFunctionValue(cx, global, fnval, _argc, argv.get(), rval);
+    return JS_CallFunctionValue(cx, global, fnval.value(),
+                                _argc, argv.get(), rval);
 }
 
 // ______________________________________________________________________
