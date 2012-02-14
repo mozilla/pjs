@@ -1087,8 +1087,17 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
     JS_SetVersion(cx, JSVERSION_LATEST);
     JS_SetErrorReporter(cx, reportError);
     JS_ClearRuntimeThread(rt);
-    if(getenv("PJS_ZEAL") != NULL)
-        JS_SetGCZeal(cx, 2, 1, false);
+
+    char *pjs_zeal = getenv("PJS_ZEAL");
+    if (pjs_zeal) {
+        int v1, v2;
+        if (sscanf(pjs_zeal, "%d,%d", &v1, &v2) < 2) {
+            fprintf(stderr, "PJS_ZEAL should have the form N,N, not %s\n",
+                    pjs_zeal);
+            exit(1);
+        }
+        JS_SetGCZeal(cx, v1, v2, false);
+    }
     return new Runner(aThreadPool, anIndex, rt, cx);
 }
 
