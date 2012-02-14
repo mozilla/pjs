@@ -55,7 +55,7 @@ extern size_t gMaxStackSize;
 using namespace js;
 using namespace std;
 
-#define COPY_ARGUMENTS
+#define PJS_COPY_ARGUMENTS
 
 namespace pjs {
 
@@ -299,7 +299,7 @@ public:
 
 class Closure {
 private:
-#   ifdef COPY_ARGUMENTS
+#   ifdef PJS_COPY_ARGUMENTS
     typedef ClonedObj *argv_t;
 #   else
     typedef jsval argv_t;
@@ -318,7 +318,7 @@ private:
 public:
     ~Closure() {
         delete[] _text;
-#       ifdef COPY_ARGUMENTS
+#       ifdef PJS_COPY_ARGUMENTS
         for (int i = 0; i < _argc; i++) {
             if (_argv[i]) delete _argv[i];
         }
@@ -760,7 +760,7 @@ Closure *Closure::create(JSContext *cx, JSString *str,
     encoded[length+1] = ')';
     encoded[length+2] = 0;
 
-#   ifdef COPY_ARGUMENTS
+#   ifdef PJS_COPY_ARGUMENTS
 
     auto_arr<ClonedObj*> argv1(new ClonedObj*[argc]);
     memset(argv1.get(), 0, sizeof(ClonedObj*) * argc);
@@ -788,7 +788,7 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
                            "fork", 1, &fnval))
         return JS_FALSE;
 
-#   ifdef COPY_ARGUMENTS
+#   ifdef PJS_COPY_ARGUMENTS
 
     auto_arr<jsval> argv(new jsval[_argc]);
     for (int i = 0; i < _argc; i++) {
