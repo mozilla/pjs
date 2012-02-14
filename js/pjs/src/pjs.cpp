@@ -55,6 +55,8 @@ extern size_t gMaxStackSize;
 using namespace js;
 using namespace std;
 
+#define COPY_ARGUMENTS
+
 namespace pjs {
 
 /*************************************************************
@@ -297,11 +299,17 @@ public:
 
 class Closure {
 private:
+#   ifdef COPY_ARGUMENTS
+    typedef ClonedObj *argv_t;
+#   else
+    typedef jsval argv_t;
+#   endif
+
     char *_text;
-    jsval *_argv;
+    argv_t *_argv;
     uintN _argc;
 
-    Closure(char *text, jsval *argv, uintN argc)
+    Closure(char *text, argv_t *argv, uintN argc)
         : _text(text)
         , _argv(argv)
         , _argc(argc)
@@ -310,6 +318,11 @@ private:
 public:
     ~Closure() {
         delete[] _text;
+#       ifdef COPY_ARGUMENTS
+        for (int i = 0; i < _argc; i++) {
+            if (_argv[i]) delete _argv[i];
+        }
+#       endif
         delete[] _argv;
     }
 
@@ -747,11 +760,24 @@ Closure *Closure::create(JSContext *cx, JSString *str,
     encoded[length+1] = ')';
     encoded[length+2] = 0;
 
+#   ifdef COPY_ARGUMENTS
+
+    auto_arr<ClonedObj*> argv1(new ClonedObj*[argc]);
+    memset(argv1.get(), 0, sizeof(ClonedObj*) * argc);
+    for (int i = 0; i < argc; i++) {
+        if (!ClonedObj::pack(cx, argv[i], &argv1[i]))
+            return NULL;
+    }
+
+#   else
+
     auto_arr<jsval> argv1(new jsval[argc]);
     if (!argv1.get()) return NULL;
     for (int i = 0; i < argc; i++)
         argv1[i] = argv[i];
 
+#   endif
+ 
     return new Closure(encoded.release(), argv1.release(), argc);
 }
 
@@ -762,6 +788,17 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
                            "fork", 1, &fnval))
         return JS_FALSE;
 
+#   ifdef COPY_ARGUMENTS
+
+    auto_arr<jsval> argv(new jsval[_argc]);
+    for (int i = 0; i < _argc; i++) {
+        if (!_argv[i]->unpack(cx, &argv[i])) {
+            return JS_FALSE;
+        }
+    }
+
+#   else
+
     auto_arr<jsval> argv(new jsval[_argc]);
     if (!argv.get()) return JS_FALSE;
     for (int i = 0; i < _argc; i++) {
@@ -769,6 +806,8 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
         if (!m->wrap(&argv[i]))
             return JS_FALSE;
     }
+
+#   endif
 
     return JS_CallFunctionValue(cx, global, fnval, _argc, argv.get(), rval);
 }
