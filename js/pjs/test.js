@@ -1,18 +1,35 @@
 let i = 0;
 let completions = [];
-while (i < 100) {
-    print("hi");
 
-    map = { a: 22, b: 23 };
+while (i++ < 50) {
+    completions.push(fork(function fib(l) {
+		let x = 1,
+			y = 1,
+			t = 0,
+			i = 0;
 
-    completions.push(fork(function(m, i) { print("in_fork 1", i); return [i, m.a]; }, map, i));
-    completions.push(fork(function(m, i) { print("in_fork 2", i); return [i, m.b]; }, map, i));
-    oncompletion(function() {
-        print("in_completion");
-        print("results: ");
-		for (var i = 0; i < completions.length; i++) {
-			print(completions[i].get());
+		while(i++ < l) {
+			t = y;
+			y = x + y;
+			x = t;
 		}
-    });
-    i++;
+		return ['fib', l, x];
+	}, i));
+
+    completions.push(fork(function phi(l) {
+		let x = 1,
+			i = 0;
+
+		while (i++ < l) {
+			x = x * 1.618;
+		}
+		return ['phi', i, x];
+	}, i));
 }
+
+oncompletion(function() {
+	for (var i = 0; i < completions.length; i++) {
+		let [name, index, val] = completions[i].get();
+		print(name, index, val);
+	}
+});
