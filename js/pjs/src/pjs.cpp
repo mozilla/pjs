@@ -305,11 +305,11 @@ private:
     typedef jsval argv_t;
 #   endif
 
-    char *_text;
-    argv_t *_argv;
+    auto_arr<char> _text;
+    auto_arr<argv_t> _argv;
     uintN _argc;
 
-    Closure(char *text, argv_t *argv, uintN argc)
+    Closure(auto_arr<char> text, auto_arr<argv_t> argv, uintN argc)
         : _text(text)
         , _argv(argv)
         , _argc(argc)
@@ -317,13 +317,11 @@ private:
 
 public:
     ~Closure() {
-        delete[] _text;
 #       ifdef PJS_COPY_ARGUMENTS
         for (int i = 0; i < _argc; i++) {
             if (_argv[i]) delete _argv[i];
         }
 #       endif
-        delete[] _argv;
     }
 
     static Closure *create(JSContext *cx, JSString *text,
@@ -778,20 +776,21 @@ Closure *Closure::create(JSContext *cx, JSString *str,
 
 #   endif
  
-    return new Closure(encoded.release(), argv1.release(), argc);
+    return new Closure(encoded, argv1, argc);
 }
 
 JSBool Closure::execute(Membrane *m, JSContext *cx,
                         JSObject *global, jsval *rval) {
     AutoValueRooter fnval(cx);
-    if (!JS_EvaluateScript(cx, global, _text, strlen(_text),
+    if (!JS_EvaluateScript(cx, global, _text.get(), strlen(_text.get()),
                            "fork", 1, fnval.addr()))
         return JS_FALSE;
 
-#   ifdef PJS_COPY_ARGUMENTS
-
     auto_arr<jsval> argv(new jsval[_argc]);          // ensure it gets freed
     AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
+
+#   ifdef PJS_COPY_ARGUMENTS
+
     for (int i = 0; i < _argc; i++) {
         if (!_argv[i]->unpack(cx, &argv[i])) {
             return JS_FALSE;
@@ -800,7 +799,6 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
 
 #   else
 
-    auto_arr<jsval> argv(new jsval[_argc]);
     if (!argv.get()) return JS_FALSE;
     for (int i = 0; i < _argc; i++) {
         argv[i] = _argv[i];
