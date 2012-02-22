@@ -7,7 +7,7 @@ OBJS =						\
 	${BUILD}/main.o				\
 	${BUILD}/membrane.o
 
-.PHONY : all TAGS clean cleaner
+.PHONY : all TAGS clean cleaner test
 
 all: ${BUILD}/pjs
 
@@ -44,3 +44,6 @@ TAGS:
 clean:
 	rm -rf ${BUILD}
 	rm -f TAGS.emacs
+
+test: ${BUILD}/pjs
+	./run-test test/*.js

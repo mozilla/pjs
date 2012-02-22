@@ -606,8 +606,6 @@ JSBool print(JSContext *cx, uintN argc, jsval *vp) {
     JSString *str;
     char *bytes;
 
-    printf("%p ", pthread_self ());
-
     argv = JS_ARGV(cx, vp);
     for (i = 0; i < argc; i++) {
         str = JS_ValueToString(cx, argv[i]);
@@ -621,6 +619,25 @@ JSBool print(JSContext *cx, uintN argc, jsval *vp) {
     }
     printf("\n");
     JS_SET_RVAL(cx, vp, JSVAL_VOID);
+    return JS_TRUE;
+}
+
+JSBool assert(JSContext *cx, uintN argc, jsval *vp) {
+    JSBool chk;
+    JSString *str;
+    if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "bS", &chk, &str))
+        return JS_FALSE;
+    JS_SET_RVAL(cx, vp, JSVAL_VOID);
+
+    if (!chk) {
+        char *bytes = JS_EncodeString(cx, str);
+        if (!bytes)
+            return JS_FALSE;
+        JS_ReportError(cx, "Assertion failure: %s\n", bytes);
+        JS_free(cx, bytes);
+        return JS_FALSE;
+    }
+
     return JS_TRUE;
 }
 
@@ -657,6 +674,7 @@ JSBool oncompletion(JSContext *cx, uintN argc, jsval *vp) {
 
 static JSFunctionSpec pjsGlobalFunctions[] = {
     JS_FN("print", print, 0, 0),
+    JS_FN("assert", assert, 2, 0),
     JS_FN("fork", fork, 1, 0),
     JS_FN("oncompletion", oncompletion, 1, 0),
     JS_FS_END

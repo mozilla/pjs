@@ -1,0 +1,21 @@
+#!/bin/bash
+
+PJS=build/pjs
+FAILED=0
+
+for file in "$@"; do
+    "$PJS" "$file" > $file.out 2> $file.err
+    if ! diff "$file.out" "$file.exp_out" > /dev/null; then
+       echo "stdout of test $file differs"
+       FAILED=1
+    fi
+    if ! diff "$file.err" "$file.exp_err" > /dev/null; then
+       echo "stderr of test $file differs"
+       FAILED=1
+    fi
+done
+
+if [ $FAILED != "0" ]; then
+   echo "Tests failed."
+fi
+exit $FAILED
