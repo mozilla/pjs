@@ -47,6 +47,7 @@
 #include <jsfriendapi.h>
 #include <HashTable.h>
 #include <jswrapper.h>
+#include <jscompartment.h>
 
 namespace pjs {
 

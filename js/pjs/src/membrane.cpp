@@ -141,7 +141,7 @@ bool Membrane::wrap(Value *vp) {
             JSObject *obj = &vp->toObject();
             JS_ASSERT(IsCrossThreadWrapper(obj));
             if (/*JS_GetClass(cx, global) != &dummy_class &&*/
-                JS_GetParent(cx, obj) != global) {
+                JS_GetParent(obj) != global) {
                 do {
                     if (!JS_SetParent(cx, obj, global))
                         return false;
