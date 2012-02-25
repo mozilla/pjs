@@ -67,47 +67,6 @@ using namespace std;
 namespace pjs {
 
 /*************************************************************
- * Architecture
- *
- * There are a (currently) fixed number of worker threads, all managed
- * as part of a thread pool.  Each thread contains a Runtime and
- * Context which are reused.  There is a central ThreadSafeQueue which
- * is shared by all threads.  The queue stores "events", which are C++
- * objects not represented in JavaScript. All threads basically just
- * pull events off the queue.
- *
- * The kinds of events are:
- * - StartFromString: creates a new task executing the given string
- *
- * Example usage:
- *
- *   let taskHandle = fork(function() {
- *       return ...;
- *   });
- *   let tN = forkn(N, function(idx) {
- *       return ... idx ...;
- *   });
- *   oncompletion(function() {
- *       t.get();
- *   });
- *
- * The object Par is a pre-loaded global.  Calling Par.fork() creates
- * a subtask of the current task.  Calling Par.forkN() creates an
- * N-ary subtask (not yet implemented).  The result of both calls is a
- * Task object.  Calling Par.oncompletion() sets the handler; when the
- * turn ends, the forked children will execute and the current task
- * will be suspended until they complete, at which point the
- * oncompletion() thunk will execute.
- *
- * The `ctx` object is a TaskContext object.  It contains data
- * specific to that current task, such as its index (if applicable).
- * It is most commonly used to set the result of the task using
- * `set()`.  If `set()` is not invoked, then the task's result is
- * undefined.  A task is considered complete when there are no
- * registered callbacks.
- *
- * Both Tasks and Contexts have a C++ and a JavaScript component.
- *
  * Execution Model
  * ---------------
  *
@@ -119,25 +78,36 @@ namespace pjs {
  * bound to a particular runtime and context.
  *
  * For now, there is a central queue and each runner has an associated
- * queue as well.  The main loop of a runner first checks its local
- * queue for work: if none is found, then it blocks loading from the
- * main queue.  The runner may be reawoken if one of its associated
- * tasks is ready to execute; more on that later.
+ * queue as well.  The central queue stores tasks that are waiting to
+ * be claimed; the runner queue stores tasks which have begun
+ * execution and are waiting for their children to complete.  Once a
+ * task begins execution with a particular runner, it is linked to the
+ * JSRuntime of that runner and thus can never migrate. 
+ *
+ * The main loop of a runner first checks its local queue for work: if
+ * none is found, then it blocks loading from the main queue.  The
+ * runner may be reawoken if one of its associated tasks is ready to
+ * execute; more on that later.
  * 
- * Most tasks are represented using two halves: the TaskHandle and the
- * TaskContext.  Both have JS counterparts.  The TaskHandle is the
- * result of a fork operation and represents the task "from the
- * outside".  The TaskContext is created when the task is about to
- * execute, and represents the task "from the inside."  It is where
- * the task compartment is stored along with other information.  The
- * root task is somewhat special: it has no TaskHandle, only a
- * TaskContext (there is no "outside" to the root task).
+ * Tasks are represented using two halves: the TaskHandle and the
+ * TaskContext.  Both have associated JS objects.  The TaskHandle is
+ * the result of a fork operation and represents the task "from the
+ * outside".  The TaskContext is created when the task is claimed by a
+ * runner and represents the task "from the inside."  It has an
+ * associated JS object but this is purely for GC purposes: the object
+ * is never exposed to the running JavaScript code. The TaskContext
+ * stores the task global along with other information.
+ *
+ * There are actually two kinds of TaskHandles: the RootTaskHandle,
+ * which exists only for the root task, and ChildTaskHandles, which
+ * are for all other tasks.  The root task is somewhat special in that
+ * it has no JS counterpart and is generally simpler.
  *
  * To manage the parallel forking and joining, the TaskContext defines
- * a few central fields: a list of pending TaskHandles, a counter, and
+ * a few central fields: a list of forked TaskHandles, a counter, and
  * a "oncompletion" callback (initially NULL when every turn begins).
  * A fork() call causes a new TaskHandle to be created and added to
- * the list of pending handles.  A call to "oncompletion()" will set
+ * the list of forked handles.  A call to "oncompletion()" will set
  * the oncompletion callback.  When the turn ends, the oncompletion
  * callback is checked: if it is non-NULL, then the counter is
  * incremented by 1 for each pending TaskHandle and the pending
@@ -165,14 +135,28 @@ namespace pjs {
  * the parent task is thus pushed onto the runner's local queue and
  * the runner's lock is pulsed to reawaken if it is sleeping.
  *
+ * Passing results around
+ * ----------------------
+ *
+ * When a task completes its turn without invoking `oncompletion()`,
+ * its return value is used as the result.  This return value is
+ * (currently) encoded using structured clone.  When all children have
+ * completed, the parent thread will declone the results from all
+ * children before executing the `oncompletion()` handler.  
+ *
  * Garbage collection
  * ------------------
  * 
- * The GC strategy is as follows: each active TaskHandle and
+ * The GC strategy is as follows: each active ChildTaskHandle and
  * TaskContext is "self-rooted", which means that the C++ object adds
- * the corresponding JS object to the root set.  This is true up until
- * the TaskContext completes, at which point both C++ objects remove
- * themselves from the root set.  Either may still be live.
+ * the corresponding JS object to the root set.  When the task
+ * completes, its task context is deleted and the GC root removed.
+ * The ChildTaskHandle for the task remains live until the parent
+ * resumes (meaning that the task and all its siblings must have
+ * completed).  At that point, the parent will de-clone the result of
+ * the task and delete the C++ object.  The JS object corresponding to
+ * the task (which carries the result) may live on longer, if the JS
+ * program keeps it alive, or may be collected immediately.
  *
  * Future improvements
  * -------------------

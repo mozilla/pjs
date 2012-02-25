@@ -17,5 +17,7 @@ done
 
 if [ $FAILED != "0" ]; then
    echo "Tests failed."
+else
+   echo "Tests passed."
 fi
 exit $FAILED
