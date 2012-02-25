@@ -648,7 +648,6 @@ JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
     JSString *str = JS_ValueToString(cx, argv[0]);
     Closure *closure = Closure::create(cx, str, argv+1, argc-1);
     if (!closure) {
-        JS_ReportOutOfMemory(cx);
         return JS_FALSE;
     }
 
@@ -770,7 +769,10 @@ Closure *Closure::create(JSContext *cx, JSString *str,
                          const jsval *argv, int argc) {
     int length = JS_GetStringEncodingLength(cx, str);
     auto_arr<char> encoded(new char[length+3]);
-    if (!encoded.get()) return NULL;
+    if (!encoded.get()) {
+        JS_ReportOutOfMemory(cx);
+        return NULL;
+    }
     JS_EncodeStringToBuffer(str, &encoded[1], length);
     encoded[0] = '(';
     encoded[length+1] = ')';
@@ -779,6 +781,10 @@ Closure *Closure::create(JSContext *cx, JSString *str,
 #   ifdef PJS_COPY_ARGUMENTS
 
     auto_arr<ClonedObj*> argv1(new ClonedObj*[argc]);
+    if (!argv1.get()) {
+        JS_ReportOutOfMemory(cx);
+        return NULL;
+    }
     memset(argv1.get(), 0, sizeof(ClonedObj*) * argc);
     for (int i = 0; i < argc; i++) {
         if (!ClonedObj::pack(cx, argv[i], &argv1[i]))
@@ -788,7 +794,10 @@ Closure *Closure::create(JSContext *cx, JSString *str,
 #   else
 
     auto_arr<jsval> argv1(new jsval[argc]);
-    if (!argv1.get()) return NULL;
+    if (!argv1.get()) {
+        JS_ReportOutOfMemory(cx);
+        return NULL;
+    }
     for (int i = 0; i < argc; i++)
         argv1[i] = argv[i];
 
@@ -1097,7 +1106,7 @@ JSClass TaskContext::jsClass = {
 // Runner impl
 
 Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
-    JSRuntime *rt = check_null(JS_NewRuntime(1L * 1024L * 1024L));
+    JSRuntime *rt = check_null(JS_NewRuntime(10L * 1024L * 1024L));
     JSContext *cx = check_null(JS_NewContext(rt, 8192));
     JS_SetOptions(cx, JSOPTION_VAROBJFIX | JSOPTION_METHODJIT);
     JS_SetVersion(cx, JSVERSION_LATEST);
@@ -1166,7 +1175,9 @@ void Runner::start() {
         
         if (create) {
             TaskContext *ctx = createTaskContext(create);
-            ctx->resume(this);
+            if (ctx) {
+                ctx->resume(this);
+            }
         }
         JS_EndRequest(_cx);
     }
