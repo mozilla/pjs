@@ -210,6 +210,7 @@ namespace pjs {
 class ThreadPool;
 class TaskHandle;
 class TaskContext;
+class ChildTaskHandle;
 class Runner;
 
 template<typename T> T* check_null(T* ptr) {
@@ -219,13 +220,8 @@ template<typename T> T* check_null(T* ptr) {
 }
 
 typedef Vector<TaskHandle*, 4, SystemAllocPolicy> TaskHandleVec;
+typedef Vector<ChildTaskHandle*, 4, SystemAllocPolicy> ChildTaskHandleVec;
 typedef Vector<TaskContext*, 4, SystemAllocPolicy> TaskContextVec;
-
-template<class T>
-void delete_assoc(JSContext *cx, JSObject *obj) {
-    T* t = (T*) JS_GetPrivate(obj);
-    delete t;
-}
 
 class CrossCompartment
 {
@@ -371,10 +367,6 @@ class ChildTaskHandle : public TaskHandle
 private:
     enum Reserved { ResultSlot, GenSlot, MaxSlot };
 
-    static void jsFinalize(JSContext *cx, JSObject *obj) {
-        delete_assoc<TaskHandle>(cx, obj);
-    }
-
     TaskContext *_parent;
     JSObject *_object;
 
@@ -392,29 +384,28 @@ private:
         , _closure(closure)
         , _result(NULL)
     {
-        JS_SetPrivate(_object, this);
         JS_SetReservedSlot(_object, ResultSlot, JSVAL_NULL);
         JS_SetReservedSlot(_object, GenSlot, gen);
     }
 
     void clearResult();
 
-
     static JSClass jsClass;
     static JSFunctionSpec jsMethods[2];
     static JSBool jsGet(JSContext *cx, uintN argc, jsval *vp);
 
-protected:
+public:
     virtual ~ChildTaskHandle() {
         clearResult();
         delete _closure;
     }
 
-public:
-    JSBool GetResult(JSContext *cx, jsval *rval);
     virtual JSBool execute(Membrane *m, JSContext *cx, JSObject *taskctx,
                            JSObject *global, jsval *rval);
     virtual void onCompleted(Runner *runner, jsval result);
+
+    // Invoked by the parent of the task:
+    JSBool finalizeAndDelete(JSContext *cx);
 
     JSObject *object() { return _object; }
 
@@ -438,7 +429,7 @@ private:
     JSObject *_global;
     JSObject *_object;
     jsrefcount _outstandingChildren;
-    TaskHandleVec _toFork;
+    ChildTaskHandleVec _toFork;
     Runner *_runner;
     auto_ptr<Membrane> _membrane;
     
@@ -453,12 +444,12 @@ private:
       , _membrane(aMembrane)
     {
         setOncompletion(cx, JSVAL_NULL);
-        JS_SetPrivate(_object, this);
     }
 
     JSBool addRoot(JSContext *cx);
     JSBool delRoot(JSContext *cx);
     JSBool newGeneration(JSContext *cx, bool *initialGeneration);
+    JSBool unpackResults(JSContext *cx);
 
 public:
     static TaskContext *create(JSContext *cx,
@@ -466,7 +457,7 @@ public:
                                Runner *aRunner,
                                JSObject *aGlobal);
 
-    void addTaskToFork(TaskHandle *th);
+    void addTaskToFork(ChildTaskHandle *th);
 
     void onChildCompleted();
 
@@ -857,7 +848,6 @@ JSBool RootTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
 void ChildTaskHandle::onCompleted(Runner *runner, jsval result) {
     ClonedObj::pack(runner->cx(), result, &_result);
     _parent->onChildCompleted();
-    delRoot(runner->cx());
 }
 
 JSBool ChildTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
@@ -888,30 +878,19 @@ void ChildTaskHandle::clearResult() {
     }
 }
 
-JSBool ChildTaskHandle::GetResult(JSContext *cx,
-                                  jsval *rval)
-{
-    // Check if all tasks within generation have completely executed:
-    jsval gen = JS_GetReservedSlot(_object, GenSlot);
-    JSBool ready;
-    if (!Generation::getReady(cx, gen, &ready))
-        return false;
-    if (!ready) {
-        JS_ReportError(cx, "all child tasks not yet completed");
+JSBool ChildTaskHandle::finalizeAndDelete(JSContext *cx) {
+    if (!_result) {
+        JS_ReportError(cx, "internal error---no result to unpack");
         return false;
     }
+    
+    jsval rval;
+    if (!_result->unpack(cx, &rval))
+        return false;
 
-    // Declone the result, if that is not already done:
-    if (_result != NULL) {
-        jsval decloned;
-        if (!_result->unpack(cx, &decloned))
-            return false;
-        clearResult();
-        JS_SetReservedSlot(_object, ResultSlot, decloned);
-    }
-
-    // Load the result:
-    *rval = JS_GetReservedSlot(_object, ResultSlot);
+    JS_SetReservedSlot(_object, ResultSlot, rval);
+    delRoot(cx);
+    delete this;
     return true;
 }
 
@@ -937,7 +916,7 @@ JSBool ChildTaskHandle::initClass(JSContext *cx, JSObject *global) {
 JSClass ChildTaskHandle::jsClass = {
     "TaskHandle", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, jsFinalize,
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, JS_FinalizeStub,
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
@@ -954,13 +933,20 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, uintN argc, jsval *vp) {
         JS_ReportError(cx, "expected TaskHandle as this");
         return JS_FALSE;
     }
-    ChildTaskHandle *task = static_cast<ChildTaskHandle*>(
-        JS_GetPrivate(self));
-    jsval rval;
-    if (!task->GetResult(cx, &rval))
-        return JS_FALSE;
-    JS_SET_RVAL(cx, vp, rval);
-    return JS_TRUE;
+
+    // Check if the generation has completed:
+    jsval gen = JS_GetReservedSlot(self, GenSlot);
+    JSBool ready;
+    if (!Generation::getReady(cx, gen, &ready))
+        return false;
+    if (!ready) {
+        JS_ReportError(cx, "all child tasks not yet completed");
+        return false;
+    }
+
+    // If it has, there should be a value waiting for us:
+    *vp = JS_GetReservedSlot(self, ResultSlot);
+    return true;
 }
 
 // ______________________________________________________________________
@@ -1005,7 +991,7 @@ JSBool TaskContext::delRoot(JSContext *cx) {
     JS_RemoveObjectRoot(cx, &_global);
 }
 
-void TaskContext::addTaskToFork(TaskHandle *th) {
+void TaskContext::addTaskToFork(ChildTaskHandle *th) {
     _toFork.append(th);
 }
 
@@ -1033,6 +1019,19 @@ JSBool TaskContext::newGeneration(JSContext *cx, bool *initialGeneration) {
     return true;
 }
 
+JSBool TaskContext::unpackResults(JSContext *cx) {
+    JSBool result = true;
+
+    for (ChildTaskHandle **p = _toFork.begin(), **pn = _toFork.end();
+         p < pn;
+         p++) {
+        result = (*p)->finalizeAndDelete(cx) && result;
+    }
+
+    _toFork.clear();
+    return result;
+}
+
 void TaskContext::resume(Runner *runner) {
     JSContext *cx = runner->cx();
     CrossCompartment cc(cx, _global);
@@ -1053,6 +1052,8 @@ void TaskContext::resume(Runner *runner) {
                                       _global, &rval))
                 break;
         } else {
+            if (!unpackResults(cx))
+                break;
             jsval fn = JS_GetReservedSlot(_object, OnCompletionSlot);
             setOncompletion(cx, JSVAL_NULL);
             if (!JS_CallFunctionValue(cx, _global, fn, 0, NULL, &rval))
@@ -1066,8 +1067,8 @@ void TaskContext::resume(Runner *runner) {
         if (!JSVAL_IS_NULL(fn)) {
             if (!_toFork.empty()) {
                 JS_ATOMIC_ADD(&_outstandingChildren, _toFork.length());
-                runner->enqueueTasks(_toFork.begin(), _toFork.end());
-                _toFork.clear();
+                runner->enqueueTasks((TaskHandle**)_toFork.begin(),
+                                     (TaskHandle**)_toFork.end());
                 return;
             }
             continue; // degenerate case: no tasks, just loop around
