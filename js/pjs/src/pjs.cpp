@@ -278,23 +278,23 @@ public:
 };
 
 // ____________________________________________________________
-// Generation interface
+// Closure interface
 
-class Generation {
+class AutoContextPrivate {
 private:
-    enum { ReadySlot, MaxSlot };
-
-    Generation(); // cannot be constructed
-
-    static JSBool asGenObj(JSContext *cx, jsval genobj, JSObject **obj);
+    JSContext *_cx;
 
 public:
-    static JSBool create(JSContext *cx, jsval *rval);
+    AutoContextPrivate(JSContext *cx, void *v)
+        : _cx(cx)
+    {
+        JS_SetContextPrivate(_cx, v);
+    }
 
-    static JSBool getReady(JSContext *cx, jsval genobj, JSBool *rval);
-    static JSBool setReady(JSContext *cx, jsval genobj, JSBool rval);
-
-    static JSClass jsClass;
+    ~AutoContextPrivate()
+    {
+        JS_SetContextPrivate(_cx, NULL);
+    }
 };
 
 // ____________________________________________________________
@@ -372,7 +372,7 @@ public:
 class ChildTaskHandle : public TaskHandle
 {
 private:
-    enum Reserved { ResultSlot, GenSlot, MaxSlot };
+    enum Reserved { ResultSlot, ReadySlot, MaxSlot };
 
     TaskContext *_parent;
     JSObject *_object;
@@ -388,7 +388,7 @@ private:
     JSBool addRoot(JSContext *cx);
     JSBool delRoot(JSContext *cx);
 
-    explicit ChildTaskHandle(JSContext *cx, TaskContext *parent, jsval gen,
+    explicit ChildTaskHandle(JSContext *cx, TaskContext *parent,
                              JSObject *object, Closure *closure)
         : _parent(parent)
         , _object(object)
@@ -399,7 +399,7 @@ private:
 #       endif
     {
         JS_SetReservedSlot(_object, ResultSlot, JSVAL_NULL);
-        JS_SetReservedSlot(_object, GenSlot, gen);
+        JS_SetReservedSlot(_object, ReadySlot, JSVAL_FALSE);
     }
 
     void clearResult();
@@ -436,7 +436,7 @@ public:
 class TaskContext
 {
 public:
-    enum TaskContextSlots { OnCompletionSlot, GenSlot, MaxSlot };
+    enum TaskContextSlots { OnCompletionSlot, MaxSlot };
 
 private:
     TaskHandle *_taskHandle;
@@ -446,7 +446,10 @@ private:
     ChildTaskHandleVec _toFork;
     Runner *_runner;
     auto_ptr<Membrane> _membrane;
-    
+#   ifdef PJS_CHECK_CX
+    JSContext *_checkCx;
+#   endif
+
     TaskContext(JSContext *cx, TaskHandle *aTask,
                 Runner *aRunner, JSObject *aGlobal,
                 JSObject *object, auto_ptr<Membrane> aMembrane)
@@ -456,13 +459,15 @@ private:
       , _outstandingChildren(0)
       , _runner(aRunner)
       , _membrane(aMembrane)
+#     ifdef PJS_CHECK_CX
+      , _checkCx(cx)
+#     endif
     {
         setOncompletion(cx, JSVAL_NULL);
     }
 
     JSBool addRoot(JSContext *cx);
     JSBool delRoot(JSContext *cx);
-    JSBool newGeneration(JSContext *cx, bool *initialGeneration);
     JSBool unpackResults(JSContext *cx);
 
 public:
@@ -476,10 +481,6 @@ public:
     void onChildCompleted();
 
     void resume(Runner *runner);
-
-    jsval getGeneration(JSContext *cx) {
-        return JS_GetReservedSlot(_object, GenSlot);
-    }
 
     void setOncompletion(JSContext *cx, jsval val) {
         JS_SetReservedSlot(_object, OnCompletionSlot, val);
@@ -695,54 +696,6 @@ JSClass Global::jsClass = {
 };
 
 // ______________________________________________________________________
-// Generation impl
-
-JSBool Generation::create(JSContext *cx, jsval *rval) {
-    JSObject *object = JS_NewObject(cx, &jsClass, NULL, NULL);
-    if (!object)
-        return NULL;
-
-    *rval = OBJECT_TO_JSVAL(object);
-    return setReady(cx, *rval, false);
-}
-
-JSBool Generation::asGenObj(JSContext *cx, jsval gen, JSObject **genobj) {
-    if (!JSVAL_IS_OBJECT(gen)) {
-        JS_ReportError(cx, "invalid generation object");
-        return false; // should not happen
-    }
-    *genobj = JSVAL_TO_OBJECT(gen);
-    if (JS_GetClass(*genobj) != &jsClass) {
-        JS_ReportError(cx, "invalid generation object");
-        return false; // should not happen
-    }
-    return true;
-}
-
-JSBool Generation::getReady(JSContext *cx, jsval gen, JSBool *rval) {
-    JSObject *genobj;
-    if (!asGenObj(cx, gen, &genobj))
-        return false;
-    jsval ready = JS_GetReservedSlot(genobj, ReadySlot);
-    *rval = JSVAL_TO_BOOLEAN(ready);
-}
-
-JSBool Generation::setReady(JSContext *cx, jsval gen, JSBool rval) {
-    JSObject *genobj;
-    if (!asGenObj(cx, gen, &genobj))
-        return JS_FALSE;
-    JS_SetReservedSlot(genobj, ReadySlot, BOOLEAN_TO_JSVAL(rval));
-    return JS_TRUE;
-}
-
-JSClass Generation::jsClass = {
-    "Generation", JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
-    JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, JS_FinalizeStub,
-    JSCLASS_NO_OPTIONAL_MEMBERS
-};
-
-// ______________________________________________________________________
 // ClonedObj impl
 
 ClonedObj::~ClonedObj() {
@@ -872,15 +825,13 @@ JSBool ChildTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
 ChildTaskHandle *ChildTaskHandle::create(JSContext *cx,
                                          TaskContext *parent,
                                          Closure *closure) {
-    jsval gen = parent->getGeneration(cx);
-    
     // To start, create the JS object representative:
     JSObject *object = JS_NewObject(cx, &jsClass, NULL, NULL);
     if (!object)
         return NULL;
 
     // Create C++ object, which will be linked via Private:
-    ChildTaskHandle *th = new ChildTaskHandle(cx, parent, gen, object, closure);
+    ChildTaskHandle *th = new ChildTaskHandle(cx, parent, object, closure);
     th->addRoot(cx);
     return th;
 }
@@ -903,6 +854,7 @@ JSBool ChildTaskHandle::finalizeAndDelete(JSContext *cx) {
         return false;
 
     JS_SetReservedSlot(_object, ResultSlot, rval);
+    JS_SetReservedSlot(_object, ReadySlot, JSVAL_TRUE);
     delRoot(cx);
     delete this;
     return true;
@@ -951,11 +903,8 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, uintN argc, jsval *vp) {
     }
 
     // Check if the generation has completed:
-    jsval gen = JS_GetReservedSlot(self, GenSlot);
-    JSBool ready;
-    if (!Generation::getReady(cx, gen, &ready))
-        return false;
-    if (!ready) {
+    jsval ready = JS_GetReservedSlot(self, ReadySlot);
+    if (ready != JSVAL_TRUE) {
         JS_ReportError(cx, "all child tasks not yet completed");
         return false;
     }
@@ -1018,23 +967,6 @@ void TaskContext::onChildCompleted() {
     }
 }
 
-JSBool TaskContext::newGeneration(JSContext *cx, bool *initialGeneration) {
-    // Set the current generation (if any) to be ready:
-    jsval gen = JS_GetReservedSlot(_object, GenSlot);
-    if (!JSVAL_IS_VOID(gen)) {
-        Generation::setReady(cx, gen, true);
-        *initialGeneration = false;
-    } else {
-        *initialGeneration = true;
-    }
-
-    // Create a fresh (non-ready) generation:
-    if (!Generation::create(cx, &gen))
-        return false;
-    JS_SetReservedSlot(_object, GenSlot, gen);
-    return true;
-}
-
 JSBool TaskContext::unpackResults(JSContext *cx) {
     JSBool result = true;
 
@@ -1053,33 +985,33 @@ void TaskContext::resume(Runner *runner) {
     CrossCompartment cc(cx, _global);
     jsval rval;
 
+    PJS_ASSERT_CX(cx, _checkCx);
+
     // If we break from this loop, this task context has completed,
     // either in error or successfully:
     while (true) {
         rval = JSVAL_NULL;
 
-        bool initialGeneration;
-        if (!newGeneration(cx, &initialGeneration))
-            break;
+        AutoContextPrivate priv(cx, this);
 
-        JS_SetContextPrivate(cx, this);
-        if (initialGeneration) {
+        jsval fn = JS_GetReservedSlot(_object, OnCompletionSlot);
+        if (JSVAL_IS_NULL(fn)) {
+            // Initial generation: no callback fn set yet.
             if (!_taskHandle->execute(_membrane.get(), cx, _object,
                                       _global, &rval))
                 break;
         } else {
+            // Subsequent generation: callback fn was set last time.
             if (!unpackResults(cx))
                 break;
-            jsval fn = JS_GetReservedSlot(_object, OnCompletionSlot);
             setOncompletion(cx, JSVAL_NULL);
             if (!JS_CallFunctionValue(cx, _global, fn, 0, NULL, &rval))
                 break;
         }
-        JS_SetContextPrivate(cx, NULL);
 
         // If the _oncompletion handler is set, fork off any tasks
         // and block until they complete:
-        jsval fn = JS_GetReservedSlot(_object, OnCompletionSlot);
+        fn = JS_GetReservedSlot(_object, OnCompletionSlot);
         if (!JSVAL_IS_NULL(fn)) {
             if (!_toFork.empty()) {
                 JS_ATOMIC_ADD(&_outstandingChildren, _toFork.length());
