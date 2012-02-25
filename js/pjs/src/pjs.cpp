@@ -56,6 +56,13 @@ using namespace js;
 using namespace std;
 
 #define PJS_COPY_ARGUMENTS
+#define PJS_CHECK_CX
+
+#ifdef PJS_CHECK_CX
+#  define PJS_ASSERT_CX(cx1, cx2) JS_ASSERT((cx1) == (cx2))
+#else
+#  define PJS_ASSERT_CX(cx1, cx2) do {} while(false)
+#endif
 
 namespace pjs {
 
@@ -374,6 +381,10 @@ private:
 
     ClonedObj *_result;
 
+#   ifdef PJS_CHECK_CX
+    JSContext *_checkCx;
+#   endif
+
     JSBool addRoot(JSContext *cx);
     JSBool delRoot(JSContext *cx);
 
@@ -383,6 +394,9 @@ private:
         , _object(object)
         , _closure(closure)
         , _result(NULL)
+#       ifdef PJS_CHECK_CX
+        , _checkCx(cx)
+#       endif
     {
         JS_SetReservedSlot(_object, ResultSlot, JSVAL_NULL);
         JS_SetReservedSlot(_object, GenSlot, gen);
@@ -895,10 +909,12 @@ JSBool ChildTaskHandle::finalizeAndDelete(JSContext *cx) {
 }
 
 JSBool ChildTaskHandle::addRoot(JSContext *cx) {
+    PJS_ASSERT_CX(cx, _checkCx);
     return JS_AddNamedObjectRoot(cx, &_object, "ChildTaskHandle::addRoot()");
 }
 
 JSBool ChildTaskHandle::delRoot(JSContext *cx) {
+    PJS_ASSERT_CX(cx, _checkCx);
     return JS_RemoveObjectRoot(cx, &_object);
 }
 
