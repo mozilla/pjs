@@ -830,7 +830,7 @@ ChildTaskHandle *ChildTaskHandle::create(JSContext *cx,
     if (!object)
         return NULL;
 
-    // Create C++ object, which will be linked via Private:
+    // Create C++ object:
     ChildTaskHandle *th = new ChildTaskHandle(cx, parent, object, closure);
     th->addRoot(cx);
     return th;
@@ -932,13 +932,13 @@ TaskContext *TaskContext::create(JSContext *cx,
         return NULL;
     }
 
-    // Create C++ object, which will be linked via Private:
-    TaskContext *tc = new TaskContext(cx, aTask, aRunner, aGlobal,
-                                      object, membrane);
-    if (!tc->addRoot(cx)) {
-        delete tc;
-    }
-    return tc;
+    // Create C++ object:
+    auto_ptr<TaskContext> tc(new TaskContext(cx, aTask, aRunner, aGlobal,
+                                             object, membrane));
+    if (!tc.get() || !tc->addRoot(cx))
+        return NULL;
+
+    return tc.release();
 }
 
 JSBool TaskContext::addRoot(JSContext *cx) {
