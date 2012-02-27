@@ -361,7 +361,7 @@ private:
     TaskContext *_parent;
     JSObject *_object;
 
-    Closure *_closure;
+    auto_ptr<Closure> _closure;
 
     ClonedObj *_result;
 
@@ -373,7 +373,7 @@ private:
     JSBool delRoot(JSContext *cx);
 
     explicit ChildTaskHandle(JSContext *cx, TaskContext *parent,
-                             JSObject *object, Closure *closure)
+                             JSObject *object, auto_ptr<Closure> &closure)
         : _parent(parent)
         , _object(object)
         , _closure(closure)
@@ -395,7 +395,6 @@ private:
 public:
     virtual ~ChildTaskHandle() {
         clearResult();
-        delete _closure;
     }
 
     virtual JSBool execute(Membrane *m, JSContext *cx, JSObject *taskctx,
@@ -409,7 +408,7 @@ public:
 
     static ChildTaskHandle *create(JSContext *cx,
                                    TaskContext *parent,
-                                   Closure *closure);
+                                   auto_ptr<Closure> &closure);
 
     static JSBool initClass(JSContext *cx, JSObject *global);
 };
@@ -436,7 +435,7 @@ private:
 
     TaskContext(JSContext *cx, TaskHandle *aTask,
                 Runner *aRunner, JSObject *aGlobal,
-                JSObject *object, auto_ptr<Membrane> aMembrane)
+                JSObject *object, auto_ptr<Membrane> &aMembrane)
       : _taskHandle(aTask)
       , _global(aGlobal)
       , _object(object)
@@ -636,12 +635,15 @@ JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
 
     jsval *argv = JS_ARGV(cx, vp);
     JSString *str = JS_ValueToString(cx, argv[0]);
-    Closure *closure = Closure::create(cx, str, argv+1, argc-1);
-    if (!closure) {
+    auto_ptr<Closure> closure(Closure::create(cx, str, argv+1, argc-1));
+    if (!closure.get()) {
         return JS_FALSE;
     }
 
     ChildTaskHandle *th = ChildTaskHandle::create(cx, taskContext, closure);
+    if (th == NULL) {
+        return JS_FALSE;
+    }
     JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(th->object()));
 
     taskContext->addTaskToFork(th);
@@ -808,7 +810,7 @@ JSBool ChildTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
 
 ChildTaskHandle *ChildTaskHandle::create(JSContext *cx,
                                          TaskContext *parent,
-                                         Closure *closure) {
+                                         auto_ptr<Closure> &closure) {
     // To start, create the JS object representative:
     JSObject *object = JS_NewObject(cx, &jsClass, NULL, NULL);
     if (!object)
@@ -919,8 +921,9 @@ TaskContext *TaskContext::create(JSContext *cx,
     // Create C++ object:
     auto_ptr<TaskContext> tc(new TaskContext(cx, aTask, aRunner, aGlobal,
                                              object, membrane));
-    if (!tc.get() || !tc->addRoot(cx))
+    if (!tc.get() || !tc->addRoot(cx)) {
         return NULL;
+    }
 
     return tc.release();
 }
