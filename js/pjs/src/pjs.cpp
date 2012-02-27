@@ -40,6 +40,7 @@
  * ***** END LICENSE BLOCK ***** */
 
 #include <memory>
+#include <deque>
 #include <string.h>
 
 #include <prthread.h>
@@ -213,6 +214,7 @@ template<typename T> T* check_null(T* ptr) {
 typedef Vector<TaskHandle*, 4, SystemAllocPolicy> TaskHandleVec;
 typedef Vector<ChildTaskHandle*, 4, SystemAllocPolicy> ChildTaskHandleVec;
 typedef Vector<TaskContext*, 4, SystemAllocPolicy> TaskContextVec;
+typedef deque<TaskHandle*> TaskHandleDeque;
 
 class CrossCompartment
 {
@@ -484,47 +486,63 @@ public:
 // ____________________________________________________________
 // Runner interface
 
+#define PJS_TASK_TAKEN   0
+#define PJS_TASK_STOLEN  1
+#define PJS_TASK_CAT_MAX 2
+
+enum task_stat_cat { task_taken, task_stolen, task_stat_max };
+
 class Runner
 {
 private:
     ThreadPool *_threadPool;
     int _index;
     TaskContextVec _toReawaken;
-    PRLock *_runnerLock;
-    PRCondVar *_runnerCondVar;
+    TaskHandleDeque _toCreate;
+    
+    //PRLock *_lock;
     JSRuntime *_rt;
     JSContext *_cx;
-    
+
+    int _stats[PJS_TASK_CAT_MAX];
+
     bool getWork(TaskContext **reawaken, TaskHandle **create);
+
+    bool getLocalWork(TaskContext **reawaken, TaskHandle **create);
+
+    bool stealWork(TaskHandle **create);
+    bool haveWorkStolen(TaskHandle **create);
 
     Runner(ThreadPool *aThreadPool, int anIndex,
            JSRuntime *aRt, JSContext *aCx)
       : _threadPool(aThreadPool)
       , _index(anIndex)
-      , _runnerLock(PR_NewLock())
-      , _runnerCondVar(PR_NewCondVar(_runnerLock))
+        //, _lock(PR_NewLock())
       , _rt(aRt)
       , _cx(aCx)
     {
+        _stats[PJS_TASK_TAKEN] = 0;
+        _stats[PJS_TASK_STOLEN] = 0;
     }
 
 public:
-
+    
     static Runner *create(ThreadPool *aThreadPool, int anIndex);
 
     ~Runner() {
-        if (_runnerCondVar)
-            PR_DestroyCondVar(_runnerCondVar);
-        if (_runnerLock)
-            PR_DestroyLock(_runnerLock);
+        //if (_lock)
+        //    PR_DestroyLock(_lock);
     }
     
     JSRuntime *rt() { return _rt; }
     JSContext *cx() { return _cx; }
 
+    int stats(int i) { return _stats[i]; }
+
     void start();
     void reawaken(TaskContext *ctx);
-    void enqueueTasks(TaskHandle **begin, TaskHandle **end);
+    void enqueueRootTask(RootTaskHandle *p);
+    void enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end);
     TaskContext *createTaskContext(TaskHandle *handle);
     void terminate();
 };
@@ -532,13 +550,15 @@ public:
 class ThreadPool
 {
 private:
+    int32_t _started;
     int32_t _terminating;
     PRLock *_masterLock;
     PRCondVar *_masterCondVar;
     int _threadCount;
     PRThread **_threads;
     Runner **_runners;
-    Vector<TaskHandle*, 4, SystemAllocPolicy> _toCreate;
+
+    void signalStartBarrier();
 
     static void start(void* arg) {
         ((Runner*) arg)->start();
@@ -565,15 +585,24 @@ public:
         delete[] _runners;
     }
 
+    void awaitStartBarrier();
     PRLock *masterLock() { return _masterLock; }
     PRCondVar *masterCondVar() { return _masterCondVar; }
-    TaskHandleVec *toCreate() { return &_toCreate; }
+
+    int runnerCount() {
+        return _threadCount;
+    }
+
+    Runner *runner(int i) {
+        JS_ASSERT(i < _threadCount);
+        return _runners[i];
+    }
 
     void start(RootTaskHandle *rth);
 
     static ThreadPool *create();
     void terminate();
-    void shutdown();
+    void await();
     int terminating() { return _terminating; }
 };
 
@@ -1002,8 +1031,7 @@ void TaskContext::resume(Runner *runner) {
         if (!JSVAL_IS_NULL(fn)) {
             if (!_toFork.empty()) {
                 JS_ATOMIC_ADD(&_outstandingChildren, _toFork.length());
-                runner->enqueueTasks((TaskHandle**)_toFork.begin(),
-                                     (TaskHandle**)_toFork.end());
+                runner->enqueueTasks(_toFork.begin(), _toFork.end());
                 return;
             }
             continue; // degenerate case: no tasks, just loop around
@@ -1051,27 +1079,64 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
     return new Runner(aThreadPool, anIndex, rt, cx);
 }
 
+bool Runner::haveWorkStolen(TaskHandle **create) {
+    if (_toCreate.empty())
+        return false;
+
+    *create = _toCreate.back();
+    _toCreate.pop_back();
+    return true;
+}
+
+bool Runner::stealWork(TaskHandle **create) {
+    int n = _threadPool->runnerCount();
+
+    for (int i = _index + 1; i < n; i++)
+        if (_threadPool->runner(i)->haveWorkStolen(create))
+            return true;
+
+    for (int i = 0; i < _index; i++)
+        if (_threadPool->runner(i)->haveWorkStolen(create))
+            return true;
+
+    return false;
+}
+
+bool Runner::getLocalWork(TaskContext **reawaken, TaskHandle **create) {
+    if (!_toReawaken.empty()) {
+        *reawaken = _toReawaken.popCopy();
+        return true;
+    }
+            
+    if (!_toCreate.empty()) {
+        *create = _toCreate.front();
+        _toCreate.pop_front();
+        return true;
+    }
+
+    return false;
+}
+
 bool Runner::getWork(TaskContext **reawaken, TaskHandle **create) {
-    // FIXME---this is very coarse locking indeed!
     *reawaken = NULL;
     *create = NULL;
+
     AutoLock holdM(_threadPool->masterLock());
-    while (true) {
-        if (!_toReawaken.empty()) {
-            *reawaken = _toReawaken.popCopy();
+    while (!_threadPool->terminating()) {
+        if (getLocalWork(reawaken, create)) {
+            _stats[PJS_TASK_TAKEN] += 1;
+            return true;
+        }
+
+        if (stealWork(create)) {
+            _stats[PJS_TASK_STOLEN] += 1;
             return true;
         }
             
-        if (_threadPool->terminating())
-            return false;
-
-        if (!_threadPool->toCreate()->empty()) {
-            *create = _threadPool->toCreate()->popCopy();
-            return true;
-        }
-
         PR_WaitCondVar(_threadPool->masterCondVar(), PR_INTERVAL_NO_TIMEOUT);
     }
+
+    return false;
 }
 
 void Runner::reawaken(TaskContext *ctx) {
@@ -1080,15 +1145,22 @@ void Runner::reawaken(TaskContext *ctx) {
     PR_NotifyAllCondVar(_threadPool->masterCondVar());
 }
 
-void Runner::enqueueTasks(TaskHandle **begin, TaskHandle **end) {
+void Runner::enqueueRootTask(RootTaskHandle *p) {
     AutoLock holdM(_threadPool->masterLock());
-    if (!_threadPool->toCreate()->append(begin, end)) {
-        check_null((void*)NULL);
-    }
+    _toCreate.push_front(p);
+    // do not notify: thread pool will do so
+}
+
+void Runner::enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end) {
+    AutoLock holdM(_threadPool->masterLock());
+    for (ChildTaskHandle **p = begin; p < end; p++)
+        _toCreate.push_front(*p);
     PR_NotifyAllCondVar(_threadPool->masterCondVar());
 }
 
 void Runner::start() {
+    _threadPool->awaitStartBarrier();
+
     TaskContext *reawaken = NULL;
     TaskHandle *create = NULL;
     JS_SetRuntimeThread(_rt);
@@ -1136,15 +1208,8 @@ void Runner::terminate() {
 // ThreadPool impl
 
 ThreadPool *ThreadPool::create() {
-    PRLock *lock = PR_NewLock();
-    if (!lock) {
-        throw "FIXME";
-    }
-
-    PRCondVar *condVar = PR_NewCondVar(lock);
-    if (!condVar) {
-        throw "FIXME";
-    }
+    PRLock *lock = check_null(PR_NewLock());
+    PRCondVar *condVar = check_null(PR_NewCondVar(lock));
 
     const int threadCount = 4; // for now
 
@@ -1171,26 +1236,59 @@ ThreadPool *ThreadPool::create() {
     return tp;
 }
 
-void ThreadPool::start(RootTaskHandle *rth) {
-    AutoLock hold(_masterLock);
-    if (!_toCreate.append(rth)) {
-        check_null((void*)NULL);
+void ThreadPool::signalStartBarrier() {
+    if (!_started) {
+        AutoLock hold(_masterLock);
+        _started = 1;
+        PR_NotifyAllCondVar(_masterCondVar);
     }
-    PR_NotifyAllCondVar(_masterCondVar);
+}
+
+void ThreadPool::awaitStartBarrier() {
+    AutoLock hold(_masterLock);
+    while (!_started) {
+        PR_WaitCondVar(_masterCondVar, PR_INTERVAL_NO_TIMEOUT);
+    }
+}
+
+void ThreadPool::start(RootTaskHandle *rth) {
+    runner(0)->enqueueRootTask(rth);
+    signalStartBarrier();
 }
 
 void ThreadPool::terminate() {
-    AutoLock hold(_masterLock);
-    _terminating = 1;
-    PR_NotifyAllCondVar(_masterCondVar);
+    signalStartBarrier(); // in case it hasn't happened yet
+
+    if (!_terminating) {
+        AutoLock hold(_masterLock);
+        _terminating = 1;
+        PR_NotifyAllCondVar(_masterCondVar);
+    }
 }
 
-void ThreadPool::shutdown() {
+void ThreadPool::await() {
     for (int i = 0; i < _threadCount; i++) {
         if (_threads[i]) {
             PR_JoinThread(_threads[i]);
             _threads[i] = NULL;
         }
+    }
+
+    if (getenv("PJS_STATS") != NULL) {
+        int totals[PJS_TASK_CAT_MAX] = { 0, 0 };
+        fprintf(stderr, "Runner | Taken | Stolen\n");
+        for (int i = 0; i < _threadCount; i++) {
+            fprintf(stderr, "%6d | %5d | %6d\n",
+                    i, _runners[i]->stats(PJS_TASK_TAKEN),
+                    _runners[i]->stats(PJS_TASK_STOLEN));
+            for (int j = 0; j < PJS_TASK_CAT_MAX; j++)
+                totals[j] += _runners[i]->stats(j);
+        }
+        fprintf(stderr, "%6s | %5d | %6d\n", "total", totals[PJS_TASK_TAKEN],
+                totals[PJS_TASK_STOLEN]);
+        fprintf(stderr, "%6s | %5.0f | %6.0f\n", "avg",
+                totals[PJS_TASK_TAKEN] / (double) _threadCount,
+                totals[PJS_TASK_STOLEN] / (double) _threadCount);
     }
 }
 
@@ -1201,7 +1299,7 @@ ThreadPool *init(const char *scriptfn) {
     ThreadPool *tp = check_null(ThreadPool::create());
     RootTaskHandle *rth = new RootTaskHandle(scriptfn);
     tp->start(rth);
-    tp->shutdown();
+    tp->await();
 }
 
 }
