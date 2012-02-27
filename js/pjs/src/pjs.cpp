@@ -159,44 +159,6 @@ namespace pjs {
  * the task (which carries the result) may live on longer, if the JS
  * program keeps it alive, or may be collected immediately.
  *
- * Future improvements
- * -------------------
- * 
- * I would like to move to a work stealing model where each runner has
- * only a local deque and there is no shared queue.  This would also
- * facilitate the efficient implementation of forkN() primitive.  One
- * important piece of this is figuring out when to go idle, this will
- * be critical for real deployment.  I can't recall the right protocol
- * for this and don't want to implement it at the moment anyhow.
- *
- * Here is a proposal for the protocol:
- * - You have a shared 64bit counter on the thread pool, guarded by a lock (for
- *   now).  Counter initially 2.  If it is 0, that means that
- *   runners are idle and blocked.  If it is 1, that means to shutdown.
- * - Each runner executes in a loop:
- *   - Check for contexts to reawaken
- *   - Check for local work
- *   - Read value of counter (no lock needed on x86)
- *   - If counter is 1, end.
- *   - If counter is not 0, search for work to steal
- *   - If unsuccessful, acquire global and read value of counter:
- *     - if 0, become idle (no work)
- *     - if 1, exit
- *     - if still the same as before, set to 0 and become idle
- *
- * After producing new work or reawakening someone:
- *   - Acquire global lock and check value of counter
- *     - if MAX_ULONG-1, pulse the monitor and set counter to 0
- *     - else, increment counter, jump up to 2 if we roll over
- *
- * This has one potential (but I think exceedingly unlikely) failure
- * mode: if I read the counter, scan for work, and then sleep for a
- * long time, it's possible that while I am sleeping the counter is
- * incremented 2^64 times and it rolls over back to the same value I
- * read.  Then I will go to sleep.  If no more tasks are ever
- * produced, I might never wake up: but note that other runners (e.g.,
- * the one that produced the 2^64 work items) are still active, so all
- * that happens is we get less parallelism than we otherwise would.
  ************************************************************/
 
 class ThreadPool;
@@ -500,7 +462,7 @@ private:
     TaskContextVec _toReawaken;
     TaskHandleDeque _toCreate;
     
-    //PRLock *_lock;
+    PRLock *_runnerLock;
     JSRuntime *_rt;
     JSContext *_cx;
 
@@ -517,7 +479,7 @@ private:
            JSRuntime *aRt, JSContext *aCx)
       : _threadPool(aThreadPool)
       , _index(anIndex)
-        //, _lock(PR_NewLock())
+      , _runnerLock(PR_NewLock())
       , _rt(aRt)
       , _cx(aCx)
     {
@@ -530,8 +492,8 @@ public:
     static Runner *create(ThreadPool *aThreadPool, int anIndex);
 
     ~Runner() {
-        //if (_lock)
-        //    PR_DestroyLock(_lock);
+        if (_runnerLock)
+            PR_DestroyLock(_runnerLock);
     }
     
     JSRuntime *rt() { return _rt; }
@@ -547,16 +509,20 @@ public:
     void terminate();
 };
 
+typedef unsigned long long workCounter_t;
+
 class ThreadPool
 {
 private:
     int32_t _started;
     int32_t _terminating;
-    PRLock *_masterLock;
-    PRCondVar *_masterCondVar;
     int _threadCount;
     PRThread **_threads;
     Runner **_runners;
+
+    PRLock *_tpLock;
+    PRCondVar *_tpCondVar;
+    volatile workCounter_t _workCounter;
 
     void signalStartBarrier();
 
@@ -567,18 +533,19 @@ private:
     explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
                         int threadCount, PRThread **threads, Runner **runners)
       : _terminating(0)
-      , _masterLock(aLock)
-      , _masterCondVar(aCondVar)
       , _threadCount(threadCount)
       , _threads(threads)
       , _runners(runners)
+      , _tpLock(aLock)
+      , _tpCondVar(aCondVar)
+      , _workCounter(0)
     {
     }
 
 public:
     ~ThreadPool() {
-        PR_DestroyLock(_masterLock);
-        PR_DestroyCondVar(_masterCondVar);
+        PR_DestroyLock(_tpLock);
+        PR_DestroyCondVar(_tpCondVar);
         delete[] _threads;
         for (int i = 0; i < _threadCount; i++)
             delete _runners[i];
@@ -586,8 +553,10 @@ public:
     }
 
     void awaitStartBarrier();
-    PRLock *masterLock() { return _masterLock; }
-    PRCondVar *masterCondVar() { return _masterCondVar; }
+
+    void signalNewWork();
+    inline workCounter_t readWorkCounter();
+    void awaitNewWork(workCounter_t since);
 
     int runnerCount() {
         return _threadCount;
@@ -1080,6 +1049,8 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
 }
 
 bool Runner::haveWorkStolen(TaskHandle **create) {
+    AutoLock hold(_runnerLock);
+
     if (_toCreate.empty())
         return false;
 
@@ -1103,6 +1074,8 @@ bool Runner::stealWork(TaskHandle **create) {
 }
 
 bool Runner::getLocalWork(TaskContext **reawaken, TaskHandle **create) {
+    AutoLock hold(_runnerLock);
+
     if (!_toReawaken.empty()) {
         *reawaken = _toReawaken.popCopy();
         return true;
@@ -1121,8 +1094,9 @@ bool Runner::getWork(TaskContext **reawaken, TaskHandle **create) {
     *reawaken = NULL;
     *create = NULL;
 
-    AutoLock holdM(_threadPool->masterLock());
     while (!_threadPool->terminating()) {
+        workCounter_t wc = _threadPool->readWorkCounter();
+
         if (getLocalWork(reawaken, create)) {
             _stats[PJS_TASK_TAKEN] += 1;
             return true;
@@ -1133,29 +1107,39 @@ bool Runner::getWork(TaskContext **reawaken, TaskHandle **create) {
             return true;
         }
             
-        PR_WaitCondVar(_threadPool->masterCondVar(), PR_INTERVAL_NO_TIMEOUT);
+        _threadPool->awaitNewWork(wc);
     }
 
     return false;
 }
 
 void Runner::reawaken(TaskContext *ctx) {
-    AutoLock holdM(_threadPool->masterLock());
-    _toReawaken.append(ctx);
-    PR_NotifyAllCondVar(_threadPool->masterCondVar());
+    {
+        AutoLock hold(_runnerLock);
+        _toReawaken.append(ctx);
+    }
+
+    // FIXME--This is kind of lame.  only the current runner has new
+    // work here, but there is no easy way to atomically check whether
+    // the current runner is idle and only signal in that case.
+    _threadPool->signalNewWork();
 }
 
 void Runner::enqueueRootTask(RootTaskHandle *p) {
-    AutoLock holdM(_threadPool->masterLock());
+    AutoLock hold(_runnerLock);
     _toCreate.push_front(p);
-    // do not notify: thread pool will do so
+
+    // no need to signal new work for the root task.
 }
 
 void Runner::enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end) {
-    AutoLock holdM(_threadPool->masterLock());
-    for (ChildTaskHandle **p = begin; p < end; p++)
-        _toCreate.push_front(*p);
-    PR_NotifyAllCondVar(_threadPool->masterCondVar());
+    {
+        AutoLock hold(_runnerLock);
+        for (ChildTaskHandle **p = begin; p < end; p++)
+            _toCreate.push_front(*p);
+    }
+
+    _threadPool->signalNewWork();
 }
 
 void Runner::start() {
@@ -1236,18 +1220,55 @@ ThreadPool *ThreadPool::create() {
     return tp;
 }
 
+void ThreadPool::signalNewWork() {
+    AutoLock hold(_tpLock);
+    
+    // Increment work counter.  The low bit indicates whether there
+    // are idle (unsignaled) workers hanging around.  If there are,
+    // then notify.
+    workCounter_t wc1 = _workCounter;
+    bool idle = (wc1 & 1) != 0;
+    _workCounter = (wc1 & ~1) + 2;
+    if (idle) {
+        PR_NotifyAllCondVar(_tpCondVar);
+    }
+}
+
+workCounter_t ThreadPool::readWorkCounter() {
+    return _workCounter >> 1;
+}
+
+void ThreadPool::awaitNewWork(workCounter_t since) {
+    AutoLock hold(_tpLock);
+    
+    while (true) {
+        if (_terminating) return;
+        
+        workCounter_t wc1 = _workCounter;
+
+        // New work has been produced since we read the work counter.
+        workCounter_t cnt = wc1 >> 1;
+        if (cnt != since) return;
+
+        // Ensure that idle flag is set, then block.
+        bool idle = (wc1 & 1) != 0;
+        if (!idle) { _workCounter = wc1 | 1; }
+        PR_WaitCondVar(_tpCondVar, PR_INTERVAL_NO_TIMEOUT);
+    }
+}
+
 void ThreadPool::signalStartBarrier() {
     if (!_started) {
-        AutoLock hold(_masterLock);
+        AutoLock hold(_tpLock);
         _started = 1;
-        PR_NotifyAllCondVar(_masterCondVar);
+        PR_NotifyAllCondVar(_tpCondVar);
     }
 }
 
 void ThreadPool::awaitStartBarrier() {
-    AutoLock hold(_masterLock);
+    AutoLock hold(_tpLock);
     while (!_started) {
-        PR_WaitCondVar(_masterCondVar, PR_INTERVAL_NO_TIMEOUT);
+        PR_WaitCondVar(_tpCondVar, PR_INTERVAL_NO_TIMEOUT);
     }
 }
 
@@ -1260,9 +1281,9 @@ void ThreadPool::terminate() {
     signalStartBarrier(); // in case it hasn't happened yet
 
     if (!_terminating) {
-        AutoLock hold(_masterLock);
+        AutoLock hold(_tpLock);
         _terminating = 1;
-        PR_NotifyAllCondVar(_masterCondVar);
+        PR_NotifyAllCondVar(_tpCondVar);
     }
 }
 
