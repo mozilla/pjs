@@ -523,6 +523,7 @@ private:
     PRLock *_tpLock;
     PRCondVar *_tpCondVar;
     volatile workCounter_t _workCounter;
+    volatile bool _idlingWorkers;
 
     void signalStartBarrier();
 
@@ -539,6 +540,7 @@ private:
       , _tpLock(aLock)
       , _tpCondVar(aCondVar)
       , _workCounter(0)
+      , _idlingWorkers(false)
     {
     }
 
@@ -1226,33 +1228,41 @@ void ThreadPool::signalNewWork() {
     // Increment work counter.  The low bit indicates whether there
     // are idle (unsignaled) workers hanging around.  If there are,
     // then notify.
-    workCounter_t wc1 = _workCounter;
-    bool idle = (wc1 & 1) != 0;
-    _workCounter = (wc1 & ~1) + 2;
-    if (idle) {
+    _workCounter++;
+    if (_idlingWorkers) {
         PR_NotifyAllCondVar(_tpCondVar);
+        _idlingWorkers = false;
     }
+
+    // I don't worry about overflow.  There is one bad case: if some
+    // worker reads the new work counter when it has value X, searches
+    // unsuccessfully for work, then idles while a whole lot of work
+    // comes in.  If there is just the right amount of work, the
+    // counter might roll-over and reach X again, thus deceiving the
+    // worker into thinking nothing had happened.  The worker would
+    // then go to sleep and (unless more work was produced, which it
+    // probably would be) never awake.  This seems rather unlikely so
+    // I am not overly concerned.  Even if it did happen, it would
+    // mean a loss of parallelism but not that PJs itself would
+    // completely stall. I am not sure if there is any way to prevent
+    // it that doesn't create bigger problems than the problem it's
+    // trying to solve.
 }
 
 workCounter_t ThreadPool::readWorkCounter() {
-    return _workCounter >> 1;
+    return _workCounter;
 }
 
 void ThreadPool::awaitNewWork(workCounter_t since) {
     AutoLock hold(_tpLock);
     
     while (true) {
+        // If we are terminating or new work has been produced, bail.
         if (_terminating) return;
-        
-        workCounter_t wc1 = _workCounter;
-
-        // New work has been produced since we read the work counter.
-        workCounter_t cnt = wc1 >> 1;
-        if (cnt != since) return;
+        if (_workCounter != since) return;
 
         // Ensure that idle flag is set, then block.
-        bool idle = (wc1 & 1) != 0;
-        if (!idle) { _workCounter = wc1 | 1; }
+        _idlingWorkers = true;
         PR_WaitCondVar(_tpCondVar, PR_INTERVAL_NO_TIMEOUT);
     }
 }
