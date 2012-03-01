@@ -462,7 +462,11 @@ private:
     TaskContextVec _toReawaken;
     TaskHandleDeque _toCreate;
     
+    // The runnerLock protects _toCreate and _toReawaken.  It could
+    // be removed if those two structures were replaced with thread-safe
+    // equivalents.
     PRLock *_runnerLock;
+
     JSRuntime *_rt;
     JSContext *_cx;
 
