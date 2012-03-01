@@ -1,0 +1,3 @@
+#!/bin/bash
+
+build/pjs $1 > $1.exp_out 2> $1.exp_err
