@@ -56,7 +56,7 @@ extern size_t gMaxStackSize;
 using namespace js;
 using namespace std;
 
-#define PJS_COPY_ARGUMENTS
+#define PJS_COPY_ARGUMENTS 1
 #define PJS_CHECK_CX
 
 #ifdef PJS_CHECK_CX
@@ -250,29 +250,26 @@ public:
 
 class Closure {
 private:
-#   ifdef PJS_COPY_ARGUMENTS
-    typedef ClonedObj *argv_t;
-#   else
-    typedef jsval argv_t;
-#   endif
-
     auto_arr<char> _text;
-    auto_arr<argv_t> _argv;
+    auto_arr<ClonedObj*> _clonedArgv;
+    auto_arr<jsval> _proxiedArgv;
     uintN _argc;
 
-    Closure(auto_arr<char> text, auto_arr<argv_t> argv, uintN argc)
+    Closure(auto_arr<char> text, auto_arr<ClonedObj*> clonedArgv,
+            auto_arr<jsval> proxiedArgv, uintN argc)
         : _text(text)
-        , _argv(argv)
+        , _clonedArgv(clonedArgv)
+        , _proxiedArgv(proxiedArgv)
         , _argc(argc)
     {}
 
 public:
     ~Closure() {
-#       ifdef PJS_COPY_ARGUMENTS
-        for (int i = 0; i < _argc; i++) {
-            if (_argv[i]) delete _argv[i];
+        if (_clonedArgv.get()) {
+            for (int i = 0; i < _argc; i++) {
+                if (_clonedArgv[i] != NULL) delete _clonedArgv[i];
+            }
         }
-#       endif
     }
 
     static Closure *create(JSContext *cx, JSString *text,
@@ -725,32 +722,36 @@ Closure *Closure::create(JSContext *cx, JSString *str,
     encoded[length+1] = ')';
     encoded[length+2] = 0;
 
-#   ifdef PJS_COPY_ARGUMENTS
-
-    auto_arr<ClonedObj*> argv1(new ClonedObj*[argc]);
-    if (!argv1.get()) {
-        JS_ReportOutOfMemory(cx);
-        return NULL;
-    }
-    memset(argv1.get(), 0, sizeof(ClonedObj*) * argc);
-    for (int i = 0; i < argc; i++) {
-        if (!ClonedObj::pack(cx, argv[i], &argv1[i]))
+    if (PJS_COPY_ARGUMENTS) {
+        auto_arr<ClonedObj*> clonedArgv(new ClonedObj*[argc]);
+        if (!clonedArgv.get()) {
+            JS_ReportOutOfMemory(cx);
             return NULL;
+        }
+        memset(clonedArgv.get(), 0, sizeof(ClonedObj*) * argc);
+        for (int i = 0; i < argc; i++) {
+            if (!ClonedObj::pack(cx, argv[i], &clonedArgv[i])) {
+                for (int j = 0; j < i; j++) {
+                    delete clonedArgv[j];
+                    clonedArgv[j] = NULL;
+                }
+                return NULL;
+            }
+        }
+        auto_arr<jsval> proxiedArgv(NULL);
+
+        return new Closure(encoded, clonedArgv, proxiedArgv, argc);
+    } else {
+        auto_arr<jsval> proxiedArgv(new jsval[argc]);
+        if (!proxiedArgv.get()) {
+            JS_ReportOutOfMemory(cx);
+            return NULL;
+        }
+        for (int i = 0; i < argc; i++)
+            proxiedArgv[i] = argv[i];
+        auto_arr<ClonedObj*> clonedArgv(NULL);
+        return new Closure(encoded, clonedArgv, proxiedArgv, argc);
     }
-
-#   else
-
-    auto_arr<jsval> argv1(new jsval[argc]);
-    if (!argv1.get()) {
-        JS_ReportOutOfMemory(cx);
-        return NULL;
-    }
-    for (int i = 0; i < argc; i++)
-        argv1[i] = argv[i];
-
-#   endif
- 
-    return new Closure(encoded, argv1, argc);
 }
 
 JSBool Closure::execute(Membrane *m, JSContext *cx,
@@ -763,24 +764,20 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
     auto_arr<jsval> argv(new jsval[_argc]);          // ensure it gets freed
     AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
 
-#   ifdef PJS_COPY_ARGUMENTS
-
-    for (int i = 0; i < _argc; i++) {
-        if (!_argv[i]->unpack(cx, &argv[i])) {
-            return JS_FALSE;
+    if (_clonedArgv.get()) {
+        for (int i = 0; i < _argc; i++) {
+            if (!_clonedArgv[i]->unpack(cx, &argv[i])) {
+                return JS_FALSE;
+            }
+        }
+    } else {
+        if (!argv.get()) return JS_FALSE;
+        for (int i = 0; i < _argc; i++) {
+            argv[i] = _proxiedArgv[i];
+            if (!m->wrap(&argv[i]))
+                return JS_FALSE;
         }
     }
-
-#   else
-
-    if (!argv.get()) return JS_FALSE;
-    for (int i = 0; i < _argc; i++) {
-        argv[i] = _argv[i];
-        if (!m->wrap(&argv[i]))
-            return JS_FALSE;
-    }
-
-#   endif
 
     return JS_CallFunctionValue(cx, global, fnval.value(),
                                 _argc, argv.get(), rval);
