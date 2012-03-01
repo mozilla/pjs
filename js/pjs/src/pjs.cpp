@@ -251,14 +251,14 @@ class Closure {
 private:
     auto_arr<char> _text;
     auto_arr<ClonedObj*> _clonedArgv;
-    auto_arr<jsval> _proxiedArgv;
+    auto_arr<jsval> _toProxyArgv;
     uintN _argc;
 
     Closure(auto_arr<char> text, auto_arr<ClonedObj*> clonedArgv,
             auto_arr<jsval> proxiedArgv, uintN argc)
         : _text(text)
         , _clonedArgv(clonedArgv)
-        , _proxiedArgv(proxiedArgv)
+        , _toProxyArgv(proxiedArgv)
         , _argc(argc)
     {}
 
@@ -783,7 +783,7 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
     } else {
         if (!argv.get()) return JS_FALSE;
         for (int i = 0; i < _argc; i++) {
-            argv[i] = _proxiedArgv[i];
+            argv[i] = _toProxyArgv[i];
             if (!m->wrap(&argv[i]))
                 return JS_FALSE;
         }
