@@ -56,7 +56,6 @@ extern size_t gMaxStackSize;
 using namespace js;
 using namespace std;
 
-#define PJS_COPY_ARGUMENTS 1
 #define PJS_CHECK_CX
 
 #ifdef PJS_CHECK_CX
@@ -397,15 +396,15 @@ private:
     TaskContext(JSContext *cx, TaskHandle *aTask,
                 Runner *aRunner, JSObject *aGlobal,
                 JSObject *object, auto_ptr<Membrane> &aMembrane)
-      : _taskHandle(aTask)
-      , _global(aGlobal)
-      , _object(object)
-      , _outstandingChildren(0)
-      , _runner(aRunner)
-      , _membrane(aMembrane)
-#     ifdef PJS_CHECK_CX
-      , _checkCx(cx)
-#     endif
+        : _taskHandle(aTask)
+        , _global(aGlobal)
+        , _object(object)
+        , _outstandingChildren(0)
+        , _runner(aRunner)
+        , _membrane(aMembrane)
+#       ifdef PJS_CHECK_CX
+        , _checkCx(cx)
+#       endif
     {
         setOncompletion(cx, JSVAL_NULL);
     }
@@ -429,6 +428,8 @@ public:
     void setOncompletion(JSContext *cx, jsval val) {
         JS_SetReservedSlot(_object, OnCompletionSlot, val);
     }
+
+    inline bool copyArguments();
 
     static JSClass jsClass;
 };
@@ -508,6 +509,8 @@ public:
     void enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end);
     TaskContext *createTaskContext(TaskHandle *handle);
     void terminate();
+
+    inline bool copyArguments();
 };
 
 typedef unsigned long long workCounter_t;
@@ -515,6 +518,7 @@ typedef unsigned long long workCounter_t;
 class ThreadPool
 {
 private:
+    bool _copyArguments;
     int32_t _started;
     int32_t _terminating;
     int _threadCount;
@@ -534,14 +538,15 @@ private:
 
     explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
                         int threadCount, PRThread **threads, Runner **runners)
-      : _terminating(0)
-      , _threadCount(threadCount)
-      , _threads(threads)
-      , _runners(runners)
-      , _tpLock(aLock)
-      , _tpCondVar(aCondVar)
-      , _workCounter(0)
-      , _idlingWorkers(false)
+        : _copyArguments(!getenv("PJS_PROXY_ARGUMENTS"))
+        , _terminating(0)
+        , _threadCount(threadCount)
+        , _threads(threads)
+        , _runners(runners)
+        , _tpLock(aLock)
+        , _tpCondVar(aCondVar)
+        , _workCounter(0)
+        , _idlingWorkers(false)
     {
     }
 
@@ -576,6 +581,10 @@ public:
     void terminate();
     void await();
     int terminating() { return _terminating; }
+
+    bool copyArguments() {
+        return _copyArguments;
+    }
 };
 
 // ______________________________________________________________________
@@ -722,7 +731,8 @@ Closure *Closure::create(JSContext *cx, JSString *str,
     encoded[length+1] = ')';
     encoded[length+2] = 0;
 
-    if (PJS_COPY_ARGUMENTS) {
+    TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+    if (taskContext->copyArguments()) {
         auto_arr<ClonedObj*> clonedArgv(new ClonedObj*[argc]);
         if (!clonedArgv.get()) {
             JS_ReportOutOfMemory(cx);
@@ -1020,6 +1030,11 @@ void TaskContext::resume(Runner *runner) {
     return;
 }
 
+bool
+TaskContext::copyArguments() {
+    return _runner->copyArguments();
+}
+
 JSClass TaskContext::jsClass = {
     "TaskContext", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
@@ -1189,6 +1204,10 @@ TaskContext *Runner::createTaskContext(TaskHandle *handle) {
 
 void Runner::terminate() {
     _threadPool->terminate();
+}
+
+bool Runner::copyArguments() {
+    return _threadPool->copyArguments();
 }
 
 // ______________________________________________________________________
