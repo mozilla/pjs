@@ -1065,6 +1065,8 @@ class RootStackShape
 
 namespace js {
 
+inline bool PJS_isSuspended(JSContext *cx);
+
 inline Shape *
 Shape::search(JSContext *cx, Shape *start, jsid id, Shape ***pspp, bool adding)
 {
@@ -1080,7 +1082,8 @@ Shape::search(JSContext *cx, Shape *start, jsid id, Shape ***pspp, bool adding)
         return SHAPE_FETCH(spp);
     }
 
-    if (start->numLinearSearches() == LINEAR_SEARCHES_MAX) {
+    if (!PJS_isSuspended(cx) &&
+        start->numLinearSearches() == LINEAR_SEARCHES_MAX) {
         if (start->isBigEnoughForAPropertyTable()) {
             RootShape startRoot(cx, &start);
             RootId idRoot(cx, &id);

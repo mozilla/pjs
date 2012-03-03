@@ -212,6 +212,9 @@ struct JSCompartment
     bool                         hold;
     bool                         isSystemCompartment;
 
+    // True if the compartment has active child threads.
+    bool                         PJS_isSuspended;
+
     /*
      * Pool for analysis and intermediate type information in this compartment.
      * Cleared on every GC, unless the GC happens during analysis (indicated
@@ -419,6 +422,12 @@ struct JSCompartment
 #define JS_PROPERTY_TREE(cx)    ((cx)->compartment->propertyTree)
 
 namespace js {
+
+inline bool PJS_isSuspended(JSContext *cx)
+{
+    return cx->compartment->PJS_isSuspended;
+}
+
 static inline MathCache *
 GetMathCache(JSContext *cx)
 {

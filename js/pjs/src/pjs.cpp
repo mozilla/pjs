@@ -48,6 +48,7 @@
 #include <prcvar.h>
 #include <jsapi.h>
 #include <jslock.h>
+#include <jsfriendapi.h>
 #include "membrane.h"
 #include "util.h"
 
@@ -537,8 +538,9 @@ private:
     }
 
     explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
-                        int threadCount, PRThread **threads, Runner **runners)
-        : _copyArguments(!getenv("PJS_PROXY_ARGUMENTS"))
+                        int threadCount, PRThread **threads, Runner **runners,
+                        bool copyArguments)
+        : _copyArguments(copyArguments)
         , _terminating(0)
         , _threadCount(threadCount)
         , _threads(threads)
@@ -577,7 +579,7 @@ public:
 
     void start(RootTaskHandle *rth);
 
-    static ThreadPool *create();
+    static ThreadPool *create(bool copyArguments);
     void terminate();
     void await();
     int terminating() { return _terminating; }
@@ -1000,6 +1002,7 @@ void TaskContext::resume(Runner *runner) {
                 break;
         } else {
             // Subsequent generation: callback fn was set last time.
+            PJS_ClearSuspended(cx);
             if (!unpackResults(cx))
                 break;
             setOncompletion(cx, JSVAL_NULL);
@@ -1012,6 +1015,7 @@ void TaskContext::resume(Runner *runner) {
         fn = JS_GetReservedSlot(_object, OnCompletionSlot);
         if (!JSVAL_IS_NULL(fn)) {
             if (!_toFork.empty()) {
+                PJS_SetSuspended(cx);
                 JS_ATOMIC_ADD(&_outstandingChildren, _toFork.length());
                 runner->enqueueTasks(_toFork.begin(), _toFork.end());
                 return;
@@ -1213,7 +1217,7 @@ bool Runner::copyArguments() {
 // ______________________________________________________________________
 // ThreadPool impl
 
-ThreadPool *ThreadPool::create() {
+ThreadPool *ThreadPool::create(bool copyArguments) {
     PRLock *lock = check_null(PR_NewLock());
     PRCondVar *condVar = check_null(PR_NewCondVar(lock));
 
@@ -1226,7 +1230,8 @@ ThreadPool *ThreadPool::create() {
     memset(threads, 0, sizeof(Runner*) * threadCount);
 
     ThreadPool *tp = check_null(
-        new ThreadPool(lock, condVar, threadCount, threads, runners));
+        new ThreadPool(lock, condVar, threadCount, threads, runners,
+                       copyArguments));
 
     for (int i = 0; i < threadCount; i++) {
         runners[i] = check_null(Runner::create(tp, i));
@@ -1346,8 +1351,8 @@ void ThreadPool::await() {
 // ______________________________________________________________________
 // Init
 
-ThreadPool *init(const char *scriptfn) {
-    ThreadPool *tp = check_null(ThreadPool::create());
+ThreadPool *init(const char *scriptfn, bool copyArguments) {
+    ThreadPool *tp = check_null(ThreadPool::create(copyArguments));
     RootTaskHandle *rth = new RootTaskHandle(scriptfn);
     tp->start(rth);
     tp->await();

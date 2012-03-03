@@ -804,6 +804,12 @@ class ObjectPtr
     operator JSObject *() const { return value; }
 };
 
+extern JS_FRIEND_API(void)
+PJS_SetSuspended(JSContext *cx);
+
+extern JS_FRIEND_API(void)
+PJS_ClearSuspended(JSContext *cx);
+
 } /* namespace js */
 
 #endif

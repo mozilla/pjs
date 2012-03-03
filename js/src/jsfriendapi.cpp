@@ -773,4 +773,16 @@ IncrementalValueBarrier(const Value &v)
     HeapValue::writeBarrierPre(v);
 }
 
+extern JS_FRIEND_API(void)
+PJS_SetSuspended(JSContext *cx) {
+    JS_ASSERT(!PJS_isSuspended(cx));
+    cx->compartment->PJS_isSuspended = true;
+}
+
+extern JS_FRIEND_API(void)
+PJS_ClearSuspended(JSContext *cx) {
+    JS_ASSERT(PJS_isSuspended(cx));
+    cx->compartment->PJS_isSuspended = false;
+}
+
 } // namespace js
