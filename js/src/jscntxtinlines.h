@@ -162,7 +162,7 @@ class CompartmentChecker
     }
 
     void check(JSCompartment *c) {
-        if (c && c != context->runtime->atomsCompartment) {
+        if (c && c != context->runtime->atomsCompartment && !c->PJS_isSuspended) {
             if (!compartment)
                 compartment = c;
             else if (c != compartment)
