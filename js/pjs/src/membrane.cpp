@@ -168,6 +168,23 @@ bool Membrane::wrap(Value *vp) {
 
     JSObject *obj = &vp->toObject();
 
+    /* Split closures */
+    if (JS_ObjectIsFunction(cx, obj)) {
+        JSFunction *fn = obj->toFunction();
+        if (!fn->isInterpreted()) {
+            JS_ReportError(cx, "Cannot access native functions from child tasks");
+            return false;
+        }
+
+        JSObject *env = fn->environment();
+        if (!wrap(&env))
+            return false;
+
+        JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
+        vp->setObject(*wrapper);
+        return _map.put(OBJECT_TO_JSVAL(obj), *vp);
+    }
+
     /*
      * Recurse to wrap the prototype. Long prototype chains will run out of
      * stack, causing an error in CHECK_RECURSE.
@@ -184,23 +201,26 @@ bool Membrane::wrap(Value *vp) {
 
     JSObject *wrapper = New(cx, obj, proto, global, this);
     vp->setObject(*wrapper);
-
-    if (!_map.put(GetProxyPrivate(wrapper), *vp))
-        return false;
-
-    return true;
+    return _map.put(GetProxyPrivate(wrapper), *vp);
 }
 
 bool Membrane::enter(JSContext *cx, JSObject *wrapper,
                      jsid id, Action act, bool *bp)
 {
     switch (act) {
-      case GET:
-        return true;  // allow GET operations
-      case SET:
-        return false; // prevent write operations
-      case CALL:
-        return false; // for now, prevent call operations
+      case GET: {
+          return true;  // allow GET operations
+      }
+      case SET: {
+          JS_ReportError(cx, "Cannot modify parent objects");
+          *bp = false;
+          return false; // prevent write operations
+      }
+      case CALL: {
+          JS_ReportError(cx, "Cannot call methods on parent objects");
+          *bp = false;
+          return false; // for now, prevent call operations
+      }
     }
 }
 
@@ -240,7 +260,8 @@ bool
 Membrane::defineProperty(JSContext *cx, JSObject *proxy, jsid id,
                                      PropertyDescriptor *desc)
 {
-	return false;
+    JS_ReportError(cx, "Cannot define a property on a parent object");
+    return false;
 }
 
 bool
@@ -296,10 +317,11 @@ Membrane::get(JSContext *cx, JSObject *wrapper, JSObject *receiver, jsid id, Val
 }
 
 bool
-Membrane::set(JSContext *cx, JSObject *proxy, JSObject *receiver, jsid id, bool strict,
+Membrane::set(JSContext *cx, JSObject *wrapper, JSObject *receiver, jsid id, bool strict,
                           Value *vp)
 {
-	return false;
+    JS_ReportError(cx, "Cannot modify parent objects");
+    return false;
 }
 
 bool

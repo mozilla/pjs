@@ -1,1 +1,1 @@
-test/access-future-from-child.js:4:TypeError: unsupported type for structured data
+<no filename>:0:uncaught exception: Error: all child tasks not yet completed

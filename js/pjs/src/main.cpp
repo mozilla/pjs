@@ -5,19 +5,12 @@
 int main(int argc, const char *argv[])
 {
     if (argc == 1) {
-        fprintf(stderr, "Usage: %s [--proxy-arguments|--copy-arguments] script.js\n", argv[0]);
+        fprintf(stderr, "Usage: %s script.js\n", argv[0]);
         return 1;
     } else {
         int i = 1;
-        bool copyArguments = true;
         while (i < argc) {
-            if (!strcmp(argv[i], "--copy-arguments")) {
-                i++;
-                copyArguments = true;
-            } else if (!strcmp(argv[i], "--proxy-arguments")) {
-                i++;
-                copyArguments = false;
-            } else if (!strcmp(argv[i], "--")) {
+            if (!strcmp(argv[i], "--")) {
                 i++;
                 break;
             } else if (argv[i][0] == '-') {
@@ -27,7 +20,7 @@ int main(int argc, const char *argv[])
             }
         }
         for (; i < argc; i++) {
-            pjs::init(argv[i], copyArguments);
+            pjs::init(argv[i]);
         }
         return 0;
     }

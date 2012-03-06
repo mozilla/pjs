@@ -1082,23 +1082,24 @@ Shape::search(JSContext *cx, Shape *start, jsid id, Shape ***pspp, bool adding)
         return SHAPE_FETCH(spp);
     }
 
-    if (!PJS_isSuspended(cx) &&
-        start->numLinearSearches() == LINEAR_SEARCHES_MAX) {
-        if (start->isBigEnoughForAPropertyTable()) {
-            RootShape startRoot(cx, &start);
-            RootId idRoot(cx, &id);
-            if (start->hashify(cx)) {
-                Shape **spp = start->table().search(id, adding);
-                return SHAPE_FETCH(spp);
+    if (!PJS_isSuspended(cx)) {
+        if (start->numLinearSearches() == LINEAR_SEARCHES_MAX) {
+            if (start->isBigEnoughForAPropertyTable()) {
+                RootShape startRoot(cx, &start);
+                RootId idRoot(cx, &id);
+                if (start->hashify(cx)) {
+                    Shape **spp = start->table().search(id, adding);
+                    return SHAPE_FETCH(spp);
+                }
             }
+            /*
+             * No table built -- there weren't enough entries, or OOM occurred.
+             * Don't increment numLinearSearches, to keep hasTable() false.
+             */
+            JS_ASSERT(!start->hasTable());
+        } else {
+            start->incrementNumLinearSearches();
         }
-        /*
-         * No table built -- there weren't enough entries, or OOM occurred.
-         * Don't increment numLinearSearches, to keep hasTable() false.
-         */
-        JS_ASSERT(!start->hasTable());
-    } else {
-        start->incrementNumLinearSearches();
     }
 
     for (Shape *shape = start; shape; shape = shape->parent) {

@@ -194,7 +194,24 @@ public:
 };
 
 // ____________________________________________________________
-// TaskSpec
+// Misc
+
+class ArrRooter {
+private:
+    JSContext *_cx;
+    Value *_values;
+    int _len;
+
+    ArrRooter(JSContext *cx, Value *values, int len)
+        : _cx(cx)
+        , _values(values)
+        , _len(len)
+    {}
+
+public:
+    static ArrRooter *create(JSContext *cx, Value *values, int len);
+    ~ArrRooter();
+};
 
 class ClonedObj {
 private:
@@ -251,27 +268,19 @@ public:
 class Closure {
 private:
     auto_arr<char> _text;
-    auto_arr<ClonedObj*> _clonedArgv;
     auto_arr<jsval> _toProxyArgv;
+    auto_ptr<ArrRooter> _rooter;   // <-- note: ordering is significant here.
     uintN _argc;
 
-    Closure(auto_arr<char> text, auto_arr<ClonedObj*> clonedArgv,
-            auto_arr<jsval> proxiedArgv, uintN argc)
+    Closure(auto_arr<char>& text, auto_arr<jsval>& toProxyArgv,
+            auto_ptr<ArrRooter>& rooter, uintN argc)
         : _text(text)
-        , _clonedArgv(clonedArgv)
-        , _toProxyArgv(proxiedArgv)
+        , _toProxyArgv(toProxyArgv)
+        , _rooter(rooter)
         , _argc(argc)
     {}
 
 public:
-    ~Closure() {
-        if (_clonedArgv.get()) {
-            for (int i = 0; i < _argc; i++) {
-                if (_clonedArgv[i] != NULL) delete _clonedArgv[i];
-            }
-        }
-    }
-
     static Closure *create(JSContext *cx, JSString *text,
                            const jsval *argv, int argc);
 
@@ -430,8 +439,6 @@ public:
         JS_SetReservedSlot(_object, OnCompletionSlot, val);
     }
 
-    inline bool copyArguments();
-
     static JSClass jsClass;
 };
 
@@ -510,8 +517,6 @@ public:
     void enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end);
     TaskContext *createTaskContext(TaskHandle *handle);
     void terminate();
-
-    inline bool copyArguments();
 };
 
 typedef unsigned long long workCounter_t;
@@ -519,7 +524,6 @@ typedef unsigned long long workCounter_t;
 class ThreadPool
 {
 private:
-    bool _copyArguments;
     int32_t _started;
     int32_t _terminating;
     int _threadCount;
@@ -538,10 +542,8 @@ private:
     }
 
     explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
-                        int threadCount, PRThread **threads, Runner **runners,
-                        bool copyArguments)
-        : _copyArguments(copyArguments)
-        , _terminating(0)
+                        int threadCount, PRThread **threads, Runner **runners)
+        : _terminating(0)
         , _threadCount(threadCount)
         , _threads(threads)
         , _runners(runners)
@@ -579,14 +581,10 @@ public:
 
     void start(RootTaskHandle *rth);
 
-    static ThreadPool *create(bool copyArguments);
+    static ThreadPool *create();
     void terminate();
     void await();
     int terminating() { return _terminating; }
-
-    bool copyArguments() {
-        return _copyArguments;
-    }
 };
 
 // ______________________________________________________________________
@@ -694,6 +692,42 @@ JSClass Global::jsClass = {
 };
 
 // ______________________________________________________________________
+// ArrRooter impl
+
+ArrRooter *
+ArrRooter::create(JSContext *cx, Value *values, int len) {
+    ArrRooter *result = NULL;
+    int rooted = 0;
+
+    for (; rooted < len; rooted++) {
+        values[rooted] = JSVAL_NULL;
+        if (!JS_AddNamedValueRoot(cx, &values[rooted], "RootedValueArr")) {
+            goto fail;
+        }
+    }
+
+    result = new ArrRooter(cx, values, len);
+    if (!result) {
+        JS_ReportOutOfMemory(cx);
+        goto fail;
+    }
+
+    return result;
+
+fail:
+    for (int i = 0; i < rooted; i++) {
+        JS_RemoveValueRoot(cx, &values[i]);
+    }
+    return false;
+}
+
+ArrRooter::~ArrRooter() {
+    for (int i = 0; i < _len; i++) {
+        JS_RemoveValueRoot(_cx, &_values[i]);
+    }
+}
+
+// ______________________________________________________________________
 // ClonedObj impl
 
 ClonedObj::~ClonedObj() {
@@ -734,36 +768,21 @@ Closure *Closure::create(JSContext *cx, JSString *str,
     encoded[length+2] = 0;
 
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
-    if (taskContext->copyArguments()) {
-        auto_arr<ClonedObj*> clonedArgv(new ClonedObj*[argc]);
-        if (!clonedArgv.get()) {
-            JS_ReportOutOfMemory(cx);
-            return NULL;
-        }
-        memset(clonedArgv.get(), 0, sizeof(ClonedObj*) * argc);
-        for (int i = 0; i < argc; i++) {
-            if (!ClonedObj::pack(cx, argv[i], &clonedArgv[i])) {
-                for (int j = 0; j < i; j++) {
-                    delete clonedArgv[j];
-                    clonedArgv[j] = NULL;
-                }
-                return NULL;
-            }
-        }
-        auto_arr<jsval> proxiedArgv(NULL);
-
-        return new Closure(encoded, clonedArgv, proxiedArgv, argc);
-    } else {
-        auto_arr<jsval> proxiedArgv(new jsval[argc]);
-        if (!proxiedArgv.get()) {
-            JS_ReportOutOfMemory(cx);
-            return NULL;
-        }
-        for (int i = 0; i < argc; i++)
-            proxiedArgv[i] = argv[i];
-        auto_arr<ClonedObj*> clonedArgv(NULL);
-        return new Closure(encoded, clonedArgv, proxiedArgv, argc);
+    auto_arr<jsval> toProxyArgv(new jsval[argc]);
+    if (!toProxyArgv.get()) {
+        JS_ReportOutOfMemory(cx);
+        return NULL;
     }
+    auto_ptr<ArrRooter> rooter(ArrRooter::create(cx, toProxyArgv.get(), argc));
+    if (!rooter.get()) {
+        return NULL;
+    }
+
+    for (int i = 0; i < argc; i++) {
+        toProxyArgv[i] = argv[i];
+    }
+
+    return new Closure(encoded, toProxyArgv, rooter, argc);
 }
 
 JSBool Closure::execute(Membrane *m, JSContext *cx,
@@ -775,20 +794,11 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
 
     auto_arr<jsval> argv(new jsval[_argc]);          // ensure it gets freed
     AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
-
-    if (_clonedArgv.get()) {
-        for (int i = 0; i < _argc; i++) {
-            if (!_clonedArgv[i]->unpack(cx, &argv[i])) {
-                return JS_FALSE;
-            }
-        }
-    } else {
-        if (!argv.get()) return JS_FALSE;
-        for (int i = 0; i < _argc; i++) {
-            argv[i] = _toProxyArgv[i];
-            if (!m->wrap(&argv[i]))
-                return JS_FALSE;
-        }
+    if (!argv.get()) return JS_FALSE;
+    for (int i = 0; i < _argc; i++) {
+        argv[i] = _toProxyArgv[i];
+        if (!m->wrap(&argv[i]))
+            return JS_FALSE;
     }
 
     return JS_CallFunctionValue(cx, global, fnval.value(),
@@ -1034,11 +1044,6 @@ void TaskContext::resume(Runner *runner) {
     return;
 }
 
-bool
-TaskContext::copyArguments() {
-    return _runner->copyArguments();
-}
-
 JSClass TaskContext::jsClass = {
     "TaskContext", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
@@ -1210,14 +1215,10 @@ void Runner::terminate() {
     _threadPool->terminate();
 }
 
-bool Runner::copyArguments() {
-    return _threadPool->copyArguments();
-}
-
 // ______________________________________________________________________
 // ThreadPool impl
 
-ThreadPool *ThreadPool::create(bool copyArguments) {
+ThreadPool *ThreadPool::create() {
     PRLock *lock = check_null(PR_NewLock());
     PRCondVar *condVar = check_null(PR_NewCondVar(lock));
 
@@ -1230,8 +1231,7 @@ ThreadPool *ThreadPool::create(bool copyArguments) {
     memset(threads, 0, sizeof(Runner*) * threadCount);
 
     ThreadPool *tp = check_null(
-        new ThreadPool(lock, condVar, threadCount, threads, runners,
-                       copyArguments));
+        new ThreadPool(lock, condVar, threadCount, threads, runners));
 
     for (int i = 0; i < threadCount; i++) {
         runners[i] = check_null(Runner::create(tp, i));
@@ -1351,8 +1351,8 @@ void ThreadPool::await() {
 // ______________________________________________________________________
 // Init
 
-ThreadPool *init(const char *scriptfn, bool copyArguments) {
-    ThreadPool *tp = check_null(ThreadPool::create(copyArguments));
+ThreadPool *init(const char *scriptfn) {
+    ThreadPool *tp = check_null(ThreadPool::create());
     RootTaskHandle *rth = new RootTaskHandle(scriptfn);
     tp->start(rth);
     tp->await();

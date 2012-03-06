@@ -2,7 +2,7 @@
 #define pjs_h___
 
 namespace pjs {
-void init(const char *initialScript, bool copyArguments);
+void init(const char *initialScript);
 }
 
 #endif /* pjs_h___ */
