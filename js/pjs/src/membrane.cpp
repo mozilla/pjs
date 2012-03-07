@@ -68,8 +68,8 @@ public:
     }
 };
 
-Membrane *Membrane::create(JSContext* cx, JSObject *gl) {
-    Membrane *m = new Membrane(cx, gl);
+Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx, JSObject *gl) {
+    Membrane *m = new Membrane(parentCx, childCx, gl);
     if (!m->_map.init()) {
         delete m;
         return NULL;

@@ -310,8 +310,8 @@ protected:
 public:
     virtual ~TaskHandle() {}
 
-    virtual JSBool execute(Membrane *m, JSContext *cx, JSObject *taskctx,
-                           JSObject *global, jsval *rval) = 0;
+    virtual JSBool execute(JSContext *cx, JSObject *global,
+                           auto_ptr<Membrane> &rmembrane, jsval *rval) = 0;
     virtual void onCompleted(Runner *runner, jsval result) = 0;
 };
 
@@ -324,8 +324,8 @@ public:
         : scriptfn(afn)
     {}
 
-    virtual JSBool execute(Membrane *m, JSContext *cx, JSObject *taskctx,
-                           JSObject *global, jsval *rval);
+    virtual JSBool execute(JSContext *cx, JSObject *global,
+                           auto_ptr<Membrane> &rmembrane, jsval *rval);
     virtual void onCompleted(Runner *runner, jsval result);
 };
 
@@ -373,8 +373,8 @@ public:
         clearResult();
     }
 
-    virtual JSBool execute(Membrane *m, JSContext *cx, JSObject *taskctx,
-                           JSObject *global, jsval *rval);
+    virtual JSBool execute(JSContext *cx, JSObject *global,
+                           auto_ptr<Membrane> &rmembrane, jsval *rval);
     virtual void onCompleted(Runner *runner, jsval result);
 
     // Invoked by the parent of the task:
@@ -404,20 +404,33 @@ private:
     jsrefcount _outstandingChildren;
     ChildTaskHandleVec _toFork;
     Runner *_runner;
+
+    // The membrane is initially NULL.  When _taskHandle->execute() is
+    // called, it *may* create a membrane and store it in _membrane.
+    // I find this a little goofy but I can't seem to come up with a
+    // more elegant structure at the moment.  The situation is that
+    // RootTaskHandle's do not require a membrane, and indeed cannot
+    // create one as there is no parent context.  So it is really the
+    // TaskHandle which ought to create the membrane, and yet it is
+    // really the TaskContext which ought to store it, so that it can
+    // be used during GC tracing and so forth.  So we end up with the
+    // current scenario, where the task handle creates it in execute
+    // but stores it in the TaskContext.
     auto_ptr<Membrane> _membrane;
+
 #   ifdef PJS_CHECK_CX
     JSContext *_checkCx;
 #   endif
 
     TaskContext(JSContext *cx, TaskHandle *aTask,
                 Runner *aRunner, JSObject *aGlobal,
-                JSObject *object, auto_ptr<Membrane> &aMembrane)
+                JSObject *object)
         : _taskHandle(aTask)
         , _global(aGlobal)
         , _object(object)
         , _outstandingChildren(0)
         , _runner(aRunner)
-        , _membrane(aMembrane)
+        , _membrane(NULL)
 #       ifdef PJS_CHECK_CX
         , _checkCx(cx)
 #       endif
@@ -434,6 +447,8 @@ public:
                                TaskHandle *aTask,
                                Runner *aRunner,
                                JSObject *aGlobal);
+
+    JSContext *cx();
 
     void addTaskToFork(ChildTaskHandle *th);
 
@@ -817,8 +832,8 @@ void RootTaskHandle::onCompleted(Runner *runner, jsval result) {
     runner->terminate();
 }
 
-JSBool RootTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
-                               JSObject *global, jsval *rval) {
+JSBool RootTaskHandle::execute(JSContext *cx, JSObject *global,
+                               auto_ptr<Membrane> &rmembrane, jsval *rval) {
     JSScript *scr = JS_CompileUTF8File(cx, global, scriptfn);
     if (scr == NULL)
         return 0;
@@ -831,9 +846,14 @@ void ChildTaskHandle::onCompleted(Runner *runner, jsval result) {
     _parent->onChildCompleted();
 }
 
-JSBool ChildTaskHandle::execute(Membrane *m, JSContext *cx, JSObject *taskctx,
-                                JSObject *global, jsval *rval) {
-    return _closure->execute(m, cx, global, rval);
+JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
+                                auto_ptr<Membrane> &rmembrane, jsval *rval) {
+    auto_ptr<Membrane> m(Membrane::create(_parent->cx(), cx, global));
+    if (!m.get()) {
+        return false;
+    }
+    rmembrane = m;
+    return _closure->execute(rmembrane.get(), cx, global, rval);
 }
 
 ChildTaskHandle *ChildTaskHandle::create(JSContext *cx,
@@ -911,6 +931,14 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, uintN argc, jsval *vp) {
     TaskContext *taskContext = static_cast<TaskContext*>(
         JS_GetContextPrivate(cx));
     JSObject *self = JS_THIS_OBJECT(cx, vp);
+
+    // Is this a proxied task handle?
+    if (Membrane::IsCrossThreadWrapper(self)) {
+        JS_ReportError(cx, "all child tasks not yet completed");
+        return false;
+    }
+
+    // Sanity check
     if (!JS_InstanceOf(cx, self, &jsClass, NULL)) {
         JS_ReportError(cx, "expected TaskHandle as this");
         return JS_FALSE;
@@ -941,14 +969,8 @@ TaskContext *TaskContext::create(JSContext *cx,
         return NULL;
     }
 
-    auto_ptr<Membrane> membrane(Membrane::create(cx, aGlobal));
-    if (!membrane.get()) {
-        return NULL;
-    }
-
     // Create C++ object:
-    auto_ptr<TaskContext> tc(new TaskContext(cx, aTask, aRunner, aGlobal,
-                                             object, membrane));
+    auto_ptr<TaskContext> tc(new TaskContext(cx, aTask, aRunner, aGlobal, object));
     if (!tc.get() || !tc->addRoot(cx)) {
         return NULL;
     }
@@ -969,6 +991,10 @@ JSBool TaskContext::addRoot(JSContext *cx) {
 JSBool TaskContext::delRoot(JSContext *cx) {
     JS_RemoveObjectRoot(cx, &_object);
     JS_RemoveObjectRoot(cx, &_global);
+}
+
+JSContext *TaskContext::cx() {
+    return _runner->cx();
 }
 
 void TaskContext::addTaskToFork(ChildTaskHandle *th) {
@@ -1012,8 +1038,7 @@ void TaskContext::resume(Runner *runner) {
         jsval fn = JS_GetReservedSlot(_object, OnCompletionSlot);
         if (JSVAL_IS_NULL(fn)) {
             // Initial generation: no callback fn set yet.
-            if (!_taskHandle->execute(_membrane.get(), cx, _object,
-                                      _global, &rval))
+            if (!_taskHandle->execute(cx, _global, _membrane, &rval))
                 break;
         } else {
             // Subsequent generation: callback fn was set last time.

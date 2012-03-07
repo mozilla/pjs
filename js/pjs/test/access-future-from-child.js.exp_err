@@ -1,1 +1,1 @@
-<no filename>:0:uncaught exception: Error: all child tasks not yet completed
+test/access-future-from-child.js:2:Error: all child tasks not yet completed

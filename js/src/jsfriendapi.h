@@ -810,6 +810,9 @@ PJS_SetSuspended(JSContext *cx);
 extern JS_FRIEND_API(void)
 PJS_ClearSuspended(JSContext *cx);
 
+extern JS_FRIEND_API(bool)
+PJS_SetReadOnly(JSContext *cx, bool nv);
+
 } /* namespace js */
 
 #endif

@@ -59,8 +59,6 @@ private:
     static const uintN MEMBRANE = Wrapper::LAST_USED_FLAG << 1;
     static const uintN LAST_USED_FLAG = MEMBRANE;
 
-    static bool IsCrossThreadWrapper(const JSObject *wrapper);
-
     // Maps from objects in the parent space to wrapper object in
     // child space.
     WrapperMap _map;
@@ -69,14 +67,15 @@ private:
     JSObject *_childGlobal;
     JSCompartment *_childCompartment;
 
-    Membrane(JSContext* cx, JSObject *gl)
+    Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl)
         : Wrapper(MEMBRANE)
-        , _childCx(cx)
+        , _parentCx(parentCx)
+        , _childCx(childCx)
         , _childGlobal(gl)
     {
     }
 public:
-    static Membrane *create(JSContext* cx, JSObject *gl);
+    static Membrane *create(JSContext *parentCx, JSContext* childCx, JSObject *gl);
 
     virtual bool enter(JSContext *cx, JSObject *wrapper,
                        jsid id, Action act, bool *bp);
@@ -93,6 +92,8 @@ public:
     bool wrap(StrictPropertyOp *propp);
     bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
+
+    static bool IsCrossThreadWrapper(const JSObject *wrapper);
 
     // ______________________________________________________________________
 
