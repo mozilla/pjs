@@ -215,6 +215,9 @@ struct JSCompartment
     // True if the compartment has active child threads.
     bool                         PJS_isSuspended;
 
+    // True if the compartment is accessing parent data.
+    bool                         PJS_isReadOnly;
+
     /*
      * Pool for analysis and intermediate type information in this compartment.
      * Cleared on every GC, unless the GC happens during analysis (indicated
@@ -426,6 +429,11 @@ namespace js {
 inline bool PJS_isSuspended(JSContext *cx)
 {
     return cx->compartment->PJS_isSuspended;
+}
+
+inline bool PJS_isReadOnly(JSContext *cx)
+{
+    return cx->compartment->PJS_isReadOnly;
 }
 
 static inline MathCache *

@@ -193,6 +193,10 @@ public:
     }
 };
 
+inline bool ValueIsFunction(JSContext *cx, const Value &v) {
+    return v.isObject() && JS_ObjectIsFunction(cx, v.toObjectOrNull());
+}
+
 // ____________________________________________________________
 // Misc
 
@@ -267,22 +271,24 @@ public:
 
 class Closure {
 private:
-    auto_arr<char> _text;
-    auto_arr<jsval> _toProxyArgv;
-    auto_ptr<ArrRooter> _rooter;   // <-- note: ordering is significant here.
+    JSContext *_cx;
+    auto_arr<jsval> _toProxy;
     uintN _argc;
+    uintN _rooted;
 
-    Closure(auto_arr<char>& text, auto_arr<jsval>& toProxyArgv,
-            auto_ptr<ArrRooter>& rooter, uintN argc)
-        : _text(text)
-        , _toProxyArgv(toProxyArgv)
-        , _rooter(rooter)
+    Closure(JSContext *cx, auto_arr<jsval>& toProxy, uintN argc)
+        : _cx(cx)
+        , _toProxy(toProxy)
         , _argc(argc)
+        , _rooted(0)
     {}
 
+    bool addRoots();
+    void delRoots();
+
 public:
-    static Closure *create(JSContext *cx, JSString *text,
-                           const jsval *argv, int argc);
+    static Closure *create(JSContext *cx, jsval fn, const jsval *argv, int argc);
+    ~Closure();
 
     JSBool execute(Membrane *m, JSContext *cx,
                    JSObject *global, jsval *rval);
@@ -644,8 +650,7 @@ JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
     jsval *argv = JS_ARGV(cx, vp);
-    JSString *str = JS_ValueToString(cx, argv[0]);
-    auto_ptr<Closure> closure(Closure::create(cx, str, argv+1, argc-1));
+    auto_ptr<Closure> closure(Closure::create(cx, argv[0], argv+1, argc-1));
     if (!closure.get()) {
         return JS_FALSE;
     }
@@ -754,55 +759,55 @@ JSBool ClonedObj::unpack(JSContext *cx, jsval *rval) {
 // ______________________________________________________________________
 // Closure impl
 
-Closure *Closure::create(JSContext *cx, JSString *str,
-                         const jsval *argv, int argc) {
-    int length = JS_GetStringEncodingLength(cx, str);
-    auto_arr<char> encoded(new char[length+3]);
-    if (!encoded.get()) {
-        JS_ReportOutOfMemory(cx);
-        return NULL;
-    }
-    JS_EncodeStringToBuffer(str, &encoded[1], length);
-    encoded[0] = '(';
-    encoded[length+1] = ')';
-    encoded[length+2] = 0;
-
+Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc) {
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
-    auto_arr<jsval> toProxyArgv(new jsval[argc]);
-    if (!toProxyArgv.get()) {
-        JS_ReportOutOfMemory(cx);
-        return NULL;
-    }
-    auto_ptr<ArrRooter> rooter(ArrRooter::create(cx, toProxyArgv.get(), argc));
-    if (!rooter.get()) {
-        return NULL;
-    }
-
+    auto_arr<jsval> toProxy(new jsval[argc + 1]);
+    if (!toProxy.get()) { JS_ReportOutOfMemory(cx); return NULL; }
+    toProxy[0] = fn;
     for (int i = 0; i < argc; i++) {
-        toProxyArgv[i] = argv[i];
+        toProxy[i + 1] = argv[i];
     }
 
-    return new Closure(encoded, toProxyArgv, rooter, argc);
+    auto_ptr<Closure> c(new Closure(cx, toProxy, argc));
+    if (!c.get()) { JS_ReportOutOfMemory(cx); return NULL; }
+    if (!c->addRoots()) { return NULL; }
+    return c.release();
+}
+
+bool Closure::addRoots() {
+    for (; _rooted < _argc; _rooted++) {
+        if (!JS_AddNamedValueRoot(_cx, &_toProxy[_rooted], "Closure::toProxyArgv[]"))
+            return false;
+    }
+}
+
+void Closure::delRoots() {
+    for (uintN i = 0; i < _rooted; i++)
+        JS_RemoveValueRoot(_cx, &_toProxy[i]);
+}
+
+Closure::~Closure() {
+    delRoots();
 }
 
 JSBool Closure::execute(Membrane *m, JSContext *cx,
                         JSObject *global, jsval *rval) {
-    AutoValueRooter fnval(cx);
-    if (!JS_EvaluateScript(cx, global, _text.get(), strlen(_text.get()),
-                           "fork", 1, fnval.addr()))
-        return JS_FALSE;
+
+    // Wrap the function:
+    AutoValueRooter fn(cx, _toProxy[0]);
+    if (!m->wrap(fn.addr())) { return false; }
+    JS_ASSERT(ValueIsFunction(cx, fn.value()));
 
     auto_arr<jsval> argv(new jsval[_argc]);          // ensure it gets freed
-    AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
     if (!argv.get()) return JS_FALSE;
+    AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
     for (int i = 0; i < _argc; i++) {
-        argv[i] = _toProxyArgv[i];
+        argv[i] = _toProxy[i + 1];
         if (!m->wrap(&argv[i]))
             return JS_FALSE;
     }
 
-    return JS_CallFunctionValue(cx, global, fnval.value(),
-                                _argc, argv.get(), rval);
+    return JS_CallFunctionValue(cx, global, fn.value(), _argc, argv.get(), rval);
 }
 
 // ______________________________________________________________________

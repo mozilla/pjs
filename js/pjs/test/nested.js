@@ -8,13 +8,13 @@ function fib(fib, n) {
         let f2 = fork(fib, fib, n-2);
         oncompletion(function() {
             return f1.get() + f2.get();
-        })
+        });
     }
 }
 
-f5 = fork(fib, fib.toString(), 5);
-f6 = fork(fib, fib.toString(), 6);
-f7 = fork(fib, fib.toString(), 7);
+f5 = fork(fib, fib, 5);
+f6 = fork(fib, fib, 6);
+f7 = fork(fib, fib, 7);
 oncompletion(function() {
     print(f5.get())
     assert(f5.get() == 5, "f5.get() == " + f5.get())

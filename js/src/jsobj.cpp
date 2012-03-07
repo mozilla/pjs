@@ -5130,7 +5130,7 @@ js_NativeGetInline(JSContext *cx, JSObject *receiver, JSObject *obj, JSObject *p
         return false;
 
     /* Update slotful shapes according to the value produced by the getter. */
-    if (!PJS_isSuspended(cx) &&
+    if (!PJS_isReadOnly(cx) &&
         shape->hasSlot() &&
         pobj->nativeContains(cx, *shape)) {
         /* Method shapes were removed by methodReadBarrier under shape->get(). */

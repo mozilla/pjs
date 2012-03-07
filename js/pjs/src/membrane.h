@@ -64,6 +64,7 @@ private:
     // Maps from objects in the parent space to wrapper object in
     // child space.
     WrapperMap _map;
+    JSContext *_parentCx;
     JSContext *_childCx;
     JSObject *_childGlobal;
     JSCompartment *_childCompartment;
@@ -84,7 +85,13 @@ public:
     // child compartment that will permit read access to the parent
     // object.  returns true if successful.
     bool wrap(Value *vp);
-
+    bool unwrap(Value *vp);
+    bool wrapId(jsid *idp);
+    bool unwrapId(jsid *idp);
+    bool wrap(AutoIdVector &props);
+    bool wrap(PropertyOp *propp);
+    bool wrap(StrictPropertyOp *propp);
+    bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
 
     // ______________________________________________________________________
@@ -99,24 +106,6 @@ public:
     virtual bool getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
     virtual bool delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp) MOZ_OVERRIDE;
     virtual bool enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
-
-    /* ES5 Harmony derived wrapper traps. */
-    virtual bool has(JSContext *cx, JSObject *wrapper, jsid id, bool *bp) MOZ_OVERRIDE;
-    virtual bool hasOwn(JSContext *cx, JSObject *wrapper, jsid id, bool *bp) MOZ_OVERRIDE;
-    virtual bool get(JSContext *cx, JSObject *wrapper, JSObject *receiver, jsid id, Value *vp) MOZ_OVERRIDE;
-    virtual bool set(JSContext *cx, JSObject *wrapper, JSObject *receiver, jsid id, bool strict,
-                     Value *vp) MOZ_OVERRIDE;
-    virtual bool keys(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
-    virtual bool iterate(JSContext *cx, JSObject *wrapper, uintN flags, Value *vp) MOZ_OVERRIDE;
-
-    /* Spidermonkey extensions. */
-    virtual bool call(JSContext *cx, JSObject *wrapper, uintN argc, Value *vp) MOZ_OVERRIDE;
-    virtual bool construct(JSContext *cx, JSObject *wrapper, uintN argc, Value *argv, Value *rval) MOZ_OVERRIDE;
-    virtual bool nativeCall(JSContext *cx, JSObject *wrapper, Class *clasp, Native native, CallArgs args) MOZ_OVERRIDE;
-    virtual bool hasInstance(JSContext *cx, JSObject *wrapper, const Value *vp, bool *bp) MOZ_OVERRIDE;
-    virtual JSString *obj_toString(JSContext *cx, JSObject *wrapper) MOZ_OVERRIDE;
-    virtual JSString *fun_toString(JSContext *cx, JSObject *wrapper, uintN indent) MOZ_OVERRIDE;
-    virtual bool defaultValue(JSContext *cx, JSObject *wrapper, JSType hint, Value *vp) MOZ_OVERRIDE;
 
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
     

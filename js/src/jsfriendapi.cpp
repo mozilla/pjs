@@ -785,4 +785,12 @@ PJS_ClearSuspended(JSContext *cx) {
     cx->compartment->PJS_isSuspended = false;
 }
 
+extern JS_FRIEND_API(bool)
+PJS_SetReadOnly(JSContext *cx, bool nv) {
+    JS_ASSERT(!PJS_isSuspended(cx));
+    bool v = cx->compartment->PJS_isReadOnly;
+    cx->compartment->PJS_isReadOnly = nv;
+    return v;
+}
+
 } // namespace js
