@@ -1,0 +1,3 @@
+test/assign.js:7:Error: Cannot modify parent objects
+test/assign.js:12:Error: Assertion failure: f.get() == null
+
