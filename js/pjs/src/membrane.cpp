@@ -45,6 +45,7 @@
 #include "jsobj.h"
 #include "jscompartment.h"
 #include "jsinterp.h"
+#include "util.h"
 
 using namespace JS;
 using namespace js;
@@ -68,6 +69,66 @@ public:
     }
 };
 
+class ProxyRooter
+{
+private:
+    JSContext *_cx;
+    auto_arr<Value> _values;
+    int _size, _capacity;
+    ProxyRooter *_next;
+
+    ProxyRooter(JSContext *cx, auto_arr<Value> &v, int c, ProxyRooter *n)
+        : _cx(cx)
+        , _values(v)
+        , _size(0)
+        , _capacity(c)
+        , _next(n)
+    {}
+
+public:
+    static ProxyRooter *create(JSContext *cx, int c, ProxyRooter *n) {
+        auto_arr<Value> values(new Value[c]);
+        if (!values.get()) {
+            JS_ReportOutOfMemory(cx);
+            return NULL;
+        }
+
+        ProxyRooter *pr = new ProxyRooter(cx, values, c, n);
+        if (!pr) {
+            JS_ReportOutOfMemory(cx);
+            return NULL;
+        }
+
+        return pr;
+    }
+
+    ~ProxyRooter() {
+        for (int i = 0; i < _size; i++) {
+            JS_RemoveValueRoot(_cx, &_values[i]);
+        }
+        delete _next;
+    }
+
+    JSBool add(Value value, ProxyRooter **rval) {
+        JS_ASSERT(*rval == this);
+
+        if (_size == _capacity) {
+            ProxyRooter *pr = ProxyRooter::create(_cx, _capacity, this);
+            if (!pr) {
+                return false;
+            }
+            *rval = pr;
+            return pr->add(value, rval);
+        }
+
+        _values[_size] = value;
+        if (!JS_AddValueRoot(_cx, &_values[_size]))
+            return false;
+        _size++;
+        return true;
+    }
+};
+
 Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx, JSObject *gl) {
     Membrane *m = new Membrane(parentCx, childCx, gl);
     if (!m->_map.init()) {
@@ -76,6 +137,10 @@ Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx, JSObject *gl
     }
     
     return m;
+}
+
+Membrane::~Membrane() {
+    delete _rooter;
 }
 
 bool
@@ -99,6 +164,22 @@ bool Membrane::wrap(JSObject **objp)
     if (!wrap(tvr.addr()))
         return false;
     *objp = &tvr.value().toObject();
+    return true;
+}
+
+JSBool Membrane::put(Value key, Value value) {
+    if (_rooter == NULL) {
+        _rooter = ProxyRooter::create(_childCx, 128, NULL);
+        if (!_rooter)
+            return false;
+    }
+    if (!_map.put(key, value)) {
+        return false;
+    }
+    if (!_rooter->add(value, &_rooter)) {
+        _map.remove(key);
+        return false;
+    }
     return true;
 }
 
@@ -145,7 +226,7 @@ bool Membrane::wrap(Value *vp) {
         if (!wrapped)
             return false;
         vp->setString(wrapped);
-        return _map.put(orig, *vp);
+        return put(orig, *vp);
     }
 
     JSObject *obj = &vp->toObject();
@@ -164,7 +245,7 @@ bool Membrane::wrap(Value *vp) {
 
         JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
         vp->setObject(*wrapper);
-        return _map.put(OBJECT_TO_JSVAL(obj), *vp);
+        return put(OBJECT_TO_JSVAL(obj), *vp);
     }
 
     /*
@@ -186,7 +267,7 @@ bool Membrane::wrap(Value *vp) {
 
     JSObject *wrapper = New(cx, obj, proto, _childGlobal, this);
     vp->setObject(*wrapper);
-    return _map.put(GetProxyPrivate(wrapper), *vp);
+    return put(GetProxyPrivate(wrapper), *vp);
 }
 
 bool Membrane::unwrap(Value *vp) {

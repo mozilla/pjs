@@ -53,6 +53,8 @@ namespace pjs {
 
 using namespace js;
 
+class ProxyRooter;
+
 class Membrane : Wrapper
 {
 private:
@@ -66,16 +68,23 @@ private:
     JSContext *_childCx;
     JSObject *_childGlobal;
     JSCompartment *_childCompartment;
+    ProxyRooter *_rooter;
 
     Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl)
         : Wrapper(MEMBRANE)
         , _parentCx(parentCx)
         , _childCx(childCx)
         , _childGlobal(gl)
+        , _childCompartment(_childGlobal->compartment())
+        , _rooter(NULL)
     {
     }
+
+    JSBool put(Value key, Value value);
+
 public:
     static Membrane *create(JSContext *parentCx, JSContext* childCx, JSObject *gl);
+    ~Membrane();
 
     virtual bool enter(JSContext *cx, JSObject *wrapper,
                        jsid id, Action act, bool *bp);
