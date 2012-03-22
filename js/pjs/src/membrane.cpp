@@ -51,6 +51,12 @@ using namespace JS;
 using namespace js;
 using namespace std;
 
+#if 1
+#  define DEBUG(...) 
+#else
+#  define DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#endif
+
 namespace pjs {
 
 char *Membrane::MEMBRANE = "Membrane";
@@ -67,6 +73,7 @@ private:
 
 public:
     AutoReadOnly(JSContext *cx) {
+        _cx = cx;
         _v = PJS_SetReadOnly(cx, true);
     }
 
@@ -248,12 +255,13 @@ bool Membrane::wrap(Value *vp) {
             return false;
 
         JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
+        JSFunction *cloned_fn = wrapper->toFunction();
+        JS_ASSERT(cloned_fn->atom == NULL); // FIXME: clone this
         vp->setObject(*wrapper);
-        fprintf(stderr,
-                "Wrapping fn %p/%p to %p/%p for %p->%p\n",
-                fn, fn->maybeScript(),
-                wrapper, wrapper->toFunction()->maybeScript(),
-                _parentCx, _childCx);
+        DEBUG("Wrapping fn %p/%p to %p/%p for %p->%p\n",
+              fn, fn->maybeScript(),
+              wrapper, wrapper->toFunction()->maybeScript(),
+              _parentCx, _childCx);
         return put(OBJECT_TO_JSVAL(obj), *vp);
     }
 
@@ -278,10 +286,9 @@ bool Membrane::wrap(Value *vp) {
         cx, this, ObjectValue(*obj), proto, _childGlobal,
         obj->isCallable() ? obj : NULL, NULL);
     vp->setObject(*wrapper);
-    fprintf(stderr,
-            "Wrapping obj %p to %p for %p->%p\n",
-            obj, wrapper,
-            _parentCx, _childCx);
+    DEBUG("Wrapping obj %p to %p for %p->%p\n",
+          obj, wrapper,
+          _parentCx, _childCx);
     return put(GetProxyPrivate(wrapper), *vp);
 }
 
