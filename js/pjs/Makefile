@@ -6,6 +6,7 @@ OBJS =						\
 	${BUILD}/pjs.o				\
 	${BUILD}/main.o				\
 	${BUILD}/membrane.o
+HEADERS=${wildcard ${SRC}/*.h}
 
 .PHONY : all TAGS clean cleaner test
 
@@ -20,7 +21,7 @@ ${BUILD}/MC: ${MC}/js/src/configure
 
 # Add mozilla-central/js/src to our include headers so that
 # we can include non-public headers like "jsobj.h"
-${BUILD}/%.o: ${SRC}/%.cpp ${BUILD}/MC
+${BUILD}/%.o: ${SRC}/%.cpp ${HEADERS} ${BUILD}/MC
 	g++ -DDEBUG -O0 -g -w -m64 -fno-rtti			\
 		$$(${BUILD}/install/bin/js-config --cflags)	\
 		-I ${MC}/js/src								\

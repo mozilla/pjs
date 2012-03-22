@@ -53,6 +53,12 @@ using namespace std;
 
 namespace pjs {
 
+char *Membrane::MEMBRANE = "Membrane";
+
+static JSObject *wrappedObject(JSObject *obj) {
+    return GetProxyPrivate(obj).toObjectOrNull();
+}
+
 class AutoReadOnly
 {
 private:
@@ -146,9 +152,7 @@ Membrane::~Membrane() {
 bool
 Membrane::IsCrossThreadWrapper(const JSObject *wrapper)
 {
-    if (!IsWrapper(wrapper))
-        return false;
-    return !!(Wrapper::wrapperHandler(wrapper)->flags() & MEMBRANE);
+    return wrapper->isWrapper() && GetProxyHandler(wrapper) == (void*)MEMBRANE;
 }
 
 static inline JSCompartment*
@@ -245,6 +249,11 @@ bool Membrane::wrap(Value *vp) {
 
         JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
         vp->setObject(*wrapper);
+        fprintf(stderr,
+                "Wrapping fn %p/%p to %p/%p for %p->%p\n",
+                fn, fn->maybeScript(),
+                wrapper, wrapper->toFunction()->maybeScript(),
+                _parentCx, _childCx);
         return put(OBJECT_TO_JSVAL(obj), *vp);
     }
 
@@ -265,8 +274,14 @@ bool Membrane::wrap(Value *vp) {
     // FIXME--using global as the parent parameter to New() here is
     // wrong but should work for now.  We should eventually proxy it.
 
-    JSObject *wrapper = New(cx, obj, proto, _childGlobal, this);
+    JSObject *wrapper = NewProxyObject(
+        cx, this, ObjectValue(*obj), proto, _childGlobal,
+        obj->isCallable() ? obj : NULL, NULL);
     vp->setObject(*wrapper);
+    fprintf(stderr,
+            "Wrapping obj %p to %p for %p->%p\n",
+            obj, wrapper,
+            _parentCx, _childCx);
     return put(GetProxyPrivate(wrapper), *vp);
 }
 
@@ -284,7 +299,7 @@ bool Membrane::unwrap(Value *vp) {
         JS_ASSERT(obj->compartment() == _childCompartment);
 
         if (IsCrossThreadWrapper(obj)) {
-            vp->setObject(*Wrapper::wrappedObject(obj));
+            vp->setObject(*wrappedObject(obj));
             return true;
         }
     }
@@ -383,31 +398,11 @@ Membrane::wrap(PropertyDescriptor *desc)
            wrap(&desc->value);
 }
 
-bool Membrane::enter(JSContext *cx, JSObject *wrapper,
-                     jsid id, Action act, bool *bp)
-{
-    switch (act) {
-      case GET: {
-          return true;  // allow GET operations
-      }
-      case SET: {
-          JS_ReportError(cx, "Cannot modify parent objects");
-          *bp = false;
-          return false; // prevent write operations
-      }
-      case CALL: {
-          JS_ReportError(cx, "Cannot call methods on parent objects");
-          *bp = false;
-          return false; // for now, prevent call operations
-      }
-    }
-}
-
-#define PIERCE(cx, wrapper, mode, pre, op, post)            \
-    JS_BEGIN_MACRO                                          \
-        AutoReadOnly ro(cx);                                \
-        bool ok = (pre) && (op);                            \
-        return ok && (post);                                \
+#define PIERCE(cx, wrapper, pre, op, post)      \
+    JS_BEGIN_MACRO                              \
+        AutoReadOnly ro(cx);                    \
+        bool ok = (pre) && (op);                \
+        return ok && (post);                    \
     JS_END_MACRO
 
 #define NOTHING (true)
@@ -416,9 +411,10 @@ bool
 Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
                                 bool set, PropertyDescriptor *desc)
 {
-    PIERCE(cx, wrapper, set ? SET : GET,
+    desc->obj = NULL; // default result if we refuse to perform this action
+    PIERCE(cx, wrapper,
            unwrapId(&id),
-           Wrapper::getPropertyDescriptor(cx, wrapper, id, set, desc),
+           JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id, JSRESOLVE_QUALIFIED, desc),
            wrap(desc));
 }
 
@@ -426,9 +422,10 @@ bool
 Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
                                                   bool set, PropertyDescriptor *desc)
 {
-    PIERCE(cx, wrapper, set ? SET : GET,
+    desc->obj = NULL;
+    PIERCE(cx, wrapper,
            unwrapId(&id),
-           Wrapper::getOwnPropertyDescriptor(cx, wrapper, id, set, desc),
+           GetOwnPropertyDescriptor(cx, wrappedObject(wrapper), id, desc),
            wrap(desc));
 }
 
@@ -443,9 +440,10 @@ Membrane::defineProperty(JSContext *cx, JSObject *proxy, jsid id,
 bool
 Membrane::getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
 {
-    PIERCE(cx, wrapper, GET,
+    jsid id = JSID_VOID;
+    PIERCE(cx, wrapper,
            NOTHING,
-           Wrapper::getOwnPropertyNames(cx, wrapper, props),
+           GetPropertyNames(cx, wrappedObject(wrapper), JSITER_OWNONLY | JSITER_HIDDEN, &props),
            wrap(props));
 }
 
@@ -459,10 +457,17 @@ Membrane::delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp)
 bool
 Membrane::enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
 {
-    PIERCE(cx, wrapper, GET,
+    PIERCE(cx, wrapper,
            NOTHING,
-           Wrapper::enumerate(cx, wrapper, props),
+           GetPropertyNames(cx, wrappedObject(wrapper), 0, &props),
            wrap(props));
+}
+
+bool
+Membrane::fix(JSContext *cx, JSObject *wrapper, Value *vp)
+{
+    vp->setUndefined();
+    return true;
 }
 
 void

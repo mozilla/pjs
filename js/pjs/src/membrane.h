@@ -46,7 +46,7 @@
 #include <jsgc.h>
 #include <jsfriendapi.h>
 #include <HashTable.h>
-#include <jswrapper.h>
+#include <jsproxy.h>
 #include <jscompartment.h>
 
 namespace pjs {
@@ -55,12 +55,9 @@ using namespace js;
 
 class ProxyRooter;
 
-class Membrane : Wrapper
+class Membrane : ProxyHandler
 {
 private:
-    static const uintN MEMBRANE = Wrapper::LAST_USED_FLAG << 1;
-    static const uintN LAST_USED_FLAG = MEMBRANE;
-
     // Maps from objects in the parent space to wrapper object in
     // child space.
     WrapperMap _map;
@@ -71,7 +68,7 @@ private:
     ProxyRooter *_rooter;
 
     Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl)
-        : Wrapper(MEMBRANE)
+        : ProxyHandler(MEMBRANE)
         , _parentCx(parentCx)
         , _childCx(childCx)
         , _childGlobal(gl)
@@ -82,12 +79,11 @@ private:
 
     JSBool put(Value key, Value value);
 
+    static char *MEMBRANE;
+
 public:
     static Membrane *create(JSContext *parentCx, JSContext* childCx, JSObject *gl);
     ~Membrane();
-
-    virtual bool enter(JSContext *cx, JSObject *wrapper,
-                       jsid id, Action act, bool *bp);
 
     // when invoked with a parent object, modifies vp to be a proxy in
     // child compartment that will permit read access to the parent
@@ -116,6 +112,7 @@ public:
     virtual bool getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
     virtual bool delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp) MOZ_OVERRIDE;
     virtual bool enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
+    virtual bool fix(JSContext *cx, JSObject *proxy, Value *vp) MOZ_OVERRIDE;
 
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
     
