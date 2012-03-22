@@ -142,8 +142,9 @@ public:
     }
 };
 
-Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx, JSObject *gl) {
-    Membrane *m = new Membrane(parentCx, childCx, gl);
+Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx,
+                           JSObject *gl, JSNative *safeNatives) {
+    Membrane *m = new Membrane(parentCx, childCx, gl, safeNatives);
     if (!m->_map.init()) {
         delete m;
         return NULL;
@@ -159,7 +160,9 @@ Membrane::~Membrane() {
 bool
 Membrane::IsCrossThreadWrapper(const JSObject *wrapper)
 {
-    return wrapper->isWrapper() && GetProxyHandler(wrapper) == (void*)MEMBRANE;
+    return
+      wrapper->isProxy() &&
+      GetProxyHandler(wrapper)->family() == (void*)MEMBRANE;
 }
 
 static inline JSCompartment*
@@ -178,6 +181,18 @@ bool Membrane::wrap(JSObject **objp)
     return true;
 }
 
+bool Membrane::wrap(JSAtom **objp)
+{
+    if (!*objp)
+        return true;
+    AutoValueRooter tvr(_childCx, StringValue(*objp));
+    if (!wrap(tvr.addr()))
+        return false;
+    JSString *str = tvr.value().toString();
+    **objp = str->asAtom();
+    return true;
+}
+
 JSBool Membrane::put(Value key, Value value) {
     if (_rooter == NULL) {
         _rooter = ProxyRooter::create(_childCx, 128, NULL);
@@ -192,6 +207,13 @@ JSBool Membrane::put(Value key, Value value) {
         return false;
     }
     return true;
+}
+
+bool Membrane::isSafeNative(JSNative n) {
+    for (JSNative *p = _safeNatives; *p; p++)
+        if (*p == n)
+            return true;
+    return false;
 }
 
 bool Membrane::wrap(Value *vp) {
@@ -245,18 +267,24 @@ bool Membrane::wrap(Value *vp) {
     /* Split closures */
     if (JS_ObjectIsFunction(cx, obj)) {
         JSFunction *fn = obj->toFunction();
+        JSObject *env;
         if (!fn->isInterpreted()) {
-            JS_ReportError(cx, "Cannot access native functions from child tasks");
-            return false;
+            if (!isSafeNative(fn->native())) {
+                JS_ReportError(cx, 
+                               "Cannot access native functions "
+                               "from child tasks");
+                return false;
+            }
+            env = NULL;
+        } else {
+            env = fn->environment();
+            if (!wrap(&env))
+                return false;
         }
-
-        JSObject *env = fn->environment();
-        if (!wrap(&env))
-            return false;
 
         JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
         JSFunction *cloned_fn = wrapper->toFunction();
-        JS_ASSERT(cloned_fn->atom == NULL); // FIXME: clone this
+        wrap(&cloned_fn->atom); // FIXME: total hack
         vp->setObject(*wrapper);
         DEBUG("Wrapping fn %p/%p to %p/%p for %p->%p\n",
               fn, fn->maybeScript(),

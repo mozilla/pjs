@@ -848,7 +848,14 @@ void ChildTaskHandle::onCompleted(Runner *runner, jsval result) {
 
 JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
                                 auto_ptr<Membrane> &rmembrane, jsval *rval) {
-    auto_ptr<Membrane> m(Membrane::create(_parent->cx(), cx, global));
+
+    static JSNative safeNatives[] = {
+        ChildTaskHandle::jsGet,
+        NULL
+    };
+
+    auto_ptr<Membrane> m(Membrane::create(_parent->cx(), cx,
+                                          global, safeNatives));
     if (!m.get()) {
         return false;
     }

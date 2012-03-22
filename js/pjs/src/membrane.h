@@ -66,23 +66,29 @@ private:
     JSObject *_childGlobal;
     JSCompartment *_childCompartment;
     ProxyRooter *_rooter;
+    JSNative *_safeNatives;
 
-    Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl)
+    Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl,
+             JSNative *safeNatives)
         : ProxyHandler(MEMBRANE)
         , _parentCx(parentCx)
         , _childCx(childCx)
         , _childGlobal(gl)
         , _childCompartment(_childGlobal->compartment())
         , _rooter(NULL)
+        , _safeNatives(safeNatives)
     {
     }
+
+    bool isSafeNative(JSNative n);
 
     JSBool put(Value key, Value value);
 
     static char *MEMBRANE;
 
 public:
-    static Membrane *create(JSContext *parentCx, JSContext* childCx, JSObject *gl);
+    static Membrane *create(JSContext *parentCx, JSContext* childCx,
+                            JSObject *gl, JSNative *safeNatives);
     ~Membrane();
 
     // when invoked with a parent object, modifies vp to be a proxy in
@@ -97,6 +103,7 @@ public:
     bool wrap(StrictPropertyOp *propp);
     bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
+    bool wrap(JSAtom **objp);
 
     static bool IsCrossThreadWrapper(const JSObject *wrapper);
 
