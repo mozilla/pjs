@@ -864,6 +864,33 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
     if (!m.get()) {
         return false;
     }
+
+    // add (proxied) globals
+    {
+        AutoReadOnly ro(cx);
+        JSObject *parentGlobal = _parent->global();
+        JSIdArray *ids = JS_Enumerate(cx, parentGlobal);
+        for (int i = 0; i < ids->length; i++) {
+            jsid pid = ids->vector[i];
+            jsval pval;
+            if (!JS_GetPropertyById(cx, parentGlobal, pid, &pval))
+                return false;
+            if (!m->wrapId(&pid))
+                return false;
+            JSBool foundp;
+            if (!JS_HasPropertyById(cx, global, pid, &foundp))
+                return false;
+            if (!foundp) {
+                if (!m->wrap(&pval))
+                    return false;
+                AutoReadOnly rw(cx, false);
+                if (!JS_SetPropertyById(cx, global, pid, &pval))
+                    return false;
+            }
+        }
+        JS_DestroyIdArray(cx, ids);
+    }
+
     rmembrane = m;
     return _closure->execute(rmembrane.get(), cx, global, rval);
 }

@@ -65,22 +65,14 @@ static JSObject *wrappedObject(JSObject *obj) {
     return GetProxyPrivate(obj).toObjectOrNull();
 }
 
-class AutoReadOnly
-{
-private:
-    JSContext *_cx;
-    bool _v;
+AutoReadOnly::AutoReadOnly(JSContext *cx, bool ro) {
+    _cx = cx;
+    _v = PJS_SetReadOnly(cx, ro);
+}
 
-public:
-    AutoReadOnly(JSContext *cx) {
-        _cx = cx;
-        _v = PJS_SetReadOnly(cx, true);
-    }
-
-    ~AutoReadOnly() {
-        PJS_SetReadOnly(_cx, _v);
-    }
-};
+AutoReadOnly::~AutoReadOnly() {
+    PJS_SetReadOnly(_cx, _v);
+}
 
 class ProxyRooter
 {

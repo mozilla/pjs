@@ -55,6 +55,17 @@ using namespace js;
 
 class ProxyRooter;
 
+class AutoReadOnly
+{
+private:
+    JSContext *_cx;
+    bool _v;
+
+public:
+    AutoReadOnly(JSContext *cx, bool ro = true);
+    ~AutoReadOnly();
+};
+
 class Membrane : ProxyHandler
 {
 private:
