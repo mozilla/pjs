@@ -65,6 +65,12 @@ using namespace std;
 #  define PJS_ASSERT_CX(cx1, cx2) do {} while(false)
 #endif
 
+#if 1
+#  define DEBUG(...) 
+#else
+#  define DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#endif
+
 namespace pjs {
 
 /*************************************************************
@@ -231,21 +237,6 @@ public:
     JSBool unpack(JSContext *cx, jsval *rval);
 };
 
-class TaskSpec {
-private:
-    ClonedObj **_args;
-    char *_fntext;
-    
-    TaskSpec(ClonedObj **args, char *fntext)
-        : _args(args)
-        , _fntext(fntext)
-    {}
-public:
-    static JSBool create(JSContext *cx, jsval fnval,
-                         jsval *argvals, int argcnt);
-    ~TaskSpec();
-};
-
 // ____________________________________________________________
 // Closure interface
 
@@ -272,11 +263,12 @@ public:
 class Closure {
 private:
     JSContext *_cx;
-    auto_arr<jsval> _toProxy;
+    auto_arr<jsval> _toProxy; // [0] == fn, [1..argc] == args
     uintN _argc;
     uintN _rooted;
 
-    Closure(JSContext *cx, auto_arr<jsval>& toProxy, uintN argc)
+    Closure(JSContext *cx, auto_arr<jsval>& toProxy,
+            uintN argc)
         : _cx(cx)
         , _toProxy(toProxy)
         , _argc(argc)
@@ -449,6 +441,7 @@ public:
                                JSObject *aGlobal);
 
     JSContext *cx();
+    JSObject *global() { return _global; }
 
     void addTaskToFork(ChildTaskHandle *th);
 
@@ -676,6 +669,10 @@ JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
     }
     JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(th->object()));
 
+    DEBUG("forked TaskHandle %p with parent context %p/g %p/c %p\n",
+          th, taskContext, taskContext->global(),
+          taskContext->global()->compartment());
+
     taskContext->addTaskToFork(th);
     return JS_TRUE;
 }
@@ -776,11 +773,17 @@ JSBool ClonedObj::unpack(JSContext *cx, jsval *rval) {
 
 Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc) {
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
-    auto_arr<jsval> toProxy(new jsval[argc + 1]);
+
+    // Create an array containing
+    // [0] - the function
+    // [1..N] - the arguments to the function
+
+    auto_arr<jsval> toProxy(new jsval[1+argc]);
     if (!toProxy.get()) { JS_ReportOutOfMemory(cx); return NULL; }
-    toProxy[0] = fn;
+    int p = 0;
+    toProxy[p++] = fn;
     for (int i = 0; i < argc; i++) {
-        toProxy[i + 1] = argv[i];
+        toProxy[p++] = argv[i];
     }
 
     auto_ptr<Closure> c(new Closure(cx, toProxy, argc));
@@ -790,7 +793,7 @@ Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc) {
 }
 
 bool Closure::addRoots() {
-    for (; _rooted < _argc; _rooted++) {
+    for (; _rooted <= _argc; _rooted++) {
         if (!JS_AddNamedValueRoot(_cx, &_toProxy[_rooted], "Closure::toProxyArgv[]"))
             return false;
     }
@@ -809,7 +812,8 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
                         JSObject *global, jsval *rval) {
 
     // Wrap the function:
-    AutoValueRooter fn(cx, _toProxy[0]);
+    int p = 0;
+    AutoValueRooter fn(cx, _toProxy[p++]);
     if (!m->wrap(fn.addr())) { return false; }
     JS_ASSERT(ValueIsFunction(cx, fn.value()));
 
@@ -817,7 +821,7 @@ JSBool Closure::execute(Membrane *m, JSContext *cx,
     if (!argv.get()) return JS_FALSE;
     AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
     for (int i = 0; i < _argc; i++) {
-        argv[i] = _toProxy[i + 1];
+        argv[i] = _toProxy[p++];
         if (!m->wrap(&argv[i]))
             return JS_FALSE;
     }
@@ -854,8 +858,9 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
         NULL
     };
 
-    auto_ptr<Membrane> m(Membrane::create(_parent->cx(), cx,
-                                          global, safeNatives));
+    auto_ptr<Membrane> m(Membrane::create(_parent->cx(), _parent->global(),
+                                          cx, global,
+                                          safeNatives));
     if (!m.get()) {
         return false;
     }
@@ -981,6 +986,11 @@ TaskContext *TaskContext::create(JSContext *cx,
     if (!tc.get() || !tc->addRoot(cx)) {
         return NULL;
     }
+
+    DEBUG("TaskContext %p for handle %p "
+          "created with global %p and compartment %p\n",
+          tc.get(), aTask, aGlobal,
+          aGlobal->compartment());
 
     return tc.release();
 }

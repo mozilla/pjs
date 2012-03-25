@@ -62,18 +62,21 @@ private:
     // child space.
     WrapperMap _map;
     JSContext *_parentCx;
+    JSObject *_parentGlobal;
     JSContext *_childCx;
     JSObject *_childGlobal;
     JSCompartment *_childCompartment;
     ProxyRooter *_rooter;
     JSNative *_safeNatives;
 
-    Membrane(JSContext *parentCx, JSContext* childCx, JSObject *gl,
+    Membrane(JSContext *parentCx, JSObject *parentGlobal,
+             JSContext *childCx, JSObject *childGlobal,
              JSNative *safeNatives)
         : ProxyHandler(MEMBRANE)
         , _parentCx(parentCx)
+        , _parentGlobal(parentGlobal)
         , _childCx(childCx)
-        , _childGlobal(gl)
+        , _childGlobal(childGlobal)
         , _childCompartment(_childGlobal->compartment())
         , _rooter(NULL)
         , _safeNatives(safeNatives)
@@ -87,8 +90,9 @@ private:
     static char *MEMBRANE;
 
 public:
-    static Membrane *create(JSContext *parentCx, JSContext* childCx,
-                            JSObject *gl, JSNative *safeNatives);
+    static Membrane *create(JSContext *parentCx, JSObject *parentGlobal,
+                            JSContext* childCx, JSObject *childGlobal,
+                            JSNative *safeNatives);
     ~Membrane();
 
     // when invoked with a parent object, modifies vp to be a proxy in

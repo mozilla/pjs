@@ -142,9 +142,12 @@ public:
     }
 };
 
-Membrane *Membrane::create(JSContext *parentCx, JSContext* childCx,
-                           JSObject *gl, JSNative *safeNatives) {
-    Membrane *m = new Membrane(parentCx, childCx, gl, safeNatives);
+Membrane *Membrane::create(JSContext *parentCx, JSObject *parentGlobal,
+                           JSContext* childCx, JSObject *childGlobal,
+                           JSNative *safeNatives) {
+    Membrane *m = new Membrane(parentCx, parentGlobal,
+                               childCx, childGlobal,
+                               safeNatives);
     if (!m->_map.init()) {
         delete m;
         return NULL;
@@ -264,6 +267,11 @@ bool Membrane::wrap(Value *vp) {
 
     JSObject *obj = &vp->toObject();
 
+    if (obj == _parentGlobal) {
+        vp->setObject(*_childGlobal);
+        return true;
+    }
+
     /* Split closures */
     if (JS_ObjectIsFunction(cx, obj)) {
         JSFunction *fn = obj->toFunction();
@@ -336,6 +344,10 @@ bool Membrane::unwrap(Value *vp) {
         if (IsCrossThreadWrapper(obj)) {
             vp->setObject(*wrappedObject(obj));
             return true;
+        }
+
+        if (obj == _childGlobal) {
+            return _parentGlobal;
         }
     }
 
