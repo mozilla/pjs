@@ -51,7 +51,9 @@ using namespace JS;
 using namespace js;
 using namespace std;
 
-#if 1
+//#define DEBUG_DUMPS
+
+#ifndef DEBUG_DUMPS
 #  define DEBUG(...) 
 #else
 #  define DEBUG(...) fprintf(stderr, __VA_ARGS__)
@@ -253,6 +255,17 @@ bool Membrane::wrap(Value *vp) {
 
         if (!wrapped)
             return false;
+
+#       ifdef DEBUG_DUMPS
+        {
+            char *c_str = JS_EncodeString(cx, wrapped);
+            DEBUG("Wrapping string %p to %p (%s) for %p->%p",
+                  str, wrapped, c_str,
+                  _parentCx, _childCx);
+            JS_free(cx, c_str);
+        }
+#       endif        
+
         vp->setString(wrapped);
         return put(orig, *vp);
     }
@@ -352,11 +365,23 @@ bool Membrane::unwrap(Value *vp) {
         if (!chars)
             return false;
 
+#       ifdef DEBUG_DUMPS
+        {
+            char *c_str = JS_EncodeString(cx, str);
+            DEBUG("Unwrapping id string %p (%s) for %p->%p\n",
+                  str, c_str, _parentCx, _childCx);
+            JS_free(cx, c_str);
+        }
+#       endif        
+
         // FIXME: This lookup is probably not actually thread-safe.
         JSAtom *atom = js_GetExistingStringAtom(_parentCx, chars, length);
         if (atom != NULL) {
             vp->setString(atom);
             return true;
+        } else {
+            DEBUG("...did not find pre-existing string atom %p->%p\n",
+                  _parentCx, _childCx);
         }
     }
 
@@ -451,6 +476,9 @@ Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
                                 bool set, PropertyDescriptor *desc)
 {
     desc->obj = NULL; // default result if we refuse to perform this action
+
+    DEBUG("%p.getPropertyDescriptor(wrapper=%p)\n", cx, wrapper);
+
     PIERCE(cx, wrapper,
            unwrapId(&id),
            JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id, JSRESOLVE_QUALIFIED, desc),
@@ -458,8 +486,21 @@ Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
 }
 
 bool
+Membrane::get(JSContext *cx, JSObject *wrapper, JSObject *receiver,
+              jsid id, Value *vp)
+{
+    JSObject *wrappee = wrappedObject(wrapper);
+    if (wrappee->isArray()) {
+        vp->setUndefined(); // default result if we refuse to perform this action
+        return wrappee->getGeneric(cx, receiver, id, vp);
+    } else {
+        return ProxyHandler::get(cx, wrapper, receiver, id, vp);
+    }
+}
+
+bool
 Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
-                                                  bool set, PropertyDescriptor *desc)
+                                   bool set, PropertyDescriptor *desc)
 {
     desc->obj = NULL;
     PIERCE(cx, wrapper,

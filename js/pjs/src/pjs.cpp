@@ -635,6 +635,22 @@ JSBool print(JSContext *cx, uintN argc, jsval *vp) {
     return JS_TRUE;
 }
 
+JSBool dumpObjects(JSContext *cx, uintN argc, jsval *vp) {
+    jsval *argv;
+    uintN i;
+    JSString *str;
+    char *bytes;
+
+    argv = JS_ARGV(cx, vp);
+    for (i = 0; i < argc; i++) {
+        if (argv[i].isObject())
+            js_DumpObject(argv[i].toObjectOrNull());
+    }
+    printf("\n");
+    JS_SET_RVAL(cx, vp, JSVAL_VOID);
+    return JS_TRUE;
+}
+
 JSBool assert(JSContext *cx, uintN argc, jsval *vp) {
     JSBool chk;
     JSString *str;
@@ -692,6 +708,7 @@ JSBool oncompletion(JSContext *cx, uintN argc, jsval *vp) {
 
 static JSFunctionSpec pjsGlobalFunctions[] = {
     JS_FN("print", print, 0, 0),
+    JS_FN("dumpObjects", dumpObjects, 0, 0),
     JS_FN("assert", assert, 2, 0),
     JS_FN("fork", fork, 1, 0),
     JS_FN("oncompletion", oncompletion, 1, 0),
