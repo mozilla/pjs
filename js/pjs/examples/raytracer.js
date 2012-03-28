@@ -735,7 +735,6 @@ Ray.prototype.pointOnRay = function(t) {
     return Vector3.addMul(this.origin, this.direction, t);
 };
 
-var g_context;
 var g_frameCount;
 var g_width;
 var g_height;
@@ -743,13 +742,7 @@ var g_height;
 function init(width, height) {
     g_width = width;
     g_height = height;
-    g_context = new Array(g_height);
-    for (var i = 0; i < g_height; i++) {
-        g_context[i] = new Array(g_width);
-    }
-
     g_frameCount = 0;
-
     initScene();
 }
 
@@ -766,22 +759,6 @@ function colorToString(c) {
 
 
 /**
- * Clear the canvas to the specified color.
- * @param {CanvasRenderingContext2D} context The 2D rendering context for a
- *     canvas element.
- * @param {Vector3} color The color to set the canvas to.
- */
-function clearBackground(context, color) {
-    var c = Vector3.copyFrom(color);
-    c.clamp().componentScale(new Vector3(255, 255, 255));
-
-    for (var y = 0; y < g_height; y++)
-        for (var x = 0; x < g_width; x++)
-            context[y][x] = c;
-}
-
-
-/**
  * Set a pixel in the canvas to the specified color.
  * @param {CanvasRenderingContext2D} context The 2D rendering context for a
  *     canvas element.
@@ -789,11 +766,10 @@ function clearBackground(context, color) {
  * @param {number} y The y co-ordinate of the pixel.
  * @param {Vector3} color The color to set the pixel.
  */
-function setPixel(context, x, y, color) {
+function toRGB(color) {
     var c = Vector3.copyFrom(color);
     c.clamp().componentScale(new Vector3(255, 255, 255));
-
-    context[y][x] = c;
+    return c;
 }
 
 function asciiDump(context, width, height) {
@@ -801,7 +777,8 @@ function asciiDump(context, width, height) {
     var colors = [" ", ".", ":",
                   "|", "~", "o",
                   "O", "*", "%",
-                  "#"]
+                  "#"];
+    colors.reverse(); // high values are lighter
     var str = "";
     for (var y = 0; y < height; y++) {
         for (var x = 0; x < width; x++) {
@@ -874,18 +851,20 @@ function buildRay(sx, sy) {
  * Draw the scene.
  */
 function draw() {
+    var width = g_width;
+    var height = g_height;
+
     // Update the sphere's Y coordinate.
     // TODO: Once transforms are introduced, this should be done by setting
     // the sphere's transform, not by directly modifying a private variable.
     g_sphere.center_.y = (0.5 + Math.sin(g_frameCount)) * 3;
 
-    clearBackground(g_context, new Vector3());
-
     // Trace rays
-    for (var i = 0; i < g_height; i++) {
+    var image = new Array(height);
+    for (var i = 0; i < height; i++) {
         var sampler = new Sampler(1);
-
-        for (var j = 0; j < g_width; j++) {
+        var i_pixels = new Array(width);
+        for (var j = 0; j < width; j++) {
             sampler.reset();
 
             while (sampler.hasNext()) {
@@ -911,9 +890,11 @@ function draw() {
                 }
             }
             var pixelColor = sampler.result();
-            setPixel(g_context, j, i, pixelColor);
+            i_pixels[j] = toRGB(pixelColor);
         }
+        image[i] = i_pixels;
     }
+    return image;
 }
 
 /**
@@ -1293,6 +1274,10 @@ Vector2.prototype.add = function(p) {
     return this;
 };
 
-init(80, 40);
-draw();
-asciiDump(g_context, g_width, g_height);
+function run(width, height) {
+    init(width, height);
+    var img = draw();
+    asciiDump(img, width, height);
+}
+
+run(80, 40);
