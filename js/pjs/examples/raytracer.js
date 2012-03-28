@@ -735,14 +735,12 @@ Ray.prototype.pointOnRay = function(t) {
     return Vector3.addMul(this.origin, this.direction, t);
 };
 
-var g_frameCount;
 var g_width;
 var g_height;
 
 function init(width, height) {
     g_width = width;
     g_height = height;
-    g_frameCount = 0;
     initScene();
 }
 
@@ -846,6 +844,39 @@ function buildRay(sx, sy) {
     return new Ray(g_eye_origin, d);
 }
 
+function draw_row(i) {
+    var sampler = new Sampler(1);
+    var i_pixels = new Array(g_width);
+    for (var j = 0; j < g_width; j++) {
+        sampler.reset();
+
+        while (sampler.hasNext()) {
+            var samplePoint = sampler.next();
+
+            // Build ray
+            var p = Vector2.add(new Vector2(j, i), samplePoint);
+            var ray = buildRay(j + samplePoint.x, i + samplePoint.y);
+
+            // Trace ray against objects in the scene
+            var intersection = intersectRayWithScene(ray);
+
+            // If there was an intersection compute the shading.
+            if (intersection) {
+                var shadeContext = {
+                    object: intersection.obj,
+                    ray: ray,
+                    t: intersection.t,
+                    normal: intersection.normal
+                };
+                var color = intersection.obj.shade(shadeContext);
+                sampler.accumulateSample(color);
+            }
+        }
+        var pixelColor = sampler.result();
+        i_pixels[j] = toRGB(pixelColor);
+    }
+    return i_pixels;
+}
 
 /**
  * Draw the scene.
@@ -854,45 +885,10 @@ function draw() {
     var width = g_width;
     var height = g_height;
 
-    // Update the sphere's Y coordinate.
-    // TODO: Once transforms are introduced, this should be done by setting
-    // the sphere's transform, not by directly modifying a private variable.
-    g_sphere.center_.y = (0.5 + Math.sin(g_frameCount)) * 3;
-
     // Trace rays
-    var image = new Array(height);
-    for (var i = 0; i < height; i++) {
-        var sampler = new Sampler(1);
-        var i_pixels = new Array(width);
-        for (var j = 0; j < width; j++) {
-            sampler.reset();
-
-            while (sampler.hasNext()) {
-                var samplePoint = sampler.next();
-
-                // Build ray
-                var p = Vector2.add(new Vector2(j, i), samplePoint);
-                var ray = buildRay(j + samplePoint.x, i + samplePoint.y);
-
-                // Trace ray against objects in the scene
-                var intersection = intersectRayWithScene(ray);
-
-                // If there was an intersection compute the shading.
-                if (intersection) {
-                    var shadeContext = {
-                        object: intersection.obj,
-                        ray: ray,
-                        t: intersection.t,
-                        normal: intersection.normal
-                    };
-                    var color = intersection.obj.shade(shadeContext);
-                    sampler.accumulateSample(color);
-                }
-            }
-            var pixelColor = sampler.result();
-            i_pixels[j] = toRGB(pixelColor);
-        }
-        image[i] = i_pixels;
+    var image = new Array(g_height);
+    for (var i = 0; i < g_height; i++) {
+        image[i] = draw_row(i);
     }
     return image;
 }
