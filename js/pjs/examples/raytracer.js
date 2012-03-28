@@ -797,9 +797,10 @@ function setPixel(context, x, y, color) {
 }
 
 function asciiDump(context, width, height) {
-    var colors = [" ", ".", ",",
-                  ":", ";", "~",
-                  "0", "*", "%",
+    // Rather arbitrary progression from light to dark in 10 steps:
+    var colors = [" ", ".", ":",
+                  "|", "~", "o",
+                  "O", "*", "%",
                   "#"]
     var str = "";
     for (var y = 0; y < height; y++) {
@@ -843,8 +844,6 @@ function initScene() {
                                           new Vector3(0, 0.2, 0)));
     g_objects.push(box);
 
-    g_sampler = new Sampler(1);
-
     g_sphere = sphere;
 
     g_eye_origin = new Vector3(0, 0, -10);
@@ -882,10 +881,10 @@ function draw() {
 
     clearBackground(g_context, new Vector3());
 
-    var sampler = g_sampler;
-
     // Trace rays
     for (var i = 0; i < g_height; i++) {
+        var sampler = new Sampler(1);
+
         for (var j = 0; j < g_width; j++) {
             sampler.reset();
 
