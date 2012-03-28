@@ -881,16 +881,15 @@ function draw_row(i) {
 /**
  * Draw the scene.
  */
-function draw() {
+function draw(nxt) {
     var width = g_width;
     var height = g_height;
 
-    // Trace rays
     var image = new Array(g_height);
     for (var i = 0; i < g_height; i++) {
         image[i] = draw_row(i);
     }
-    return image;
+    nxt(image);
 }
 
 /**
@@ -1272,8 +1271,9 @@ Vector2.prototype.add = function(p) {
 
 function run(width, height) {
     init(width, height);
-    var img = draw();
-    asciiDump(img, width, height);
+    draw(function(img) {
+        asciiDump(img, width, height);
+    });
 }
 
 run(80, 40);
