@@ -885,11 +885,18 @@ function draw(nxt) {
     var width = g_width;
     var height = g_height;
 
-    var image = new Array(g_height);
+    var tasks = new Array(g_height);
     for (var i = 0; i < g_height; i++) {
-        image[i] = draw_row(i);
+        tasks[i] = fork(draw_row, i);
     }
-    nxt(image);
+
+    oncompletion(function() {
+        var image = new Array(g_height);
+        for (var i = 0; i < g_height; i++) {
+            image[i] = tasks[i].get();
+        }
+        nxt(image);
+    });
 }
 
 /**

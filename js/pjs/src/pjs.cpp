@@ -725,6 +725,11 @@ JSClass Global::jsClass = {
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
+JS_PUBLIC_API(JSBool)
+JS_ResolveStub(JSContext *cx, JSObject *obj, jsid id)
+{
+}
+
 // ______________________________________________________________________
 // ArrRooter impl
 
@@ -859,6 +864,12 @@ JSBool RootTaskHandle::execute(JSContext *cx, JSObject *global,
     if (scr == NULL)
         return 0;
 
+    if (!JS_DefineFunctions(cx, global, pjsGlobalFunctions))
+        return NULL;
+
+    if (!ChildTaskHandle::initClass(cx, global))
+        return NULL;
+
     return JS_ExecuteScript(cx, global, scr, rval);
 }
 
@@ -886,26 +897,30 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
     {
         AutoReadOnly ro(cx);
         JSObject *parentGlobal = _parent->global();
-        JSIdArray *ids = JS_Enumerate(cx, parentGlobal);
-        for (int i = 0; i < ids->length; i++) {
-            jsid pid = ids->vector[i];
+        AutoIdVector props(cx);
+        if (!GetPropertyNames(cx, parentGlobal, JSITER_OWNONLY, &props))
+            return false;
+        for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
+            jsid pid = *v, cid = *v;
+            if (!m->wrapId(&cid))
+                return false;
+
+            // stop if this prop is already present on the child
+            JSBool foundp;
+            if (!JS_HasPropertyById(cx, global, cid, &foundp))
+                return false;
+            if (foundp)
+                continue;
+
             jsval pval;
             if (!JS_GetPropertyById(cx, parentGlobal, pid, &pval))
                 return false;
-            if (!m->wrapId(&pid))
+            if (!m->wrap(&pval))
                 return false;
-            JSBool foundp;
-            if (!JS_HasPropertyById(cx, global, pid, &foundp))
+            AutoReadOnly rw(cx, false);
+            if (!JS_SetPropertyById(cx, global, cid, &pval))
                 return false;
-            if (!foundp) {
-                if (!m->wrap(&pval))
-                    return false;
-                AutoReadOnly rw(cx, false);
-                if (!JS_SetPropertyById(cx, global, pid, &pval))
-                    return false;
-            }
         }
-        JS_DestroyIdArray(cx, ids);
     }
 
     rmembrane = m;
@@ -1293,12 +1308,6 @@ TaskContext *Runner::createTaskContext(TaskHandle *handle) {
     if (!JS_InitStandardClasses(_cx, global))
         return NULL;
         
-    if (!JS_DefineFunctions(_cx, global, pjsGlobalFunctions))
-        return NULL;
-
-    if (!ChildTaskHandle::initClass(_cx, global))
-        return NULL;
-
     return TaskContext::create(_cx, handle, this, global);
 }
 

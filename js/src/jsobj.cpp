@@ -728,7 +728,7 @@ obj_toLocaleString(JSContext *cx, uintN argc, Value *vp)
     return obj->callMethod(cx, ATOM_TO_JSID(cx->runtime->atomState.toStringAtom), 0, NULL, vp);
 }
 
-static JSBool
+JSBool
 obj_valueOf(JSContext *cx, uintN argc, Value *vp)
 {
     JSObject *obj = ToObject(cx, &vp[1]);
@@ -4777,6 +4777,16 @@ CallResolveOp(JSContext *cx, JSObject *start, HandleObject obj, HandleId id, uin
 {
     Class *clasp = obj->getClass();
     JSResolveOp resolve = clasp->resolve;
+
+    /* Do not trigger resolve hook when in read-only mode. 
+     * 
+     * Note that objects with resolve hooks are generally not
+     * proxyable; the main time that this path occurs when in R/O mode
+     * is when we are trying to enumerate properties on an object we
+     * are proxying. */
+    if (PJS_isReadOnly(cx)) {
+        return true;
+    }
 
     /*
      * Avoid recursion on (obj, id) already being resolved on cx.

@@ -213,6 +213,33 @@ bool Membrane::isSafeNative(JSNative n) {
     return false;
 }
 
+bool Membrane::copyAndWrapProperties(JSObject *from, JSObject *to) {
+    JSContext *cx = _childCx;
+    AutoReadOnly ro(cx);
+    AutoIdVector props(cx);
+    if (!GetPropertyNames(cx, from, JSITER_OWNONLY|JSITER_HIDDEN, &props))
+        return false;
+    for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
+        jsid propid = *v;
+        JSPropertyDescriptor desc;
+        if (!JS_GetPropertyDescriptorById(cx, from, propid, 0, &desc))
+            return false;
+
+        if (!wrapId(&propid))
+            return false;
+        if (!wrap(&desc))
+            return false;
+
+        AutoReadOnly ro(cx, false);
+        if (!JS_DefinePropertyById(
+                cx, to, propid, desc.value,
+                desc.getter, desc.setter, desc.attrs))
+            return false;
+    }
+
+    return true;
+}
+
 bool Membrane::wrap(Value *vp) {
     JSContext *cx = _childCx;
 
@@ -303,7 +330,20 @@ bool Membrane::wrap(Value *vp) {
               fn, fn->maybeScript(),
               wrapper, wrapper->toFunction()->maybeScript(),
               _parentCx, _childCx);
-        return put(OBJECT_TO_JSVAL(obj), *vp);
+
+        if (!put(OBJECT_TO_JSVAL(obj), *vp))
+            return false;
+
+        // We now have to copy over any properties.  I do this *after*
+        // putting the wrapper into the table lest there is a
+        // recursive reference.
+        if (!copyAndWrapProperties(obj, wrapper))
+            return false;
+
+        // if (!JS_FreezeObject(cx, wrapper))
+        //    return false;
+
+        return true;
     }
 
     /*

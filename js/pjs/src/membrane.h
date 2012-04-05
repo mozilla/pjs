@@ -98,6 +98,8 @@ private:
 
     JSBool put(Value key, Value value);
 
+    bool copyAndWrapProperties(JSObject *from, JSObject *to);
+
     static char *MEMBRANE;
 
 public:

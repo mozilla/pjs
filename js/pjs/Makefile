@@ -8,7 +8,7 @@ OBJS =						\
 	${BUILD}/membrane.o
 HEADERS=${wildcard ${SRC}/*.h}
 
-.PHONY : all TAGS clean cleaner test
+.PHONY : all TAGS clean cleaner test js
 
 all: ${BUILD}/pjs
 
@@ -18,6 +18,10 @@ ${MC}/js/src/configure:
 ${BUILD}/MC: ${MC}/js/src/configure
 	mkdir -p ${BUILD}
 	./build-mozilla-central
+
+js:
+	make -C ${BUILD}/js
+	make -C ${BUILD}/js install
 
 # Add mozilla-central/js/src to our include headers so that
 # we can include non-public headers like "jsobj.h"
