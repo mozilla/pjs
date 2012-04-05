@@ -4785,6 +4785,8 @@ CallResolveOp(JSContext *cx, JSObject *start, HandleObject obj, HandleId id, uin
      * is when we are trying to enumerate properties on an object we
      * are proxying. */
     if (PJS_isReadOnly(cx)) {
+        *propp = NULL;
+        *recursedp = NULL;
         return true;
     }
 
