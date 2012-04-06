@@ -893,6 +893,12 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
         return false;
     }
 
+    if (!JS_DefineFunctions(cx, global, pjsGlobalFunctions))
+        return NULL; // XXX
+
+    if (!ChildTaskHandle::initClass(cx, global))
+        return NULL; // XXX
+
     // add (proxied) globals
     {
         AutoReadOnly ro(cx);
@@ -902,6 +908,7 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
             return false;
         for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
             jsid pid = *v, cid = *v;
+            
             if (!m->wrapId(&cid))
                 return false;
 

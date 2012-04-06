@@ -414,6 +414,12 @@ js_DumpString(JSString *str)
     str->dump();
 }
 
+extern JS_FRIEND_API(void)
+js_DumpId(JSContext *cx, jsid id)
+{
+    js_DumpString(IdToString(cx, id));
+}
+
 JS_FRIEND_API(void)
 js_DumpAtom(JSAtom *atom)
 {

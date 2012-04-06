@@ -145,6 +145,9 @@ extern JS_FRIEND_API(void)
 js_DumpString(JSString *str);
 
 extern JS_FRIEND_API(void)
+js_DumpId(JSContext *cx, jsid id);
+
+extern JS_FRIEND_API(void)
 js_DumpAtom(JSAtom *atom);
 
 extern JS_FRIEND_API(void)
