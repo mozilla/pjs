@@ -73,6 +73,16 @@ using namespace mozilla;
 using namespace js;
 using namespace js::gc;
 
+class AutoLock
+{
+  private:
+    PRLock *lock;
+
+  public:
+    AutoLock(PRLock *lock) : lock(lock) { PR_Lock(lock); }
+    ~AutoLock() { PR_Unlock(lock); }
+};
+
 const size_t JSAtomState::commonAtomsOffset = offsetof(JSAtomState, emptyAtom);
 const size_t JSAtomState::lazyAtomsOffset = offsetof(JSAtomState, lazy);
 
@@ -455,6 +465,8 @@ AtomizeInline(JSContext *cx, const jschar **pchars, size_t length,
 {
     const jschar *chars = *pchars;
 
+    AutoLock lock(cx->runtime->atomsLock);
+
     if (JSAtom *s = cx->runtime->staticStrings.lookup(chars, length))
         return s;
 
@@ -593,6 +605,8 @@ js_AtomizeChars(JSContext *cx, const jschar *chars, size_t length, InternBehavio
 JSAtom *
 js_GetExistingStringAtom(JSContext *cx, const jschar *chars, size_t length)
 {
+    AutoLock lock(cx->runtime->atomsLock);
+
     if (JSAtom *atom = cx->runtime->staticStrings.lookup(chars, length))
         return atom;
     if (AtomSet::Ptr p = cx->runtime->atomState.atoms.lookup(AtomHasher::Lookup(chars, length)))

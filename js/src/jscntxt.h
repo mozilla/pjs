@@ -189,8 +189,11 @@ struct ConservativeGCData
 
 } /* namespace js */
 
-struct JSRuntime : js::RuntimeFriendFields
+struct 
+JSRuntime : js::RuntimeFriendFields
 {
+    PRLock *atomsLock;
+
     /* Default compartment. */
     JSCompartment       *atomsCompartment;
 

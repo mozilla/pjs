@@ -696,7 +696,8 @@ JS_IsBuiltinFunctionConstructor(JSFunction *fun)
 static JSBool js_NewRuntimeWasCalled = JS_FALSE;
 
 JSRuntime::JSRuntime()
-  : atomsCompartment(NULL),
+  : atomsLock(NULL),
+    atomsCompartment(NULL),
 #ifdef JS_THREADSAFE
     ownerThread_(NULL),
 #endif
@@ -823,6 +824,9 @@ JSRuntime::init(uint32_t maxbytes)
         return false;
 
     if (!gcMarker.init())
+        return false;
+
+    if (!(atomsLock = PR_NewLock()))
         return false;
 
     if (!(atomsCompartment = this->new_<JSCompartment>(this)) ||
