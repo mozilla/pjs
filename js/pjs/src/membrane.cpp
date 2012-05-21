@@ -503,7 +503,7 @@ Membrane::wrap(PropertyDescriptor *desc)
            wrap(&desc->value);
 }
 
-#define PIERCE(cx, wrapper, pre, op, post)      \
+#define PIERCE(cx, pre, op, post)      \
     JS_BEGIN_MACRO                              \
         AutoReadOnly ro(cx);                    \
         bool ok = (pre) && (op);                \
@@ -520,7 +520,7 @@ Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
 
     DEBUG("%p.getPropertyDescriptor(wrapper=%p)\n", cx, wrapper);
 
-    PIERCE(cx, wrapper,
+    PIERCE(cx,
            unwrapId(&id),
            JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id, JSRESOLVE_QUALIFIED, desc),
            wrap(desc));
@@ -543,14 +543,17 @@ bool
 Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject* wrapper, 
                                    jsid id, bool set, PropertyDescriptor *desc)
 {
+    AutoReadOnly ro(cx);
+    if (!unwrapId(&id))
+        return false;
     RootedVarObject rwrapper(cx, wrappedObject(wrapper));
     RootedVarId rid(cx, id);
-
     desc->obj = NULL;
-    PIERCE(cx, wrapper,
-           unwrapId(&id),
-           GetOwnPropertyDescriptor(cx, rwrapper, rid, desc),
-           wrap(desc));
+    if (!GetOwnPropertyDescriptor(cx, rwrapper, rid, desc))
+        return false;
+    if (!wrap(desc))
+        return false;
+    return true;
 }
 
 bool
@@ -565,7 +568,7 @@ bool
 Membrane::getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
 {
     jsid id = JSID_VOID;
-    PIERCE(cx, wrapper,
+    PIERCE(cx,
            NOTHING,
            GetPropertyNames(cx, wrappedObject(wrapper), JSITER_OWNONLY | JSITER_HIDDEN, &props),
            wrap(props));
@@ -581,7 +584,7 @@ Membrane::delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp)
 bool
 Membrane::enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props)
 {
-    PIERCE(cx, wrapper,
+    PIERCE(cx,
            NOTHING,
            GetPropertyNames(cx, wrappedObject(wrapper), 0, &props),
            wrap(props));
