@@ -1,49 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=78: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Original Author: David W. Hyatt (hyatt@netscape.com)
- *   Daniel Glazman <glazman@netscape.com>
- *   Roger B. Sidje <rbs@maths.uq.edu.au>
- *   Mats Palmgren <matspal@gmail.com>
- *   L. David Baron <dbaron@dbaron.org>
- *   Christian Biesinger <cbiesinger@web.de>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *   Keith Rarick <kr@xph.us>
- *   Jonathon Jongsma <jonathon.jongsma@collabora.co.uk>, Collabora Ltd.
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * a node in the lexicographic tree of rules that match an element,
@@ -80,8 +39,6 @@
 #include "mozilla/dom/Element.h"
 #include "CSSCalc.h"
 #include "nsPrintfCString.h"
-#include "mozilla/Util.h"
-
 #include "mozilla/Util.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -1470,8 +1427,9 @@ CheckTextCallback(const nsRuleData* aRuleData,
   return aResult;
 }
 
-#define FLAG_DATA_FOR_PROPERTY(name_, id_, method_, flags_, parsevariant_,   \
-                               kwtable_, stylestructoffset_, animtype_)      \
+#define FLAG_DATA_FOR_PROPERTY(name_, id_, method_, flags_, pref_,          \
+                               parsevariant_, kwtable_, stylestructoffset_, \
+                               animtype_)                                   \
   flags_,
 
 // The order here must match the enums in *CheckCounter in nsCSSProps.cpp.
@@ -2905,16 +2863,34 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
   // font-feature-settings
   const nsCSSValue* featureSettingsValue =
     aRuleData->ValueForFontFeatureSettings();
-  if (eCSSUnit_Inherit == featureSettingsValue->GetUnit()) {
+
+  switch (featureSettingsValue->GetUnit()) {
+  case eCSSUnit_Null:
+    break;
+
+  case eCSSUnit_Normal:
+  case eCSSUnit_Initial:
+    aFont->mFont.fontFeatureSettings.Clear();
+    break;
+
+  case eCSSUnit_Inherit:
     aCanStoreInRuleTree = false;
-    aFont->mFont.featureSettings = aParentFont->mFont.featureSettings;
-  } else if (eCSSUnit_Normal == featureSettingsValue->GetUnit() ||
-             eCSSUnit_Initial == featureSettingsValue->GetUnit()) {
-    aFont->mFont.featureSettings.Truncate();
-  } else if (eCSSUnit_System_Font == featureSettingsValue->GetUnit()) {
-    aFont->mFont.featureSettings = systemFont.featureSettings;
-  } else if (eCSSUnit_String == featureSettingsValue->GetUnit()) {
-    featureSettingsValue->GetStringValue(aFont->mFont.featureSettings);
+    aFont->mFont.fontFeatureSettings = aParentFont->mFont.fontFeatureSettings;
+    break;
+
+  case eCSSUnit_System_Font:
+    aFont->mFont.fontFeatureSettings = systemFont.fontFeatureSettings;
+    break;
+
+  case eCSSUnit_PairList:
+  case eCSSUnit_PairListDep:
+    ComputeFontFeatures(featureSettingsValue->GetPairListValue(),
+                        aFont->mFont.fontFeatureSettings);
+    break;
+
+  default:
+    NS_ABORT_IF_FALSE(false, "unexpected value unit");
+    break;
   }
 
   // font-language-override
@@ -2986,6 +2962,36 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
     SetFactor(*sizeAdjustValue, aFont->mFont.sizeAdjust,
               aCanStoreInRuleTree, aParentFont->mFont.sizeAdjust, 0.0f,
               SETFCT_NONE);
+}
+
+/* static */ void
+nsRuleNode::ComputeFontFeatures(const nsCSSValuePairList *aFeaturesList,
+                                nsTArray<gfxFontFeature>& aFeatureSettings)
+{
+  aFeatureSettings.Clear();
+  for (const nsCSSValuePairList* p = aFeaturesList; p; p = p->mNext) {
+    gfxFontFeature feat = {0, 0};
+
+    NS_ABORT_IF_FALSE(aFeaturesList->mXValue.GetUnit() == eCSSUnit_String,
+                      "unexpected value unit");
+
+    // tag is a 4-byte ASCII sequence
+    nsAutoString tag;
+    p->mXValue.GetStringValue(tag);
+    if (tag.Length() != 4) {
+      continue;
+    }
+    // parsing validates that these are ASCII chars
+    // tags are always big-endian
+    feat.mTag = (tag[0] << 24) | (tag[1] << 16) | (tag[2] << 8)  | tag[3];
+
+    // value
+    NS_ASSERTION(p->mYValue.GetUnit() == eCSSUnit_Integer,
+                 "should have found an integer unit");
+    feat.mValue = p->mYValue.GetIntValue();
+
+    aFeatureSettings.AppendElement(feat);
+  }
 }
 
 // This should die (bug 380915).
@@ -3388,6 +3394,11 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
               SETDSC_ENUMERATED, parentText->mWhiteSpace,
               NS_STYLE_WHITESPACE_NORMAL, 0, 0, 0, 0);
 
+  // word-break: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForWordBreak(), text->mWordBreak, canStoreInRuleTree,
+              SETDSC_ENUMERATED, parentText->mWordBreak,
+              NS_STYLE_WORDBREAK_NORMAL, 0, 0, 0, 0);
+
   // word-spacing: normal, length, inherit
   nsStyleCoord tempCoord;
   const nsCSSValue* wordSpacingValue = aRuleData->ValueForWordSpacing();
@@ -3623,7 +3634,7 @@ nsRuleNode::ComputeUserInterfaceData(void* aStartStruct,
       // that's invalid.
       NS_ABORT_IF_FALSE(cursorUnit == eCSSUnit_List ||
                         cursorUnit == eCSSUnit_ListDep,
-                        nsPrintfCString(64, "unrecognized cursor unit %d",
+                        nsPrintfCString("unrecognized cursor unit %d",
                                         cursorUnit).get());
       const nsCSSValueList* list = cursorValue->GetListValue();
       const nsCSSValueList* list2 = list;
@@ -4022,8 +4033,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       transition->SetProperty(eCSSPropertyExtra_no_properties);
     } else if (property.list) {
       NS_ABORT_IF_FALSE(property.list->mValue.GetUnit() == eCSSUnit_Ident,
-                        nsPrintfCString(64,
-                                        "Invalid transition property unit %d",
+                        nsPrintfCString("Invalid transition property unit %d",
                                         property.list->mValue.GetUnit()).get());
 
       nsDependentString
@@ -4190,7 +4200,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
         }
         default:
           NS_ABORT_IF_FALSE(false,
-            nsPrintfCString(64, "Invalid animation-name unit %d",
+            nsPrintfCString("Invalid animation-name unit %d",
                                 animName.list->mValue.GetUnit()).get());
       }
     }
@@ -4225,8 +4235,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       animation->SetDirection(NS_STYLE_ANIMATION_DIRECTION_NORMAL);
     } else if (animDirection.list) {
       NS_ABORT_IF_FALSE(animDirection.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                        nsPrintfCString(64,
-                                        "Invalid animation-direction unit %d",
+                        nsPrintfCString("Invalid animation-direction unit %d",
                                         animDirection.list->mValue.GetUnit()).get());
 
       animation->SetDirection(animDirection.list->mValue.GetIntValue());
@@ -4244,8 +4253,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       animation->SetFillMode(NS_STYLE_ANIMATION_FILL_MODE_NONE);
     } else if (animFillMode.list) {
       NS_ABORT_IF_FALSE(animFillMode.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                        nsPrintfCString(64,
-                                        "Invalid animation-fill-mode unit %d",
+                        nsPrintfCString("Invalid animation-fill-mode unit %d",
                                         animFillMode.list->mValue.GetUnit()).get());
 
       animation->SetFillMode(animFillMode.list->mValue.GetIntValue());
@@ -4263,8 +4271,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       animation->SetPlayState(NS_STYLE_ANIMATION_PLAY_STATE_RUNNING);
     } else if (animPlayState.list) {
       NS_ABORT_IF_FALSE(animPlayState.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                        nsPrintfCString(64,
-                                        "Invalid animation-play-state unit %d",
+                        nsPrintfCString("Invalid animation-play-state unit %d",
                                         animPlayState.list->mValue.GetUnit()).get());
 
       animation->SetPlayState(animPlayState.list->mValue.GetIntValue());
@@ -4786,6 +4793,59 @@ struct BackgroundItemComputer<nsCSSValueList, PRUint8>
 };
 
 template <>
+struct BackgroundItemComputer<nsCSSValuePairList, nsStyleBackground::Repeat>
+{
+  static void ComputeValue(nsStyleContext* aStyleContext,
+                           const nsCSSValuePairList* aSpecifiedValue,
+                           nsStyleBackground::Repeat& aComputedValue,
+                           bool& aCanStoreInRuleTree)
+  {
+    NS_ASSERTION(aSpecifiedValue->mXValue.GetUnit() == eCSSUnit_Enumerated &&
+                 (aSpecifiedValue->mYValue.GetUnit() == eCSSUnit_Enumerated ||
+                  aSpecifiedValue->mYValue.GetUnit() == eCSSUnit_Null),
+                 "Invalid unit");
+    
+    bool hasContraction = true;
+    PRUint8 value = aSpecifiedValue->mXValue.GetIntValue();
+    switch (value) {
+    case NS_STYLE_BG_REPEAT_REPEAT_X:
+      aComputedValue.mXRepeat = NS_STYLE_BG_REPEAT_REPEAT;
+      aComputedValue.mYRepeat = NS_STYLE_BG_REPEAT_NO_REPEAT;
+      break;
+    case NS_STYLE_BG_REPEAT_REPEAT_Y:
+      aComputedValue.mXRepeat = NS_STYLE_BG_REPEAT_NO_REPEAT;
+      aComputedValue.mYRepeat = NS_STYLE_BG_REPEAT_REPEAT;
+      break;
+    default:
+      aComputedValue.mXRepeat = value;
+      hasContraction = false;
+      break;
+    }
+    
+    if (hasContraction) {
+      NS_ASSERTION(aSpecifiedValue->mYValue.GetUnit() == eCSSUnit_Null,
+                   "Invalid unit.");
+      return;
+    }
+    
+    switch (aSpecifiedValue->mYValue.GetUnit()) {
+    case eCSSUnit_Null:
+      aComputedValue.mYRepeat = aComputedValue.mXRepeat;
+      break;
+    case eCSSUnit_Enumerated:
+      value = aSpecifiedValue->mYValue.GetIntValue();
+      NS_ASSERTION(value == NS_STYLE_BG_REPEAT_NO_REPEAT ||
+                   value == NS_STYLE_BG_REPEAT_REPEAT, "Unexpected value");
+      aComputedValue.mYRepeat = value;
+      break;
+    default:
+      NS_NOTREACHED("Unexpected CSS value");
+      break;
+    }
+  }
+};
+
+template <>
 struct BackgroundItemComputer<nsCSSValueList, nsStyleImage>
 {
   static void ComputeValue(nsStyleContext* aStyleContext,
@@ -5051,7 +5111,7 @@ SetBackgroundList(nsStyleContext* aStyleContext,
 
   default:
     NS_ABORT_IF_FALSE(false,
-                      nsPrintfCString(32, "unexpected unit %d",
+                      nsPrintfCString("unexpected unit %d",
                                       aValue.GetUnit()).get());
   }
 
@@ -5126,7 +5186,7 @@ SetBackgroundPairList(nsStyleContext* aStyleContext,
 
   default:
     NS_ABORT_IF_FALSE(false,
-                      nsPrintfCString(32, "unexpected unit %d",
+                      nsPrintfCString("unexpected unit %d",
                                       aValue.GetUnit()).get());
   }
 
@@ -5181,12 +5241,15 @@ nsRuleNode::ComputeBackgroundData(void* aStartStruct,
                     initialImage, parentBG->mImageCount, bg->mImageCount,
                     maxItemCount, rebuild, canStoreInRuleTree);
 
-  // background-repeat: enum, inherit, initial [list]
-  SetBackgroundList(aContext, *aRuleData->ValueForBackgroundRepeat(),
-                    bg->mLayers,
-                    parentBG->mLayers, &nsStyleBackground::Layer::mRepeat,
-                    PRUint8(NS_STYLE_BG_REPEAT_XY), parentBG->mRepeatCount,
-                    bg->mRepeatCount, maxItemCount, rebuild, canStoreInRuleTree);
+  // background-repeat: enum, inherit, initial [pair list]
+  nsStyleBackground::Repeat initialRepeat;
+  initialRepeat.SetInitialValues();
+  SetBackgroundPairList(aContext, *aRuleData->ValueForBackgroundRepeat(),
+                        bg->mLayers,
+                        parentBG->mLayers, &nsStyleBackground::Layer::mRepeat,
+                        initialRepeat, parentBG->mRepeatCount,
+                        bg->mRepeatCount, maxItemCount, rebuild, 
+                        canStoreInRuleTree);
 
   // background-attachment: enum, inherit, initial [list]
   SetBackgroundList(aContext, *aRuleData->ValueForBackgroundAttachment(),
@@ -5419,7 +5482,7 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
 
   default:
     NS_ABORT_IF_FALSE(false,
-                      nsPrintfCString(64, "unrecognized shadow unit %d",
+                      nsPrintfCString("unrecognized shadow unit %d",
                                       boxShadowValue->GetUnit()).get());
   }
 
@@ -5546,14 +5609,14 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
 
     case eCSSUnit_Inherit: {
       canStoreInRuleTree = false;
-      nsBorderColors *parentColors;
-      parentBorder->GetCompositeColors(side, &parentColors);
-      if (parentColors) {
-        border->EnsureBorderColors();
-        border->ClearBorderColors(side);
-        border->mBorderColors[side] = parentColors->Clone();
-      } else {
-        border->ClearBorderColors(side);
+      border->ClearBorderColors(side);
+      if (parentContext) {
+        nsBorderColors *parentColors;
+        parentBorder->GetCompositeColors(side, &parentColors);
+        if (parentColors) {
+          border->EnsureBorderColors();
+          border->mBorderColors[side] = parentColors->Clone();
+        }
       }
       break;
     }
@@ -6270,7 +6333,7 @@ nsRuleNode::ComputeContentData(void* aStartStruct,
 
   default:
     NS_ABORT_IF_FALSE(false,
-                      nsPrintfCString(64, "unrecognized content unit %d",
+                      nsPrintfCString("unrecognized content unit %d",
                                       contentValue->GetUnit()).get());
   }
 
@@ -6955,6 +7018,13 @@ nsRuleNode::ComputeSVGResetData(void* aStartStruct,
               canStoreInRuleTree, SETDSC_ENUMERATED,
               parentSVGReset->mDominantBaseline,
               NS_STYLE_DOMINANT_BASELINE_AUTO, 0, 0, 0, 0);
+
+  // vector-effect: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForVectorEffect(),
+              svgReset->mVectorEffect,
+              canStoreInRuleTree, SETDSC_ENUMERATED,
+              parentSVGReset->mVectorEffect,
+              NS_STYLE_VECTOR_EFFECT_NONE, 0, 0, 0, 0);
 
   // filter: url, none, inherit
   const nsCSSValue* filterValue = aRuleData->ValueForFilter();

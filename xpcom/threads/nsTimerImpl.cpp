@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <pavlov@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTimerImpl.h"
 #include "TimerThread.h"
@@ -45,6 +10,8 @@
 #include "nsThreadUtils.h"
 #include "prmem.h"
 #include "sampler.h"
+#include NEW_H
+#include "nsFixedSizeAllocator.h"
 
 using mozilla::TimeDuration;
 using mozilla::TimeStamp;
@@ -78,6 +45,80 @@ myNS_MeanAndStdDev(double n, double sumOfValues, double sumOfSquaredValues,
   *stdDevResult = stdDev;
 }
 #endif
+
+namespace {
+
+// TimerEventAllocator is a fixed size allocator class which is used in order
+// to avoid the default allocator lock contention when firing timer events.
+// It is a thread-safe wrapper around nsFixedSizeAllocator.  The thread-safety
+// is required because nsTimerEvent objects are allocated on the timer thread,
+// and freed on the main thread.  Since this is a TimerEventAllocator specific
+// lock, the lock contention issue is only limited to the allocation and
+// deallocation of nsTimerEvent objects.
+class TimerEventAllocator : public nsFixedSizeAllocator {
+public:
+    TimerEventAllocator() :
+      mMonitor("TimerEventAllocator")
+  {
+  }
+
+  void* Alloc(size_t aSize)
+  {
+    mozilla::MonitorAutoLock lock(mMonitor);
+    return nsFixedSizeAllocator::Alloc(aSize);
+  }
+  void Free(void* aPtr, size_t aSize)
+  {
+    mozilla::MonitorAutoLock lock(mMonitor);
+    nsFixedSizeAllocator::Free(aPtr, aSize);
+  }
+
+private:
+  mozilla::Monitor mMonitor;
+};
+
+}
+
+class nsTimerEvent : public nsRunnable {
+public:
+  NS_IMETHOD Run();
+
+  nsTimerEvent(nsTimerImpl *timer, PRInt32 generation)
+    : mTimer(timer), mGeneration(generation) {
+    // timer is already addref'd for us
+    MOZ_COUNT_CTOR(nsTimerEvent);
+  }
+
+#ifdef DEBUG_TIMERS
+  TimeStamp mInitTime;
+#endif
+
+  static void Init();
+  static void Shutdown();
+
+  static void* operator new(size_t size) CPP_THROW_NEW {
+    return sAllocator->Alloc(size);
+  }
+  void operator delete(void* p) {
+    sAllocator->Free(p, sizeof(nsTimerEvent));
+  }
+
+private:
+  ~nsTimerEvent() {
+#ifdef DEBUG
+    if (mTimer)
+      NS_WARNING("leaking reference to nsTimerImpl");
+#endif
+    MOZ_COUNT_DTOR(nsTimerEvent);
+  }
+
+  nsTimerImpl *mTimer;
+  PRInt32      mGeneration;
+
+  static TimerEventAllocator* sAllocator;
+};
+
+TimerEventAllocator* nsTimerEvent::sAllocator = nsnull;
 
 NS_IMPL_THREADSAFE_QUERY_INTERFACE1(nsTimerImpl, nsITimer)
 NS_IMPL_THREADSAFE_ADDREF(nsTimerImpl)
@@ -164,6 +205,8 @@ nsTimerImpl::Startup()
 {
   nsresult rv;
 
+  nsTimerEvent::Init();
+
   gThread = new TimerThread();
   if (!gThread) return NS_ERROR_OUT_OF_MEMORY;
 
@@ -194,6 +237,8 @@ void nsTimerImpl::Shutdown()
 
   gThread->Shutdown();
   NS_RELEASE(gThread);
+
+  nsTimerEvent::Shutdown();
 }
 
 
@@ -476,33 +521,20 @@ void nsTimerImpl::Fire()
   }
 }
 
+void nsTimerEvent::Init()
+{
+  sAllocator = new TimerEventAllocator();
+  static const size_t kBucketSizes[] = {sizeof(nsTimerEvent)};
+  static const PRInt32 kNumBuckets = mozilla::ArrayLength(kBucketSizes);
+  static const PRInt32 kInitialPoolSize = 1024 * sizeof(nsTimerEvent);
+  sAllocator->Init("TimerEventPool", kBucketSizes, kNumBuckets, kInitialPoolSize);
+}
 
-class nsTimerEvent : public nsRunnable {
-public:
-  NS_IMETHOD Run();
-
-  nsTimerEvent(nsTimerImpl *timer, PRInt32 generation)
-    : mTimer(timer), mGeneration(generation) {
-    // timer is already addref'd for us
-    MOZ_COUNT_CTOR(nsTimerEvent);
-  }
-
-#ifdef DEBUG_TIMERS
-  TimeStamp mInitTime;
-#endif
-
-private:
-  ~nsTimerEvent() { 
-#ifdef DEBUG
-    if (mTimer)
-      NS_WARNING("leaking reference to nsTimerImpl");
-#endif
-    MOZ_COUNT_DTOR(nsTimerEvent);
-  }
-
-  nsTimerImpl *mTimer;
-  PRInt32      mGeneration;
-};
+void nsTimerEvent::Shutdown()
+{
+  delete sAllocator;
+  sAllocator = nsnull;
+}
 
 NS_IMETHODIMP nsTimerEvent::Run()
 {

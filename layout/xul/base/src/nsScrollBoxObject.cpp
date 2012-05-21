@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Original Author: David W. Hyatt (hyatt@netscape.com)
- *   Mihai Șucan <mihai.sucan@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCOMPtr.h"
 #include "nsIScrollBoxObject.h"
@@ -90,10 +56,7 @@ NS_IMETHODIMP nsScrollBoxObject::ScrollTo(PRInt32 x, PRInt32 y)
   nsIScrollableFrame* sf = GetScrollFrame();
   if (!sf)
     return NS_ERROR_FAILURE;
-
-  sf->ScrollTo(nsPoint(nsPresContext::CSSPixelsToAppUnits(x),
-                       nsPresContext::CSSPixelsToAppUnits(y)),
-               nsIScrollableFrame::INSTANT);
+  sf->ScrollToCSSPixels(nsIntPoint(x, y));
   return NS_OK;
 }
 
@@ -225,16 +188,29 @@ NS_IMETHODIMP nsScrollBoxObject::ScrollByIndex(PRInt32 dindexes)
       }
    }
 
-   if (horiz)
+   nscoord csspixel = nsPresContext::CSSPixelsToAppUnits(1);
+   if (horiz) {
        // In the left-to-right case we scroll so that the left edge of the
        // selected child is scrolled to the left edge of the scrollbox.
        // In the right-to-left case we scroll so that the right edge of the
        // selected child is scrolled to the right edge of the scrollbox.
-       sf->ScrollTo(nsPoint(isLTR ? rect.x : rect.x + rect.width - frameWidth,
-                            cp.y),
-                    nsIScrollableFrame::INSTANT);
-   else
-       sf->ScrollTo(nsPoint(cp.x, rect.y), nsIScrollableFrame::INSTANT);
+
+       nsPoint pt(isLTR ? rect.x : rect.x + rect.width - frameWidth,
+                  cp.y);
+
+       // Use a destination range that ensures the left edge (or right edge,
+       // for RTL) will indeed be visible. Also ensure that the top edge
+       // is visible.
+       nsRect range(pt.x, pt.y, csspixel, 0);
+       if (isLTR) {
+         range.x -= csspixel;
+       }
+       sf->ScrollTo(pt, nsIScrollableFrame::INSTANT, &range);
+   } else {
+       // Use a destination range that ensures the top edge will be visible.
+       nsRect range(cp.x, rect.y - csspixel, 0, csspixel);
+       sf->ScrollTo(nsPoint(cp.x, rect.y), nsIScrollableFrame::INSTANT, &range);
+   }
 
    return NS_OK;
 }
@@ -247,7 +223,9 @@ NS_IMETHODIMP nsScrollBoxObject::ScrollToLine(PRInt32 line)
      return NS_ERROR_FAILURE;
   
   nscoord y = sf->GetLineScrollAmount().height * line;
-  sf->ScrollTo(nsPoint(0, y), nsIScrollableFrame::INSTANT);
+  nsRect range(0, y - nsPresContext::CSSPixelsToAppUnits(1),
+               0, nsPresContext::CSSPixelsToAppUnits(1));
+  sf->ScrollTo(nsPoint(0, y), nsIScrollableFrame::INSTANT, &range);
   return NS_OK;
 }
 
@@ -263,8 +241,12 @@ NS_IMETHODIMP nsScrollBoxObject::ScrollToElement(nsIDOMElement *child)
 
     nsCOMPtr<nsIContent> content = do_QueryInterface(child);
     shell->ScrollContentIntoView(content,
-                                 NS_PRESSHELL_SCROLL_TOP,
-                                 NS_PRESSHELL_SCROLL_LEFT,
+                                 nsIPresShell::ScrollAxis(
+                                   nsIPresShell::SCROLL_TOP,
+                                   nsIPresShell::SCROLL_ALWAYS),
+                                 nsIPresShell::ScrollAxis(
+                                   nsIPresShell::SCROLL_LEFT,
+                                   nsIPresShell::SCROLL_ALWAYS),
                                  nsIPresShell::SCROLL_FIRST_ANCESTOR_ONLY |
                                  nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
     return NS_OK;
@@ -317,8 +299,8 @@ NS_IMETHODIMP nsScrollBoxObject::EnsureElementIsVisible(nsIDOMElement *child)
 
     nsCOMPtr<nsIContent> content = do_QueryInterface(child);
     shell->ScrollContentIntoView(content,
-                                 NS_PRESSHELL_SCROLL_ANYWHERE,
-                                 NS_PRESSHELL_SCROLL_ANYWHERE,
+                                 nsIPresShell::ScrollAxis(),
+                                 nsIPresShell::ScrollAxis(),
                                  nsIPresShell::SCROLL_FIRST_ANCESTOR_ONLY |
                                  nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
     return NS_OK;

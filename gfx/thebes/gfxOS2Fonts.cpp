@@ -1,43 +1,7 @@
 /* vim: set sw=4 sts=4 et cin: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is OS/2 code in Thebes.
- *
- * The Initial Developer of the Original Code is
- * Peter Weilbacher <mozilla@Weilbacher.org>.
- * Portions created by the Initial Developer are Copyright (C) 2006-2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   authors of code taken from gfxPangoFonts:
- *     Mozilla Foundation
- *     Vladimir Vukicevic <vladimir@mozilla.com>
- *     Masayuki Nakano <masayuki@d-toybox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxContext.h"
 
@@ -45,7 +9,7 @@
 #include "gfxOS2Surface.h"
 #include "gfxOS2Fonts.h"
 #include "nsTArray.h"
-#include "gfxAtoms.h"
+#include "nsGkAtoms.h"
 
 #include "nsIPlatformCharset.h"
 
@@ -373,13 +337,13 @@ cairo_font_face_t *gfxOS2Font::CairoFontFace()
         PRUint8 fcProperty;
         // add style to pattern
         switch (GetStyle()->style) {
-        case FONT_STYLE_ITALIC:
+        case NS_FONT_STYLE_ITALIC:
             fcProperty = FC_SLANT_ITALIC;
             break;
-        case FONT_STYLE_OBLIQUE:
+        case NS_FONT_STYLE_OBLIQUE:
             fcProperty = FC_SLANT_OBLIQUE;
             break;
-        case FONT_STYLE_NORMAL:
+        case NS_FONT_STYLE_NORMAL:
         default:
             fcProperty = FC_SLANT_ROMAN;
         }
@@ -454,7 +418,7 @@ cairo_scaled_font_t *gfxOS2Font::CairoScaledFont()
     cairo_matrix_t fontMatrix;
     // synthetic oblique by skewing via the font matrix
     if (!mFontEntry->mItalic &&
-        (mStyle.style & (FONT_STYLE_ITALIC | FONT_STYLE_OBLIQUE)))
+        (mStyle.style & (NS_FONT_STYLE_ITALIC | NS_FONT_STYLE_OBLIQUE)))
     {
         const double kSkewFactor = 0.2126; // 12 deg skew as used in e.g. ftview
         cairo_matrix_init(&fontMatrix, size, 0, -kSkewFactor*size, size, 0, 0);
@@ -547,10 +511,10 @@ gfxOS2FontGroup::gfxOS2FontGroup(const nsAString& aFamilies,
     // are set up, and if the user was so clever to set up the User Defined fonts,
     // then these are probable candidates, too.
     nsString fontString;
-    gfxPlatform::GetPlatform()->GetPrefFonts(gfxAtoms::x_unicode, fontString, false);
-    ForEachFont(fontString, gfxAtoms::x_unicode, FontCallback, &familyArray);
-    gfxPlatform::GetPlatform()->GetPrefFonts(gfxAtoms::x_user_def, fontString, false);
-    ForEachFont(fontString, gfxAtoms::x_user_def, FontCallback, &familyArray);
+    gfxPlatform::GetPlatform()->GetPrefFonts(nsGkAtoms::Unicode, fontString, false);
+    ForEachFont(fontString, nsGkAtoms::Unicode, FontCallback, &familyArray);
+    gfxPlatform::GetPlatform()->GetPrefFonts(nsGkAtoms::x_user_def, fontString, false);
+    ForEachFont(fontString, nsGkAtoms::x_user_def, FontCallback, &familyArray);
 
     // Should append some default font if there are no available fonts.
     // Let's use Helv which should be available on any OS/2 system; if
@@ -595,7 +559,7 @@ gfxTextRun *gfxOS2FontGroup::MakeTextRun(const PRUnichar* aString, PRUint32 aLen
                                          const Parameters* aParams, PRUint32 aFlags)
 {
     NS_ASSERTION(aLength > 0, "should use MakeEmptyTextRun for zero-length text");
-    gfxTextRun *textRun = gfxTextRun::Create(aParams, aString, aLength, this, aFlags);
+    gfxTextRun *textRun = gfxTextRun::Create(aParams, aLength, this, aFlags);
     if (!textRun)
         return nsnull;
 
@@ -629,7 +593,7 @@ gfxTextRun *gfxOS2FontGroup::MakeTextRun(const PRUint8* aString, PRUint32 aLengt
 #endif
     NS_ASSERTION(aLength > 0, "should use MakeEmptyTextRun for zero-length text");
     NS_ASSERTION(aFlags & TEXT_IS_8BIT, "8bit should have been set");
-    gfxTextRun *textRun = gfxTextRun::Create(aParams, aString, aLength, this, aFlags);
+    gfxTextRun *textRun = gfxTextRun::Create(aParams, aLength, this, aFlags);
     if (!textRun)
         return nsnull;
 

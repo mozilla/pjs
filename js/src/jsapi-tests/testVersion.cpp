@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "tests.h"
 #include "jsscript.h"
 #include "jscntxt.h"
@@ -16,14 +20,14 @@ struct VersionFixture;
 
 static VersionFixture *callbackData = NULL;
 
-JSBool CheckVersionHasXML(JSContext *cx, uintN argc, jsval *vp);
-JSBool DisableXMLOption(JSContext *cx, uintN argc, jsval *vp);
-JSBool CallSetVersion17(JSContext *cx, uintN argc, jsval *vp);
-JSBool CheckNewScriptNoXML(JSContext *cx, uintN argc, jsval *vp);
-JSBool OverrideVersion15(JSContext *cx, uintN argc, jsval *vp);
-JSBool CaptureVersion(JSContext *cx, uintN argc, jsval *vp);
-JSBool CheckOverride(JSContext *cx, uintN argc, jsval *vp);
-JSBool EvalScriptVersion16(JSContext *cx, uintN argc, jsval *vp);
+JSBool CheckVersionHasXML(JSContext *cx, unsigned argc, jsval *vp);
+JSBool DisableXMLOption(JSContext *cx, unsigned argc, jsval *vp);
+JSBool CallSetVersion17(JSContext *cx, unsigned argc, jsval *vp);
+JSBool CheckNewScriptNoXML(JSContext *cx, unsigned argc, jsval *vp);
+JSBool OverrideVersion15(JSContext *cx, unsigned argc, jsval *vp);
+JSBool CaptureVersion(JSContext *cx, unsigned argc, jsval *vp);
+JSBool CheckOverride(JSContext *cx, unsigned argc, jsval *vp);
+JSBool EvalScriptVersion16(JSContext *cx, unsigned argc, jsval *vp);
 
 struct VersionFixture : public JSAPITest
 {
@@ -49,7 +53,7 @@ struct VersionFixture : public JSAPITest
         return JS_CompileScript(cx, global, contents, length, "<test>", 1);
     }
 
-    bool hasXML(uintN version) {
+    bool hasXML(unsigned version) {
         return VersionHasXML(JSVersion(version));
     }
 
@@ -122,31 +126,31 @@ struct VersionFixture : public JSAPITest
 /* Callbacks to throw into JS-land. */
 
 JSBool
-CallSetVersion17(JSContext *cx, uintN argc, jsval *vp)
+CallSetVersion17(JSContext *cx, unsigned argc, jsval *vp)
 {
     return callbackData->setVersion(JSVERSION_1_7);
 }
 
 JSBool
-CheckVersionHasXML(JSContext *cx, uintN argc, jsval *vp)
+CheckVersionHasXML(JSContext *cx, unsigned argc, jsval *vp)
 {
     return callbackData->checkVersionHasXML();
 }
 
 JSBool
-DisableXMLOption(JSContext *cx, uintN argc, jsval *vp)
+DisableXMLOption(JSContext *cx, unsigned argc, jsval *vp)
 {
     return callbackData->disableXMLOption();
 }
 
 JSBool
-CheckNewScriptNoXML(JSContext *cx, uintN argc, jsval *vp)
+CheckNewScriptNoXML(JSContext *cx, unsigned argc, jsval *vp)
 {
     return callbackData->checkNewScriptNoXML();
 }
 
 JSBool
-OverrideVersion15(JSContext *cx, uintN argc, jsval *vp)
+OverrideVersion15(JSContext *cx, unsigned argc, jsval *vp)
 {
     if (!callbackData->setVersion(JSVERSION_1_5))
         return false;
@@ -154,7 +158,7 @@ OverrideVersion15(JSContext *cx, uintN argc, jsval *vp)
 }
 
 JSBool
-EvalScriptVersion16(JSContext *cx, uintN argc, jsval *vp)
+EvalScriptVersion16(JSContext *cx, unsigned argc, jsval *vp)
 {
     JS_ASSERT(argc == 1);
     jsval *argv = JS_ARGV(cx, vp);
@@ -167,14 +171,14 @@ EvalScriptVersion16(JSContext *cx, uintN argc, jsval *vp)
 }
 
 JSBool
-CaptureVersion(JSContext *cx, uintN argc, jsval *vp)
+CaptureVersion(JSContext *cx, unsigned argc, jsval *vp)
 {
     callbackData->captured = JS_GetVersion(cx);
     return true;
 }
 
 JSBool
-CheckOverride(JSContext *cx, uintN argc, jsval *vp)
+CheckOverride(JSContext *cx, unsigned argc, jsval *vp)
 {
     JS_ASSERT(argc == 1);
     jsval *argv = JS_ARGV(cx, vp);
@@ -223,7 +227,7 @@ BEGIN_FIXTURE_TEST(VersionFixture, testEntryLosesOverride)
     EXEC("overrideVersion15(); evalScriptVersion16('checkOverride(false); captureVersion()');");
     CHECK_EQUAL(captured, JSVERSION_1_6);
 
-    /* 
+    /*
      * Override gets propagated to default version as non-override when you leave the VM's execute
      * call.
      */
@@ -233,7 +237,7 @@ BEGIN_FIXTURE_TEST(VersionFixture, testEntryLosesOverride)
 }
 END_FIXTURE_TEST(VersionFixture, testEntryLosesOverride)
 
-/* 
+/*
  * EvalScriptVersion does not propagate overrides to its caller, it
  * restores things exactly as they were before the call. This is as opposed to
  * the normal (no Version suffix) API which propagates overrides

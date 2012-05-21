@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <stuart@mozilla.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   Mats Palmgren <mats.palmgren@bredband.net>
- *   John Daggett <jdaggett@mozilla.com>
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -83,6 +47,10 @@ using namespace mozilla;
                                    gfxPlatform::GetLog(eGfxLog_fontlist), \
                                    PR_LOG_DEBUG)
 
+#define LOG_CMAPDATA_ENABLED() PR_LOG_TEST( \
+                                   gfxPlatform::GetLog(eGfxLog_cmapdata), \
+                                   PR_LOG_DEBUG)
+
 #endif // PR_LOGGING
 
 // font info loader constants
@@ -103,6 +71,24 @@ BuildKeyNameFromFontName(nsAString &aName)
 // Implementation of gfxPlatformFontList for Win32 GDI,
 // using GDI font enumeration APIs to get the list of fonts
 
+typedef LONG
+(WINAPI *TTLoadEmbeddedFontProc)(HANDLE* phFontReference, ULONG ulFlags,
+                                 ULONG* pulPrivStatus, ULONG ulPrivs,
+                                 ULONG* pulStatus,
+                                 READEMBEDPROC lpfnReadFromStream,
+                                 LPVOID lpvReadStream,
+                                 LPWSTR szWinFamilyName, 
+                                 LPSTR szMacFamilyName,
+                                 TTLOADINFO* pTTLoadInfo);
+
+typedef LONG
+(WINAPI *TTDeleteEmbeddedFontProc)(HANDLE hFontReference, ULONG ulFlags,
+                                   ULONG* pulStatus);
+
+
+static TTLoadEmbeddedFontProc TTLoadEmbeddedFontPtr = nsnull;
+static TTDeleteEmbeddedFontProc TTDeleteEmbeddedFontPtr = nsnull;
+
 class WinUserFontData : public gfxUserFontData {
 public:
     WinUserFontData(HANDLE aFontRef, bool aIsEmbedded)
@@ -114,7 +100,7 @@ public:
         if (mIsEmbedded) {
             ULONG pulStatus;
             LONG err;
-            err = TTDeleteEmbeddedFont(mFontRef, 0, &pulStatus);
+            err = TTDeleteEmbeddedFontPtr(mFontRef, 0, &pulStatus);
 #if DEBUG
             if (err != E_NONE) {
                 char buf[256];
@@ -179,7 +165,7 @@ GDIFontEntry::GDIFontEntry(const nsAString& aFaceName,
     : gfxFontEntry(aFaceName),
       mWindowsFamily(0), mWindowsPitch(0),
       mFontType(aFontType),
-      mForceGDI(false), mUnknownCMAP(false),
+      mForceGDI(false),
       mCharset(), mUnicodeRanges()
 {
     mUserFontData = aUserFontData;
@@ -196,36 +182,63 @@ GDIFontEntry::GDIFontEntry(const nsAString& aFaceName,
 nsresult
 GDIFontEntry::ReadCMAP()
 {
+    // attempt this once, if errors occur leave a blank cmap
+    if (mCharacterMap) {
+        return NS_OK;
+    }
+
     // skip non-SFNT fonts completely
     if (mFontType != GFX_FONT_TYPE_PS_OPENTYPE && 
         mFontType != GFX_FONT_TYPE_TT_OPENTYPE &&
         mFontType != GFX_FONT_TYPE_TRUETYPE) 
     {
+        mCharacterMap = new gfxCharacterMap();
+        mCharacterMap->mBuildOnTheFly = true;
         return NS_ERROR_FAILURE;
     }
 
-    // attempt this once, if errors occur leave a blank cmap
-    if (mCmapInitialized)
-        return NS_OK;
-    mCmapInitialized = true;
+    nsRefPtr<gfxCharacterMap> charmap = new gfxCharacterMap();
 
-    const PRUint32 kCmapTag = TRUETYPE_TAG('c','m','a','p');
-    AutoFallibleTArray<PRUint8,16384> buffer;
-    if (GetFontTable(kCmapTag, buffer) != NS_OK)
-        return NS_ERROR_FAILURE;
-    PRUint8 *cmap = buffer.Elements();
+    PRUint32 kCMAP = TRUETYPE_TAG('c','m','a','p');
+    nsresult rv;
 
-    bool          unicodeFont = false, symbolFont = false;
-    nsresult rv = gfxFontUtils::ReadCMAP(cmap, buffer.Length(),
-                                         mCharacterMap, mUVSOffset,
-                                         unicodeFont, symbolFont);
+    AutoFallibleTArray<PRUint8,16384> cmap;
+    rv = GetFontTable(kCMAP, cmap);
+
+    bool unicodeFont = false, symbolFont = false; // currently ignored
+
+    if (NS_SUCCEEDED(rv)) {
+        rv = gfxFontUtils::ReadCMAP(cmap.Elements(), cmap.Length(),
+                                    *charmap, mUVSOffset,
+                                    unicodeFont, symbolFont);
+    }
     mSymbolFont = symbolFont;
+
     mHasCmapTable = NS_SUCCEEDED(rv);
+    if (mHasCmapTable) {
+        gfxPlatformFontList *pfl = gfxPlatformFontList::PlatformFontList();
+        mCharacterMap = pfl->FindCharMap(charmap);
+    } else {
+        // if error occurred, initialize to null cmap
+        mCharacterMap = new gfxCharacterMap();
+        // For fonts where we failed to read the character map,
+        // we can take a slow path to look up glyphs character by character
+        mCharacterMap->mBuildOnTheFly = true;
+    }
 
 #ifdef PR_LOGGING
-    LOG_FONTLIST(("(fontlist-cmap) name: %s, size: %d\n",
-                  NS_ConvertUTF16toUTF8(mName).get(), mCharacterMap.GetSize()));
+    LOG_FONTLIST(("(fontlist-cmap) name: %s, size: %d hash: %8.8x%s\n",
+                  NS_ConvertUTF16toUTF8(mName).get(),
+                  charmap->SizeOfIncludingThis(moz_malloc_size_of),
+                  charmap->mHash, mCharacterMap == charmap ? " new" : ""));
+    if (LOG_CMAPDATA_ENABLED()) {
+        char prefix[256];
+        sprintf(prefix, "(cmapdata) name: %.220s",
+                NS_ConvertUTF16toUTF8(mName).get());
+        charmap->Dump(prefix, eGfxLog_cmapdata);
+    }
 #endif
+
     return rv;
 }
 
@@ -317,20 +330,19 @@ GDIFontEntry::FillLogFont(LOGFONTW *aLogFont,
 bool 
 GDIFontEntry::TestCharacterMap(PRUint32 aCh)
 {
-    if (ReadCMAP() != NS_OK) {
-        // For fonts where we failed to read the character map,
-        // we can take a slow path to look up glyphs character by character
-        mUnknownCMAP = true;
+    if (!mCharacterMap) {
+        nsresult rv = ReadCMAP();
+        NS_ASSERTION(mCharacterMap, "failed to initialize a character map");
     }
 
-    if (mUnknownCMAP) {
+    if (mCharacterMap->mBuildOnTheFly) {
         if (aCh > 0xFFFF)
             return false;
 
         // previous code was using the group style
         gfxFontStyle fakeStyle;  
         if (mItalic)
-            fakeStyle.style = FONT_STYLE_ITALIC;
+            fakeStyle.style = NS_FONT_STYLE_ITALIC;
         fakeStyle.weight = mWeight * 100;
 
         nsRefPtr<gfxFont> tempFont = FindOrMakeFont(&fakeStyle, false);
@@ -375,12 +387,12 @@ GDIFontEntry::TestCharacterMap(PRUint32 aCh)
         ReleaseDC(NULL, dc);
 
         if (hasGlyph) {
-            mCharacterMap.set(aCh);
+            mCharacterMap->set(aCh);
             return true;
         }
     } else {
         // font had a cmap so simply check that
-        return mCharacterMap.test(aCh);
+        return mCharacterMap->test(aCh);
     }
 
     return false;
@@ -429,6 +441,14 @@ GDIFontEntry::CreateFontEntry(const nsAString& aName,
                                         aWeight, aStretch, aUserFontData);
 
     return fe;
+}
+
+void
+GDIFontEntry::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                  FontListSizes*    aSizes) const
+{
+    aSizes->mFontListSize += aMallocSizeOf(this);
+    SizeOfExcludingThis(aMallocSizeOf, aSizes);
 }
 
 /***************************************************************
@@ -563,6 +583,8 @@ GDIFontFamily::FindStyleVariations()
 gfxGDIFontList::gfxGDIFontList()
 {
     mFontSubstitutes.Init(50);
+
+    InitializeFontEmbeddingProcs();
 }
 
 static void
@@ -628,7 +650,7 @@ gfxGDIFontList::GetFontSubstitutes()
     nsAutoString substituteName;
     substituteName.AssignLiteral("Courier");
     BuildKeyNameFromFontName(substituteName);
-    if (!mFontSubstitutes.Get(substituteName)) {
+    if (!mFontSubstitutes.GetWeak(substituteName)) {
         gfxFontFamily *ff;
         nsAutoString actualFontName;
         actualFontName.AssignLiteral("Courier New");
@@ -713,7 +735,6 @@ gfxFontEntry*
 gfxGDIFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
                                 const nsAString& aFullname)
 {
-    bool found;
     gfxFontEntry *lookup;
 
     // initialize name lookup tables if needed
@@ -722,8 +743,8 @@ gfxGDIFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
     }
 
     // lookup in name lookup tables, return null if not found
-    if (!(lookup = mPostscriptNames.GetWeak(aFullname, &found)) &&
-        !(lookup = mFullnames.GetWeak(aFullname, &found))) 
+    if (!(lookup = mPostscriptNames.GetWeak(aFullname)) &&
+        !(lookup = mFullnames.GetWeak(aFullname))) 
     {
         return nsnull;
     }
@@ -738,7 +759,7 @@ gfxGDIFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
     // 'Arial Vet' which can be used as a key in GDI font lookups).
     gfxFontEntry *fe = GDIFontEntry::CreateFontEntry(lookup->Name(), 
         gfxWindowsFontType(isCFF ? GFX_FONT_TYPE_PS_OPENTYPE : GFX_FONT_TYPE_TRUETYPE) /*type*/, 
-        PRUint32(aProxyEntry->mItalic ? FONT_STYLE_ITALIC : FONT_STYLE_NORMAL), 
+        PRUint32(aProxyEntry->mItalic ? NS_FONT_STYLE_ITALIC : NS_FONT_STYLE_NORMAL), 
         w, aProxyEntry->mStretch, nsnull);
         
     if (!fe)
@@ -747,6 +768,17 @@ gfxGDIFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
     fe->mIsUserFont = true;
     fe->mIsLocalUserFont = true;
     return fe;
+}
+
+void gfxGDIFontList::InitializeFontEmbeddingProcs()
+{
+    static HMODULE fontlib = LoadLibraryW(L"t2embed.dll");
+    if (!fontlib)
+        return;
+    TTLoadEmbeddedFontPtr = (TTLoadEmbeddedFontProc)
+        GetProcAddress(fontlib, "TTLoadEmbeddedFont");
+    TTDeleteEmbeddedFontPtr = (TTDeleteEmbeddedFontProc)
+        GetProcAddress(fontlib, "TTDeleteEmbeddedFont");
 }
 
 // used to control stream read by Windows TTLoadEmbeddedFont API
@@ -864,8 +896,8 @@ gfxGDIFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
     if (NS_FAILED(rv))
         return nsnull;
 
-    // for TTF fonts, first try using the t2embed library
-    if (!isCFF) {
+    // for TTF fonts, first try using the t2embed library if available
+    if (!isCFF && TTLoadEmbeddedFontPtr && TTDeleteEmbeddedFontPtr) {
         // TrueType-style glyphs, use EOT library
         AutoFallibleTArray<PRUint8,2048> eotHeader;
         PRUint8 *buffer;
@@ -890,11 +922,11 @@ gfxGDIFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
             EOTFontStreamReader eotReader(aFontData, aLength, buffer, eotlen,
                                           &overlayNameData);
 
-            ret = TTLoadEmbeddedFont(&fontRef, TTLOAD_PRIVATE, &privStatus,
-                                     LICENSE_PREVIEWPRINT, &pulStatus,
-                                     EOTFontStreamReader::ReadEOTStream,
-                                     &eotReader,
-                                     (PRUnichar*)(fontName.get()), 0, 0);
+            ret = TTLoadEmbeddedFontPtr(&fontRef, TTLOAD_PRIVATE, &privStatus,
+                                        LICENSE_PREVIEWPRINT, &pulStatus,
+                                        EOTFontStreamReader::ReadEOTStream,
+                                        &eotReader,
+                                        (PRUnichar*)(fontName.get()), 0, 0);
             if (ret != E_NONE) {
                 fontRef = nsnull;
                 char buf[256];
@@ -944,7 +976,7 @@ gfxGDIFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
 
     GDIFontEntry *fe = GDIFontEntry::CreateFontEntry(uniqueName, 
         gfxWindowsFontType(isCFF ? GFX_FONT_TYPE_PS_OPENTYPE : GFX_FONT_TYPE_TRUETYPE) /*type*/, 
-        PRUint32(aProxyEntry->mItalic ? FONT_STYLE_ITALIC : FONT_STYLE_NORMAL), 
+        PRUint32(aProxyEntry->mItalic ? NS_FONT_STYLE_ITALIC : NS_FONT_STYLE_NORMAL), 
         w, aProxyEntry->mStretch, winUserFontData);
 
     if (!fe)
@@ -997,8 +1029,8 @@ gfxGDIFontList::ResolveFontName(const nsAString& aFontName, nsAString& aResolved
     nsAutoString keyName(aFontName);
     BuildKeyNameFromFontName(keyName);
 
-    nsRefPtr<gfxFontFamily> ff;
-    if (mFontSubstitutes.Get(keyName, &ff)) {
+    gfxFontFamily *ff = mFontSubstitutes.GetWeak(keyName);
+    if (ff) {
         aResolvedFontName = ff->Name();
         return true;
     }
@@ -1010,4 +1042,28 @@ gfxGDIFontList::ResolveFontName(const nsAString& aFontName, nsAString& aResolved
         return true;
 
     return false;
+}
+
+void
+gfxGDIFontList::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                    FontListSizes*    aSizes) const
+{
+    gfxPlatformFontList::SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    aSizes->mFontListSize +=
+        mFontSubstitutes.SizeOfExcludingThis(SizeOfFamilyNameEntryExcludingThis,
+                                             aMallocSizeOf);
+    aSizes->mFontListSize +=
+        mNonExistingFonts.SizeOfExcludingThis(aMallocSizeOf);
+    for (PRUint32 i = 0; i < mNonExistingFonts.Length(); ++i) {
+        aSizes->mFontListSize +=
+            mNonExistingFonts[i].SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+    }
+}
+
+void
+gfxGDIFontList::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                    FontListSizes*    aSizes) const
+{
+    aSizes->mFontListSize += aMallocSizeOf(this);
+    SizeOfExcludingThis(aMallocSizeOf, aSizes);
 }

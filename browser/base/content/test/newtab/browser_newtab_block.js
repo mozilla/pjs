@@ -15,47 +15,47 @@ function runTests() {
   yield addNewTabPageTab();
   checkGrid("0,1,2,3,4,5,6,7,8");
 
-  yield blockCell(cells[4]);
+  yield blockCell(4);
   checkGrid("0,1,2,3,5,6,7,8,9");
 
-  yield blockCell(cells[4]);
+  yield blockCell(4);
   checkGrid("0,1,2,3,6,7,8,9,");
 
-  yield blockCell(cells[4]);
+  yield blockCell(4);
   checkGrid("0,1,2,3,7,8,9,,");
 
   // we removed a pinned site
-  reset();
+  yield restore();
   setLinks("0,1,2,3,4,5,6,7,8");
   setPinnedLinks(",1");
 
   yield addNewTabPageTab();
   checkGrid("0,1p,2,3,4,5,6,7,8");
 
-  yield blockCell(cells[1]);
+  yield blockCell(1);
   checkGrid("0,2,3,4,5,6,7,8,");
 
   // we remove the last site on the grid (which is pinned) and expect the gap
   // to be re-filled and the new site to be unpinned
-  reset();
+  yield restore();
   setLinks("0,1,2,3,4,5,6,7,8,9");
   setPinnedLinks(",,,,,,,,8");
 
   yield addNewTabPageTab();
   checkGrid("0,1,2,3,4,5,6,7,8p");
 
-  yield blockCell(cells[8]);
+  yield blockCell(8);
   checkGrid("0,1,2,3,4,5,6,7,9");
 
   // we remove the first site on the grid with the last one pinned. all cells
   // but the last one should shift to the left and a new site fades in
-  reset();
+  yield restore();
   setLinks("0,1,2,3,4,5,6,7,8,9");
   setPinnedLinks(",,,,,,,,8");
 
   yield addNewTabPageTab();
   checkGrid("0,1,2,3,4,5,6,7,8p");
 
-  yield blockCell(cells[0]);
+  yield blockCell(0);
   checkGrid("1,2,3,4,5,6,7,9,8p");
 }

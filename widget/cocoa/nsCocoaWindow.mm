@@ -1,41 +1,7 @@
 /* -*- Mode: Objective-C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is 
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Josh Aas <josh@mozilla.com>
- *   Colin Barrett <cbarrett@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCocoaWindow.h"
 
@@ -61,6 +27,8 @@
 #include "nsStyleConsts.h"
 #include "nsNativeThemeColors.h"
 #include "nsChildView.h"
+#include "nsCocoaFeatures.h"
+#include "nsIScreenManager.h"
 
 #include "gfxPlatform.h"
 #include "qcms.h"
@@ -139,7 +107,9 @@ nsCocoaWindow::nsCocoaWindow()
 , mWindowMadeHere(false)
 , mSheetNeedsShow(false)
 , mFullScreen(false)
+, mInFullScreenTransition(false)
 , mModal(false)
+, mUsesNativeFullScreen(false)
 , mIsAnimationSuppressed(false)
 , mInReportMoveEvent(false)
 , mNumModalDescendents(0)
@@ -513,7 +483,10 @@ NS_IMETHODIMP nsCocoaWindow::Destroy()
   nsBaseWidget::Destroy();
   nsBaseWidget::OnDestroy();
 
-  if (mFullScreen) {
+  // On Lion we do not have to mess with the OS chrome when in Full Screen mode. So we
+  // can simply skip that. When the Window is destroyed, the OS will take care of removing
+  // the full screen 'Space' that was setup for us.
+  if (!mUsesNativeFullScreen && mFullScreen) {
     nsCocoaUtils::HideOSChromeOnScreen(false, [mWindow screen]);
   }
 
@@ -1034,8 +1007,23 @@ NS_IMETHODIMP nsCocoaWindow::ConstrainPosition(bool aAllowSlop,
     return NS_OK;
   }
 
-  nsIntRect screenBounds(
-    nsCocoaUtils::CocoaRectToGeckoRect([[mWindow screen] visibleFrame]));
+  nsIntRect screenBounds;
+
+  nsCOMPtr<nsIScreenManager> screenMgr = do_GetService("@mozilla.org/gfx/screenmanager;1");
+  if (screenMgr) {
+    nsCOMPtr<nsIScreen> screen;
+    PRInt32 width, height;
+
+    // zero size rects confuse the screen manager
+    width = mBounds.width > 0 ? mBounds.width : 1;
+    height = mBounds.height > 0 ? mBounds.height : 1;
+    screenMgr->ScreenForRect(*aX, *aY, width, height, getter_AddRefs(screen));
+
+    if (screen) {
+      screen->GetRect(&(screenBounds.x), &(screenBounds.y),
+                      &(screenBounds.width), &(screenBounds.height));
+    }
+  }
 
   if (aAllowSlop) {
     if (*aX < screenBounds.x - mBounds.width + kWindowPositionSlop) {
@@ -1180,24 +1168,42 @@ NS_IMETHODIMP nsCocoaWindow::HideWindowChrome(bool aShouldHide)
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
+void nsCocoaWindow::EnteredFullScreen(bool aFullScreen)
+{
+  mInFullScreenTransition = false;
+  mFullScreen = aFullScreen;
+  DispatchSizeModeEvent();
+}
 
 NS_METHOD nsCocoaWindow::MakeFullScreen(bool aFullScreen)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NS_ASSERTION(mFullScreen != aFullScreen, "Unnecessary MakeFullScreen call");
+  // We will call into MakeFullScreen redundantly when entering/exiting
+  // fullscreen mode via OS X controls. When that happens we should just handle
+  // it gracefully - no need to ASSERT.
+  if (mFullScreen == aFullScreen) {
+    return NS_OK;
+  }
+  mInFullScreenTransition = true;
 
-  NSDisableScreenUpdates();
-  // The order here matters. When we exit full screen mode, we need to show the
-  // Dock first, otherwise the newly-created window won't have its minimize
-  // button enabled. See bug 526282.
-  nsCocoaUtils::HideOSChromeOnScreen(aFullScreen, [mWindow screen]);
-  nsresult rv = nsBaseWidget::MakeFullScreen(aFullScreen);
-  NSEnableScreenUpdates();
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (mUsesNativeFullScreen) {
+    // Calling toggleFullScreen will result in windowDid(FailTo)?(Enter|Exit)FullScreen
+    // to be called from the OS. We will call EnteredFullScreen from those methods,
+    // where mFullScreen will be set and a sizemode event will be dispatched.
+    [mWindow toggleFullScreen:nil];
+  } else {
+    NSDisableScreenUpdates();
+    // The order here matters. When we exit full screen mode, we need to show the
+    // Dock first, otherwise the newly-created window won't have its minimize
+    // button enabled. See bug 526282.
+    nsCocoaUtils::HideOSChromeOnScreen(aFullScreen, [mWindow screen]);
+    nsresult rv = nsBaseWidget::MakeFullScreen(aFullScreen);
+    NSEnableScreenUpdates();
+    NS_ENSURE_SUCCESS(rv, rv);
 
-  mFullScreen = aFullScreen;
-  DispatchSizeModeEvent();
+    EnteredFullScreen(aFullScreen);
+  }
 
   return NS_OK;
 
@@ -1452,8 +1458,13 @@ void
 nsCocoaWindow::DispatchSizeModeEvent()
 {
   nsSizeMode newMode = GetWindowSizeMode(mWindow, mFullScreen);
-  if (mSizeMode == newMode)
+
+  // Don't dispatch a sizemode event if:
+  // 1. the window is transitioning to fullscreen
+  // 2. the new sizemode is the same as the current sizemode
+  if (mInFullScreenTransition || mSizeMode == newMode) {
     return;
+  }
 
   mSizeMode = newMode;
   nsSizeModeEvent event(true, NS_SIZEMODE, this);
@@ -1638,6 +1649,42 @@ void nsCocoaWindow::SetShowsToolbarButton(bool aShow)
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
   [mWindow setShowsToolbarButton:aShow];
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+void nsCocoaWindow::SetShowsFullScreenButton(bool aShow)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  if (![mWindow respondsToSelector:@selector(toggleFullScreen:)] ||
+      mUsesNativeFullScreen == aShow) {
+    return;
+  }
+
+  // If the window is currently in fullscreen mode, then we're going to
+  // transition out first, then set the collection behavior & toggle
+  // mUsesNativeFullScreen, then transtion back into fullscreen mode. This
+  // prevents us from getting into a conflicting state with MakeFullScreen
+  // where mUsesNativeFullScreen would lead us down the wrong path.
+  bool wasFullScreen = mFullScreen;
+
+  if (wasFullScreen) {
+    MakeFullScreen(false);
+  }
+
+  NSWindowCollectionBehavior newBehavior = [mWindow collectionBehavior];
+  if (aShow) {
+    newBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+  } else {
+    newBehavior &= ~NSWindowCollectionBehaviorFullScreenPrimary;
+  }
+  [mWindow setCollectionBehavior:newBehavior];
+  mUsesNativeFullScreen = aShow;
+
+  if (wasFullScreen) {
+    MakeFullScreen(true);
+  }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -1873,6 +1920,45 @@ bool nsCocoaWindow::ShouldFocusPlugin()
     return;
 
   mGeckoWindow->ReportMoveEvent();
+}
+
+// Lion's full screen mode will bypass our internal fullscreen tracking, so
+// we need to catch it when we transition and call our own methods, which in
+// turn will fire "fullscreen" events.
+- (void)windowDidEnterFullScreen:(NSNotification *)notification
+{
+  if (!mGeckoWindow) {
+    return;
+  }
+
+  mGeckoWindow->EnteredFullScreen(true);
+}
+
+- (void)windowDidExitFullScreen:(NSNotification *)notification
+{
+  if (!mGeckoWindow) {
+    return;
+  }
+
+  mGeckoWindow->EnteredFullScreen(false);
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow *)window
+{
+  if (!mGeckoWindow) {
+    return;
+  }
+
+  mGeckoWindow->EnteredFullScreen(false);
+}
+
+- (void)windowDidFailToExitFullScreen:(NSWindow *)window
+{
+  if (!mGeckoWindow) {
+    return;
+  }
+
+  mGeckoWindow->EnteredFullScreen(true);
 }
 
 - (void)windowDidBecomeMain:(NSNotification *)aNotification
@@ -2281,7 +2367,7 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
   // We work around this problem by only returning AXChildren that are
   // mozAccessible object or are one of the titlebar's buttons (which
   // instantiate subclasses of NSButtonCell).
-  if (nsToolkit::OnLionOrLater() && [retval isKindOfClass:[NSArray class]] &&
+  if (nsCocoaFeatures::OnLionOrLater() && [retval isKindOfClass:[NSArray class]] &&
       [attribute isEqualToString:@"AXChildren"]) {
     NSMutableArray *holder = [NSMutableArray arrayWithCapacity:10];
     [holder addObjectsFromArray:(NSArray *)retval];
@@ -2586,7 +2672,7 @@ DrawNativeTitlebar(CGContextRef aContext, CGRect aTitlebarRect,
             nil],
           nil);
 
-  if (nsToolkit::OnLionOrLater()) {
+  if (nsCocoaFeatures::OnLionOrLater()) {
     // On Lion the call to CUIDraw doesn't draw the top pixel strip at some
     // window widths. We don't want to have a flickering transparent line, so
     // we overdraw it.

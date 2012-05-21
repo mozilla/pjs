@@ -1,4 +1,8 @@
 #!perl -w
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 package Packager;
 
 require 5.004;
@@ -234,7 +238,10 @@ sub do_copyfile
 
   # set the destination path, if alternate destination given, use it.
   if ($flat) {
-    if ($srcsuffix eq ".manifest" && $srcpath =~ m'/(chrome|components)/$') {
+    # WebappRuntime has manifests that shouldn't be flattened, even though it
+    # gets packaged with Firefox, which does get flattened, so special-case it.
+    if ($srcsuffix eq ".manifest" && $srcpath =~ m'/(chrome|components)/$' &&
+        $component ne "WebappRuntime") {
       my $subdir = $1;
       if ($component eq "") {
         die ("Manifest file was not part of a component.");
@@ -320,6 +327,15 @@ sub do_copyfile
         print " copy\t$srcpath$srcname$srcsuffix =>\n\t\t$destpath$destname$destsuffix\n";
       }
     }
+
+    if (stat("$destpath$destname$destsuffix") &&
+        stat("$srcpath$srcname$srcsuffix")->mtime < stat("$destpath$destname$destsuffix")->mtime) {
+      if ( $debug >= 3 ) {
+        print "source file older than destination, do not copy\n";
+      }
+      return;
+    }
+
     unlink("$destpath$destname$destsuffix") if ( -e "$destpath$destname$destsuffix");
     # If source is a symbolic link pointing in the same directory, create a
     # symbolic link

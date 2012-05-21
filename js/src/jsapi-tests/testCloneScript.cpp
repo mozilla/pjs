@@ -3,11 +3,13 @@
  *
  * Test script cloning.
  */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #include "tests.h"
-#include "jsapi.h"
 #include "jsdbgapi.h"
-#include "jsxdrapi.h"
 
 BEGIN_TEST(test_cloneScript)
 {
@@ -16,7 +18,7 @@ BEGIN_TEST(test_cloneScript)
     CHECK(A = createGlobal());
     CHECK(B = createGlobal());
 
-    const char *source = 
+    const char *source =
         "var i = 0;\n"
         "var sum = 0;\n"
         "while (i < 10) {\n"
@@ -52,7 +54,7 @@ BEGIN_TEST(test_cloneScript)
 END_TEST(test_cloneScript)
 
 void
-DestroyPrincipals(JSContext *cx, JSPrincipals *principals)
+DestroyPrincipals(JSPrincipals *principals)
 {
     delete principals;
 }
@@ -60,54 +62,38 @@ DestroyPrincipals(JSContext *cx, JSPrincipals *principals)
 struct Principals : public JSPrincipals
 {
   public:
-    Principals(const char *name)
+    Principals()
     {
         refcount = 0;
-        codebase = const_cast<char *>(name);
-        destroy = DestroyPrincipals;
-        subsume = NULL;
     }
 };
 
 class AutoDropPrincipals
 {
-    JSContext *cx;
+    JSRuntime *rt;
     JSPrincipals *principals;
 
   public:
-    AutoDropPrincipals(JSContext *cx, JSPrincipals *principals)
-      : cx(cx), principals(principals)
+    AutoDropPrincipals(JSRuntime *rt, JSPrincipals *principals)
+      : rt(rt), principals(principals)
     {
-        JSPRINCIPALS_HOLD(cx, principals);
+        JS_HoldPrincipals(principals);
     }
 
     ~AutoDropPrincipals()
     {
-        JSPRINCIPALS_DROP(cx, principals);
+        JS_DropPrincipals(rt, principals);
     }
 };
 
-JSBool
-TranscodePrincipals(JSXDRState *xdr, JSPrincipals **principalsp)
-{
-    return JS_XDRBytes(xdr, reinterpret_cast<char *>(principalsp), sizeof(*principalsp));
-}
-
 BEGIN_TEST(test_cloneScriptWithPrincipals)
 {
-    JSSecurityCallbacks cbs = {
-        NULL,
-        TranscodePrincipals,
-        NULL,
-        NULL
-    };
+    JS_InitDestroyPrincipalsCallback(rt, DestroyPrincipals);
 
-    JS_SetRuntimeSecurityCallbacks(rt, &cbs);
-
-    JSPrincipals *principalsA = new Principals("A");
-    AutoDropPrincipals dropA(cx, principalsA);
-    JSPrincipals *principalsB = new Principals("B");
-    AutoDropPrincipals dropB(cx, principalsB);
+    JSPrincipals *principalsA = new Principals();
+    AutoDropPrincipals dropA(rt, principalsA);
+    JSPrincipals *principalsB = new Principals();
+    AutoDropPrincipals dropB(rt, principalsB);
 
     JSObject *A, *B;
 
@@ -133,7 +119,7 @@ BEGIN_TEST(test_cloneScriptWithPrincipals)
         JSScript *script;
         CHECK(script = JS_GetFunctionScript(cx, fun));
 
-        CHECK(JS_GetScriptPrincipals(cx, script) == principalsA);
+        CHECK(JS_GetScriptPrincipals(script) == principalsA);
         CHECK(obj = JS_GetFunctionObject(fun));
     }
 
@@ -152,7 +138,7 @@ BEGIN_TEST(test_cloneScriptWithPrincipals)
         JSScript *script;
         CHECK(script = JS_GetFunctionScript(cx, fun));
 
-        CHECK(JS_GetScriptPrincipals(cx, script) == principalsB);
+        CHECK(JS_GetScriptPrincipals(script) == principalsB);
 
         JS::Value v;
         JS::Value args[] = { JS::Int32Value(1) };
@@ -163,7 +149,7 @@ BEGIN_TEST(test_cloneScriptWithPrincipals)
         CHECK(JS_ObjectIsFunction(cx, funobj));
         CHECK(fun = JS_ValueToFunction(cx, v));
         CHECK(script = JS_GetFunctionScript(cx, fun));
-        CHECK(JS_GetScriptPrincipals(cx, script) == principalsB);
+        CHECK(JS_GetScriptPrincipals(script) == principalsB);
     }
 
     return true;

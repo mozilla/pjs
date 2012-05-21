@@ -1,4 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /* vim: se cin sw=2 ts=2 et : */
 
 #ifndef nsDownloadScanner_h_
@@ -10,12 +14,8 @@
 #define INITGUID
 #include <windows.h>
 #define AVVENDOR
+#include <objidl.h>
 #include <msoav.h>
-// To cope with both msvs8 header and sdk6 header
-#ifdef _WIN32_IE_IE60SP2
-#undef _WIN32_IE
-#define _WIN32_IE _WIN32_IE_IE60SP2
-#endif
 #include <shlobj.h>
 
 #include "nsAutoPtr.h"

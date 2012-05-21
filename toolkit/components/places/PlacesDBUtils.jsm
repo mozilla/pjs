@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=2 sts=2 expandtab filetype=javascript
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places Database Utils code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Marco Bonardo <mak77@bonardo.net> (Original Author)
- *   Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -341,6 +307,7 @@ let PlacesDBUtils = {
       "WHERE anno_attribute_id IN ( "               +
       "  SELECT id FROM moz_anno_attributes "       +
       "  WHERE name = 'sync/children' "             +
+      "     OR name = 'placesInternal/GUID' "       +
       "     OR name BETWEEN 'weave/' AND 'weave0' " +
       ")");
     cleanupStatements.push(deleteObsoleteItemsAnnos);
@@ -611,18 +578,6 @@ let PlacesDBUtils = {
       "DROP TABLE moz_bm_reindex_temp "
     ));
 
-    // D.11 remove old livemarks status items
-    //      Livemark status items are now static but some livemark has still old
-    //      status items bookmarks inside it. We should remove them.
-    let removeLivemarkStaticItems = DBConn.createAsyncStatement(
-      "DELETE FROM moz_bookmarks WHERE type = :bookmark_type AND fk IN ( " +
-        "SELECT id FROM moz_places WHERE url = :lmloading OR url = :lmfailed " +
-      ")");
-    removeLivemarkStaticItems.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    removeLivemarkStaticItems.params["lmloading"] = "about:livemark-loading";
-    removeLivemarkStaticItems.params["lmfailed"] = "about:livemark-failed";
-    cleanupStatements.push(removeLivemarkStaticItems);
-
     // D.12 Fix empty-named tags.
     //      Tags were allowed to have empty names due to a UI bug.  Fix them
     //      replacing their title with "(notitle)".
@@ -722,6 +677,19 @@ let PlacesDBUtils = {
                                   "WHERE v.place_id = h.id) " +
       ")");
     cleanupStatements.push(fixVisitStats);
+
+    // L.3 recalculate hidden for redirects.
+    let fixRedirectsHidden = DBConn.createAsyncStatement(
+      "UPDATE moz_places " +
+      "SET hidden = 1 " +
+      "WHERE id IN ( " +
+        "SELECT h.id FROM moz_places h " +
+        "JOIN moz_historyvisits src ON src.place_id = h.id " +
+        "JOIN moz_historyvisits dst ON dst.from_visit = src.id AND dst.visit_type IN (5,6) " +
+        "LEFT JOIN moz_bookmarks on fk = h.id AND fk ISNULL " +
+        "GROUP BY src.place_id HAVING count(*) = visit_count " +
+      ")");
+    cleanupStatements.push(fixRedirectsHidden);
 
     // MAINTENANCE STATEMENTS SHOULD GO ABOVE THIS POINT!
 

@@ -1,40 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is mozilla.org code.
-#
-# The Initial Developer of the Original Code is
-# Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2009
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Serge Gautherie <sgautherie.bz@free.fr>
-#   Ted Mielczarek <ted.mielczarek@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 """
 Runs the reftest test harness.
@@ -113,25 +79,6 @@ class RefTest(object):
                                                   profileDir,
                                                   "reftest@mozilla.org")
 
-
-  def registerExtension(self, browserEnv, options, profileDir, extraArgs = ['-silent']):
-    # run once with -silent to let the extension manager do its thing
-    # and then exit the app
-    self.automation.log.info("REFTEST INFO | runreftest.py | Performing extension manager registration: start.\n")
-    # Don't care about this |status|: |runApp()| reporting it should be enough.
-    status = self.automation.runApp(None, browserEnv, options.app, profileDir,
-                                 extraArgs,
-                                 utilityPath = options.utilityPath,
-                                 xrePath=options.xrePath,
-                                 symbolsPath=options.symbolsPath)
-    # We don't care to call |processLeakLog()| for this step.
-    self.automation.log.info("\nREFTEST INFO | runreftest.py | Performing extension manager registration: end.")
-
-    # Remove the leak detection file so it can't "leak" to the tests run.
-    # The file is not there if leak logging was not enabled in the application build.
-    if os.path.exists(self.leakLogFile):
-      os.remove(self.leakLogFile)
-
   def buildBrowserEnv(self, options, profileDir):
     browserEnv = self.automation.environment(xrePath = options.xrePath)
     browserEnv["XPCOM_DEBUG_BREAK"] = "stack"
@@ -162,9 +109,6 @@ class RefTest(object):
       # browser environment
       browserEnv = self.buildBrowserEnv(options, profileDir)
 
-      self.registerExtension(browserEnv, options, profileDir)
-
-      # then again to actually run reftest
       self.automation.log.info("REFTEST INFO | runreftest.py | Running tests: start.\n")
       status = self.automation.runApp(None, browserEnv, options.app, profileDir,
                                  cmdlineArgs,

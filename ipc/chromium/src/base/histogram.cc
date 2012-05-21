@@ -149,6 +149,12 @@ void Histogram::AddSampleSet(const SampleSet& sample) {
   sample_.Add(sample);
 }
 
+void Histogram::Clear() {
+  SampleSet ss;
+  ss.Resize(*this);
+  sample_ = ss;
+}
+
 void Histogram::SetRangeDescriptions(const DescriptionPair descriptions[]) {
   DCHECK(false);
 }
@@ -916,6 +922,77 @@ BooleanHistogram::BooleanHistogram(const std::string& name)
     : LinearHistogram(name, 1, 2, 3) {
 }
 
+//------------------------------------------------------------------------------
+// FlagHistogram:
+//------------------------------------------------------------------------------
+
+Histogram *
+FlagHistogram::FactoryGet(const std::string &name, Flags flags)
+{
+  Histogram *h(nsnull);
+
+  if (!StatisticsRecorder::FindHistogram(name, &h)) {
+    // To avoid racy destruction at shutdown, the following will be leaked.
+    FlagHistogram *fh = new FlagHistogram(name);
+    fh->InitializeBucketRange();
+    fh->SetFlags(flags);
+    size_t zero_index = fh->BucketIndex(0);
+    fh->Histogram::Accumulate(1, 1, zero_index);
+    h = StatisticsRecorder::RegisterOrDeleteDuplicate(fh);
+  }
+
+  return h;
+}
+
+FlagHistogram::FlagHistogram(const std::string &name)
+  : BooleanHistogram(name), mSwitched(false) {
+}
+
+Histogram::ClassType
+FlagHistogram::histogram_type() const
+{
+  return FLAG_HISTOGRAM;
+}
+
+void
+FlagHistogram::Accumulate(Sample value, Count count, size_t index)
+{
+  if (mSwitched) {
+    return;
+  }
+
+  mSwitched = true;
+  DCHECK_EQ(value, 1);
+  Histogram::Accumulate(value, 1, index);
+  size_t zero_index = BucketIndex(0);
+  Histogram::Accumulate(1, -1, zero_index);
+}
+
+void
+FlagHistogram::AddSampleSet(const SampleSet& sample) {
+  DCHECK_EQ(bucket_count(), sample.size());
+  // We can't be sure the SampleSet provided came from another FlagHistogram,
+  // so we take the following steps:
+  //  - If our flag has already been set do nothing.
+  //  - Set our flag if the following hold:
+  //      - The sum of the counts in the provided SampleSet is 1.
+  //      - The bucket index for that single value is the same as the index where we
+  //        would place our set flag.
+  //  - Otherwise, take no action.
+
+  if (mSwitched) {
+    return;
+  }
+
+  if (sample.sum() != 1) {
+    return;
+  }
+
+  size_t one_index = BucketIndex(1);
+  if (sample.counts(one_index) == 1) {
+    Accumulate(1, 1, one_index);
+  }
+}
 //------------------------------------------------------------------------------
 // CustomHistogram:
 //------------------------------------------------------------------------------

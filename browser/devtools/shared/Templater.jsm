@@ -1,46 +1,17 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is GCLI
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Joe Walker (jwalker@mozilla.com) (original author)
- *   Mike Ratcliffe (mratcliffe@mozilla.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 var EXPORTED_SYMBOLS = [ "Templater", "template" ];
 
 Components.utils.import("resource://gre/modules/Services.jsm");
 const Node = Components.interfaces.nsIDOMNode;
+
+/**
+ * For full documentation, see:
+ * https://github.com/mozilla/domtemplate/blob/master/README.md
+ */
 
 // WARNING: do not 'use_strict' without reading the notes in _envEval();
 
@@ -50,8 +21,16 @@ const Node = Components.interfaces.nsIDOMNode;
  * @param data Data to use in filling out the template
  * @param options Options to customize the template processing. One of:
  * - allowEval: boolean (default false) Basic template interpolations are
- * either property paths (e.g. ${a.b.c.d}), however if allowEval=true then we
- * allow arbitrary JavaScript
+ *   either property paths (e.g. ${a.b.c.d}), or if allowEval=true then we
+ *   allow arbitrary JavaScript
+ * - stack: string or array of strings (default empty array) The template
+ *   engine maintains a stack of tasks to help debug where it is. This allows
+ *   this stack to be prefixed with a template name
+ * - blankNullUndefined: By default DOMTemplate exports null and undefined
+ *   values using the strings 'null' and 'undefined', which can be helpful for
+ *   debugging, but can introduce unnecessary extra logic in a template to
+ *   convert null/undefined to ''. By setting blankNullUndefined:true, this
+ *   conversion is handled by DOMTemplate
  */
 function template(node, data, options) {
   var template = new Templater(options || {});
@@ -68,7 +47,15 @@ function Templater(options) {
     options = { allowEval: true };
   }
   this.options = options;
-  this.stack = [];
+  if (options.stack && Array.isArray(options.stack)) {
+    this.stack = options.stack;
+  }
+  else if (typeof options.stack === 'string') {
+    this.stack = [ options.stack ];
+  }
+  else {
+    this.stack = [];
+  }
 }
 
 /**
@@ -90,7 +77,7 @@ Templater.prototype._splitSpecial = /\uF001|\uF002/;
  * Cached regex used to detect if a script is capable of being interpreted
  * using Template._property() or if we need to use Template._envEval()
  */
-Templater.prototype._isPropertyScript = /^[a-zA-Z0-9.]*$/;
+Templater.prototype._isPropertyScript = /^[_a-zA-Z0-9.]*$/;
 
 /**
  * Recursive function to walk the tree processing the attributes as it goes.
@@ -153,7 +140,11 @@ Templater.prototype.processNode = function(node, data) {
           } else {
             // Replace references in all other attributes
             var newValue = value.replace(this._templateRegion, function(path) {
-              return this._envEval(path.slice(2, -1), data, value);
+              var insert = this._envEval(path.slice(2, -1), data, value);
+              if (this.options.blankNullUndefined && insert == null) {
+                insert = '';
+              }
+              return insert;
             }.bind(this));
             // Remove '_' prefix of attribute names so the DOM won't try
             // to use them before we've processed the template
@@ -177,7 +168,7 @@ Templater.prototype.processNode = function(node, data) {
       this.processNode(childNodes[j], data);
     }
 
-    if (node.nodeType === Node.TEXT_NODE) {
+    if (node.nodeType === 3 /*Node.TEXT_NODE*/) {
       this._processTextNode(node, data);
     }
   } finally {
@@ -347,8 +338,27 @@ Templater.prototype._processTextNode = function(node, data) {
         part = this._envEval(part.slice(1), data, node.data);
       }
       this._handleAsync(part, node, function(reply, siblingNode) {
-        reply = this._toNode(reply, siblingNode.ownerDocument);
-        siblingNode.parentNode.insertBefore(reply, siblingNode);
+        var doc = siblingNode.ownerDocument;
+        if (reply == null) {
+          reply = this.options.blankNullUndefined ? '' : '' + reply;
+        }
+        if (typeof reply.cloneNode === 'function') {
+          // i.e. if (reply instanceof Element) { ...
+          reply = this._maybeImportNode(reply, doc);
+          siblingNode.parentNode.insertBefore(reply, siblingNode);
+        } else if (typeof reply.item === 'function' && reply.length) {
+          // if thing is a NodeList, then import the children
+          for (var i = 0; i < reply.length; i++) {
+            var child = this._maybeImportNode(reply.item(i), doc);
+            siblingNode.parentNode.insertBefore(child, siblingNode);
+          }
+        }
+        else {
+          // if thing isn't a DOM element then wrap its string value in one
+          reply = doc.createTextNode(reply.toString());
+          siblingNode.parentNode.insertBefore(reply, siblingNode);
+        }
+
       }.bind(this));
     }, this);
     node.parentNode.removeChild(node);
@@ -356,21 +366,13 @@ Templater.prototype._processTextNode = function(node, data) {
 };
 
 /**
- * Helper to convert a 'thing' to a DOM Node.
- * This is (obviously) a no-op for DOM Elements (which are detected using
- * 'typeof thing.cloneNode !== "function"' (is there a better way that will
- * work in all environments, including a .jsm?)
- * Non DOM elements are converted to a string and wrapped in a TextNode.
+ * Return node or a import of node, if it's not in the given document
+ * @param node The node that we want to be properly owned
+ * @param doc The document that the given node should belong to
+ * @return A node that belongs to the given document
  */
-Templater.prototype._toNode = function(thing, document) {
-  if (thing == null) {
-    thing = '' + thing;
-  }
-  // if thing isn't a DOM element then wrap its string value in one
-  if (typeof thing.cloneNode !== 'function') {
-    thing = document.createTextNode(thing.toString());
-  }
-  return thing;
+Templater.prototype._maybeImportNode = function(node, doc) {
+  return node.ownerDocument === doc ? node : doc.importNode(node, true);
 };
 
 /**
@@ -429,7 +431,6 @@ Templater.prototype._stripBraces = function(str) {
  * <tt>newValue</tt> is applied.
  */
 Templater.prototype._property = function(path, data, newValue) {
-  this.stack.push(path);
   try {
     if (typeof path === 'string') {
       path = path.split('.');
@@ -445,12 +446,13 @@ Templater.prototype._property = function(path, data, newValue) {
       return value;
     }
     if (!value) {
-      this._handleError('Can\'t find path=' + path);
+      this._handleError('"' + path[0] + '" is undefined');
       return null;
     }
     return this._property(path.slice(1), value, newValue);
-  } finally {
-    this.stack.pop();
+  } catch (ex) {
+    this._handleError('Path error with \'' + path + '\'', ex);
+    return '${' + path + '}';
   }
 };
 
@@ -469,7 +471,7 @@ Templater.prototype._property = function(path, data, newValue) {
  */
 Templater.prototype._envEval = function(script, data, frame) {
   try {
-    this.stack.push(frame);
+    this.stack.push(frame.replace(/\s+/g, ' '));
     if (this._isPropertyScript.test(script)) {
       return this._property(script, data);
     } else {
@@ -483,8 +485,7 @@ Templater.prototype._envEval = function(script, data, frame) {
       }
     }
   } catch (ex) {
-    this._handleError('Template error evaluating \'' + script + '\'' +
-        ' environment=' + Object.keys(data).join(', '), ex);
+    this._handleError('Template error evaluating \'' + script + '\'', ex);
     return '${' + script + '}';
   } finally {
     this.stack.pop();
@@ -498,8 +499,7 @@ Templater.prototype._envEval = function(script, data, frame) {
  * @param ex optional associated exception.
  */
 Templater.prototype._handleError = function(message, ex) {
-  this._logError(message);
-  this._logError('In: ' + this.stack.join(' > '));
+  this._logError(message + ' (In: ' + this.stack.join(' > ') + ')');
   if (ex) {
     this._logError(ex);
   }

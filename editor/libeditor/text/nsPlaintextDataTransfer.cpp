@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -50,6 +18,7 @@
 #include "nsISelection.h"
 #include "nsCRT.h"
 #include "nsServiceManagerUtils.h"
+#include "nsIPrivateDOMEvent.h"
 
 #include "nsIDOMRange.h"
 #include "nsIDOMDOMStringList.h"
@@ -108,7 +77,7 @@ nsresult nsPlaintextEditor::InsertTextAt(const nsAString &aStringToInsert,
       // Use an auto tracker so that our drop point is correctly
       // positioned after the delete.
       nsAutoTrackDOMPoint tracker(mRangeUpdater, &targetNode, &targetOffset);
-      res = DeleteSelection(eNone);
+      res = DeleteSelection(eNone, eStrip);
       NS_ENSURE_SUCCESS(res, res);
     }
 
@@ -124,7 +93,7 @@ NS_IMETHODIMP nsPlaintextEditor::InsertTextFromTransferable(nsITransferable *aTr
                                                             PRInt32 aDestOffset,
                                                             bool aDoDeleteSelection)
 {
-  FireTrustedInputEvent trusted(this);
+  HandlingTrustedAction trusted(this);
 
   nsresult rv = NS_OK;
   char* bestFlavor = nsnull;
@@ -192,10 +161,18 @@ nsresult nsPlaintextEditor::InsertFromDrop(nsIDOMEvent* aDropEvent)
   nsresult rv = dragEvent->GetDataTransfer(getter_AddRefs(dataTransfer));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession();
+  NS_ASSERTION(dragSession, "No drag session");
+
+  nsCOMPtr<nsIPrivateDOMEvent> privateEvent(do_QueryInterface(aDropEvent));
+  nsDragEvent* dragEventInternal = static_cast<nsDragEvent *>(privateEvent->GetInternalNSEvent());
+  if (nsContentUtils::CheckForSubFrameDrop(dragSession, dragEventInternal)) {
+    return NS_OK;
+  }
+
   // Current doc is destination
-  nsCOMPtr<nsIDOMDocument> destdomdoc; 
-  rv = GetDocument(getter_AddRefs(destdomdoc)); 
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDOMDocument> destdomdoc = GetDOMDocument();
+  NS_ENSURE_TRUE(destdomdoc, NS_ERROR_NOT_INITIALIZED);
 
   PRUint32 numItems = 0;
   rv = dataTransfer->GetMozItemCount(&numItems);
@@ -226,9 +203,7 @@ nsresult nsPlaintextEditor::InsertFromDrop(nsIDOMEvent* aDropEvent)
   NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(selection, NS_ERROR_FAILURE);
 
-  bool isCollapsed;
-  rv = selection->GetIsCollapsed(&isCollapsed);
-  NS_ENSURE_SUCCESS(rv, rv);
+  bool isCollapsed = selection->Collapsed();
 
   nsCOMPtr<nsIDOMNode> sourceNode;
   dataTransfer->GetMozSourceNode(getter_AddRefs(sourceNode));
@@ -356,8 +331,7 @@ NS_IMETHODIMP nsPlaintextEditor::Paste(PRInt32 aSelectionType)
     if (NS_SUCCEEDED(clipboard->GetData(trans, aSelectionType)) && IsModifiable())
     {
       // handle transferable hooks
-      nsCOMPtr<nsIDOMDocument> domdoc;
-      GetDocument(getter_AddRefs(domdoc));
+      nsCOMPtr<nsIDOMDocument> domdoc = GetDOMDocument();
       if (!nsEditorHookUtils::DoInsertionHook(domdoc, nsnull, trans))
         return NS_OK;
 
@@ -377,8 +351,7 @@ NS_IMETHODIMP nsPlaintextEditor::PasteTransferable(nsITransferable *aTransferabl
     return NS_OK;
 
   // handle transferable hooks
-  nsCOMPtr<nsIDOMDocument> domdoc;
-  GetDocument(getter_AddRefs(domdoc));
+  nsCOMPtr<nsIDOMDocument> domdoc = GetDOMDocument();
   if (!nsEditorHookUtils::DoInsertionHook(domdoc, nsnull, aTransferable))
     return NS_OK;
 

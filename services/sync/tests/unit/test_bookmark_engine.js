@@ -1,8 +1,8 @@
 Cu.import("resource://services-sync/engines.js");
 Cu.import("resource://services-sync/engines/bookmarks.js");
 Cu.import("resource://services-sync/record.js");
-Cu.import("resource://services-sync/log4moz.js");
-Cu.import("resource://services-sync/async.js");
+Cu.import("resource://services-common/log4moz.js");
+Cu.import("resource://services-common/async.js");
 Cu.import("resource://services-sync/util.js");
 
 Cu.import("resource://services-sync/service.js");
@@ -92,10 +92,7 @@ function serverForFoo(engine) {
 
 add_test(function test_processIncoming_error_orderChildren() {
   _("Ensure that _orderChildren() is called even when _processIncoming() throws an error.");
-  let syncTesting = new SyncTestingInfrastructure();
-  Svc.Prefs.set("serverURL", TEST_SERVER_URL);
-  Svc.Prefs.set("clusterURL", TEST_CLUSTER_URL);
-  Svc.Prefs.set("username", "foo");
+  new SyncTestingInfrastructure();
 
   let engine = new BookmarksEngine();
   let store  = engine._store;
@@ -165,10 +162,7 @@ add_test(function test_processIncoming_error_orderChildren() {
 
 add_test(function test_restorePromptsReupload() {
   _("Ensure that restoring from a backup will reupload all records.");
-  let syncTesting = new SyncTestingInfrastructure();
-  Svc.Prefs.set("username", "foo");
-  Service.serverURL = TEST_SERVER_URL;
-  Service.clusterURL = TEST_CLUSTER_URL;
+  new SyncTestingInfrastructure();
 
   let engine = new BookmarksEngine();
   let store  = engine._store;
@@ -333,10 +327,7 @@ add_test(function test_mismatched_types() {
     "parentid": "toolbar"
   };
 
-  let syncTesting = new SyncTestingInfrastructure();
-  Svc.Prefs.set("username", "foo");
-  Service.serverURL = TEST_SERVER_URL;
-  Service.clusterURL = TEST_CLUSTER_URL;
+  new SyncTestingInfrastructure();
 
   let engine = new BookmarksEngine();
   let store  = engine._store;
@@ -356,7 +347,8 @@ add_test(function test_mismatched_types() {
     let oldID = store.idForGUID(oldR.id);
     _("Old ID: " + oldID);
     do_check_eq(bms.getItemType(oldID), bms.TYPE_FOLDER);
-    do_check_false(PlacesUtils.livemarks.isLivemark(oldID));
+    do_check_false(PlacesUtils.annotations
+                              .itemHasAnnotation(oldID, PlacesUtils.LMANNO_FEEDURI));
 
     store.applyIncoming(newR);
     let newID = store.idForGUID(newR.id);
@@ -364,7 +356,8 @@ add_test(function test_mismatched_types() {
 
     _("Applied new. It's a livemark.");
     do_check_eq(bms.getItemType(newID), bms.TYPE_FOLDER);
-    do_check_true(PlacesUtils.livemarks.isLivemark(newID));
+    do_check_true(PlacesUtils.annotations
+                             .itemHasAnnotation(newID, PlacesUtils.LMANNO_FEEDURI));
 
   } finally {
     store.wipe();
@@ -377,10 +370,8 @@ add_test(function test_mismatched_types() {
 add_test(function test_bookmark_guidMap_fail() {
   _("Ensure that failures building the GUID map cause early death.");
 
-  let syncTesting = new SyncTestingInfrastructure();
-  Svc.Prefs.set("serverURL", TEST_SERVER_URL);
-  Svc.Prefs.set("clusterURL", TEST_CLUSTER_URL);
-  Svc.Prefs.set("username", "foo");
+  new SyncTestingInfrastructure();
+
   let engine = new BookmarksEngine();
   let store = engine._store;
 
@@ -427,10 +418,59 @@ add_test(function test_bookmark_guidMap_fail() {
   server.stop(run_next_test);
 });
 
+add_test(function test_bookmark_is_taggable() {
+  let engine = new BookmarksEngine();
+  let store = engine._store;
+
+  do_check_true(store.isTaggable("bookmark"));
+  do_check_true(store.isTaggable("microsummary"));
+  do_check_true(store.isTaggable("query"));
+  do_check_false(store.isTaggable("folder"));
+  do_check_false(store.isTaggable("livemark"));
+  do_check_false(store.isTaggable(null));
+  do_check_false(store.isTaggable(undefined));
+  do_check_false(store.isTaggable(""));
+
+  run_next_test();
+});
+
+add_test(function test_bookmark_tag_but_no_uri() {
+  _("Ensure that a bookmark record with tags, but no URI, doesn't throw an exception.");
+
+  let engine = new BookmarksEngine();
+  let store = engine._store;
+
+  // We're simply checking that no exception is thrown, so
+  // no actual checks in this test.
+ 
+  store._tagURI(null, ["foo"]);
+  store._tagURI(null, null);
+  store._tagURI(Utils.makeURI("about:fake"), null);
+
+  let record = {
+    _parent:     PlacesUtils.bookmarks.toolbarFolder,
+    id:          Utils.makeGUID(),
+    description: "",
+    tags:        ["foo"],
+    title:       "Taggy tag",
+    type:        "folder"
+  };
+
+  // Because update() walks the cleartext.
+  record.cleartext = record;
+
+  store.create(record);
+  record.tags = ["bar"];
+  store.update(record);
+
+  run_next_test();
+});
 
 function run_test() {
   initTestLogging("Trace");
-  Log4Moz.repository.getLogger("Sync.Engine.Bookmarks").level = Log4Moz.Level.Trace;
+  Log4Moz.repository.getLogger("Sync.Engine.Bookmarks").level  = Log4Moz.Level.Trace;
+  Log4Moz.repository.getLogger("Sync.Store.Bookmarks").level   = Log4Moz.Level.Trace;
+  Log4Moz.repository.getLogger("Sync.Tracker.Bookmarks").level = Log4Moz.Level.Trace;
 
   generateNewKeys();
 

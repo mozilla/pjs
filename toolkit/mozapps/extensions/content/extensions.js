@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Extension Manager UI.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Blair McBride <bmcbride@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 
@@ -640,6 +607,7 @@ var gViewController = {
 
     this.viewPort.selectedPanel = this.currentViewObj.node;
     this.viewPort.selectedPanel.setAttribute("loading", "true");
+    this.currentViewObj.node.focus();
 
     if (aViewId == aPreviousView)
       this.currentViewObj.refresh(view.param, ++this.currentViewRequest, aState);
@@ -2671,7 +2639,7 @@ var gDetailView = {
       downloadsRow.value = null;
     }
 
-    var canUpdate = !aIsRemote && hasPermission(aAddon, "upgrade");
+    var canUpdate = !aIsRemote && hasPermission(aAddon, "upgrade") && aAddon.id != AddonManager.hotfixID;
     document.getElementById("detail-updates-row").hidden = !canUpdate;
 
     if ("applyBackgroundUpdates" in aAddon) {
@@ -2756,6 +2724,12 @@ var gDetailView = {
     AddonManager.removeManagerListener(this);
     this.clearLoading();
     if (this._addon) {
+      if (this._addon.optionsType == AddonManager.OPTIONS_TYPE_INLINE) {
+        Services.obs.notifyObservers(document,
+                                     "addon-options-hidden",
+                                     this._addon.id);
+      }
+
       gEventManager.unregisterAddonListener(this, this._addon.id);
       gEventManager.unregisterInstallListener(this);
       this._addon = null;
@@ -2882,12 +2856,9 @@ var gDetailView = {
     for (var i = 0; i < settings.length; i++) {
       var setting = settings[i];
 
-      // Remove setting description, for replacement later
       var desc = stripTextNodes(setting).trim();
-      if (setting.hasAttribute("desc")) {
-        desc = setting.getAttribute("desc").trim();
-        setting.removeAttribute("desc");
-      }
+      if (!setting.hasAttribute("desc"))
+        setting.setAttribute("desc", desc);
 
       var type = setting.getAttribute("type");
       if (type == "file" || type == "directory")
@@ -2899,23 +2870,10 @@ var gDetailView = {
         setting.setAttribute("first-row", true);
         firstSetting = setting;
       }
-
-      // Add a new row containing the description
-      if (desc) {
-        var row = document.createElement("row");
-        if (!visible) {
-          row.setAttribute("unsupported", "true");
-        }
-        var label = document.createElement("label");
-        label.className = "preferences-description";
-        label.textContent = desc;
-        row.appendChild(label);
-        rows.appendChild(row);
-      }
     }
 
-	// Ensure the page has loaded and force the XBL bindings to be synchronously applied,
-	// then notify observers.
+    // Ensure the page has loaded and force the XBL bindings to be synchronously applied,
+    // then notify observers.
     if (gViewController.viewPort.selectedPanel.hasAttribute("loading")) {
       gDetailView.node.addEventListener("ViewChanged", function viewChangedEventListener() {
         gDetailView.node.removeEventListener("ViewChanged", viewChangedEventListener, false);
@@ -2963,8 +2921,14 @@ var gDetailView = {
     this.fillSettingsRows();
   },
 
-  onDisabling: function() {
+  onDisabling: function(aNeedsRestart) {
     this.updateState();
+    if (!aNeedsRestart &&
+        this._addon.optionsType == AddonManager.OPTIONS_TYPE_INLINE) {
+      Services.obs.notifyObservers(document,
+                                   "addon-options-hidden",
+                                   this._addon.id);
+    }
   },
 
   onDisabled: function() {

@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is about:permissions code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Margaret Leibovic <margaret.leibovic@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 let Ci = Components.interfaces;
 let Cc = Components.classes;
@@ -92,28 +59,28 @@ Site.prototype = {
    *        A callback function that takes a favicon image URL as a parameter.
    */
   getFavicon: function Site_getFavicon(aCallback) {
-    let callbackExecuted = false;
-    function faviconDataCallback(aURI, aDataLen, aData, aMimeType) {
-      // We don't need a second callback, so we can ignore it to avoid making
-      // a second database query for the favicon data.
-      if (callbackExecuted) {
-        return;
-      }
+    function invokeCallback(aFaviconURI) {
       try {
         // Use getFaviconLinkForIcon to get image data from the database instead
         // of using the favicon URI to fetch image data over the network.
-        aCallback(gFaviconService.getFaviconLinkForIcon(aURI).spec);
-        callbackExecuted = true;
+        aCallback(gFaviconService.getFaviconLinkForIcon(aFaviconURI).spec);
       } catch (e) {
         Cu.reportError("AboutPermissions: " + e);
       }
     }
 
-    // Try to find favicion for both URIs. Callback will only be called if a
-    // favicon URI is found. We'll ignore the second callback if it is called,
-    // so this means we'll always prefer the https favicon.
-    gFaviconService.getFaviconURLForPage(this.httpsURI, faviconDataCallback);
-    gFaviconService.getFaviconURLForPage(this.httpURI, faviconDataCallback);
+    // Try to find favicon for both URIs, but always prefer the https favicon.
+    gFaviconService.getFaviconURLForPage(this.httpsURI, function (aURI) {
+      if (aURI) {
+        invokeCallback(aURI);
+      } else {
+        gFaviconService.getFaviconURLForPage(this.httpURI, function (aURI) {
+          if (aURI) {
+            invokeCallback(aURI);
+          }
+        });
+      }
+    }.bind(this));
   },
 
   /**
@@ -353,6 +320,28 @@ let PermissionDefaults = {
   set popup(aValue) {
     let value = (aValue == this.DENY);
     Services.prefs.setBoolPref("dom.disable_open_during_load", value);
+  },
+
+  get plugins() {
+    if (Services.prefs.getBoolPref("plugins.click_to_play")) {
+      return this.UNKNOWN;
+    }
+    return this.ALLOW;
+  },
+  set plugins(aValue) {
+    let value = (aValue != this.ALLOW);
+    Services.prefs.setBoolPref("plugins.click_to_play", value);
+  },
+  
+  get fullscreen() {
+    if (!Services.prefs.getBoolPref("full-screen-api.enabled")) {
+      return this.DENY;
+    }
+    return this.UNKNOWN;
+  },
+  set fullscreen(aValue) {
+    let value = (aValue != this.DENY);
+    Services.prefs.setBoolPref("full-screen-api.enabled", value);
   }
 }
 
@@ -392,12 +381,17 @@ let AboutPermissions = {
    *
    * Potential future additions: "sts/use", "sts/subd"
    */
-  _supportedPermissions: ["password", "cookie", "geo", "indexedDB", "popup"],
+  _supportedPermissions: ["password", "cookie", "geo", "indexedDB", "popup", "plugins", "fullscreen"],
 
   /**
    * Permissions that don't have a global "Allow" option.
    */
-  _noGlobalAllow: ["geo", "indexedDB"],
+  _noGlobalAllow: ["geo", "indexedDB", "fullscreen"],
+
+  /**
+   * Permissions that don't have a global "Deny" option.
+   */
+  _noGlobalDeny: ["plugins"],
 
   _stringBundle: Services.strings.
                  createBundle("chrome://browser/locale/preferences/aboutPermissions.properties"),
@@ -419,6 +413,8 @@ let AboutPermissions = {
     Services.prefs.addObserver("geo.enabled", this, false);
     Services.prefs.addObserver("dom.indexedDB.enabled", this, false);
     Services.prefs.addObserver("dom.disable_open_during_load", this, false);
+    Services.prefs.addObserver("plugins.click_to_play", this, false);
+    Services.prefs.addObserver("full-screen-api.enabled", this, false);
 
     Services.obs.addObserver(this, "perm-changed", false);
     Services.obs.addObserver(this, "passwordmgr-storage-changed", false);
@@ -439,6 +435,8 @@ let AboutPermissions = {
       Services.prefs.removeObserver("geo.enabled", this, false);
       Services.prefs.removeObserver("dom.indexedDB.enabled", this, false);
       Services.prefs.removeObserver("dom.disable_open_during_load", this, false);
+      Services.prefs.removeObserver("plugins.click_to_play", this, false);
+      Services.prefs.removeObserver("full-screen-api.enabled", this, false);
 
       Services.obs.removeObserver(this, "perm-changed", false);
       Services.obs.removeObserver(this, "passwordmgr-storage-changed", false);
@@ -752,13 +750,23 @@ let AboutPermissions = {
     let allowItem = document.getElementById(aType + "-" + PermissionDefaults.ALLOW);
     allowItem.hidden = !this._selectedSite &&
                        this._noGlobalAllow.indexOf(aType) != -1;
+    let denyItem = document.getElementById(aType + "-" + PermissionDefaults.DENY);
+    denyItem.hidden = !this._selectedSite &&
+                      this._noGlobalDeny.indexOf(aType) != -1;
 
     let permissionMenulist = document.getElementById(aType + "-menulist");
-    let permissionValue;    
+    let permissionValue;
     if (!this._selectedSite) {
       // If there is no selected site, we are updating the default permissions interface.
       permissionValue = PermissionDefaults[aType];
+      if (aType == "plugins")
+        document.getElementById("plugins-pref-item").hidden = false;
     } else {
+      if (aType == "plugins") {
+        document.getElementById("plugins-pref-item").hidden =
+          !Services.prefs.getBoolPref("plugins.click_to_play");
+        return;
+      }
       let result = {};
       permissionValue = this._selectedSite.getPermission(aType, result) ?
                         result.value : PermissionDefaults[aType];

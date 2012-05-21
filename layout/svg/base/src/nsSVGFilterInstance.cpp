@@ -1,47 +1,19 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Main header first:
 #include "nsSVGFilterInstance.h"
-#include "nsSVGUtils.h"
-#include "nsIDOMSVGUnitTypes.h"
+
+// Keep others in (case-insensitive) order:
 #include "gfxPlatform.h"
-#include "nsSVGFilterPaintCallback.h"
-#include "nsSVGFilterElement.h"
-#include "nsLayoutUtils.h"
 #include "gfxUtils.h"
+#include "nsIDOMSVGUnitTypes.h"
+#include "nsRenderingContext.h"
+#include "nsSVGFilterElement.h"
+#include "nsSVGFilterPaintCallback.h"
+#include "nsSVGUtils.h"
 
 float
 nsSVGFilterInstance::GetPrimitiveNumber(PRUint8 aCtxType, float aValue) const
@@ -196,10 +168,9 @@ nsSVGFilterInstance::BuildPrimitives()
 {
   // First build mFilterInfo. It's important that we don't change that
   // array after we start storing pointers to its elements!
-  PRUint32 count = mFilterElement->GetChildCount();
-  PRUint32 i;
-  for (i = 0; i < count; ++i) {
-    nsIContent* child = mFilterElement->GetChildAt(i);
+  for (nsIContent* child = mFilterElement->nsINode::GetFirstChild();
+       child;
+       child = child->GetNextSibling()) {
     nsRefPtr<nsSVGFE> primitive;
     CallQueryInterface(child, (nsSVGFE**)getter_AddRefs(primitive));
     if (!primitive)
@@ -213,7 +184,7 @@ nsSVGFilterInstance::BuildPrimitives()
   nsTHashtable<ImageAnalysisEntry> imageTable;
   imageTable.Init(10);
 
-  for (i = 0; i < mPrimitives.Length(); ++i) {
+  for (PRUint32 i = 0; i < mPrimitives.Length(); ++i) {
     PrimitiveInfo* info = &mPrimitives[i];
     nsSVGFE* filter = info->mFE;
     nsAutoTArray<nsSVGStringInfo,2> sources;
@@ -364,8 +335,9 @@ nsSVGFilterInstance::BuildSourceImages()
     if (!offscreen || offscreen->CairoStatus())
       return NS_ERROR_OUT_OF_MEMORY;
     offscreen->SetDeviceOffset(gfxPoint(-mSurfaceRect.x, -mSurfaceRect.y));
-  
-    nsSVGRenderState tmpState(offscreen);
+
+    nsRenderingContext tmpCtx;
+    tmpCtx.Init(mTargetFrame->PresContext()->DeviceContext(), offscreen);
     gfxMatrix userSpaceToFilterSpace = GetUserSpaceToFilterSpaceTransform();
 
     gfxRect r(neededRect.x, neededRect.y, neededRect.width, neededRect.height);
@@ -389,8 +361,8 @@ nsSVGFilterInstance::BuildSourceImages()
     // code more complex while being hard to get right without introducing
     // subtle bugs, and in practice it probably makes no real difference.)
     gfxMatrix deviceToFilterSpace = GetFilterSpaceToDeviceSpaceTransform().Invert();
-    tmpState.GetGfxContext()->Multiply(deviceToFilterSpace);
-    mPaintCallback->Paint(&tmpState, mTargetFrame, &dirty);
+    tmpCtx.ThebesContext()->Multiply(deviceToFilterSpace);
+    mPaintCallback->Paint(&tmpCtx, mTargetFrame, &dirty);
 
     gfxContext copyContext(sourceColorAlpha);
     copyContext.SetSource(offscreen);

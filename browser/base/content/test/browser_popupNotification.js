@@ -1,42 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is browser popup notification test code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Gavin Sharp <gavin@gavinsharp.com>
- *   Sylvain Pasche <sylvain.pasche@gmail.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *   Margaret Leibovic <margaret.leibovic@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 function test() {
   waitForExplicitFinish();
@@ -191,7 +155,7 @@ var wrongBrowserNotification;
 var tests = [
   { // Test #0
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       showNotification(this.notifyObj);
     },
     onShown: function (popup) {
@@ -206,7 +170,7 @@ var tests = [
   },
   { // Test #1
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       showNotification(this.notifyObj);
     },
     onShown: function (popup) {
@@ -221,7 +185,7 @@ var tests = [
   },
   { // Test #2
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       this.notification = showNotification(this.notifyObj);
     },
     onShown: function (popup) {
@@ -261,7 +225,6 @@ var tests = [
 
       // switch back to the old browser
       gBrowser.selectedTab = this.oldSelectedTab;
-
     },
     onHidden: function (popup) {
       // actually remove the notification to prevent it from reappearing
@@ -285,7 +248,7 @@ var tests = [
   // notification.
   { // Test #6
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       // Show the same notification twice
       this.notification1 = showNotification(this.notifyObj);
       this.notification2 = showNotification(this.notifyObj);
@@ -332,7 +295,7 @@ var tests = [
   // Test notification without mainAction
   { // Test #8
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       this.notifyObj.mainAction = null;
       this.notification = showNotification(this.notifyObj);
     },
@@ -568,7 +531,7 @@ var tests = [
   // Test notification "Not Now" menu item
   { // Test #17
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       this.notification = showNotification(this.notifyObj);
     },
     onShown: function (popup) {
@@ -584,7 +547,7 @@ var tests = [
   // Test notification close button
   { // Test #18
     run: function () {
-      this.notifyObj = new basicNotification(),
+      this.notifyObj = new basicNotification();
       this.notification = showNotification(this.notifyObj);
     },
     onShown: function (popup) {
@@ -601,14 +564,10 @@ var tests = [
   // Test notification when chrome is hidden
   { // Test #19
     run: function () {
-      this.oldSelectedTab = gBrowser.selectedTab;
-      gBrowser.selectedTab = gBrowser.addTab("about:blank");
-
-      let self = this;
-      loadURI("about:addons", function() {
-        self.notifyObj = new basicNotification();
-        self.notification = showNotification(self.notifyObj);
-      });
+      window.locationbar.visible = false;
+      this.notifyObj = new basicNotification();
+      this.notification = showNotification(this.notifyObj);
+      window.locationbar.visible = true;
     },
     onShown: function (popup) {
       checkPopup(popup, this.notifyObj);
@@ -619,9 +578,6 @@ var tests = [
       ok(this.notifyObj.dismissalCallbackTriggered, "dismissal callback triggered");
       this.notification.remove();
       ok(this.notifyObj.removedCallbackTriggered, "removed callback triggered");
-
-      gBrowser.removeTab(gBrowser.selectedTab);
-      gBrowser.selectedTab = this.oldSelectedTab;
     }
   },
   // Test notification is removed when dismissed if removeOnDismissal is true
@@ -642,6 +598,84 @@ var tests = [
       ok(this.notifyObj.removedCallbackTriggered, "removed callback triggered");
     }
   },
+  // Test multiple notification icons are shown
+  { // Test #21
+    run: function () {
+      this.notifyObj1 = new basicNotification();
+      this.notifyObj1.id += "_1";
+      this.notifyObj1.anchorID = "default-notification-icon";
+      this.notification1 = showNotification(this.notifyObj1);
+
+      this.notifyObj2 = new basicNotification();
+      this.notifyObj2.id += "_2";
+      this.notifyObj2.anchorID = "geo-notification-icon";
+      this.notification2 = showNotification(this.notifyObj2);
+    },
+    onShown: function (popup) {
+      checkPopup(popup, this.notifyObj2);
+
+      // check notifyObj1 anchor icon is showing
+      isnot(document.getElementById("default-notification-icon").boxObject.width, 0,
+            "default anchor should be visible");
+      // check notifyObj2 anchor icon is showing
+      isnot(document.getElementById("geo-notification-icon").boxObject.width, 0,
+            "geo anchor should be visible");
+
+      dismissNotification(popup);
+    },
+    onHidden: [
+      function (popup) {
+      },
+      function (popup) {
+        this.notification1.remove();
+        ok(this.notifyObj1.removedCallbackTriggered, "removed callback triggered");
+
+        this.notification2.remove();
+        ok(this.notifyObj2.removedCallbackTriggered, "removed callback triggered");
+      }
+    ]
+  },
+  // Test that multiple notification icons are removed when switching tabs
+  { // Test #22
+    run: function () {
+      // show the notification on old tab.
+      this.notifyObjOld = new basicNotification();
+      this.notifyObjOld.anchorID = "default-notification-icon";
+      this.notificationOld = showNotification(this.notifyObjOld);
+
+      // switch tab
+      this.oldSelectedTab = gBrowser.selectedTab;
+      gBrowser.selectedTab = gBrowser.addTab("about:blank");
+
+      // show the notification on new tab.
+      this.notifyObjNew = new basicNotification();
+      this.notifyObjNew.anchorID = "geo-notification-icon";
+      this.notificationNew = showNotification(this.notifyObjNew);
+    },
+    onShown: function (popup) {
+      checkPopup(popup, this.notifyObjNew);
+
+      // check notifyObjOld anchor icon is removed
+      is(document.getElementById("default-notification-icon").boxObject.width, 0,
+         "default anchor shouldn't be visible");
+      // check notifyObjNew anchor icon is showing
+      isnot(document.getElementById("geo-notification-icon").boxObject.width, 0,
+            "geo anchor should be visible");
+
+      dismissNotification(popup);
+    },
+    onHidden: [
+      function (popup) {
+      },
+      function (popup) {
+        this.notificationNew.remove();
+        gBrowser.removeTab(gBrowser.selectedTab);
+
+        gBrowser.selectedTab = this.oldSelectedTab;
+        this.notificationOld.remove();
+      }
+    ]
+  }
 ];
 
 function showNotification(notifyObj) {

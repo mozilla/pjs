@@ -1,46 +1,19 @@
 # -*- Mode: Java; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is mozilla.org code.
-#
-# The Initial Developer of the Original Code is 
-# Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1998
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or 
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 // XXX Toolkit-specific preferences should be moved into toolkit.js
 
 #filter substitution
 
-# SYNTAX HINTS:  dashes are delimiters.  Use underscores instead.
-#  The first character after a period must be alphabetic.
+#
+# SYNTAX HINTS:
+#
+#  - Dashes are delimiters; use underscores instead.
+#  - The first character after a period must be alphabetic.
+#  - Computed values (e.g. 50 * 1024) don't work.
+#
 
 #ifdef XP_UNIX
 #ifndef XP_MACOSX
@@ -66,7 +39,7 @@ pref("extensions.getAddons.cache.enabled", true);
 pref("extensions.getAddons.maxResults", 15);
 pref("extensions.getAddons.get.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%");
 pref("extensions.getAddons.getWithPerformance.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%&tMain=%TIME_MAIN%&tFirstPaint=%TIME_FIRST_PAINT%&tSessionRestored=%TIME_SESSION_RESTORED%");
-pref("extensions.getAddons.search.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/search?q=%TERMS%");
+pref("extensions.getAddons.search.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/search?q=%TERMS%&platform=%OS%&appver=%VERSION%");
 pref("extensions.getAddons.search.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/%TERMS%/all/%MAX_RESULTS%/%OS%/%VERSION%/%COMPATIBILITY_MODE%?src=firefox");
 pref("extensions.webservice.discoverURL", "https://services.addons.mozilla.org/%LOCALE%/firefox/discovery/pane/%VERSION%/%OS%/%COMPATIBILITY_MODE%");
 
@@ -214,6 +187,7 @@ pref("app.update.service.enabled", true);
 //
 pref("extensions.update.enabled", true);
 pref("extensions.update.url", "https://versioncheck.addons.mozilla.org/update/VersionCheck.php?reqVersion=%REQ_VERSION%&id=%ITEM_ID%&version=%ITEM_VERSION%&maxAppVersion=%ITEM_MAXAPPVERSION%&status=%ITEM_STATUS%&appID=%APP_ID%&appVersion=%APP_VERSION%&appOS=%APP_OS%&appABI=%APP_ABI%&locale=%APP_LOCALE%&currentAppVersion=%CURRENT_APP_VERSION%&updateType=%UPDATE_TYPE%&compatMode=%COMPATIBILITY_MODE%");
+pref("extensions.update.background.url", "https://versioncheck-bg.addons.mozilla.org/update/VersionCheck.php?reqVersion=%REQ_VERSION%&id=%ITEM_ID%&version=%ITEM_VERSION%&maxAppVersion=%ITEM_MAXAPPVERSION%&status=%ITEM_STATUS%&appID=%APP_ID%&appVersion=%APP_VERSION%&appOS=%APP_OS%&appABI=%APP_ABI%&locale=%APP_LOCALE%&currentAppVersion=%CURRENT_APP_VERSION%&updateType=%UPDATE_TYPE%&compatMode=%COMPATIBILITY_MODE%");
 pref("extensions.update.interval", 86400);  // Check for updates to Extensions and 
                                             // Themes every day
 // Non-symmetric (not shared by extensions) extension-specific [update] preferences
@@ -281,7 +255,7 @@ pref("browser.urlbar.doubleClickSelectsAll", true);
 #else
 pref("browser.urlbar.doubleClickSelectsAll", false);
 #endif
-pref("browser.urlbar.autoFill", false);
+pref("browser.urlbar.autoFill", true);
 pref("browser.urlbar.autoFill.typed", true);
 // 0: Match anywhere (e.g., middle of words)
 // 1: Match on word boundaries and then try matching anywhere
@@ -320,6 +294,8 @@ pref("browser.urlbar.default.behavior", 0);
 pref("browser.urlbar.formatting.enabled", true);
 pref("browser.urlbar.trimURLs", true);
 
+pref("browser.altClickSave", false);
+
 // Number of milliseconds to wait for the http headers (and thus
 // the Content-Disposition filename) before giving up and falling back to 
 // picking a filename without that info in hand so that the user sees some
@@ -340,6 +316,12 @@ pref("browser.download.manager.addToRecentDocs", true);
 pref("browser.download.manager.quitBehavior", 0);
 pref("browser.download.manager.scanWhenDone", true);
 pref("browser.download.manager.resumeOnWakeDelay", 10000);
+
+// This allows disabling the Downloads Panel in favor of the old interface.
+pref("browser.download.useToolkitUI", false);
+
+// This controls retention behavior in the Downloads Panel only.
+pref("browser.download.panel.removeFinishedDownloads", false);
 
 // search engines URL
 pref("browser.search.searchEnginesURL",      "https://addons.mozilla.org/%LOCALE%/firefox/search-engines/");
@@ -604,6 +586,8 @@ pref("plugins.hide_infobar_for_carbon_failure_plugin", false);
 pref("plugins.update.url", "https://www.mozilla.com/%LOCALE%/plugincheck/");
 pref("plugins.update.notifyUser", false);
 
+pref("plugins.click_to_play", false);
+
 #ifdef XP_WIN
 pref("browser.preferences.instantApply", false);
 #else
@@ -614,6 +598,9 @@ pref("browser.preferences.animateFadeIn", true);
 #else
 pref("browser.preferences.animateFadeIn", false);
 #endif
+
+// Toggles between the two Preferences implementations, pop-up window and in-content
+pref("browser.preferences.inContent", false);
 
 pref("browser.download.show_plugins_in_list", true);
 pref("browser.download.hide_plugins_without_extensions", true);
@@ -759,6 +746,12 @@ pref("urlclassifier.gethashtables", "goog-phish-shavar,goog-malware-shavar");
 // the database.
 pref("urlclassifier.confirm-age", 2700);
 
+// Maximum size of the sqlite3 cache during an update, in bytes
+pref("urlclassifier.updatecachemax", 41943040);
+
+// Maximum size of the sqlite3 cache for lookups, in bytes
+pref("urlclassifier.lookupcachemax", 1048576);
+
 // URL for checking the reason for a malware warning.
 pref("browser.safebrowsing.malware.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 
@@ -799,7 +792,7 @@ pref("browser.sessionstore.max_resumed_crashes", 1);
 // focused (also applies to tabs that aren't visible). When false, the values
 // for MAX_CONCURRENT_TAB_RESTORES and restore_hidden_tabs are respected.
 // Selected tabs are always restored regardless of this pref.
-pref("browser.sessionstore.restore_on_demand", false);
+pref("browser.sessionstore.restore_on_demand", true);
 // Whether to automatically restore hidden tabs (i.e., tabs in other tab groups) or not
 pref("browser.sessionstore.restore_hidden_tabs", false);
 // If restore_on_demand is set, pinned tabs are restored on startup by default.
@@ -850,12 +843,6 @@ pref("places.frecency.unvisitedTypedBonus", 200);
 // 1 - pre-populate site URL, but don't fetch certificate
 // 2 - pre-populate site URL and pre-fetch certificate
 pref("browser.ssl_override_behavior", 2);
-
-// Controls the display of domain in the identity box for SSL connections.
-// 0 - do not show domain
-// 1 - show effectiveTLD + 1 (e.g. mozilla.org)
-// 2 - show full domain (e.g. bugzilla.mozilla.org)
-pref("browser.identity.ssl_domain_display", 1);
 
 // True if the user should be prompted when a web application supports
 // offline apps.
@@ -973,7 +960,6 @@ pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
 pref("services.sync.prefs.sync.browser.tabs.onTop", true);
 pref("services.sync.prefs.sync.browser.urlbar.autocomplete.enabled", true);
-pref("services.sync.prefs.sync.browser.urlbar.autoFill", true);
 pref("services.sync.prefs.sync.browser.urlbar.default.behavior", true);
 pref("services.sync.prefs.sync.browser.urlbar.maxRichResults", true);
 pref("services.sync.prefs.sync.dom.disable_open_during_load", true);
@@ -982,7 +968,6 @@ pref("services.sync.prefs.sync.dom.disable_window_move_resize", true);
 pref("services.sync.prefs.sync.dom.event.contextmenu.enabled", true);
 pref("services.sync.prefs.sync.extensions.personas.current", true);
 pref("services.sync.prefs.sync.extensions.update.enabled", true);
-pref("services.sync.prefs.sync.general.smoothScroll", true);
 pref("services.sync.prefs.sync.intl.accept_languages", true);
 pref("services.sync.prefs.sync.javascript.enabled", true);
 pref("services.sync.prefs.sync.layout.spellcheckDefault", true);
@@ -1025,15 +1010,35 @@ pref("services.sync.prefs.sync.xpinstall.whitelist.required", true);
 // Disable the error console
 pref("devtools.errorconsole.enabled", false);
 
+// Enable the developer toolbar
+pref("devtools.toolbar.enabled", false);
+
 // Enable the Inspector
 pref("devtools.inspector.enabled", true);
 pref("devtools.inspector.htmlHeight", 112);
+pref("devtools.inspector.htmlPanelOpen", false);
+pref("devtools.inspector.sidebarOpen", false);
+pref("devtools.inspector.activeSidebar", "ruleview");
+pref("devtools.inspector.highlighterShowVeil", true);
+pref("devtools.inspector.highlighterShowInfobar", true);
+
+// Enable the Layout View
+pref("devtools.layoutview.enabled", false);
+pref("devtools.layoutview.open", false);
 
 // Enable the Debugger
 pref("devtools.debugger.enabled", false);
+pref("devtools.debugger.remote-enabled", false);
+pref("devtools.debugger.remote-host", "localhost");
+pref("devtools.debugger.remote-port", 6000);
+pref("devtools.debugger.remote-autoconnect", false);
+pref("devtools.debugger.remote-connection-retries", 3);
+pref("devtools.debugger.remote-timeout", 3000);
 
 // The default Debugger UI height
 pref("devtools.debugger.ui.height", 250);
+pref("devtools.debugger.ui.remote-win.width", 900);
+pref("devtools.debugger.ui.remote-win.height", 400);
 
 // Enable the style inspector
 pref("devtools.styleinspector.enabled", true);
@@ -1056,8 +1061,14 @@ pref("devtools.styleeditor.transitions", true);
 // Enable tools for Chrome development.
 pref("devtools.chrome.enabled", false);
 
-// Disable the GCLI enhanced command line.
-pref("devtools.gcli.enable", false);
+// Display the introductory text
+pref("devtools.gcli.hideIntro", false);
+
+// How eager are we to show help: never=1, sometimes=2, always=3
+pref("devtools.gcli.eagerHelper", 2);
+
+// Do we allow the 'pref set' command
+pref("devtools.gcli.allowSet", false);
 
 // The last Web Console height. This is initially 0 which means that the Web
 // Console will use the default height next time it shows.
@@ -1118,10 +1129,20 @@ pref("browser.newtab.url", "about:newtab");
 // Toggles the content of 'about:newtab'. Shows the grid when enabled.
 pref("browser.newtabpage.enabled", true);
 
-// Enable the DOM full-screen API.
+// Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
+
+// True if the fullscreen API requires approval upon a domain entering fullscreen.
+// Domains that have already had fullscreen permission granted won't re-request
+// approval.
+pref("full-screen-api.approval-required", true);
 
 // Startup Crash Tracking
 // number of startup crashes that can occur before starting into safe mode automatically
 // (this pref has no effect if more than 6 hours have passed since the last crash)
 pref("toolkit.startup.max_resumed_crashes", 2);
+
+// The maximum amount of decoded image data we'll willingly keep around (we
+// might keep around more than this, but we'll try to get down to this value).
+// (This is intentionally on the high side; see bug 746055.)
+pref("image.mem.max_decoded_image_kb", 256000);

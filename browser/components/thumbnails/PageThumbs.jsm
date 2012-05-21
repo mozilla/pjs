@@ -4,7 +4,7 @@
 
 "use strict";
 
-let EXPORTED_SYMBOLS = ["PageThumbs", "PageThumbsCache"];
+let EXPORTED_SYMBOLS = ["PageThumbs", "PageThumbsStorage", "PageThumbsCache"];
 
 const Cu = Components.utils;
 const Cc = Components.classes;
@@ -13,20 +13,9 @@ const Ci = Components.interfaces;
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 
 /**
- * The default width for page thumbnails.
- *
- * Hint: This is the default value because the 'New Tab Page' is the only
- *       client for now.
+ * Name of the directory in the profile that contains the thumbnails.
  */
-const THUMBNAIL_WIDTH = 201;
-
-/**
- * The default height for page thumbnails.
- *
- * Hint: This is the default value because the 'New Tab Page' is the only
- *       client for now.
- */
-const THUMBNAIL_HEIGHT = 127;
+const THUMBNAIL_DIRECTORY = "thumbnails";
 
 /**
  * The default background color for page thumbnails.
@@ -41,11 +30,36 @@ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
+  "resource://gre/modules/FileUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+  "resource://gre/modules/PlacesUtils.jsm");
+
+XPCOMUtils.defineLazyGetter(this, "gCryptoHash", function () {
+  return Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
+});
+
+XPCOMUtils.defineLazyGetter(this, "gUnicodeConverter", function () {
+  let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
+                    .createInstance(Ci.nsIScriptableUnicodeConverter);
+  converter.charset = 'utf8';
+  return converter;
+});
+
 /**
  * Singleton providing functionality for capturing web page thumbnails and for
  * accessing them if already cached.
  */
 let PageThumbs = {
+  _initialized: false,
+
+  /**
+   * The calculated width and height of the thumbnails.
+   */
+  _thumbnailWidth : 0,
+  _thumbnailHeight : 0,
+
   /**
    * The scheme to use for thumbnail urls.
    */
@@ -60,6 +74,20 @@ let PageThumbs = {
    * The thumbnails' image type.
    */
   get contentType() "image/png",
+
+  init: function PageThumbs_init() {
+    if (!this._initialized) {
+      this._initialized = true;
+      PlacesUtils.history.addObserver(PageThumbsHistoryObserver, false);
+    }
+  },
+
+  uninit: function PageThumbs_uninit() {
+    if (this._initialized) {
+      this._initialized = false;
+      PlacesUtils.history.removeObserver(PageThumbsHistoryObserver);
+    }
+  },
 
   /**
    * Gets the thumbnail image's url for a given web page's url.
@@ -79,6 +107,10 @@ let PageThumbs = {
    *                  containing the image data.
    */
   capture: function PageThumbs_capture(aWindow, aCallback) {
+    if (!this._prefEnabled()) {
+      return;
+    }
+
     let telemetryCaptureTime = new Date();
     let [sw, sh, scale] = this._determineCropSize(aWindow);
 
@@ -109,6 +141,14 @@ let PageThumbs = {
    * @param aCallback The function to be called when finished (optional).
    */
   captureAndStore: function PageThumbs_captureAndStore(aBrowser, aCallback) {
+    if (!this._prefEnabled()) {
+      return;
+    }
+
+    let url = aBrowser.currentURI.spec;
+    let channel = aBrowser.docShell.currentDocumentChannel;
+    let originalURL = channel.originalURI.spec;
+
     this.capture(aBrowser.contentWindow, function (aInputStream) {
       let telemetryStoreTime = new Date();
 
@@ -116,31 +156,27 @@ let PageThumbs = {
         if (aSuccessful) {
           Services.telemetry.getHistogramById("FX_THUMBNAILS_STORE_TIME_MS")
             .add(new Date() - telemetryStoreTime);
+
+          // We've been redirected. Create a copy of the current thumbnail for
+          // the redirect source. We need to do this because:
+          //
+          // 1) Users can drag any kind of links onto the newtab page. If those
+          //    links redirect to a different URL then we want to be able to
+          //    provide thumbnails for both of them.
+          //
+          // 2) The newtab page should actually display redirect targets, only.
+          //    Because of bug 559175 this information can get lost when using
+          //    Sync and therefore also redirect sources appear on the newtab
+          //    page. We also want thumbnails for those.
+          if (url != originalURL)
+            PageThumbsStorage.copy(url, originalURL);
         }
 
         if (aCallback)
           aCallback(aSuccessful);
       }
 
-      // Get a writeable cache entry.
-      PageThumbsCache.getWriteEntry(aBrowser.currentURI.spec, function (aEntry) {
-        if (!aEntry) {
-          finish(false);
-          return;
-        }
-
-        let outputStream = aEntry.openOutputStream(0);
-
-        // Write the image data to the cache entry.
-        NetUtil.asyncCopy(aInputStream, outputStream, function (aResult) {
-          let success = Components.isSuccessCode(aResult);
-          if (success)
-            aEntry.markValid();
-
-          aEntry.close();
-          finish(success);
-        });
-      });
+      PageThumbsStorage.write(url, aInputStream, finish);
     });
   },
 
@@ -153,15 +189,16 @@ let PageThumbs = {
     let sw = aWindow.innerWidth;
     let sh = aWindow.innerHeight;
 
-    let scale = Math.max(THUMBNAIL_WIDTH / sw, THUMBNAIL_HEIGHT / sh);
+    let [thumbnailWidth, thumbnailHeight] = this._getThumbnailSize();
+    let scale = Math.max(thumbnailWidth / sw, thumbnailHeight / sh);
     let scaledWidth = sw * scale;
     let scaledHeight = sh * scale;
 
-    if (scaledHeight > THUMBNAIL_HEIGHT)
-      sh -= Math.floor(Math.abs(scaledHeight - THUMBNAIL_HEIGHT) * scale);
+    if (scaledHeight > thumbnailHeight)
+      sh -= Math.floor(Math.abs(scaledHeight - thumbnailHeight) * scale);
 
-    if (scaledWidth > THUMBNAIL_WIDTH)
-      sw -= Math.floor(Math.abs(scaledWidth - THUMBNAIL_WIDTH) * scale);
+    if (scaledWidth > thumbnailWidth)
+      sw -= Math.floor(Math.abs(scaledWidth - thumbnailWidth) * scale);
 
     return [sw, sh, scale];
   },
@@ -175,10 +212,120 @@ let PageThumbs = {
     let canvas = doc.createElementNS(HTML_NAMESPACE, "canvas");
     canvas.mozOpaque = true;
     canvas.mozImageSmoothingEnabled = true;
-    canvas.width = THUMBNAIL_WIDTH;
-    canvas.height = THUMBNAIL_HEIGHT;
+    let [thumbnailWidth, thumbnailHeight] = this._getThumbnailSize();
+    canvas.width = thumbnailWidth;
+    canvas.height = thumbnailHeight;
     return canvas;
-  }
+  },
+
+  /**
+   * Calculates the thumbnail size based on current desktop's dimensions.
+   * @return The calculated thumbnail size or a default if unable to calculate.
+   */
+  _getThumbnailSize: function PageThumbs_getThumbnailSize() {
+    if (!this._thumbnailWidth || !this._thumbnailHeight) {
+      let screenManager = Cc["@mozilla.org/gfx/screenmanager;1"]
+                            .getService(Ci.nsIScreenManager);
+      let left = {}, top = {}, width = {}, height = {};
+      screenManager.primaryScreen.GetRect(left, top, width, height);
+      this._thumbnailWidth = Math.round(width.value / 3);
+      this._thumbnailHeight = Math.round(height.value / 3);
+    }
+    return [this._thumbnailWidth, this._thumbnailHeight];
+  },
+
+  _prefEnabled: function PageThumbs_prefEnabled() {
+    try {
+      return Services.prefs.getBoolPref("browser.pageThumbs.enabled");
+    }
+    catch (e) {
+      return true;
+    }
+  },
+};
+
+let PageThumbsStorage = {
+  getFileForURL: function Storage_getFileForURL(aURL, aOptions) {
+    let hash = this._calculateMD5Hash(aURL);
+    let parts = [THUMBNAIL_DIRECTORY, hash[0], hash[1]];
+    let file = FileUtils.getDir("ProfD", parts, aOptions && aOptions.createPath);
+    file.append(hash.slice(2) + ".png");
+    return file;
+  },
+
+  write: function Storage_write(aURL, aDataStream, aCallback) {
+    let file = this.getFileForURL(aURL, {createPath: true});
+    let fos = FileUtils.openSafeFileOutputStream(file);
+
+    NetUtil.asyncCopy(aDataStream, fos, function (aResult) {
+      FileUtils.closeSafeFileOutputStream(fos);
+      aCallback(Components.isSuccessCode(aResult));
+    });
+  },
+
+  copy: function Storage_copy(aSourceURL, aTargetURL) {
+    let sourceFile = this.getFileForURL(aSourceURL);
+    let targetFile = this.getFileForURL(aTargetURL);
+
+    try {
+      sourceFile.copyTo(targetFile.parent, targetFile.leafName);
+    } catch (e) {
+      /* We might not be permitted to write to the file. */
+    }
+  },
+
+  remove: function Storage_remove(aURL) {
+    try {
+      this.getFileForURL(aURL).remove(false);
+    } catch (e) {
+      /* The file might not exist or we're not permitted to remove it. */
+    }
+  },
+
+  wipe: function Storage_wipe() {
+    try {
+      FileUtils.getDir("ProfD", [THUMBNAIL_DIRECTORY]).remove(true);
+    } catch (e) {
+      /* The file might not exist or we're not permitted to remove it. */
+    }
+  },
+
+  _calculateMD5Hash: function Storage_calculateMD5Hash(aValue) {
+    let hash = gCryptoHash;
+    let value = gUnicodeConverter.convertToByteArray(aValue);
+
+    hash.init(hash.MD5);
+    hash.update(value, value.length);
+    return this._convertToHexString(hash.finish(false));
+  },
+
+  _convertToHexString: function Storage_convertToHexString(aData) {
+    let hex = "";
+    for (let i = 0; i < aData.length; i++)
+      hex += ("0" + aData.charCodeAt(i).toString(16)).slice(-2);
+    return hex;
+  },
+
+};
+
+let PageThumbsHistoryObserver = {
+  onDeleteURI: function Thumbnails_onDeleteURI(aURI, aGUID) {
+    PageThumbsStorage.remove(aURI.spec);
+  },
+
+  onClearHistory: function Thumbnails_onClearHistory() {
+    PageThumbsStorage.wipe();
+  },
+
+  onTitleChanged: function () {},
+  onBeginUpdateBatch: function () {},
+  onEndUpdateBatch: function () {},
+  onVisit: function () {},
+  onBeforeDeleteURI: function () {},
+  onPageChanged: function () {},
+  onDeleteVisits: function () {},
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsINavHistoryObserver])
 };
 
 /**
@@ -193,16 +340,6 @@ let PageThumbsCache = {
   getReadEntry: function Cache_getReadEntry(aKey, aCallback) {
     // Try to open the desired cache entry.
     this._openCacheEntry(aKey, Ci.nsICache.ACCESS_READ, aCallback);
-  },
-
-  /**
-   * Calls the given callback with a cache entry opened for writing.
-   * @param aKey The key identifying the desired cache entry.
-   * @param aCallback The callback that is called when the cache entry is ready.
-   */
-  getWriteEntry: function Cache_getWriteEntry(aKey, aCallback) {
-    // Try to open the desired cache entry.
-    this._openCacheEntry(aKey, Ci.nsICache.ACCESS_WRITE, aCallback);
   },
 
   /**

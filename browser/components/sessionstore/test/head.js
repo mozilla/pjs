@@ -1,41 +1,42 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is sessionstore test code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Paul O’Shannessy <paul@oshannessy.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 let ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
+
+// Some tests here assume that all restored tabs are loaded without waiting for
+// the user to bring them to the foreground. We ensure this by resetting the
+// related preference (see the "firefox.js" defaults file for details).
+Services.prefs.setBoolPref("browser.sessionstore.restore_on_demand", false);
+registerCleanupFunction(function () {
+  Services.prefs.clearUserPref("browser.sessionstore.restore_on_demand");
+});
+
+// This kicks off the search service used on about:home and allows the
+// session restore tests to be run standalone without triggering errors.
+Cc["@mozilla.org/browser/clh;1"].getService(Ci.nsIBrowserHandler).defaultArgs;
+
+function provideWindow(aCallback, aURL, aFeatures) {
+  function callbackSoon(aWindow) {
+    executeSoon(function executeCallbackSoon() {
+      aCallback(aWindow);
+    });
+  }
+
+  let win = openDialog(getBrowserURL(), "", aFeatures || "chrome,all,dialog=no", aURL);
+  whenWindowLoaded(win, function onWindowLoaded(aWin) {
+    if (!aURL) {
+      info("Loaded a blank window.");
+      callbackSoon(aWin);
+      return;
+    }
+
+    aWin.gBrowser.selectedBrowser.addEventListener("load", function selectedBrowserLoadListener() {
+      aWin.gBrowser.selectedBrowser.removeEventListener("load", selectedBrowserLoadListener, true);
+      callbackSoon(aWin);
+    }, true);
+  });
+}
 
 // This assumes that tests will at least have some state/entries
 function waitForBrowserState(aState, aSetStateCallback) {
@@ -120,6 +121,27 @@ function waitForBrowserState(aState, aSetStateCallback) {
   ss.setBrowserState(JSON.stringify(aState));
 }
 
+// Doesn't assume that the tab needs to be closed in a cleanup function.
+// If that's the case, the test author should handle that in the test.
+function waitForTabState(aTab, aState, aCallback) {
+  let listening = true;
+
+  function onSSTabRestored() {
+    aTab.removeEventListener("SSTabRestored", onSSTabRestored, false);
+    listening = false;
+    aCallback();
+  }
+
+  aTab.addEventListener("SSTabRestored", onSSTabRestored, false);
+
+  registerCleanupFunction(function() {
+    if (listening) {
+      aTab.removeEventListener("SSTabRestored", onSSTabRestored, false);
+    }
+  });
+  ss.setTabState(aTab, JSON.stringify(aState));
+}
+
 // waitForSaveState waits for a state write but not necessarily for the state to
 // turn dirty.
 function waitForSaveState(aSaveStateCallback) {
@@ -157,6 +179,22 @@ function waitForSaveState(aSaveStateCallback) {
   observing = true;
   Services.obs.addObserver(observer, topic, false);
 };
+
+function whenBrowserLoaded(aBrowser, aCallback) {
+  aBrowser.addEventListener("load", function onLoad() {
+    aBrowser.removeEventListener("load", onLoad, true);
+    executeSoon(aCallback);
+  }, true);
+}
+
+function whenWindowLoaded(aWindow, aCallback) {
+  aWindow.addEventListener("load", function windowLoadListener() {
+    aWindow.removeEventListener("load", windowLoadListener, false);
+    executeSoon(function executeWhenWindowLoaded() {
+      aCallback(aWindow);
+    });
+  }, false);
+}
 
 var gUniqueCounter = 0;
 function r() {

@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Waterson <waterson@netscape.com>
- *   David Hyatt <hyatt@netscape.com>
- *   Brendan Eich <brendan@mozilla.org>
- *   Mark Hammond <mhammond@skippinet.com.au>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * An implementation for a Gecko-style content sink that knows how
@@ -62,7 +26,6 @@
 #include "nsHTMLStyleSheet.h"
 #include "nsINameSpaceManager.h"
 #include "nsINodeInfo.h"
-#include "nsIParser.h"
 #include "nsIScriptContext.h"
 #include "nsIScriptRuntime.h"
 #include "nsIScriptGlobalObject.h"
@@ -74,7 +37,6 @@
 #include "nsLayoutCID.h"
 #include "nsNetUtil.h"
 #include "nsRDFCID.h"
-#include "nsParserUtils.h"
 #include "nsXPIDLString.h"
 #include "nsReadableUtils.h"
 #include "nsXULElement.h"
@@ -165,39 +127,6 @@ XULContentSinkImpl::ContextStack::GetTopChildren(nsPrototypeArray** aChildren)
 
     *aChildren = &(mTop->mChildren);
     return NS_OK;
-}
-
-nsresult
-XULContentSinkImpl::ContextStack::GetTopNodeScriptType(PRUint32 *aScriptType)
-{
-    if (mDepth == 0)
-        return NS_ERROR_UNEXPECTED;
-
-    // This would be much simpler if nsXULPrototypeNode itself
-    // stored the language ID - but text elements don't need it!
-    nsresult rv = NS_OK;
-    nsRefPtr<nsXULPrototypeNode> node;
-    rv = GetTopNode(node);
-    if (NS_FAILED(rv)) return rv;
-    switch (node->mType) {
-        case nsXULPrototypeNode::eType_Element: {
-            nsXULPrototypeElement *parent =
-                reinterpret_cast<nsXULPrototypeElement*>(node.get());
-            *aScriptType = parent->mScriptTypeID;
-            break;
-        }
-        case nsXULPrototypeNode::eType_Script: {
-            nsXULPrototypeScript *parent =
-                reinterpret_cast<nsXULPrototypeScript*>(node.get());
-            *aScriptType = parent->mScriptObject.mLangID;
-            break;
-        }
-        default: {
-            NS_WARNING("Unexpected parent node type");
-            rv = NS_ERROR_UNEXPECTED;
-        }
-    }
-    return rv;
 }
 
 void
@@ -789,55 +718,6 @@ XULContentSinkImpl::ReportError(const PRUnichar* aErrorText,
 }
 
 nsresult
-XULContentSinkImpl::SetElementScriptType(nsXULPrototypeElement* element,
-                                         const PRUnichar** aAttributes, 
-                                         const PRUint32 aAttrLen)
-{
-    // First check if the attributes specify an explicit script type.
-    nsresult rv = NS_OK;
-    PRUint32 i;
-    bool found = false;
-    for (i=0;i<aAttrLen;i++) {
-        const nsDependentString key(aAttributes[i*2]);
-        if (key.EqualsLiteral("script-type")) {
-            const nsDependentString value(aAttributes[i*2+1]);
-            if (!value.IsEmpty()) {
-                nsCOMPtr<nsIScriptRuntime> runtime;
-                rv = NS_GetScriptRuntime(value, getter_AddRefs(runtime));
-                if (NS_SUCCEEDED(rv))
-                    element->mScriptTypeID = runtime->GetScriptTypeID();
-                else {
-                    // probably just a bad language name (typo, etc)
-                    NS_WARNING("Failed to load the node's script language!");
-                    // Leave the default language as unknown - we don't want js
-                    // trying to execute this stuff.
-                    NS_ASSERTION(element->mScriptTypeID == nsIProgrammingLanguage::UNKNOWN,
-                                 "Default script type should be unknown");
-                }
-                found = true;
-                break;
-            }
-        }
-    }
-    // If not specified, look at the context stack and use the element
-    // there.
-    if (!found) {
-        if (mContextStack.Depth() == 0) {
-            // This is the root element - default to JS
-            element->mScriptTypeID = nsIProgrammingLanguage::JAVASCRIPT;
-        } else {
-            // Ask the top-node for its script type (which has already
-            // had this function called for it - so no need to recurse
-            // until we find it)
-            PRUint32 scriptId = 0;
-            rv = mContextStack.GetTopNodeScriptType(&scriptId);
-            element->mScriptTypeID = scriptId;
-        }
-    }
-    return rv;
-}
-
-nsresult
 XULContentSinkImpl::OpenRoot(const PRUnichar** aAttributes, 
                              const PRUint32 aAttrLen, 
                              nsINodeInfo *aNodeInfo)
@@ -874,10 +754,6 @@ XULContentSinkImpl::OpenRoot(const PRUnichar** aAttributes,
 
         return rv;
     }
-
-    // Set the correct script-type for the element.
-    rv = SetElementScriptType(element, aAttributes, aAttrLen);
-    if (NS_FAILED(rv)) return rv;
 
     // Push the element onto the context stack, so that child
     // containers will hook up to us as their parent.
@@ -938,10 +814,7 @@ XULContentSinkImpl::OpenTag(const PRUnichar** aAttributes,
 
     if (aNodeInfo->Equals(nsGkAtoms::script, kNameSpaceID_XHTML) || 
         aNodeInfo->Equals(nsGkAtoms::script, kNameSpaceID_XUL)) {
-        // Do scripty things now.  Set a script language for the element,
-        // even though it is ignored (the nsPrototypeScriptElement
-        // has its own script-type).
-        element->mScriptTypeID = nsIProgrammingLanguage::JAVASCRIPT;
+        // Do scripty things now
         rv = OpenScript(aAttributes, aLineNumber);
         NS_ENSURE_SUCCESS(rv, rv);
 
@@ -953,10 +826,6 @@ XULContentSinkImpl::OpenTag(const PRUnichar** aAttributes,
             return NS_OK;
         }
     }
-
-    // Set the correct script-type for the element.
-    rv = SetElementScriptType(element, aAttributes, aAttrLen);
-    if (NS_FAILED(rv)) return rv;
 
     // Push the element onto the context stack, so that child
     // containers will hook up to us as their parent.
@@ -971,10 +840,9 @@ nsresult
 XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
                                const PRUint32 aLineNumber)
 {
-  PRUint32 langID;
-  nsresult rv = mContextStack.GetTopNodeScriptType(&langID);
-  if (NS_FAILED(rv)) return rv;
+  PRUint32 langID = nsIProgrammingLanguage::JAVASCRIPT;
   PRUint32 version = 0;
+  nsresult rv;
 
   // Look for SRC attribute and look for a LANGUAGE attribute
   nsAutoString src;
@@ -1024,15 +892,7 @@ XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
               langID = nsIProgrammingLanguage::JAVASCRIPT;
               version = JSVERSION_LATEST;
           } else {
-              // Use the script object factory to locate the language.
-              nsCOMPtr<nsIScriptRuntime> runtime;
-              rv = NS_GetScriptRuntime(mimeType, getter_AddRefs(runtime));
-              if (NS_FAILED(rv) || runtime == nsnull) {
-                  // Failed to get the explicitly specified language
-                  NS_WARNING("Failed to find a scripting language");
-                  langID = nsIProgrammingLanguage::UNKNOWN;
-              } else
-                  langID = runtime->GetScriptTypeID();
+              langID = nsIProgrammingLanguage::UNKNOWN;
           }
 
           if (langID != nsIProgrammingLanguage::UNKNOWN) {
@@ -1045,7 +905,7 @@ XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
               // no version specified - version remains the default.
             } else {
               nsCOMPtr<nsIScriptRuntime> runtime;
-              rv = NS_GetScriptRuntimeByID(langID, getter_AddRefs(runtime));
+              rv = NS_GetJSRuntime(getter_AddRefs(runtime));
               if (NS_FAILED(rv))
                 return rv;
               rv = runtime->ParseVersion(versionName, &version);
@@ -1079,7 +939,7 @@ XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
           // various version strings anyway.  So we make no attempt to support
           // languages other than JS for language=
           nsAutoString lang(aAttributes[1]);
-          if (nsParserUtils::IsJavaScriptLanguage(lang, &version)) {
+          if (nsContentUtils::IsJavaScriptLanguage(lang, &version)) {
               langID = nsIProgrammingLanguage::JAVASCRIPT;
 
               // Even when JS version < 1.6 is specified, E4X is
@@ -1089,6 +949,7 @@ XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
       }
       aAttributes += 2;
   }
+
   // Not all script languages have a "sandbox" concept.  At time of
   // writing, Python is the only other language, and it does not.
   // For such languages, neither any inline script nor remote script are
@@ -1104,13 +965,14 @@ XULContentSinkImpl::OpenScript(const PRUnichar** aAttributes,
       langID = nsIProgrammingLanguage::UNKNOWN;
       NS_WARNING("Non JS language called from non chrome - ignored");
   }
+
   // Don't process scripts that aren't known
   if (langID != nsIProgrammingLanguage::UNKNOWN) {
       nsIScriptGlobalObject* globalObject = nsnull; // borrowed reference
       if (doc)
           globalObject = doc->GetScriptGlobalObject();
       nsRefPtr<nsXULPrototypeScript> script =
-          new nsXULPrototypeScript(langID, aLineNumber, version);
+          new nsXULPrototypeScript(aLineNumber, version);
       if (! script)
           return NS_ERROR_OUT_OF_MEMORY;
 

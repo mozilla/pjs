@@ -1,45 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=4 sw=4 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Waterson <waterson@netscape.com>
- *   Ben Goodger <ben@netscape.com>
- *   Pete Collins <petejc@collab.net>
- *   Dan Rosen <dr@netscape.com>
- *   Johnny Stenback <jst@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
 
@@ -84,7 +47,6 @@
 #include "nsXULContentUtils.h"
 #include "nsIXULOverlayProvider.h"
 #include "nsNetUtil.h"
-#include "nsParserUtils.h"
 #include "nsParserCIID.h"
 #include "nsPIBoxObject.h"
 #include "nsRDFCID.h"
@@ -93,7 +55,6 @@
 #include "nsPIDOMWindow.h"
 #include "nsPIWindowRoot.h"
 #include "nsXULCommandDispatcher.h"
-#include "nsXULDocument.h"
 #include "nsXULElement.h"
 #include "prlog.h"
 #include "rdf.h"
@@ -113,6 +74,7 @@
 #include "nsContentCreatorFunctions.h"
 #include "nsContentUtils.h"
 #include "nsIParser.h"
+#include "nsCharsetSource.h"
 #include "nsIParserService.h"
 #include "nsCSSStyleSheet.h"
 #include "mozilla/css/Loader.h"
@@ -462,6 +424,21 @@ nsXULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
                                  nsIStreamListener **aDocListener,
                                  bool aReset, nsIContentSink* aSink)
 {
+#ifdef PR_LOGGING
+    if (PR_LOG_TEST(gXULLog, PR_LOG_WARNING)) {
+
+        nsCOMPtr<nsIURI> uri;
+        nsresult rv = aChannel->GetOriginalURI(getter_AddRefs(uri));
+        if (NS_SUCCEEDED(rv)) {
+            nsCAutoString urlspec;
+            rv = uri->GetSpec(urlspec);
+            if (NS_SUCCEEDED(rv)) {
+                PR_LOG(gXULLog, PR_LOG_WARNING,
+                       ("xul: load document '%s'", urlspec.get()));
+            }
+        }
+    }
+#endif
     // NOTE: If this ever starts calling nsDocument::StartDocumentLoad
     // we'll possibly need to reset our content type afterwards.
     mStillWalking = true;
@@ -634,6 +611,16 @@ nsXULDocument::EndLoad()
     }
 
     OnPrototypeLoadDone(true);
+#ifdef PR_LOGGING
+    if (PR_LOG_TEST(gXULLog, PR_LOG_WARNING)) {
+        nsCAutoString urlspec;
+        rv = uri->GetSpec(urlspec);
+        if (NS_SUCCEEDED(rv)) {
+            PR_LOG(gXULLog, PR_LOG_WARNING,
+                   ("xul: Finished loading document '%s'", urlspec.get()));
+        }
+    }
+#endif
 }
 
 NS_IMETHODIMP
@@ -734,10 +721,6 @@ nsXULDocument::SynchronizeBroadcastListener(nsIDOMElement   *aBroadcaster,
     nsCOMPtr<nsIContent> broadcaster = do_QueryInterface(aBroadcaster);
     nsCOMPtr<nsIContent> listener = do_QueryInterface(aListener);
     bool notify = mDocumentLoaded || mHandlingDelayedBroadcasters;
-
-    // We may be copying event handlers etc, so we must also copy
-    // the script-type to the listener.
-    listener->SetScriptTypeID(broadcaster->GetScriptTypeID());
 
     if (aAttr.EqualsLiteral("*")) {
         PRUint32 count = broadcaster->GetAttrCount();
@@ -1333,11 +1316,9 @@ nsXULDocument::Persist(const nsAString& aID,
     }
     else {
         // Make sure that this QName is going to be valid.
-        nsIParserService *parserService = nsContentUtils::GetParserService();
-        NS_ASSERTION(parserService, "Running scripts during shutdown?");
-
         const PRUnichar *colon;
-        rv = parserService->CheckQName(PromiseFlatString(aAttr), true, &colon);
+        rv = nsContentUtils::CheckQName(PromiseFlatString(aAttr), true, &colon);
+
         if (NS_FAILED(rv)) {
             // There was an invalid character or it was malformed.
             return NS_ERROR_INVALID_ARG;
@@ -1855,10 +1836,7 @@ nsXULDocument::SetTemplateBuilderFor(nsIContent* aContent,
             return NS_OK;
         }
         mTemplateBuilderTable = new BuilderTable;
-        if (! mTemplateBuilderTable || !mTemplateBuilderTable->Init()) {
-            mTemplateBuilderTable = nsnull;
-            return NS_ERROR_OUT_OF_MEMORY;
-        }
+        mTemplateBuilderTable->Init();
     }
 
     if (aBuilder) {
@@ -1933,7 +1911,7 @@ nsXULDocument::RemoveElementFromRefMap(Element* aElement)
 //
 
 NS_IMETHODIMP
-nsXULDocument::CloneNode(bool aDeep, nsIDOMNode** aReturn)
+nsXULDocument::CloneNode(bool aDeep, PRUint8 aOptionalArgc, nsIDOMNode** aReturn)
 {
     // We don't allow cloning of a document
     *aReturn = nsnull;
@@ -2545,9 +2523,9 @@ nsXULDocument::InsertXULOverlayPI(const nsXULPrototypePI* aProtoPI,
     }
 
     nsAutoString href;
-    nsParserUtils::GetQuotedAttributeValue(aProtoPI->mData,
-                                           nsGkAtoms::href,
-                                           href);
+    nsContentUtils::GetPseudoAttributeValue(aProtoPI->mData,
+                                            nsGkAtoms::href,
+                                            href);
 
     // If there was no href, we can't do anything with this PI
     if (href.IsEmpty()) {
@@ -2631,9 +2609,9 @@ nsXULDocument::LoadOverlay(const nsAString& aURL, nsIObserver* aObserver)
 
     if (aObserver) {
         nsIObserver* obs = nsnull;
-        NS_ENSURE_TRUE(mOverlayLoadObservers.IsInitialized() || mOverlayLoadObservers.Init(), 
-                       NS_ERROR_OUT_OF_MEMORY);
-        
+        if (!mOverlayLoadObservers.IsInitialized()) {
+            mOverlayLoadObservers.Init();
+        }
         obs = mOverlayLoadObservers.GetWeak(uri);
 
         if (obs) {
@@ -2664,9 +2642,16 @@ nsXULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
     if (PR_LOG_TEST(gXULLog, PR_LOG_DEBUG)) {
         nsCAutoString urlspec;
         aURI->GetSpec(urlspec);
+        nsCAutoString parentDoc;
+        nsCOMPtr<nsIURI> uri;
+        nsresult rv = mChannel->GetOriginalURI(getter_AddRefs(uri));
+        if (NS_SUCCEEDED(rv))
+            rv = uri->GetSpec(parentDoc);
+        if (!(parentDoc.get()))
+            parentDoc = "";
 
         PR_LOG(gXULLog, PR_LOG_DEBUG,
-                ("xul: loading overlay %s", urlspec.get()));
+                ("xul: %s loading overlay %s", parentDoc.get(), urlspec.get()));
     }
 #endif
 
@@ -2736,6 +2721,11 @@ nsXULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
     else {
         // Not there. Initiate a load.
         PR_LOG(gXULLog, PR_LOG_DEBUG, ("xul: overlay was not cached"));
+
+        if (mIsGoingAway) {
+            PR_LOG(gXULLog, PR_LOG_DEBUG, ("xul: ...and document already destroyed"));
+            return NS_ERROR_NOT_AVAILABLE;
+        }
 
         // We'll set the right principal on the proto doc when we get
         // OnStartRequest from the parser, so just pass in a null principal for
@@ -3218,8 +3208,9 @@ nsXULDocument::DoneWalking()
                 // XXXbz really, we shouldn't be firing binding constructors
                 // until after StartLayout returns!
 
-                NS_ENSURE_TRUE(mPendingOverlayLoadNotifications.IsInitialized() || mPendingOverlayLoadNotifications.Init(), 
-                               NS_ERROR_OUT_OF_MEMORY);
+                if (!mPendingOverlayLoadNotifications.IsInitialized()) {
+                    mPendingOverlayLoadNotifications.Init();
+                }
                 
                 mPendingOverlayLoadNotifications.Get(overlayURI, getter_AddRefs(obs));
                 if (!obs) {
@@ -3358,18 +3349,12 @@ nsXULDocument::LoadScript(nsXULPrototypeScript* aScriptProto, bool* aBlock)
     bool useXULCache = nsXULPrototypeCache::GetInstance()->IsEnabled();
 
     if (isChromeDoc && useXULCache) {
-        PRUint32 fetchedLang = nsIProgrammingLanguage::UNKNOWN;
         JSScript* newScriptObject =
             nsXULPrototypeCache::GetInstance()->GetScript(
-                                   aScriptProto->mSrcURI,
-                                   &fetchedLang);
+                                   aScriptProto->mSrcURI);
         if (newScriptObject) {
             // The script language for a proto must remain constant - we
             // can't just change it for this unexpected language.
-            if (aScriptProto->mScriptObject.mLangID != fetchedLang) {
-                NS_ERROR("XUL cache gave me an incorrect script language");
-                return NS_ERROR_UNEXPECTED;
-            }
             aScriptProto->Set(newScriptObject);
         }
 
@@ -3533,7 +3518,6 @@ nsXULDocument::OnStreamComplete(nsIStreamLoader* aLoader,
             if (useXULCache && IsChromeURI(mDocumentURI)) {
                 nsXULPrototypeCache::GetInstance()->PutScript(
                                    scriptProto->mSrcURI,
-                                   scriptProto->mScriptObject.mLangID,
                                    scriptProto->mScriptObject.mObject);
             }
 
@@ -3554,9 +3538,8 @@ nsXULDocument::OnStreamComplete(nsIStreamLoader* aLoader,
 
                 NS_ASSERTION(global != nsnull, "master prototype w/o global?!");
                 if (global) {
-                    PRUint32 stid = scriptProto->mScriptObject.mLangID;
                     nsIScriptContext *scriptContext = \
-                          global->GetScriptContext(stid);
+                          global->GetScriptContext();
                     NS_ASSERTION(scriptContext != nsnull,
                                  "Failed to get script context for language");
                     if (scriptContext)
@@ -3607,8 +3590,6 @@ nsXULDocument::ExecuteScript(nsIScriptContext * aContext, JSScript* aScriptObjec
 
     NS_ENSURE_TRUE(mScriptGlobalObject, NS_ERROR_NOT_INITIALIZED);
 
-    NS_ABORT_IF_FALSE(aContext->GetScriptTypeID() == nsIProgrammingLanguage::JAVASCRIPT,
-                      "Should have a JavaScript nsIScriptContext.");
     // Execute the precompiled script with the given version
     JSObject* global = mScriptGlobalObject->GetGlobalJSObject();
     return aContext->ExecuteScript(aScriptObject, global, nsnull, nsnull);
@@ -3620,14 +3601,13 @@ nsXULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
     NS_PRECONDITION(aScript != nsnull, "null ptr");
     NS_ENSURE_TRUE(aScript, NS_ERROR_NULL_POINTER);
     NS_ENSURE_TRUE(mScriptGlobalObject, NS_ERROR_NOT_INITIALIZED);
-    PRUint32 stid = aScript->mScriptObject.mLangID;
 
     nsresult rv;
-    rv = mScriptGlobalObject->EnsureScriptEnvironment(stid);
+    rv = mScriptGlobalObject->EnsureScriptEnvironment();
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIScriptContext> context =
-      mScriptGlobalObject->GetScriptContext(stid);
+      mScriptGlobalObject->GetScriptContext();
     // failure getting a script context is fatal.
     NS_ENSURE_TRUE(context != nsnull, NS_ERROR_UNEXPECTED);
 
@@ -3919,14 +3899,7 @@ nsXULDocument::OverlayForwardReference::Resolve()
         if (!target)
             return eResolve_Later;
 
-        // While merging, set the default script language of the element to be
-        // the language from the overlay - attributes will then be correctly
-        // hooked up with the appropriate language (while child nodes ignore
-        // the default language - they have it in their proto.
-        PRUint32 oldDefLang = target->GetScriptTypeID();
-        target->SetScriptTypeID(mOverlay->GetScriptTypeID());
         rv = Merge(target, mOverlay, notify);
-        target->SetScriptTypeID(oldDefLang);
         if (NS_FAILED(rv)) return eResolve_Error;
     }
 
@@ -4088,15 +4061,13 @@ nsXULDocument::OverlayForwardReference::Merge(nsIContent* aTargetNode,
                 // The element matches. "Go Deep!"
                 rv = Merge(elementInDocument, currContent, aNotify);
                 if (NS_FAILED(rv)) return rv;
-                rv = aOverlayNode->RemoveChildAt(0, false);
-                if (NS_FAILED(rv)) return rv;
+                aOverlayNode->RemoveChildAt(0, false);
 
                 continue;
             }
         }
 
-        rv = aOverlayNode->RemoveChildAt(0, false);
-        if (NS_FAILED(rv)) return rv;
+        aOverlayNode->RemoveChildAt(0, false);
 
         rv = InsertElement(aTargetNode, currContent, aNotify);
         if (NS_FAILED(rv)) return rv;
@@ -4116,9 +4087,19 @@ nsXULDocument::OverlayForwardReference::~OverlayForwardReference()
 
         nsCAutoString idC;
         idC.AssignWithConversion(id);
+
+        nsIURI *protoURI = mDocument->mCurrentPrototype->GetURI();
+        nsCAutoString urlspec;
+        protoURI->GetSpec(urlspec);
+
+        nsCOMPtr<nsIURI> docURI;
+        nsCAutoString parentDoc;
+        nsresult rv = mDocument->mChannel->GetOriginalURI(getter_AddRefs(docURI));
+        if (NS_SUCCEEDED(rv))
+            docURI->GetSpec(parentDoc);
         PR_LOG(gXULLog, PR_LOG_WARNING,
-               ("xul: overlay failed to resolve '%s'",
-                idC.get()));
+               ("xul: %s overlay failed to resolve '%s' in %s",
+                urlspec.get(), idC.get(), parentDoc.get()));
     }
 #endif
 }
@@ -4476,7 +4457,8 @@ nsXULDocument::RemoveElement(nsIContent* aParent, nsIContent* aChild)
 {
     PRInt32 nodeOffset = aParent->IndexOf(aChild);
 
-    return aParent->RemoveChildAt(nodeOffset, true);
+    aParent->RemoveChildAt(nodeOffset, true);
+    return NS_OK;
 }
 
 //----------------------------------------------------------------------

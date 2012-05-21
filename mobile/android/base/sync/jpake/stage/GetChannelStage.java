@@ -52,6 +52,7 @@ public class GetChannelStage extends JPakeStage {
 
       @Override
       public void handleFailure(String error) {
+        Logger.error(LOG_TAG, "Got HTTP failure: " + error);
         jClient.abort(error);
       }
 
@@ -66,10 +67,12 @@ public class GetChannelStage extends JPakeStage {
       makeChannelRequest(callbackDelegate, jClient.jpakeServer + "new_channel", jClient.clientId);
     } catch (URISyntaxException e) {
       Logger.error(LOG_TAG, "Incorrect URI syntax.", e);
-      jClient.abort(Constants.JPAKE_ERROR_INVALID);
+      jClient.abort(Constants.JPAKE_ERROR_CHANNEL);
+      return;
     } catch (Exception e) {
       Logger.error(LOG_TAG, "Unexpected exception.", e);
-      jClient.abort(Constants.JPAKE_ERROR_INTERNAL);
+      jClient.abort(Constants.JPAKE_ERROR_CHANNEL);
+      return;
     }
   }
 
@@ -84,25 +87,24 @@ public class GetChannelStage extends JPakeStage {
 
       @Override
       public void handleHttpResponse(HttpResponse response) {
-
-        JPakeResponse res = new JPakeResponse(response);
-        Object body = null;
         try {
-          body = res.jsonBody();
-        } catch (Exception e) {
-          callbackDelegate.handleError(e);
-          SyncResourceDelegate.consumeEntity(response.getEntity());
-          return;
+          JPakeResponse res = new JPakeResponse(response);
+          Object body = null;
+          try {
+            body = res.jsonBody();
+          } catch (Exception e) {
+            callbackDelegate.handleError(e);
+            return;
+          }
+          String channel = body instanceof String ? (String) body : null;
+          if (channel == null) {
+            callbackDelegate.handleFailure(Constants.JPAKE_ERROR_CHANNEL);
+            return;
+          }
+          callbackDelegate.handleSuccess(channel);
+        } finally {
+          BaseResource.consumeEntity(response);
         }
-        String channel = body instanceof String ? (String) body : null;
-        if (channel == null) {
-          callbackDelegate.handleFailure(Constants.JPAKE_ERROR_CHANNEL);
-          SyncResourceDelegate.consumeEntity(response.getEntity());
-          return;
-        }
-        callbackDelegate.handleSuccess(channel);
-        // Clean up.
-        SyncResourceDelegate.consumeEntity(response.getEntity());
       }
 
       @Override

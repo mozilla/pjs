@@ -1,38 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla IPCShell.
- *
- * The Initial Developer of the Original Code is
- *   Ben Turner <bent.mozilla@gmail.com>.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdlib.h>
 #include <errno.h>
@@ -67,6 +35,7 @@
 #include "nsIXPCScriptable.h"
 
 #include "nsJSUtils.h"
+#include "nsJSPrincipals.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 
@@ -135,15 +104,12 @@ ScriptErrorReporter(JSContext *cx,
     int i, j, k, n;
     char *prefix = NULL, *tmp;
     const char *ctmp;
-    JSStackFrame * fp = nsnull;
     nsCOMPtr<nsIXPConnect> xpc;
 
     // Don't report an exception from inner JS frames as the callers may intend
     // to handle it.
-    while ((fp = JS_FrameIterator(cx, &fp))) {
-        if (JS_IsScriptFrame(cx, fp)) {
-            return;
-        }
+    if (JS_DescribeScriptedCaller(cx, nsnull, nsnull)) {
+        return;
     }
 
     // In some cases cx->fp is null here so use XPConnect to tell us about inner
@@ -230,7 +196,7 @@ JSContextCallback gOldContextCallback = NULL;
 
 static JSBool
 ContextCallback(JSContext *cx,
-                uintN contextOp)
+                unsigned contextOp)
 {
     if (gOldContextCallback && !gOldContextCallback(cx, contextOp))
         return JS_FALSE;
@@ -244,10 +210,10 @@ ContextCallback(JSContext *cx,
 
 static JSBool
 Print(JSContext *cx,
-      uintN argc,
+      unsigned argc,
       jsval *vp)
 {
-    uintN i, n;
+    unsigned i, n;
     JSString *str;
 
     jsval *argv = JS_ARGV(cx, vp);
@@ -284,7 +250,7 @@ GetLine(char *bufp,
 
 static JSBool
 Dump(JSContext *cx,
-     uintN argc,
+     unsigned argc,
      jsval *vp)
 {
     JS_SET_RVAL(cx, vp, JSVAL_VOID);
@@ -307,10 +273,10 @@ Dump(JSContext *cx,
 
 static JSBool
 Load(JSContext *cx,
-     uintN argc,
+     unsigned argc,
      jsval *vp)
 {
-    uintN i;
+    unsigned i;
     JSString *str;
     JSScript *script;
     jsval result;
@@ -351,7 +317,7 @@ Load(JSContext *cx,
 
 static JSBool
 Version(JSContext *cx,
-        uintN argc,
+        unsigned argc,
         jsval *vp)
 {
     jsval *argv = JS_ARGV(cx, vp);
@@ -363,7 +329,7 @@ Version(JSContext *cx,
 }
 
 static JSBool
-BuildDate(JSContext *cx, uintN argc, jsval *vp)
+BuildDate(JSContext *cx, unsigned argc, jsval *vp)
 {
     fprintf(stdout, "built on %s at %s\n", __DATE__, __TIME__);
     return JS_TRUE;
@@ -371,7 +337,7 @@ BuildDate(JSContext *cx, uintN argc, jsval *vp)
 
 static JSBool
 Quit(JSContext *cx,
-     uintN argc,
+     unsigned argc,
      jsval *vp)
 {
     int exitCode = 0;
@@ -386,7 +352,7 @@ Quit(JSContext *cx,
 
 static JSBool
 DumpXPC(JSContext *cx,
-        uintN argc,
+        unsigned argc,
         jsval *vp)
 {
     int32_t depth = 2;
@@ -405,12 +371,12 @@ DumpXPC(JSContext *cx,
 
 static JSBool
 GC(JSContext *cx,
-   uintN argc,
+   unsigned argc,
    jsval *vp)
 {
-    JS_GC(cx);
-#ifdef JS_GCMETER
     JSRuntime *rt = JS_GetRuntime(cx);
+    JS_GC(rt);
+#ifdef JS_GCMETER
     js_DumpGCStats(rt, stdout);
 #endif
     JS_SET_RVAL(cx, vp, JSVAL_VOID);
@@ -420,7 +386,7 @@ GC(JSContext *cx,
 #ifdef JS_GC_ZEAL
 static JSBool
 GCZeal(JSContext *cx, 
-       uintN argc,
+       unsigned argc,
        jsval *vp)
 {
   jsval* argv = JS_ARGV(cx, vp);
@@ -429,7 +395,7 @@ GCZeal(JSContext *cx,
   if (!JS_ValueToECMAUint32(cx, argv[0], &zeal))
     return JS_FALSE;
 
-  JS_SetGCZeal(cx, PRUint8(zeal), JS_DEFAULT_ZEAL_FREQ, JS_FALSE);
+  JS_SetGCZeal(cx, PRUint8(zeal), JS_DEFAULT_ZEAL_FREQ);
   return JS_TRUE;
 }
 #endif
@@ -438,7 +404,7 @@ GCZeal(JSContext *cx,
 
 static JSBool
 DumpHeap(JSContext *cx,
-         uintN argc,
+         unsigned argc,
          jsval *vp)
 {
     JSAutoByteString fileName;
@@ -507,10 +473,12 @@ DumpHeap(JSContext *cx,
         }
     }
 
-    ok = JS_DumpHeap(cx, dumpFile, startThing, startTraceKind, thingToFind,
+    ok = JS_DumpHeap(JS_GetRuntime(cx), dumpFile, startThing, startTraceKind, thingToFind,
                      maxDepth, thingToIgnore);
     if (dumpFile != stdout)
         fclose(dumpFile);
+    if (!ok)
+        JS_ReportOutOfMemory(cx);
     return ok;
 
   not_traceable_arg:
@@ -521,22 +489,6 @@ DumpHeap(JSContext *cx,
 }
 
 #endif /* DEBUG */
-
-static JSBool
-Clear(JSContext *cx,
-      uintN argc,
-      jsval *vp)
-{
-    jsval *argv = JS_ARGV(cx, vp);
-    if (argc > 0 && !JSVAL_IS_PRIMITIVE(argv[0])) {
-        JS_ClearScope(cx, JSVAL_TO_OBJECT(argv[0]));
-    } else {
-        JS_ReportError(cx, "'clear' requires an object");
-        return JS_FALSE;
-    }
-    JS_SET_RVAL(cx, vp, JSVAL_VOID);
-    return JS_TRUE;
-}
 
 JSFunctionSpec gGlobalFunctions[] =
 {
@@ -551,7 +503,6 @@ JSFunctionSpec gGlobalFunctions[] =
 #ifdef JS_GC_ZEAL
     {"gczeal",          GCZeal,         1,0},
 #endif
-    {"clear",           Clear,          1,0},
 #ifdef DEBUG
     {"dumpHeap",        DumpHeap,       5,0},
 #endif
@@ -861,26 +812,6 @@ FullTrustSecMan::EnableCapability(const char *capability)
 }
 
 NS_IMETHODIMP
-FullTrustSecMan::RevertCapability(const char *capability)
-{
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-FullTrustSecMan::DisableCapability(const char *capability)
-{
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-FullTrustSecMan::SetCanEnableCapability(const nsACString & certificateFingerprint,
-                                        const char *capability,
-                                        PRInt16 canEnable)
-{
-    return NS_OK;
-}
-
-NS_IMETHODIMP
 FullTrustSecMan::GetObjectPrincipal(JSContext * cx,
                                     JSObject * obj,
                                     nsIPrincipal **_retval)
@@ -1051,15 +982,14 @@ XPCShellEnvironment::~XPCShellEnvironment()
         }
         mGlobalHolder.Release();
 
-        JS_GC(mCx);
+        JSRuntime *rt = JS_GetRuntime(mCx);
+        JS_GC(rt);
 
         mCxStack = nsnull;
 
         if (mJSPrincipals) {
-            JSPRINCIPALS_DROP(mCx, mJSPrincipals);
+            JS_DropPrincipals(rt, mJSPrincipals);
         }
-
-        JSRuntime* rt = gOldContextCallback ? JS_GetRuntime(mCx) : NULL;
 
         JS_EndRequest(mCx);
         JS_DestroyContext(mCx);
@@ -1138,10 +1068,8 @@ XPCShellEnvironment::Init()
             fprintf(stderr, "+++ Failed to obtain SystemPrincipal from ScriptSecurityManager service.\n");
         } else {
             // fetch the JS principals and stick in a global
-            rv = principal->GetJSPrincipals(cx, &mJSPrincipals);
-            if (NS_FAILED(rv)) {
-                fprintf(stderr, "+++ Failed to obtain JS principals from SystemPrincipal.\n");
-            }
+            mJSPrincipals = nsJSPrincipals::get(principal);
+            JS_HoldPrincipals(mJSPrincipals);
             secman->SetSystemPrincipal(principal);
         }
     } else {
@@ -1167,9 +1095,7 @@ XPCShellEnvironment::Init()
 
     nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
     rv = xpc->InitClassesWithNewWrappedGlobal(cx, backstagePass,
-                                              NS_GET_IID(nsISupports),
                                               principal,
-                                              nsnull,
                                               nsIXPConnect::
                                                   FLAG_SYSTEM_GLOBAL_OBJECT,
                                               getter_AddRefs(holder));

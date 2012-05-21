@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Patrick McManus <mcmanus@ducksong.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_net_SpdySession_h
 #define mozilla_net_SpdySession_h
@@ -66,7 +33,7 @@ class SpdySession : public nsAHttpTransaction
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSAHTTPTRANSACTION
-  NS_DECL_NSAHTTPCONNECTION
+  NS_DECL_NSAHTTPCONNECTION(mConnection)
   NS_DECL_NSAHTTPSEGMENTREADER
   NS_DECL_NSAHTTPSEGMENTWRITER
 
@@ -75,10 +42,9 @@ public:
 
   bool AddStream(nsAHttpTransaction *, PRInt32);
   bool CanReuse() { return !mShouldGoAway && !mClosed; }
-  void DontReuse();
   bool RoomForMoreStreams();
 
-  // When the connection is active this is called every 15 seconds
+  // When the connection is active this is called every 1 second
   void ReadTimeoutTick(PRIntervalTime now);
   
   // Idle time represents time since "goodput".. e.g. a data or header frame
@@ -92,10 +58,19 @@ public:
   const static PRUint8 kFlag_Data_UNI  = 0x02;
   const static PRUint8 kFlag_Data_ZLIB = 0x02;
   
-  const static PRUint8 kPri00   = 0x00;
-  const static PRUint8 kPri01   = 0x40;
-  const static PRUint8 kPri02   = 0x80;
-  const static PRUint8 kPri03   = 0xC0;
+  // The protocol document for v2 specifies that the
+  // highest value (3) is the highest priority, but in
+  // reality 0 is the highest priority. 
+  //
+  // Draft 3 notes here https://sites.google.com/a/chromium.org/dev/spdy/spdy-protocol/
+  // are the best guide to the mistake. Also see
+  // GetLowestPriority() and GetHighestPriority() in spdy_framer.h of
+  // chromium source.
+
+  const static PRUint8 kPri00   = 0 << 6; // highest
+  const static PRUint8 kPri01   = 1 << 6;
+  const static PRUint8 kPri02   = 2 << 6;
+  const static PRUint8 kPri03   = 3 << 6; // lowest
 
   enum
   {
@@ -188,6 +163,7 @@ private:
     PROCESSING_CONTROL_RST_STREAM
   };
 
+  void        DeterminePingThreshold();
   nsresult    HandleSynReplyForValidStream();
   PRUint32    GetWriteQueueSize();
   void        ChangeDownstreamState(enum stateType);
@@ -198,6 +174,7 @@ private:
   nsresult    ConvertHeaders(nsDependentCSubstring &,
                              nsDependentCSubstring &);
   void        GeneratePing(PRUint32);
+  void        ClearPing(bool);
   void        GenerateRstStream(PRUint32, PRUint32);
   void        GenerateGoAway();
   void        CleanupStream(SpdyStream *, nsresult, rstReason);
@@ -345,10 +322,12 @@ private:
   PRUint32             mOutputQueueSent;
   nsAutoArrayPtr<char> mOutputQueueBuffer;
 
+  PRIntervalTime       mPingThreshold;
   PRIntervalTime       mLastReadEpoch;     // used for ping timeouts
   PRIntervalTime       mLastDataReadEpoch; // used for IdleTime()
   PRIntervalTime       mPingSentEpoch;
   PRUint32             mNextPingID;
+  bool                 mPingThresholdExperiment;
 };
 
 }} // namespace mozilla::net

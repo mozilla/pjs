@@ -1,41 +1,7 @@
 // -*- Mode: js2; tab-width: 2; indent-tabs-mode: nil; js2-basic-offset: 2; js2-skip-preprocessor-directives: t; -*-
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Mobile Browser.
- *
- * The Initial Developer of the Original Code is Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mark Finkle <mfinkle@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
-
-Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef ANDROID
 const URI_GENERIC_ICON_DOWNLOAD = "drawable://alertdownloads";
@@ -299,7 +265,7 @@ var DownloadsView = {
     let fileSize = Number(aItem.getAttribute("maxBytes"));
     let sizeText = strings.GetStringFromName("downloadsUnknownSize");
     if (fileSize >= 0) {
-      let [size, unit] = DownloadUtils.convertByteUnits(fileSize);
+      let [size, unit] = this._DownloadUtils.convertByteUnits(fileSize);
       sizeText = this._replaceInsert(strings.GetStringFromName("downloadsKnownSize"), 1, size);
       sizeText = this._replaceInsert(sizeText, 2, unit);
     }
@@ -308,7 +274,7 @@ var DownloadsView = {
     status = this._replaceInsert(strings.GetStringFromName("downloadsStatus"), 1, sizeText);
 
     // Insert 2 is the eTLD + 1 or other variations of the host
-    let [displayHost, fullHost] = DownloadUtils.getURIHost(this._getReferrerOrSource(aItem));
+    let [displayHost, fullHost] = this._DownloadUtils.getURIHost(this._getReferrerOrSource(aItem));
     status = this._replaceInsert(status, 2, displayHost);
   
     // Insert 3 is the left time if download status is DOWNLOADING
@@ -318,7 +284,7 @@ var DownloadsView = {
       let passedTime = (Date.now() - aItem.getAttribute("startTime"))/1000;
       let totalTime = (passedTime / downloadSize) * fileSize;
       let leftTime = totalTime - passedTime;
-      let [time, lastTime] = DownloadUtils.getTimeLeft(leftTime);
+      let [time, lastTime] = this._DownloadUtils.getTimeLeft(leftTime);
 
       let stringTime = this._replaceInsert(strings.GetStringFromName("downloadsTime"), 1, time);
       status = status + " " + stringTime;
@@ -491,6 +457,9 @@ var DownloadsView = {
     return this;
   }
 };
+
+XPCOMUtils.defineLazyModuleGetter(DownloadsView, "_DownloadUtils",
+                                  "resource://gre/modules/DownloadUtils.jsm", "DownloadUtils");
 
 // DownloadProgressListener is used for managing the DownloadsView UI. This listener
 // is only active if the view has been completely initialized.

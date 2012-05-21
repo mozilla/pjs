@@ -1,39 +1,7 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "prefapi.h"
 #include "prefapi_private_data.h"
@@ -172,8 +140,11 @@ struct CallbackNode {
 /* -- Prototypes */
 static nsresult pref_DoCallback(const char* changed_pref);
 
-
-static nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, bool defaultPref);
+enum {
+    kPrefSetDefault = 1,
+    kPrefForceSet = 2
+};
+static nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRUint32 flags);
 
 #define PREF_HASHTABLE_INITIAL_SIZE	2048
 
@@ -279,7 +250,7 @@ PREF_SetCharPref(const char *pref_name, const char *value, bool set_default)
     PrefValue pref;
     pref.stringVal = (char*) value;
 
-    return pref_HashPref(pref_name, pref, PREF_STRING, set_default);
+    return pref_HashPref(pref_name, pref, PREF_STRING, set_default ? kPrefSetDefault : 0);
 }
 
 nsresult
@@ -288,7 +259,7 @@ PREF_SetIntPref(const char *pref_name, PRInt32 value, bool set_default)
     PrefValue pref;
     pref.intVal = value;
 
-    return pref_HashPref(pref_name, pref, PREF_INT, set_default);
+    return pref_HashPref(pref_name, pref, PREF_INT, set_default ? kPrefSetDefault : 0);
 }
 
 nsresult
@@ -297,7 +268,7 @@ PREF_SetBoolPref(const char *pref_name, bool value, bool set_default)
     PrefValue pref;
     pref.boolVal = value;
 
-    return pref_HashPref(pref_name, pref, PREF_BOOL, set_default);
+    return pref_HashPref(pref_name, pref, PREF_BOOL, set_default ? kPrefSetDefault : 0);
 }
 
 nsresult
@@ -697,7 +668,7 @@ PrefHashEntry* pref_HashTableLookup(const void *key)
     return result;
 }
 
-nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, bool set_default)
+nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRUint32 flags)
 {
     if (!gHashTable.ops)
         return NS_ERROR_OUT_OF_MEMORY;
@@ -719,12 +690,12 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, bool set
     else if ((((PrefType)(pref->flags)) & PREF_VALUETYPE_MASK) !=
                  (type & PREF_VALUETYPE_MASK))
     {
-        NS_WARNING(nsPrintfCString(192, "Trying to set pref %s to with the wrong type!", key).get());
+        NS_WARNING(nsPrintfCString("Trying to set pref %s to with the wrong type!", key).get());
         return NS_ERROR_UNEXPECTED;
     }
 
     bool valueChanged = false;
-    if (set_default)
+    if (flags & kPrefSetDefault)
     {
         if (!PREF_IS_LOCKED(pref))
         {       /* ?? change of semantics? */
@@ -743,7 +714,8 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, bool set
         /* If new value is same as the default value, then un-set the user value.
            Otherwise, set the user value only if it has changed */
         if (!pref_ValueChanged(pref->defaultPref, value, type) &&
-            pref->flags & PREF_HAS_DEFAULT)
+            (pref->flags & PREF_HAS_DEFAULT) &&
+            !(flags & kPrefForceSet))
         {
             if (PREF_HAS_USER_VALUE(pref))
             {
@@ -946,5 +918,5 @@ void PREF_ReaderCallback(void       *closure,
                          PrefType    type,
                          bool        isDefault)
 {
-    pref_HashPref(pref, value, type, isDefault);
+    pref_HashPref(pref, value, type, isDefault ? kPrefSetDefault : kPrefForceSet);
 }

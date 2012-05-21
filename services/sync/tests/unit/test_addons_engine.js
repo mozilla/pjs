@@ -6,9 +6,9 @@
 Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://services-sync/addonsreconciler.js");
-Cu.import("resource://services-sync/async.js");
+Cu.import("resource://services-common/async.js");
 Cu.import("resource://services-sync/engines/addons.js");
-Cu.import("resource://services-sync/ext/Preferences.js");
+Cu.import("resource://services-common/preferences.js");
 Cu.import("resource://services-sync/service.js");
 
 let prefs = new Preferences();
@@ -154,11 +154,7 @@ add_test(function test_disabled_install_semantics() {
   const PASSPHRASE = "abcdeabcdeabcdeabcdeabcdea";
   const ADDON_ID   = "addon1@tests.mozilla.org";
 
-  Service.username   = USER;
-  Service.password   = PASSWORD;
-  Service.passphrase = PASSPHRASE;
-  Service.serverURL  = TEST_SERVER_URL;
-  Service.clusterURL = TEST_CLUSTER_URL;
+  new SyncTestingInfrastructure(USER, PASSWORD, PASSPHRASE);
 
   generateNewKeys();
 

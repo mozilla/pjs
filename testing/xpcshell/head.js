@@ -1,44 +1,8 @@
 /* -*- Mode: JavaScript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Darin Fisher <darin@meer.net>
- *  Boris Zbarsky <bzbarsky@mit.edu>
- *  Jeff Walden <jwalden+code@mit.edu>
- *  Serge Gautherie <sgautherie.bz@free.fr>
- *  Kyle Huey <me@kylehuey.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * This file contains common code that is loaded before each test file(s).
@@ -301,8 +265,9 @@ function do_get_idle() {
                    .getService(Components.interfaces.nsIIdleService);
 }
 
-function _execute_test() {
-  // Map resource://test/ to the current working directory.
+// Map resource://test/ to current working directory and
+// resource://testing-common/ to the shared test modules directory.
+function _register_protocol_handlers() {
   let (ios = Components.classes["@mozilla.org/network/io-service;1"]
              .getService(Components.interfaces.nsIIOService)) {
     let protocolHandler =
@@ -310,7 +275,20 @@ function _execute_test() {
          .QueryInterface(Components.interfaces.nsIResProtocolHandler);
     let curDirURI = ios.newFileURI(do_get_cwd());
     protocolHandler.setSubstitution("test", curDirURI);
+
+    if (this._TESTING_MODULES_DIR) {
+      let modulesFile = Components.classes["@mozilla.org/file/local;1"].
+                        createInstance(Components.interfaces.nsILocalFile);
+      modulesFile.initWithPath(_TESTING_MODULES_DIR);
+
+      let modulesURI = ios.newFileURI(modulesFile);
+      protocolHandler.setSubstitution("testing-common", modulesURI);
+    }
   }
+}
+
+function _execute_test() {
+  _register_protocol_handlers();
 
   // Override idle service by default.
   // Call do_get_idle() to restore the factory and get the service.
@@ -335,9 +313,9 @@ function _execute_test() {
     // do_check failure though.
     if (!_quit || e != Components.results.NS_ERROR_ABORT) {
       msg = "TEST-UNEXPECTED-FAIL | ";
-      if ('fileName' in e) {
+      if (e.fileName) {
         msg += e.fileName;
-        if ('lineNumber' in e) {
+        if (e.lineNumber) {
           msg += ":" + e.lineNumber;
         }
       } else {
@@ -778,6 +756,13 @@ function do_get_profile() {
   };
   dirSvc.QueryInterface(Components.interfaces.nsIDirectoryService)
         .registerProvider(provider);
+
+  // The methods of 'provider' will entrain this scope so null out everything
+  // to avoid spurious leak reports.
+  env = null;
+  profd = null;
+  dirSvc = null;
+  provider = null;
   return file.clone();
 }
 
@@ -812,14 +797,21 @@ function do_load_child_test_harness()
   var quoted_tail_files = _TAIL_FILES.map(addQuotes);
 
   _XPCSHELL_PROCESS = "parent";
- 
-  sendCommand(
+
+  let command =
         "const _HEAD_JS_PATH='" + _HEAD_JS_PATH + "'; "
       + "const _HTTPD_JS_PATH='" + _HTTPD_JS_PATH + "'; "
       + "const _HEAD_FILES=[" + quoted_head_files.join() + "];"
       + "const _TAIL_FILES=[" + quoted_tail_files.join() + "];"
-      + "const _XPCSHELL_PROCESS='child';"
-      + "load(_HEAD_JS_PATH);");
+      + "const _XPCSHELL_PROCESS='child';";
+
+  if (this._TESTING_MODULES_DIR) {
+    command += "const _TESTING_MODULES_DIR='" + _TESTING_MODULES_DIR + "'; ";
+  }
+
+  command += "load(_HEAD_JS_PATH);";
+
+  sendCommand(command);
 }
 
 /**
@@ -843,7 +835,9 @@ function run_test_in_child(testFile, optionalCallback)
 
   var testPath = do_get_file(testFile).path.replace(/\\/g, "/");
   do_test_pending();
-  sendCommand("const _TEST_FILE=['" + testPath + "']; _execute_test();", 
+  sendCommand("_dump('CHILD-TEST-STARTED'); "
+              + "const _TEST_FILE=['" + testPath + "']; _execute_test(); "
+              + "_dump('CHILD-TEST-COMPLETED');", 
               callback);
 }
 

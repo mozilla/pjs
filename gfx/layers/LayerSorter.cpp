@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Matt Woodrow <mwoodrow@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LayerSorter.h"
 #include "DirectedGraph.h"
@@ -156,7 +124,7 @@ static LayerSortOrder CompareDepth(Layer* aOne, Layer* aTwo) {
     }
   }
   // If layers have the same depth keep the original order
-  if (highest >= 0) {
+  if (fabs(highest) < 0.1 || highest >= 0) {
     return ABeforeB;
   } else {
     return BBeforeA;
@@ -166,10 +134,61 @@ static LayerSortOrder CompareDepth(Layer* aOne, Layer* aTwo) {
 #ifdef DEBUG
 static bool gDumpLayerSortList = getenv("MOZ_DUMP_LAYER_SORT_LIST") != 0;
 
+#define BLACK       0
+#define RED         1
+#define GREEN       2
+#define YELLOW      3
+#define BLUE        4
+#define MAGENTA     5
+#define CYAN        6
+#define WHITE       7
+
+//#define USE_XTERM_COLORING
+#ifdef USE_XTERM_COLORING
+
+#define RESET       0
+#define BRIGHT      1
+#define DIM         2
+#define UNDERLINE   3
+#define BLINK       4
+#define REVERSE     7
+#define HIDDEN      8
+
+static void SetTextColor(PRUint32 aColor)
+{
+  char command[13];
+
+  /* Command is the control command to the terminal */
+  sprintf(command, "%c[%d;%d;%dm", 0x1B, RESET, aColor + 30, BLACK + 40);
+  printf("%s", command);
+}
+
+static void print_layer_internal(FILE* aFile, Layer* aLayer, PRUint32 aColor)
+{
+  SetTextColor(aColor);
+  fprintf(aFile, "%p", aLayer);
+  SetTextColor(GREEN);
+}
+#else
+
+const char *colors[] = { "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White" };
+
+static void print_layer_internal(FILE* aFile, Layer* aLayer, PRUint32 aColor)
+{
+  fprintf(aFile, "%p(%s)", aLayer, colors[aColor]);
+}
+#endif
+
+static void print_layer(FILE* aFile, Layer* aLayer)
+{
+  print_layer_internal(aFile, aLayer, aLayer->GetDebugColorIndex());
+}
+
 static void DumpLayerList(nsTArray<Layer*>& aLayers)
 {
   for (PRUint32 i = 0; i < aLayers.Length(); i++) {
-    fprintf(stderr, "%p, ", aLayers.ElementAt(i));
+    print_layer(stderr, aLayers.ElementAt(i));
+    fprintf(stderr, " ");
   }
   fprintf(stderr, "\n");
 }
@@ -179,7 +198,11 @@ static void DumpEdgeList(DirectedGraph<Layer*>& aGraph)
   nsTArray<DirectedGraph<Layer*>::Edge> edges = aGraph.GetEdgeList();
   
   for (PRUint32 i = 0; i < edges.Length(); i++) {
-    fprintf(stderr, "From: %p, To: %p\n", edges.ElementAt(i).mFrom, edges.ElementAt(i).mTo);
+    fprintf(stderr, "From: ");
+    print_layer(stderr, edges.ElementAt(i).mFrom);
+    fprintf(stderr, ", To: ");
+    print_layer(stderr, edges.ElementAt(i).mTo);
+    fprintf(stderr, "\n");
   }
 }
 #endif
@@ -188,6 +211,9 @@ static void DumpEdgeList(DirectedGraph<Layer*>& aGraph)
 // greater than this will be left unsorted. We should consider enabling
 // depth buffering for the scene in this case.
 #define MAX_SORTABLE_LAYERS 100
+
+
+PRUint32 gColorIndex = 1;
 
 void SortLayersBy3DZOrder(nsTArray<Layer*>& aLayers)
 {
@@ -199,6 +225,14 @@ void SortLayersBy3DZOrder(nsTArray<Layer*>& aLayers)
 
 #ifdef DEBUG
   if (gDumpLayerSortList) {
+    for (PRUint32 i = 0; i < nodeCount; i++) {
+      if (aLayers.ElementAt(i)->GetDebugColorIndex() == 0) {
+        aLayers.ElementAt(i)->SetDebugColorIndex(gColorIndex++);
+        if (gColorIndex > 7) {
+          gColorIndex = 1;
+        }
+      }
+    }
     fprintf(stderr, " --- Layers before sorting: --- \n");
     DumpLayerList(aLayers);
   }

@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is 
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Josh Aas <josh@mozilla.com>
- *   Sylvain Pasche <sylvain.pasche@gmail.com>
- *   Stuart Morgan <stuart.morgan@alumni.case.edu>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxImageSurface.h"
 #include "nsCocoaUtils.h"
@@ -52,6 +17,8 @@
 #include "nsMenuUtilsX.h"
 #include "nsToolkit.h"
 #include "nsGUIEvent.h"
+
+using namespace mozilla::widget;
 
 float nsCocoaUtils::MenuBarScreenHeight()
 {
@@ -414,4 +381,103 @@ nsCocoaUtils::InitPluginEvent(nsPluginEvent &aPluginEvent,
   aPluginEvent.time = PR_IntervalNow();
   aPluginEvent.pluginEvent = (void*)&aCocoaEvent;
   aPluginEvent.retargetToFocusedDocument = false;
+}
+
+// static
+void
+nsCocoaUtils::InitInputEvent(nsInputEvent &aInputEvent,
+                             NSEvent* aNativeEvent)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  NSUInteger modifiers =
+    aNativeEvent ? [aNativeEvent modifierFlags] : GetCurrentModifiers();
+  InitInputEvent(aInputEvent, modifiers);
+
+  aInputEvent.time = PR_IntervalNow();
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+// static
+void
+nsCocoaUtils::InitInputEvent(nsInputEvent &aInputEvent,
+                             NSUInteger aModifiers)
+{
+  aInputEvent.modifiers = 0;
+  if (aModifiers & NSShiftKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_SHIFT;
+  }
+  if (aModifiers & NSControlKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_CONTROL;
+  }
+  if (aModifiers & NSAlternateKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_ALT;
+    // Mac's option key is similar to other platforms' AltGr key.
+    // Let's set AltGr flag when option key is pressed for consistency with
+    // other platforms.
+    aInputEvent.modifiers |= MODIFIER_ALTGRAPH;
+  }
+  if (aModifiers & NSCommandKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_META;
+  }
+
+  if (aModifiers & NSAlphaShiftKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_CAPSLOCK;
+  }
+  // Mac doesn't have NumLock key.  We can assume that NumLock is always locked
+  // if user is using a keyboard which has numpad.  Otherwise, if user is using
+  // a keyboard which doesn't have numpad, e.g., MacBook's keyboard, we can
+  // assume that NumLock is always unlocked.
+  // Unfortunately, we cannot know whether current keyboard has numpad or not.
+  // We should notify locked state only when keys in numpad are pressed.
+  // By this, web applications may not be confused by unexpected numpad key's
+  // key event with unlocked state.
+  if (aModifiers & NSNumericPadKeyMask) {
+    aInputEvent.modifiers |= MODIFIER_NUMLOCK;
+  }
+
+  // Be aware, NSFunctionKeyMask is included when arrow keys, home key or some
+  // other keys are pressed. We cannot check whether 'fn' key is pressed or
+  // not by the flag.
+
+}
+
+// static
+NSUInteger
+nsCocoaUtils::GetCurrentModifiers()
+{
+  // NOTE: [[NSApp currentEvent] modifiers] isn't useful because it sometime 0
+  //       and we cannot check if it's actual state.
+  if (nsCocoaFeatures::OnSnowLeopardOrLater()) {
+    // XXX [NSEvent modifierFlags] returns "current" modifier state, so,
+    //     it's not event-queue-synchronized.  GetCurrentEventKeyModifiers()
+    //     might be better, but it's Carbon API, we shouldn't use it as far as
+    //     possible.
+    return [NSEvent modifierFlags];
+  }
+
+  // If [NSEvent modifierFlags] isn't available, use carbon API.
+  // GetCurrentEventKeyModifiers() might be better?
+  // It's event-queue-synchronized.
+  UInt32 carbonModifiers = ::GetCurrentKeyModifiers();
+  NSUInteger cocoaModifiers = 0;
+
+  if (carbonModifiers & alphaLock) {
+    cocoaModifiers |= NSAlphaShiftKeyMask;
+  }
+  if (carbonModifiers & (controlKey | rightControlKey)) {
+    cocoaModifiers |= NSControlKeyMask;
+  }
+  if (carbonModifiers & (optionKey | rightOptionKey)) {
+    cocoaModifiers |= NSAlternateKeyMask;
+  }
+  if (carbonModifiers & (shiftKey | rightShiftKey)) {
+    cocoaModifiers |= NSShiftKeyMask;
+  }
+  if (carbonModifiers & cmdKey) {
+    cocoaModifiers |= NSCommandKeyMask;
+  }
+
+  return cocoaModifiers;
 }

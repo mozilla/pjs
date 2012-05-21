@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998-2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "frontend/BytecodeCompiler.h"
 
@@ -49,69 +16,26 @@
 
 #include "jsinferinlines.h"
 
+#include "frontend/TreeContext-inl.h"
+
 using namespace js;
 using namespace js::frontend;
 
 bool
-DefineGlobals(JSContext *cx, GlobalScope &globalScope, JSScript *script)
+MarkInnerAndOuterFunctions(JSContext *cx, JSScript* script)
 {
-    JSObject *globalObj = globalScope.globalObj;
-
-    /* Define and update global properties. */
-    for (size_t i = 0; i < globalScope.defs.length(); i++) {
-        GlobalScope::GlobalDef &def = globalScope.defs[i];
-
-        /* Names that could be resolved ahead of time can be skipped. */
-        if (!def.atom)
-            continue;
-
-        jsid id = ATOM_TO_JSID(def.atom);
-        Value rval;
-
-        if (def.funbox) {
-            JSFunction *fun = def.funbox->function();
-
-            /*
-             * No need to check for redeclarations or anything, global
-             * optimizations only take place if the property is not defined.
-             */
-            rval.setObject(*fun);
-            types::AddTypePropertyId(cx, globalObj, id, rval);
-        } else {
-            rval.setUndefined();
-        }
-
-        /*
-         * Don't update the type information when defining the property for the
-         * global object, per the consistency rules for type properties. If the
-         * property is only undefined before it is ever written, we can check
-         * the global directly during compilation and avoid having to emit type
-         * checks every time it is accessed in the script.
-         */
-        const Shape *shape =
-            DefineNativeProperty(cx, globalObj, id, rval, JS_PropertyStub, JS_StrictPropertyStub,
-                                 JSPROP_ENUMERATE | JSPROP_PERMANENT, 0, 0, DNP_SKIP_TYPE);
-        if (!shape)
-            return false;
-        def.knownSlot = shape->slot();
-    }
+    Root<JSScript*> root(cx, &script);
 
     Vector<JSScript *, 16> worklist(cx);
     if (!worklist.append(script))
         return false;
 
-    /*
-     * Recursively walk through all scripts we just compiled. For each script,
-     * go through all global uses. Each global use indexes into globalScope->defs.
-     * Use this information to repoint each use to the correct slot in the global
-     * object.
-     */
     while (worklist.length()) {
         JSScript *outer = worklist.back();
         worklist.popBack();
 
-        if (JSScript::isValidOffset(outer->objectsOffset)) {
-            JSObjectArray *arr = outer->objects();
+        if (outer->hasObjects()) {
+            ObjectArray *arr = outer->objects();
 
             /*
              * If this is an eval script, don't treat the saved caller function
@@ -130,24 +54,11 @@ DefineGlobals(JSContext *cx, GlobalScope &globalScope, JSScript *script)
                     outer->isOuterFunction = true;
                     inner->isInnerFunction = true;
                 }
-                if (!JSScript::isValidOffset(inner->globalsOffset) &&
-                    !JSScript::isValidOffset(inner->objectsOffset)) {
+                if (!inner->hasObjects())
                     continue;
-                }
                 if (!worklist.append(inner))
                     return false;
             }
-        }
-
-        if (!JSScript::isValidOffset(outer->globalsOffset))
-            continue;
-
-        GlobalSlotArray *globalUses = outer->globals();
-        uint32_t nGlobalUses = globalUses->length;
-        for (uint32_t i = 0; i < nGlobalUses; i++) {
-            uint32_t index = globalUses->vector[i].slot;
-            JS_ASSERT(index < globalScope.defs.length());
-            globalUses->vector[i].slot = globalScope.defs[index].knownSlot;
         }
     }
 
@@ -157,35 +68,38 @@ DefineGlobals(JSContext *cx, GlobalScope &globalScope, JSScript *script)
 JSScript *
 frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerFrame,
                         JSPrincipals *principals, JSPrincipals *originPrincipals,
-                        uint32_t tcflags,
+                        bool compileAndGo, bool noScriptRval, bool needScriptGlobal,
                         const jschar *chars, size_t length,
-                        const char *filename, uintN lineno, JSVersion version,
+                        const char *filename, unsigned lineno, JSVersion version,
                         JSString *source /* = NULL */,
-                        uintN staticLevel /* = 0 */)
+                        unsigned staticLevel /* = 0 */)
 {
     TokenKind tt;
     ParseNode *pn;
-    JSScript *script;
     bool inDirectivePrologue;
-
-    JS_ASSERT(!(tcflags & ~(TCF_COMPILE_N_GO | TCF_NO_SCRIPT_RVAL | TCF_COMPILE_FOR_EVAL
-                            | TCF_NEED_SCRIPT_GLOBAL)));
 
     /*
      * The scripted callerFrame can only be given for compile-and-go scripts
      * and non-zero static level requires callerFrame.
      */
-    JS_ASSERT_IF(callerFrame, tcflags & TCF_COMPILE_N_GO);
+    JS_ASSERT_IF(callerFrame, compileAndGo);
     JS_ASSERT_IF(staticLevel != 0, callerFrame);
 
-    Parser parser(cx, principals, originPrincipals, callerFrame);
+    bool foldConstants = true;
+    Parser parser(cx, principals, originPrincipals, callerFrame, foldConstants, compileAndGo);
     if (!parser.init(chars, length, filename, lineno, version))
         return NULL;
 
     TokenStream &tokenStream = parser.tokenStream;
 
-    BytecodeEmitter bce(&parser, tokenStream.getLineno());
-    if (!bce.init(cx, TreeContext::USED_AS_TREE_CONTEXT))
+    SharedContext sc(cx, /* inFunction = */ false);
+
+    TreeContext tc(&parser, &sc);
+    if (!tc.init(cx))
+        return NULL;
+
+    BytecodeEmitter bce(&parser, &sc, tokenStream.getLineno(), noScriptRval, needScriptGlobal);
+    if (!bce.init())
         return NULL;
 
     Probes::compileScriptBegin(cx, filename, lineno);
@@ -199,21 +113,20 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
     JS_ASSERT_IF(globalObj, globalObj->isNative());
     JS_ASSERT_IF(globalObj, JSCLASS_HAS_GLOBAL_FLAG_AND_SLOTS(globalObj->getClass()));
 
-    /* Null script early in case of error, to reduce our code footprint. */
-    script = NULL;
+    RootedVar<JSScript*> script(cx);
 
-    GlobalScope globalScope(cx, globalObj, &bce);
-    bce.flags |= tcflags;
-    bce.setScopeChain(scopeChain);
+    GlobalScope globalScope(cx, globalObj);
+    bce.sc->setScopeChain(scopeChain);
     bce.globalScope = &globalScope;
-    if (!SetStaticLevel(&bce, staticLevel))
+    if (!SetStaticLevel(bce.sc, staticLevel))
         goto out;
 
     /* If this is a direct call to eval, inherit the caller's strictness.  */
     if (callerFrame &&
         callerFrame->isScriptFrame() &&
-        callerFrame->script()->strictModeCode) {
-        bce.flags |= TCF_STRICT_MODE_CODE;
+        callerFrame->script()->strictModeCode)
+    {
+        bce.sc->setInStrictMode();
         tokenStream.setStrictMode();
     }
 
@@ -221,7 +134,7 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
     bool savedCallerFun;
     savedCallerFun = false;
 #endif
-    if (tcflags & TCF_COMPILE_N_GO) {
+    if (compileAndGo) {
         if (source) {
             /*
              * Save eval program source in script->atoms[0] for the
@@ -256,9 +169,9 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
      * generate our script-body blockid since we aren't calling Statements.
      */
     uint32_t bodyid;
-    if (!GenerateBlockId(&bce, bodyid))
+    if (!GenerateBlockId(bce.sc, bodyid))
         goto out;
-    bce.bodyid = bodyid;
+    bce.sc->bodyid = bodyid;
 
 #if JS_HAS_XML_SUPPORT
     pn = NULL;
@@ -280,17 +193,16 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
         pn = parser.statement();
         if (!pn)
             goto out;
-        JS_ASSERT(!bce.blockNode);
 
         if (inDirectivePrologue && !parser.recognizeDirectivePrologue(pn, &inDirectivePrologue))
             goto out;
 
-        if (!FoldConstants(cx, pn, &bce))
+        if (!FoldConstants(cx, pn, bce.parser))
             goto out;
 
-        if (!AnalyzeFunctions(&bce))
+        if (!AnalyzeFunctions(bce.parser))
             goto out;
-        bce.functionList = NULL;
+        bce.sc->functionList = NULL;
 
         if (!EmitTree(cx, &bce, pn))
             goto out;
@@ -299,7 +211,7 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
         if (!pn->isKind(PNK_SEMI) || !pn->pn_kid || !pn->pn_kid->isXMLItem())
             onlyXML = false;
 #endif
-        bce.freeTree(pn);
+        bce.parser->freeTree(pn);
     }
 
 #if JS_HAS_XML_SUPPORT
@@ -330,7 +242,7 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
 
     JS_ASSERT(script->savedCallerFun == savedCallerFun);
 
-    if (!DefineGlobals(cx, globalScope, script))
+    if (!MarkInnerAndOuterFunctions(cx, script))
         script = NULL;
 
   out:
@@ -346,7 +258,7 @@ bool
 frontend::CompileFunctionBody(JSContext *cx, JSFunction *fun,
                               JSPrincipals *principals, JSPrincipals *originPrincipals,
                               Bindings *bindings, const jschar *chars, size_t length,
-                              const char *filename, uintN lineno, JSVersion version)
+                              const char *filename, unsigned lineno, JSVersion version)
 {
     Parser parser(cx, principals, originPrincipals);
     if (!parser.init(chars, length, filename, lineno, version))
@@ -354,35 +266,41 @@ frontend::CompileFunctionBody(JSContext *cx, JSFunction *fun,
 
     TokenStream &tokenStream = parser.tokenStream;
 
-    BytecodeEmitter funbce(&parser, tokenStream.getLineno());
-    if (!funbce.init(cx, TreeContext::USED_AS_TREE_CONTEXT))
+    SharedContext funsc(cx, /* inFunction = */ true);
+
+    TreeContext funtc(&parser, &funsc);
+    if (!funtc.init(cx))
+        return NULL;
+
+    BytecodeEmitter funbce(&parser, &funsc, tokenStream.getLineno(),
+                           /* noScriptRval = */ false, /* needsScriptGlobal = */ false);
+    if (!funbce.init())
         return false;
 
-    funbce.flags |= TCF_IN_FUNCTION;
-    funbce.setFunction(fun);
-    funbce.bindings.transfer(cx, bindings);
-    fun->setArgCount(funbce.bindings.countArgs());
-    if (!GenerateBlockId(&funbce, funbce.bodyid))
+    funsc.setFunction(fun);
+    funsc.bindings.transfer(cx, bindings);
+    fun->setArgCount(funsc.bindings.numArgs());
+    if (!GenerateBlockId(&funsc, funsc.bodyid))
         return false;
 
     /* FIXME: make Function format the source for a function definition. */
-    ParseNode *fn = FunctionNode::create(PNK_NAME, &funbce);
+    ParseNode *fn = FunctionNode::create(PNK_NAME, &parser);
     if (fn) {
         fn->pn_body = NULL;
         fn->pn_cookie.makeFree();
 
-        uintN nargs = fun->nargs;
+        unsigned nargs = fun->nargs;
         if (nargs) {
             /*
              * NB: do not use AutoLocalNameArray because it will release space
              * allocated from cx->tempLifoAlloc by DefineArg.
              */
-            Vector<JSAtom *> names(cx);
-            if (!funbce.bindings.getLocalNameArray(cx, &names)) {
+            BindingNames names(cx);
+            if (!funsc.bindings.getLocalNameArray(cx, &names)) {
                 fn = NULL;
             } else {
-                for (uintN i = 0; i < nargs; i++) {
-                    if (!DefineArg(fn, names[i], i, &funbce)) {
+                for (unsigned i = 0; i < nargs; i++) {
+                    if (!DefineArg(fn, names[i].maybeAtom, i, &parser)) {
                         fn = NULL;
                         break;
                     }
@@ -398,15 +316,13 @@ frontend::CompileFunctionBody(JSContext *cx, JSFunction *fun,
      */
     ParseNode *pn = fn ? parser.functionBody(Parser::StatementListBody) : NULL;
     if (pn) {
-        if (!CheckStrictParameters(cx, &funbce)) {
-            pn = NULL;
-        } else if (!tokenStream.matchToken(TOK_EOF)) {
+        if (!tokenStream.matchToken(TOK_EOF)) {
             parser.reportErrorNumber(NULL, JSREPORT_ERROR, JSMSG_SYNTAX_ERROR);
             pn = NULL;
-        } else if (!FoldConstants(cx, pn, &funbce)) {
+        } else if (!FoldConstants(cx, pn, &parser)) {
             /* FoldConstants reported the error already. */
             pn = NULL;
-        } else if (!AnalyzeFunctions(&funbce)) {
+        } else if (!AnalyzeFunctions(&parser)) {
             pn = NULL;
         } else {
             if (fn->pn_body) {

@@ -1,4 +1,8 @@
 // -*- Mode: js2; tab-width: 2; indent-tabs-mode: nil; js2-basic-offset: 2; js2-skip-preprocessor-directives: t; -*-
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 // This stays here because otherwise it's hard to tell if there's a parsing error
 dump("###################################### content loaded\n");
 
@@ -539,7 +543,8 @@ let Content = {
 
         let listener = {
           onStateChange: function(aWebProgress, aRequest, aStateFlags, aStatus) {
-            if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP) {
+            if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
+                aStateFlage & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT) {
               sendAsyncMessage("Browser:SaveAs:Return", { type: json.type, id: json.id, referrer: json.referrer });
             }
           },

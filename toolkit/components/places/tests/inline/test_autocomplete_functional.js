@@ -5,18 +5,39 @@
 // Functional tests for inline autocomplete
 
 add_autocomplete_test([
+  "Check disabling autocomplete disables autofill",
+  "vis",
+  "vis",
+  function ()
+  {
+    Services.prefs.setBoolPref("browser.urlbar.autocomplete.enabled", false);
+    addVisits({ uri: NetUtil.newURI("http://visit.mozilla.org"),
+                transition: TRANSITION_TYPED });
+  }
+]);
+
+add_autocomplete_test([
+  "Check disabling autofill disables autofill",
+  "vis",
+  "vis",
+  function ()
+  {
+    Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
+    addVisits({ uri: NetUtil.newURI("http://visit.mozilla.org"),
+                transition: TRANSITION_TYPED });
+  }
+]);
+
+add_autocomplete_test([
   "Add urls, check for correct order",
   "vis",
   "visit2.mozilla.org/",
   function ()
   {
-    let urls = [{ url: NetUtil.newURI("http://visit1.mozilla.org"),
-                  transition: undefined,
-                },
-                { url: NetUtil.newURI("http://visit2.mozilla.org"),
-                  transition: TRANSITION_TYPED,
-                }];
-    addVisits(urls);
+    let places = [{ uri: NetUtil.newURI("http://visit1.mozilla.org") },
+                  { uri: NetUtil.newURI("http://visit2.mozilla.org"),
+                    transition: TRANSITION_TYPED }];
+    addVisits(places);
   }
 ]);
 
@@ -26,12 +47,7 @@ add_autocomplete_test([
   "visit1.mozilla.org/",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://www.visit1.mozilla.org"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://www.visit1.mozilla.org"));
   }
 ]);
 
@@ -41,12 +57,7 @@ add_autocomplete_test([
   "visit3.mozilla.org/",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://www.visit3.mozilla.org"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://www.visit3.mozilla.org"));
   }
 ]);
 
@@ -56,12 +67,7 @@ add_autocomplete_test([
   "www.me.mozilla.org/",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://www.me.mozilla.org"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://www.me.mozilla.org"));
   }
 ]);
 
@@ -71,13 +77,8 @@ add_autocomplete_test([
   "bookmark1.mozilla.org/",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://bookmark1.mozilla.org/foo"),
-                  transition: undefined,
-                },
-               ];
     addBookmark({ url: "http://bookmark1.mozilla.org/", });
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://bookmark1.mozilla.org/foo"));
   }
 ]);
 
@@ -88,14 +89,9 @@ add_autocomplete_test([
   function ()
   {
 
-    let urls = [{ url: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=delicious"),
-                  transition: undefined,
-                },
-                { url: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=smokey"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    let places = [{ uri: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=delicious") },
+                  { uri: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=smokey") }];
+    addVisits(places);
   }
 ]);
 
@@ -106,14 +102,9 @@ add_autocomplete_test([
   function ()
   {
 
-    let urls = [{ url: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=delicious"),
-                  transition: undefined,
-                },
-                { url: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=smokey"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    let places = [{ uri: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=delicious") },
+                  { uri: NetUtil.newURI("http://smokey.mozilla.org/foo/bar/baz?bacon=smokey") }];
+    addVisits(places);
   }
 ]);
 
@@ -123,12 +114,7 @@ add_autocomplete_test([
   "smokey.mozilla.org/foo?bacon=delicious",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://smokey.mozilla.org/foo?bacon=delicious"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://smokey.mozilla.org/foo?bacon=delicious"));
   }
 ]);
 
@@ -138,11 +124,6 @@ add_autocomplete_test([
   "smokey.mozilla.org/foo?bacon=delicious#bar",
   function ()
   {
-
-    let urls = [{ url: NetUtil.newURI("http://smokey.mozilla.org/foo?bacon=delicious#bar"),
-                  transition: undefined,
-                },
-               ];
-    addVisits(urls);
+    addVisits(NetUtil.newURI("http://smokey.mozilla.org/foo?bacon=delicious#bar"));
   }
 ]);

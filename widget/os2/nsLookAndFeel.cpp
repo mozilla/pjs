@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   John Fairhurst <john_fairhurst@iname.com>
- *   Michael Lowe <michael.lowe@bigfoot.com>
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #define INCL_WIN
 #define INCL_WINWINDOWMGR
@@ -532,11 +497,11 @@ nsLookAndFeel::GetFont(FontID aID, nsString& aFontName,
   // do, otherwise it's bad luck
   NS_NAMED_LITERAL_CSTRING(spcBold, " Bold");
   if ((pos = fontFace.Find(spcBold.get(), false, 0, -1)) > -1) {
-    aFontStyle.weight = FONT_WEIGHT_BOLD;
+    aFontStyle.weight = NS_FONT_WEIGHT_BOLD;
     // strip the attribute, now that we have set it in the gfxFontStyle
     fontFace.Cut(pos, spcBold.Length());
   } else {
-    aFontStyle.weight = FONT_WEIGHT_NORMAL;
+    aFontStyle.weight = NS_FONT_WEIGHT_NORMAL;
   }
 
   // FIXME: Set aFontStyle.stretch correctly!
@@ -547,23 +512,23 @@ nsLookAndFeel::GetFont(FontID aID, nsString& aFontName,
   NS_NAMED_LITERAL_CSTRING(spcOblique, " Oblique");
   NS_NAMED_LITERAL_CSTRING(spcObli, " Obli");
   if ((pos = fontFace.Find(spcItalic.get(), false, 0, -1)) > -1) {
-    aFontStyle.style = FONT_STYLE_ITALIC;
+    aFontStyle.style = NS_FONT_STYLE_ITALIC;
     fontFace.Cut(pos, spcItalic.Length());
   } else if ((pos = fontFace.Find(spcOblique.get(), false, 0, -1)) > -1) {
     // oblique fonts are rare on OS/2 and not specially supported by
     // the GPI system, but at least we are trying...
-    aFontStyle.style = FONT_STYLE_OBLIQUE;
+    aFontStyle.style = NS_FONT_STYLE_OBLIQUE;
     fontFace.Cut(pos, spcOblique.Length());
   } else if ((pos = fontFace.Find(spcObli.get(), false, 0, -1)) > -1) {
     // especially oblique often gets cut by the 32 char limit to "Obli",
     // so search for that, too (anything shorter would be ambiguous)
-    aFontStyle.style = FONT_STYLE_OBLIQUE;
+    aFontStyle.style = NS_FONT_STYLE_OBLIQUE;
     // In this case, assume that this is the last property in the line
     // and cut off everything else, too
     // This is needed in case it was really Obliq or Obliqu...
     fontFace.Cut(pos, fontFace.Length());
   } else {
-    aFontStyle.style = FONT_STYLE_NORMAL;
+    aFontStyle.style = NS_FONT_STYLE_NORMAL;
   }
 
   // just throw away any modifiers that are separated by dots (which are either

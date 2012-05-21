@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Indexed Database.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Shawn Wilsher <me@shawnwilsher.com>
- *   Ben Turner <bent.mozilla@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 #include "IDBIndex.h"
@@ -186,7 +152,7 @@ public:
                       IDBRequest* aRequest,
                       IDBIndex* aIndex,
                       IDBKeyRange* aKeyRange,
-                      PRUint16 aDirection)
+                      IDBCursor::Direction aDirection)
   : AsyncConnectionHelper(aTransaction, aRequest), mIndex(aIndex),
     mKeyRange(aKeyRange), mDirection(aDirection)
   { }
@@ -206,7 +172,7 @@ private:
   // In-params.
   nsRefPtr<IDBIndex> mIndex;
   nsRefPtr<IDBKeyRange> mKeyRange;
-  const PRUint16 mDirection;
+  const IDBCursor::Direction mDirection;
 
   // Out-params.
   Key mKey;
@@ -223,7 +189,7 @@ public:
                    IDBRequest* aRequest,
                    IDBIndex* aIndex,
                    IDBKeyRange* aKeyRange,
-                   PRUint16 aDirection)
+                   IDBCursor::Direction aDirection)
   : AsyncConnectionHelper(aTransaction, aRequest), mIndex(aIndex),
     mKeyRange(aKeyRange), mDirection(aDirection)
   { }
@@ -248,7 +214,7 @@ private:
   // In-params.
   nsRefPtr<IDBIndex> mIndex;
   nsRefPtr<IDBKeyRange> mKeyRange;
-  const PRUint16 mDirection;
+  const IDBCursor::Direction mDirection;
 
   // Out-params.
   Key mKey;
@@ -582,7 +548,7 @@ IDBIndex::GetAllKeys(const jsval& aKey,
 
 NS_IMETHODIMP
 IDBIndex::OpenCursor(const jsval& aKey,
-                     PRUint16 aDirection,
+                     const nsAString& aDirection,
                      JSContext* aCx,
                      PRUint8 aOptionalArgCount,
                      nsIIDBRequest** _retval)
@@ -596,21 +562,16 @@ IDBIndex::OpenCursor(const jsval& aKey,
 
   nsresult rv;
 
+  IDBCursor::Direction direction = IDBCursor::NEXT;
+
   nsRefPtr<IDBKeyRange> keyRange;
   if (aOptionalArgCount) {
     rv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (aOptionalArgCount >= 2) {
-      if (aDirection != nsIIDBCursor::NEXT &&
-          aDirection != nsIIDBCursor::NEXT_NO_DUPLICATE &&
-          aDirection != nsIIDBCursor::PREV &&
-          aDirection != nsIIDBCursor::PREV_NO_DUPLICATE) {
-        return NS_ERROR_DOM_INDEXEDDB_NON_TRANSIENT_ERR;
-      }
-    }
-    else {
-      aDirection = nsIIDBCursor::NEXT;
+      rv = IDBCursor::ParseDirection(aDirection, &direction);
+      NS_ENSURE_SUCCESS(rv, rv);
     }
   }
 
@@ -618,7 +579,7 @@ IDBIndex::OpenCursor(const jsval& aKey,
   NS_ENSURE_TRUE(request, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   nsRefPtr<OpenCursorHelper> helper =
-    new OpenCursorHelper(transaction, request, this, keyRange, aDirection);
+    new OpenCursorHelper(transaction, request, this, keyRange, direction);
 
   rv = helper->DispatchToTransactionPool();
   NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
@@ -629,7 +590,7 @@ IDBIndex::OpenCursor(const jsval& aKey,
 
 NS_IMETHODIMP
 IDBIndex::OpenKeyCursor(const jsval& aKey,
-                        PRUint16 aDirection,
+                        const nsAString& aDirection,
                         JSContext* aCx,
                         PRUint8 aOptionalArgCount,
                         nsIIDBRequest** _retval)
@@ -643,21 +604,16 @@ IDBIndex::OpenKeyCursor(const jsval& aKey,
 
   nsresult rv;
 
+  IDBCursor::Direction direction = IDBCursor::NEXT;
+
   nsRefPtr<IDBKeyRange> keyRange;
   if (aOptionalArgCount) {
     rv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (aOptionalArgCount >= 2) {
-      if (aDirection != nsIIDBCursor::NEXT &&
-          aDirection != nsIIDBCursor::NEXT_NO_DUPLICATE &&
-          aDirection != nsIIDBCursor::PREV &&
-          aDirection != nsIIDBCursor::PREV_NO_DUPLICATE) {
-        return NS_ERROR_DOM_INDEXEDDB_NON_TRANSIENT_ERR;
-      }
-    }
-    else {
-      aDirection = nsIIDBCursor::NEXT;
+      rv = IDBCursor::ParseDirection(aDirection, &direction);
+      NS_ENSURE_SUCCESS(rv, rv);
     }
   }
 
@@ -665,7 +621,7 @@ IDBIndex::OpenKeyCursor(const jsval& aKey,
   NS_ENSURE_TRUE(request, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   nsRefPtr<OpenKeyCursorHelper> helper =
-    new OpenKeyCursorHelper(transaction, request, this, keyRange, aDirection);
+    new OpenKeyCursorHelper(transaction, request, this, keyRange, direction);
 
   rv = helper->DispatchToTransactionPool();
   NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
@@ -904,7 +860,7 @@ GetAllKeysHelper::GetSuccessResult(JSContext* aCx,
   }
 
   if (!keys.IsEmpty()) {
-    if (!JS_SetArrayLength(aCx, array, jsuint(keys.Length()))) {
+    if (!JS_SetArrayLength(aCx, array, uint32_t(keys.Length()))) {
       NS_WARNING("Failed to set array length!");
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
@@ -1032,16 +988,16 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   nsCAutoString directionClause(" ORDER BY value ");
   switch (mDirection) {
-    case nsIIDBCursor::NEXT:
-    case nsIIDBCursor::NEXT_NO_DUPLICATE:
+    case IDBCursor::NEXT:
+    case IDBCursor::NEXT_UNIQUE:
       directionClause += NS_LITERAL_CSTRING("ASC, object_data_key ASC");
       break;
 
-    case nsIIDBCursor::PREV:
+    case IDBCursor::PREV:
       directionClause += NS_LITERAL_CSTRING("DESC, object_data_key DESC");
       break;
 
-    case nsIIDBCursor::PREV_NO_DUPLICATE:
+    case IDBCursor::PREV_UNIQUE:
       directionClause += NS_LITERAL_CSTRING("DESC, object_data_key ASC");
       break;
 
@@ -1092,7 +1048,7 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
   NS_NAMED_LITERAL_CSTRING(rangeKey, "range_key");
 
   switch (mDirection) {
-    case nsIIDBCursor::NEXT:
+    case IDBCursor::NEXT:
       if (mKeyRange && !mKeyRange->Upper().IsUnset()) {
         AppendConditionClause(value, rangeKey, true, !mKeyRange->IsUpperOpen(),
                               queryStart);
@@ -1112,7 +1068,7 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         NS_LITERAL_CSTRING(" LIMIT ");
       break;
 
-    case nsIIDBCursor::NEXT_NO_DUPLICATE:
+    case IDBCursor::NEXT_UNIQUE:
       if (mKeyRange && !mKeyRange->Upper().IsUnset()) {
         AppendConditionClause(value, rangeKey, true, !mKeyRange->IsUpperOpen(),
                               queryStart);
@@ -1128,7 +1084,7 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         NS_LITERAL_CSTRING(" LIMIT ");
       break;
 
-    case nsIIDBCursor::PREV:
+    case IDBCursor::PREV:
       if (mKeyRange && !mKeyRange->Lower().IsUnset()) {
         AppendConditionClause(value, rangeKey, false, !mKeyRange->IsLowerOpen(),
                               queryStart);
@@ -1149,7 +1105,7 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         NS_LITERAL_CSTRING(" LIMIT ");
       break;
 
-    case nsIIDBCursor::PREV_NO_DUPLICATE:
+    case IDBCursor::PREV_UNIQUE:
       if (mKeyRange && !mKeyRange->Lower().IsUnset()) {
         AppendConditionClause(value, rangeKey, false, !mKeyRange->IsLowerOpen(),
                               queryStart);
@@ -1213,18 +1169,18 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   nsCAutoString directionClause(" ORDER BY index_table.value ");
   switch (mDirection) {
-    case nsIIDBCursor::NEXT:
-    case nsIIDBCursor::NEXT_NO_DUPLICATE:
+    case IDBCursor::NEXT:
+    case IDBCursor::NEXT_UNIQUE:
       directionClause +=
         NS_LITERAL_CSTRING("ASC, index_table.object_data_key ASC");
       break;
 
-    case nsIIDBCursor::PREV:
+    case IDBCursor::PREV:
       directionClause +=
         NS_LITERAL_CSTRING("DESC, index_table.object_data_key DESC");
       break;
 
-    case nsIIDBCursor::PREV_NO_DUPLICATE:
+    case IDBCursor::PREV_UNIQUE:
       directionClause +=
         NS_LITERAL_CSTRING("DESC, index_table.object_data_key ASC");
       break;
@@ -1292,7 +1248,7 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
   NS_NAMED_LITERAL_CSTRING(limit, " LIMIT ");
 
   switch (mDirection) {
-    case nsIIDBCursor::NEXT:
+    case IDBCursor::NEXT:
       if (mKeyRange && !mKeyRange->Upper().IsUnset()) {
         AppendConditionClause(value, rangeKey, true, !mKeyRange->IsUpperOpen(),
                               queryStart);
@@ -1310,7 +1266,7 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         directionClause + limit;
       break;
 
-    case nsIIDBCursor::NEXT_NO_DUPLICATE:
+    case IDBCursor::NEXT_UNIQUE:
       if (mKeyRange && !mKeyRange->Upper().IsUnset()) {
         AppendConditionClause(value, rangeKey, true, !mKeyRange->IsUpperOpen(),
                               queryStart);
@@ -1326,7 +1282,7 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         directionClause + limit;
       break;
 
-    case nsIIDBCursor::PREV:
+    case IDBCursor::PREV:
       if (mKeyRange && !mKeyRange->Lower().IsUnset()) {
         AppendConditionClause(value, rangeKey, false, !mKeyRange->IsLowerOpen(),
                               queryStart);
@@ -1344,7 +1300,7 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
         directionClause + limit;
       break;
 
-    case nsIIDBCursor::PREV_NO_DUPLICATE:
+    case IDBCursor::PREV_UNIQUE:
       if (mKeyRange && !mKeyRange->Lower().IsUnset()) {
         AppendConditionClause(value, rangeKey, false, !mKeyRange->IsLowerOpen(),
                               queryStart);
@@ -1450,5 +1406,5 @@ nsresult
 CountHelper::GetSuccessResult(JSContext* aCx,
                               jsval* aVal)
 {
-  return JS_NewNumberValue(aCx, static_cast<jsdouble>(mCount), aVal);
+  return JS_NewNumberValue(aCx, static_cast<double>(mCount), aVal);
 }

@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsgcinlines_h___
 #define jsgcinlines_h___
@@ -118,8 +85,8 @@ GetGCObjectFixedSlotsKind(size_t numFixedSlots)
 static inline bool
 IsBackgroundAllocKind(AllocKind kind)
 {
-    JS_ASSERT(kind <= FINALIZE_OBJECT_LAST);
-    return kind % 2 == 1;
+    JS_ASSERT(kind <= FINALIZE_LAST);
+    return kind <= FINALIZE_OBJECT_LAST && kind % 2 == 1;
 }
 
 static inline AllocKind
@@ -349,13 +316,17 @@ class CellIter : public CellIterImpl
     size_t *counter;
 #endif
   public:
-    CellIter(JSContext *cx, JSCompartment *comp, AllocKind kind)
+    CellIter(JSCompartment *comp, AllocKind kind)
       : lists(&comp->arenas),
         kind(kind)
     {
-#ifdef JS_THREADSAFE
-        JS_ASSERT(comp->arenas.doneBackgroundFinalize(kind));
-#endif
+        /*
+         * We have a single-threaded runtime, so there's no need to protect
+         * against other threads iterating or allocating. However, we do have
+         * background finalization; make sure people aren't using CellIter to
+         * walk such allocation kinds.
+         */
+        JS_ASSERT(!IsBackgroundAllocKind(kind));
         if (lists->isSynchronizedFreeList(kind)) {
             lists = NULL;
         } else {
@@ -363,7 +334,7 @@ class CellIter : public CellIterImpl
             lists->copyFreeListToArena(kind);
         }
 #ifdef DEBUG
-        counter = &cx->runtime->noGCOrAllocationCheck;
+        counter = &comp->rt->noGCOrAllocationCheck;
         ++*counter;
 #endif
         init(comp, kind);
@@ -384,6 +355,37 @@ class CellIter : public CellIterImpl
 inline void EmptyArenaOp(Arena *arena) {}
 inline void EmptyCellOp(Cell *t) {}
 
+class GCCompartmentsIter {
+  private:
+    JSCompartment **it, **end;
+
+  public:
+    GCCompartmentsIter(JSRuntime *rt) {
+        JS_ASSERT(rt->gcRunning);
+        it = rt->compartments.begin();
+        end = rt->compartments.end();
+        if (!(*it)->isCollecting())
+            next();
+    }
+
+    bool done() const { return it == end; }
+
+    void next() {
+        JS_ASSERT(!done());
+        do {
+            it++;
+        } while (it != end && !(*it)->isCollecting());
+    }
+
+    JSCompartment *get() const {
+        JS_ASSERT(!done());
+        return *it;
+    }
+
+    operator JSCompartment *() const { return get(); }
+    JSCompartment *operator->() const { return get(); }
+};
+
 /*
  * Allocates a new GC thing. After a successful allocation the caller must
  * fully initialize the thing before calling any function that can potentially
@@ -403,12 +405,15 @@ NewGCThing(JSContext *cx, js::gc::AllocKind kind, size_t thingSize)
     JS_ASSERT(!cx->runtime->gcRunning);
     JS_ASSERT(!cx->runtime->noGCOrAllocationCheck);
 
+    /* For testing out of memory conditions */
+    JS_OOM_POSSIBLY_FAIL_REPORT(cx);
+
 #ifdef JS_GC_ZEAL
     if (cx->runtime->needZealousGC())
         js::gc::RunDebugGC(cx);
 #endif
 
-    js::gc::MaybeCheckStackRoots(cx);
+    MaybeCheckStackRoots(cx);
 
     JSCompartment *comp = cx->compartment;
     void *t = comp->arenas.allocateFromFreeList(kind, thingSize);

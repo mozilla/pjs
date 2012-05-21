@@ -1,45 +1,74 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Kan-Ru Chen <kchen@mozilla.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
-[scriptable, uuid(6ec16abc-2fe8-4ab3-99b0-0f08405be81b)]
+interface nsIDOMMozWakeLockListener;
+
+/**
+ * This interface implements navigator.mozPower
+ */
+[scriptable, uuid(256a3287-f528-45b5-9ba8-2b3650c056e6)]
 interface nsIDOMMozPowerManager : nsISupports
 {
-    void powerOff();
-    void reboot();
+    void    powerOff();
+    void    reboot();
+
+    /**
+     * The listeners are notified when a resource changes its lock state to:
+     *  - unlocked
+     *  - locked but not visible
+     *  - locked and visible
+     */
+    void    addWakeLockListener(in nsIDOMMozWakeLockListener aListener);
+    void    removeWakeLockListener(in nsIDOMMozWakeLockListener aListener);
+
+    /**
+     * Query the wake lock state of the topic.
+     *
+     * Possible states are:
+     *
+     *  - "unlocked" - nobody holds the wake lock.
+     *
+     *  - "locked-foreground" - at least one window holds the wake lock,
+     *    and it is visible.
+     *
+     *  - "locked-background" - at least one window holds the wake lock,
+     *    but all of them are hidden.
+     *
+     * @param aTopic The resource name related to the wake lock.
+     */
+    DOMString getWakeLockState(in DOMString aTopic);
+
+    /**
+     * Is the device's screen currently enabled?  This attribute controls the
+     * device's screen, so setting it to false will turn off the screen.
+     */
+    attribute boolean screenEnabled;
+
+    /**
+     * How bright is the screen's backlight, on a scale from 0 (very dim) to 1
+     * (full brightness)?  Setting this attribute modifies the screen's
+     * brightness.
+     *
+     * You can read and write this attribute even when the screen is disabled,
+     * but the backlight is off while the screen is disabled.
+     *
+     * If you write a value of X into this attribute, the attribute may not have
+     * the same value X when you later read it.  Most screens don't support as
+     * many different brightness levels as there are doubles between 0 and 1, so
+     * we may reduce the value's precision before storing it.
+     *
+     * @throw NS_ERROR_INVALID_ARG if brightness is not in the range [0, 1].
+     */
+    attribute double screenBrightness;
+
+    /**
+     * Is it possible that the device's CPU will sleep after the screen is
+     * disabled?  Setting this attribute to false will prevent the device
+     * entering suspend state.
+     */
+    attribute boolean cpuSleepAllowed;
 };

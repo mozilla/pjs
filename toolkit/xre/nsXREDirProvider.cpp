@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Brian Ryner <bryner@brianryner.com>
- *  Benjamin Smedberg <bsmedberg@covad.net>
- *  Ben Goodger <ben@mozilla.org>
- *  Jens Bannmann <jens.b@web.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsAppRunner.h"
 #include "nsToolkitCompsCID.h"
@@ -45,7 +9,7 @@
 
 #include "jsapi.h"
 
-#include "nsIJSContextStack.h"
+#include "nsIJSRuntimeService.h"
 #include "nsIAppStartup.h"
 #include "nsIDirectoryEnumerator.h"
 #include "nsILocalFile.h"
@@ -70,6 +34,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 
 #include <stdlib.h>
 
@@ -424,24 +389,26 @@ nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
 }
 
 static void
-LoadAppDirIntoArray(nsIFile* aXULAppDir,
-                    const char *const *aAppendList,
-                    nsCOMArray<nsIFile>& aDirectories)
+LoadDirIntoArray(nsIFile* dir,
+                 const char *const *aAppendList,
+                 nsCOMArray<nsIFile>& aDirectories)
 {
-  if (!aXULAppDir)
+  if (!dir)
     return;
 
   nsCOMPtr<nsIFile> subdir;
-  aXULAppDir->Clone(getter_AddRefs(subdir));
+  dir->Clone(getter_AddRefs(subdir));
   if (!subdir)
     return;
 
-  for (; *aAppendList; ++aAppendList)
-    subdir->AppendNative(nsDependentCString(*aAppendList));
+  for (const char *const *a = aAppendList; *a; ++a) {
+    subdir->AppendNative(nsDependentCString(*a));
+  }
 
   bool exists;
-  if (NS_SUCCEEDED(subdir->Exists(&exists)) && exists)
+  if (NS_SUCCEEDED(subdir->Exists(&exists)) && exists) {
     aDirectories.AppendObject(subdir);
+  }
 }
 
 static void
@@ -460,11 +427,11 @@ LoadDirsIntoArray(nsCOMArray<nsIFile>& aSourceDirs,
     nsCAutoString leaf;
     appended->GetNativeLeafName(leaf);
     if (!Substring(leaf, leaf.Length() - 4).Equals(NS_LITERAL_CSTRING(".xpi"))) {
-      for (const char *const *a = aAppendList; *a; ++a)
-        appended->AppendNative(nsDependentCString(*a));
+      LoadDirIntoArray(appended,
+                       aAppendList,
+                       aDirectories);
     }
-
-    if (NS_SUCCEEDED(appended->Exists(&exists)) && exists)
+    else if (NS_SUCCEEDED(appended->Exists(&exists)) && exists)
       aDirectories.AppendObject(appended);
   }
 }
@@ -641,7 +608,7 @@ nsXREDirProvider::GetFilesInternal(const char* aProperty,
   else if (!strcmp(aProperty, NS_APP_PREFS_DEFAULTS_DIR_LIST)) {
     nsCOMArray<nsIFile> directories;
 
-    LoadAppDirIntoArray(mXULAppDir, kAppendPrefDir, directories);
+    LoadDirIntoArray(mXULAppDir, kAppendPrefDir, directories);
     LoadDirsIntoArray(mAppBundleDirectories,
                       kAppendPrefDir, directories);
 
@@ -671,9 +638,9 @@ nsXREDirProvider::GetFilesInternal(const char* aProperty,
 
     static const char *const kAppendChromeDir[] = { "chrome", nsnull };
     nsCOMArray<nsIFile> directories;
-    LoadAppDirIntoArray(mXULAppDir,
-                        kAppendChromeDir,
-                        directories);
+    LoadDirIntoArray(mXULAppDir,
+                     kAppendChromeDir,
+                     directories);
     LoadDirsIntoArray(mAppBundleDirectories,
                       kAppendChromeDir,
                       directories);
@@ -779,6 +746,16 @@ nsXREDirProvider::DoStartup()
       obsSvc->NotifyObservers(nsnull, "safemode-forced", kCrashed);
     }
 
+    // 1 = Regular mode, 2 = Safe mode, 3 = Safe mode forced
+    int mode = 1;
+    if (gSafeMode) {
+      if (safeModeNecessary)
+        mode = 3;
+      else
+        mode = 2;
+    }
+    mozilla::Telemetry::Accumulate(mozilla::Telemetry::SAFE_MODE_USAGE, mode);
+
     obsSvc->NotifyObservers(nsnull, "profile-initial-state", nsnull);
   }
   return NS_OK;
@@ -826,14 +803,15 @@ nsXREDirProvider::DoShutdown()
 
       // Phase 2c: Now that things are torn down, force JS GC so that things which depend on
       // resources which are about to go away in "profile-before-change" are destroyed first.
-      nsCOMPtr<nsIThreadJSContextStack> stack
-        (do_GetService("@mozilla.org/js/xpc/ContextStack;1"));
-      if (stack)
+
+      nsCOMPtr<nsIJSRuntimeService> rtsvc
+        (do_GetService("@mozilla.org/js/xpc/RuntimeService;1"));
+      if (rtsvc)
       {
-        JSContext *cx = nsnull;
-        stack->GetSafeJSContext(&cx);
-        if (cx)
-          ::JS_GC(cx);
+        JSRuntime *rt = nsnull;
+        rtsvc->GetRuntime(&rt);
+        if (rt)
+          ::JS_GC(rt);
       }
 
       // Phase 3: Notify observers of a profile change
@@ -1092,7 +1070,7 @@ nsXREDirProvider::GetUserDataDirectoryHome(nsILocalFile** aFile, bool aLocal)
     rv = NS_NewNativeLocalFile(nsDependentCString(appDir), true, getter_AddRefs(localDir));
   }
 #elif defined(MOZ_WIDGET_GONK)
-  rv = NS_NewNativeLocalFile(NS_LITERAL_CSTRING("/data/b2g"), PR_TRUE,
+  rv = NS_NewNativeLocalFile(NS_LITERAL_CSTRING("/data/b2g"), true,
                              getter_AddRefs(localDir));
 #elif defined(XP_UNIX)
   const char* homeDir = getenv("HOME");

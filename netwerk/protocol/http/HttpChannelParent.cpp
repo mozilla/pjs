@@ -1,49 +1,14 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=2 ts=8 et tw=80 : */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jason Duell <jduell.mcbugs@gmail.com>
- *   Honza Bambas <honzab@firemni.cz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/net/HttpChannelParent.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/net/NeckoParent.h"
 #include "mozilla/unused.h"
 #include "HttpChannelParentListener.h"
-#include "nsHttpChannel.h"
 #include "nsHttpHandler.h"
 #include "nsNetUtil.h"
 #include "nsISupportsPriority.h"
@@ -331,11 +296,6 @@ HttpChannelParent::RecvUpdateAssociatedContentSecurity(const PRInt32& high,
   return true;
 }
 
-// Bug 621446 investigation, we don't want conditional PR_Aborts bellow to be
-// merged to a single address.
-#pragma warning(disable : 4068)
-#pragma GCC optimize ("O0")
-
 bool
 HttpChannelParent::RecvRedirect2Verify(const nsresult& result, 
                                        const RequestHeaderTuples& changedHeaders)
@@ -354,28 +314,31 @@ HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
   }
 
   if (!mRedirectCallback) {
-    // Bug 621446 investigation (optimization turned off above)
+    // This should according the logic never happen, log the situation.
     if (mReceivedRedirect2Verify)
-      NS_RUNTIMEABORT("Duplicate fire");
+      LOG(("RecvRedirect2Verify[%p]: Duplicate fire", this));
     if (mSentRedirect1BeginFailed)
-      NS_RUNTIMEABORT("Send to child failed");
+      LOG(("RecvRedirect2Verify[%p]: Send to child failed", this));
     if (mSentRedirect1Begin && NS_FAILED(result))
-      NS_RUNTIMEABORT("Redirect failed");
+      LOG(("RecvRedirect2Verify[%p]: Redirect failed", this));
     if (mSentRedirect1Begin && NS_SUCCEEDED(result))
-      NS_RUNTIMEABORT("Redirect succeeded");
+      LOG(("RecvRedirect2Verify[%p]: Redirect succeeded", this));
     if (!mRedirectChannel)
-      NS_RUNTIMEABORT("Missing redirect channel");
+      LOG(("RecvRedirect2Verify[%p]: Missing redirect channel", this));
+
+    NS_ERROR("Unexpcted call to HttpChannelParent::RecvRedirect2Verify, "
+             "mRedirectCallback null");
   }
 
   mReceivedRedirect2Verify = true;
 
-  mRedirectCallback->OnRedirectVerifyCallback(result);
-  mRedirectCallback = nsnull;
+  if (mRedirectCallback) {
+    mRedirectCallback->OnRedirectVerifyCallback(result);
+    mRedirectCallback = nsnull;
+  }
+
   return true;
 }
-
-// Bug 621446 investigation
-#pragma GCC reset_options
 
 bool
 HttpChannelParent::RecvDocumentChannelCleanup()
@@ -389,8 +352,11 @@ HttpChannelParent::RecvDocumentChannelCleanup()
 bool 
 HttpChannelParent::RecvMarkOfflineCacheEntryAsForeign()
 {
-  nsHttpChannel *httpChan = static_cast<nsHttpChannel *>(mChannel.get());
-  httpChan->MarkOfflineCacheEntryAsForeign();
+  if (mOfflineForeignMarker) {
+    mOfflineForeignMarker->MarkAsForeign();
+    mOfflineForeignMarker = 0;
+  }
+
   return true;
 }
 
@@ -416,6 +382,7 @@ HttpChannelParent::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
   bool loadedFromApplicationCache;
   chan->GetLoadedFromApplicationCache(&loadedFromApplicationCache);
   if (loadedFromApplicationCache) {
+    mOfflineForeignMarker = chan->GetOfflineCacheEntryAsForeignMarker();
     nsCOMPtr<nsIApplicationCache> appCache;
     chan->GetApplicationCache(getter_AddRefs(appCache));
     nsCString appCacheGroupId;

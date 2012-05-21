@@ -1,41 +1,8 @@
 /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Tilt: A WebGL-based 3D visualization of a webpage.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Victor Porof <vporof@mozilla.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the LGPL or the GPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- ***** END LICENSE BLOCK *****/
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
 const Cc = Components.classes;
@@ -92,6 +59,8 @@ TiltGL.Renderer = function TGL_Renderer(aCanvas, onError, onLoad)
    */
   this.width = aCanvas.width;
   this.height = aCanvas.height;
+  this.initialWidth = this.width;
+  this.initialHeight = this.height;
 
   /**
    * The current model view matrix.
@@ -864,19 +833,27 @@ TiltGL.Program.prototype = {
 
       // use the the program if it wasn't already set
       this._context.useProgram(this._ref);
+      this.cleanupVertexAttrib();
 
-      // check if the required vertex attributes aren't already set
-      if (utils._enabledAttributes < this._attributes.length) {
-        utils._enabledAttributes = this._attributes.length;
-
-        // enable any necessary vertex attributes using the cache
-        for (let i in this._attributes) {
-          if (this._attributes.hasOwnProperty(i)) {
-            this._context.enableVertexAttribArray(this._attributes[i]);
-          }
-        }
+      // enable any necessary vertex attributes using the cache
+      for each (let attribute in this._attributes) {
+        this._context.enableVertexAttribArray(attribute);
+        utils._enabledAttributes.push(attribute);
       }
     }
+  },
+
+  /**
+   * Disables all currently enabled vertex attribute arrays.
+   */
+  cleanupVertexAttrib: function TGLP_cleanupVertexAttrib()
+  {
+    let utils = TiltGL.ProgramUtils;
+
+    for each (let attribute in utils._enabledAttributes) {
+      this._context.disableVertexAttribArray(attribute);
+    }
+    utils._enabledAttributes = [];
   },
 
   /**
@@ -949,9 +926,9 @@ TiltGL.Program.prototype = {
   {
     let gl = this._context;
 
-    gl.uniform1i(this._uniforms[aSampler], 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, aTexture._ref);
+    gl.uniform1i(this._uniforms[aSampler], 0);
   },
 
   /**
@@ -1177,7 +1154,7 @@ TiltGL.ProgramUtils = {
   /**
    * Represents the current enabled attributes.
    */
-  _enabledAttributes: -1
+  _enabledAttributes: []
 };
 
 /**
@@ -1415,7 +1392,7 @@ TiltGL.TextureUtils = {
 
   /**
    * This shim renders a content window to a canvas element, but clamps the
-   * maximum width and height of the canvas to half the WebGL MAX_TEXTURE_SIZE.
+   * maximum width and height of the canvas to the WebGL MAX_TEXTURE_SIZE.
    *
    * @param {Window} aContentWindow
    *                 the content window to get a texture from
@@ -1615,5 +1592,5 @@ TiltGL.create3DContext = function TGL_create3DContext(aCanvas, aFlags)
 TiltGL.clearCache = function TGL_clearCache()
 {
   TiltGL.ProgramUtils._activeProgram = -1;
-  TiltGL.ProgramUtils._enabledAttributes = -1;
+  TiltGL.ProgramUtils._enabledAttributes = [];
 };

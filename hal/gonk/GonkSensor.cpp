@@ -11,9 +11,22 @@
 #include "hardware/sensors.h"
 #include "mozilla/Util.h"
 #include "SensorDevice.h"
+#include "nsThreadUtils.h"
+
+#include <android/log.h>
 
 using namespace mozilla::hal;
 using namespace android;
+
+#define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "GonkSensor" , ## args)
+
+namespace mozilla {
+
+#define DEFAULT_DEVICE_POLL_RATE 100000000 /*100ms*/
+
+double radToDeg(double a) {
+  return a * (180.0 / M_PI);
+}
 
 static SensorType
 HardwareSensorToHalSensor(int type)
@@ -25,9 +38,20 @@ HardwareSensorToHalSensor(int type)
       return SENSOR_ACCELERATION;
     case SENSOR_TYPE_PROXIMITY:
       return SENSOR_PROXIMITY;
+    case SENSOR_TYPE_LIGHT:
+      return SENSOR_LIGHT;
+    case SENSOR_TYPE_GYROSCOPE:
+      return SENSOR_GYROSCOPE;
+    case SENSOR_TYPE_LINEAR_ACCELERATION:
+      return SENSOR_LINEAR_ACCELERATION;
     default:
       return SENSOR_UNKNOWN;
   }
+}
+
+static SensorAccuracyType
+HardwareStatusToHalAccuracy(int status) {
+  return static_cast<SensorAccuracyType>(status);
 }
 
 static int
@@ -40,92 +64,191 @@ HalSensorToHardwareSensor(SensorType type)
       return SENSOR_TYPE_ACCELEROMETER;
     case SENSOR_PROXIMITY:
       return SENSOR_TYPE_PROXIMITY;
+    case SENSOR_LIGHT:
+      return SENSOR_TYPE_LIGHT;
+    case SENSOR_GYROSCOPE:
+      return SENSOR_TYPE_GYROSCOPE;
+    case SENSOR_LINEAR_ACCELERATION:
+      return SENSOR_TYPE_LINEAR_ACCELERATION;
     default:
       return -1;
   }
 }
 
-static bool
-SensorseventToSensorData(const sensors_event_t& data, SensorData* aSensorData)
+static int
+SensorseventStatus(const sensors_event_t& data)
 {
-  aSensorData->sensor() = HardwareSensorToHalSensor(data.type);
-
-  if (aSensorData->sensor() == SENSOR_UNKNOWN)
-    return false;
-
-  aSensorData->timestamp() = data.timestamp;
-  aSensorData->values()[0] = data.data[0];
-  aSensorData->values()[1] = data.data[1];
-  aSensorData->values()[2] = data.data[2];
-  return true;
-}
-
-static void
-onSensorChanged(const sensors_event_t& data, SensorData* aSensorData)
-{
-  mozilla::DebugOnly<bool> convertedData = SensorseventToSensorData(data, aSensorData);
-  MOZ_ASSERT(convertedData);
-  NotifySensorChange(*aSensorData);
-}
-
-namespace mozilla {
-namespace hal_impl {
-
-static pthread_t sThread;
-static bool sInitialized = false;
-static bool sContinue = false;
-static int sActivatedSensors = 0;
-static SensorData sSensordata[NUM_SENSOR_TYPE];
-
-static void*
-UpdateSensorData(void* /*unused*/)
-{
-  SensorDevice &device = SensorDevice::getInstance();
-  const size_t numEventMax = 16;
-  sensors_event_t buffer[numEventMax];
-  int count = 0;
-
-  while (sContinue) {
-    count = device.poll(buffer, numEventMax);
-    if (count < 0) {
-      continue;
-    }
-
-    for (int i=0; i<count; i++) {
-      onSensorChanged(buffer[i], &sSensordata[HardwareSensorToHalSensor(buffer[i].type)]);
-    }
+  int type = data.type;
+  switch(type) {
+    case SENSOR_ORIENTATION:
+      return data.orientation.status;
+    case SENSOR_LINEAR_ACCELERATION:
+    case SENSOR_ACCELERATION:
+      return data.acceleration.status;
+    case SENSOR_GYROSCOPE:
+      return data.gyro.status;
   }
 
-  return NULL;
+  return SENSOR_STATUS_UNRELIABLE;
 }
 
-static void 
-InitialResources()
+class SensorRunnable : public nsRunnable
 {
-  pthread_create(&sThread, NULL, &UpdateSensorData, NULL);
-  sInitialized = true;
-  sContinue = true;
-}
+public:
+  SensorRunnable(const sensors_event_t& data)
+  {
+    mSensorData.sensor() = HardwareSensorToHalSensor(data.type);
+    if (mSensorData.sensor() == SENSOR_UNKNOWN) {
+      // Emulator is broken and gives us events without types set
+      const sensor_t* sensors = NULL;
+      SensorDevice& device = SensorDevice::getInstance();
+      ssize_t size = device.getSensorList(&sensors);
+      if (data.sensor < size)
+        mSensorData.sensor() = HardwareSensorToHalSensor(sensors[data.sensor].type);
+    }
+    mSensorData.accuracy() = HardwareStatusToHalAccuracy(SensorseventStatus(data));
+    mSensorData.timestamp() = data.timestamp;
+    if (mSensorData.sensor() == SENSOR_GYROSCOPE) {
+      // libhardware returns gyro as rad.  convert.
+      mSensorValues.AppendElement(radToDeg(data.data[0]));
+      mSensorValues.AppendElement(radToDeg(data.data[1]));
+      mSensorValues.AppendElement(radToDeg(data.data[2]));
+    } else if (mSensorData.sensor() == SENSOR_PROXIMITY) {
+      mSensorValues.AppendElement(data.data[0]);
+      mSensorValues.AppendElement(0);     
 
-static void 
-ReleaseResources()
-{
-  sContinue = false;
-  pthread_join(sThread, NULL);
-  sInitialized = false;
-}
+      // Determine the maxRange for this sensor.
+      const sensor_t* sensors = NULL;
+      ssize_t size = SensorDevice::getInstance().getSensorList(&sensors);
+      for (ssize_t i = 0; i < size; i++) {
+        if (sensors[i].type == SENSOR_TYPE_PROXIMITY) {
+          mSensorValues.AppendElement(sensors[i].maxRange);     
+        }
+      }
+    } else if (mSensorData.sensor() == SENSOR_LIGHT) {
+      mSensorValues.AppendElement(data.data[0]);
+    } else {
+      mSensorValues.AppendElement(data.data[0]);
+      mSensorValues.AppendElement(data.data[1]);
+      mSensorValues.AppendElement(data.data[2]);
+    }
+    mSensorData.values() = mSensorValues;
+  }
+
+  ~SensorRunnable() {}
+
+  NS_IMETHOD Run()
+  {
+    NotifySensorChange(mSensorData);
+    return NS_OK;
+  }
+
+private:
+  SensorData mSensorData;
+  InfallibleTArray<float> mSensorValues;
+};
+
+namespace hal_impl {
+
+class SensorStatus {
+public:
+  SensorData data;
+  DebugOnly<int> count;
+};
+
+static int sActivatedSensors = 0;
+static SensorStatus sSensorStatus[NUM_SENSOR_TYPE];
+static nsCOMPtr<nsIThread> sSwitchThread;
+
+class PollSensor {
+  public:
+    NS_INLINE_DECL_REFCOUNTING(PollSensor);
+ 
+    static nsCOMPtr<nsIRunnable> GetRunnable() {
+      if (!mRunnable)
+        mRunnable = NS_NewRunnableMethod(new PollSensor(), &PollSensor::Poll);
+      return mRunnable;
+    }
+ 
+    void Poll() {
+      if (!sActivatedSensors) {
+        return;
+      }
+
+      SensorDevice &device = SensorDevice::getInstance();
+      const size_t numEventMax = 16;
+      sensors_event_t buffer[numEventMax];
+
+      int n = device.poll(buffer, numEventMax);
+      if (n < 0) {
+        LOG("Error polling for sensor data (err=%d)", n);
+        return;
+      }
+
+      for (int i = 0; i < n; ++i) {
+        NS_DispatchToMainThread(new SensorRunnable(buffer[i]));
+      }
+
+      if (sActivatedSensors) {
+        sSwitchThread->Dispatch(GetRunnable(), NS_DISPATCH_NORMAL);
+      }
+    }
+  private:
+    static nsCOMPtr<nsIRunnable> mRunnable;
+};
+
+nsCOMPtr<nsIRunnable> PollSensor::mRunnable = NULL;
+
+class SwitchSensor {
+  public:
+    NS_INLINE_DECL_REFCOUNTING(SwitchSensor)
+    
+    SwitchSensor(bool aActivate, sensor_t aSensor, pthread_t aThreadId) :
+      mActivate(aActivate), mSensor(aSensor), mThreadId(aThreadId) { }
+
+    void Switch() {
+      int index = HardwareSensorToHalSensor(mSensor.type);
+
+      MOZ_ASSERT(sSensorStatus[index].count == 0 || mActivate);
+
+      SensorDevice& device = SensorDevice::getInstance();
+      
+      device.activate((void*)mThreadId, mSensor.handle, mActivate);
+      device.setDelay((void*)mThreadId, mSensor.handle, DEFAULT_DEVICE_POLL_RATE);
+
+      if (mActivate) {
+        if (++sActivatedSensors == 1) {
+          sSwitchThread->Dispatch(PollSensor::GetRunnable(), NS_DISPATCH_NORMAL);
+        }
+        sSensorStatus[index].count++;
+      } else {
+        sSensorStatus[index].count--;
+        --sActivatedSensors;
+      }
+    }
+  
+  protected:
+    SwitchSensor() { };
+    bool      mActivate;
+    sensor_t  mSensor;
+    pthread_t mThreadId;
+};
+
 
 static void
-SensorSwitch(SensorType aSensor, bool activate)
+SetSensorState(SensorType aSensor, bool activate)
 {
   int type = HalSensorToHardwareSensor(aSensor);
   const sensor_t* sensors = NULL;
   SensorDevice& device = SensorDevice::getInstance();
-  size_t size = device.getSensorList(&sensors);
-
-  for (size_t i=0; i<size; i++) {
+  ssize_t size = device.getSensorList(&sensors);
+  for (ssize_t i = 0; i < size; i++) {
     if (sensors[i].type == type) {
-      device.activate((void*)pthread_self(), sensors[i].handle, activate);
+      // Post an event to the sensor thread
+      nsCOMPtr<nsIRunnable> event = NS_NewRunnableMethod(new SwitchSensor(activate, sensors[i], pthread_self()),
+                                                         &SwitchSensor::Switch);
+
+      sSwitchThread->Dispatch(event, NS_DISPATCH_NORMAL);
       break;
     }
   }
@@ -134,33 +257,17 @@ SensorSwitch(SensorType aSensor, bool activate)
 void
 EnableSensorNotifications(SensorType aSensor) 
 {
-  if (!sInitialized) {
-    InitialResources();
+  if (sSwitchThread == nsnull) {
+    NS_NewThread(getter_AddRefs(sSwitchThread));
   }
   
-  SensorSwitch(aSensor, true);
-  sActivatedSensors++;
+  SetSensorState(aSensor, true);
 }
 
 void
 DisableSensorNotifications(SensorType aSensor) 
 {
-  if (!sInitialized) {
-    NS_WARNING("Disable sensors without initializing first");
-    return;
-  }
-  
-  SensorSwitch(aSensor, false);  
-  sActivatedSensors--;
-
-  if (!sActivatedSensors) {
-    ReleaseResources();  
-  }
-}
-
-void 
-GetCurrentSensorDataInformation(SensorType aSensor, SensorData* aSensorData) {
-  *aSensorData = sSensordata[aSensor];
+  SetSensorState(aSensor, false);
 }
 
 } // hal_impl

@@ -1,47 +1,17 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *  Chris Pearce <chris@pearce.org.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "nsError.h"
 #include "nsBuiltinDecoderStateMachine.h"
 #include "nsBuiltinDecoder.h"
 #include "nsOggReader.h"
 #include "VideoUtils.h"
 #include "theora/theoradec.h"
+#ifdef MOZ_OPUS
+#include "opus/opus.h"
+#endif
 #include "nsTimeRanges.h"
 #include "mozilla/TimeStamp.h"
 
@@ -105,6 +75,8 @@ nsOggReader::nsOggReader(nsBuiltinDecoder* aDecoder)
   : nsBuiltinDecoderReader(aDecoder),
     mTheoraState(nsnull),
     mVorbisState(nsnull),
+    mOpusState(nsnull),
+    mOpusEnabled(nsHTMLMediaElement::IsOpusEnabled()),
     mSkeletonState(nsnull),
     mVorbisSerial(0),
     mTheoraSerial(0),
@@ -121,11 +93,7 @@ nsOggReader::~nsOggReader()
 }
 
 nsresult nsOggReader::Init(nsBuiltinDecoderReader* aCloneDonor) {
-  bool init = mCodecStates.Init();
-  NS_ASSERTION(init, "Failed to initialize mCodecStates");
-  if (!init) {
-    return NS_ERROR_FAILURE;
-  }
+  mCodecStates.Init();
   int ret = ogg_sync_init(&mOggState);
   NS_ENSURE_TRUE(ret == 0, NS_ERROR_FAILURE);
   return NS_OK;
@@ -143,6 +111,9 @@ nsresult nsOggReader::ResetDecode()
   // Discard any previously buffered packets/pages.
   ogg_sync_reset(&mOggState);
   if (mVorbisState && NS_FAILED(mVorbisState->Reset())) {
+    res = NS_ERROR_FAILURE;
+  }
+  if (mOpusState && NS_FAILED(mOpusState->Reset())) {
     res = NS_ERROR_FAILURE;
   }
   if (mTheoraState && NS_FAILED(mTheoraState->Reset())) {
@@ -197,8 +168,7 @@ nsresult nsOggReader::ReadMetadata(nsVideoInfo* aInfo)
       // an nsOggCodecState to demux it, and map that to the nsOggCodecState
       // in mCodecStates.
       codecState = nsOggCodecState::Create(&page);
-      DebugOnly<bool> r = mCodecStates.Put(serial, codecState);
-      NS_ASSERTION(r, "Failed to insert into mCodecStates");
+      mCodecStates.Put(serial, codecState);
       bitstreams.AppendElement(codecState);
       mKnownStreams.AppendElement(serial);
       if (codecState &&
@@ -216,6 +186,17 @@ nsresult nsOggReader::ReadMetadata(nsVideoInfo* aInfo)
         // First Theora bitstream, we'll play this one. Subsequent Theora
         // bitstreams will be ignored.
         mTheoraState = static_cast<nsTheoraState*>(codecState);
+      }
+      if (codecState &&
+          codecState->GetType() == nsOggCodecState::TYPE_OPUS &&
+          !mOpusState)
+      {
+        if (mOpusEnabled) {
+          mOpusState = static_cast<nsOpusState*>(codecState);
+        } else {
+          NS_WARNING("Opus decoding disabled."
+                     " See media.opus.enabled in about:config");
+        }
       }
       if (codecState &&
           codecState->GetType() == nsOggCodecState::TYPE_SKELETON &&
@@ -240,7 +221,8 @@ nsresult nsOggReader::ReadMetadata(nsVideoInfo* aInfo)
   // Deactivate any non-primary bitstreams.
   for (PRUint32 i = 0; i < bitstreams.Length(); i++) {
     nsOggCodecState* s = bitstreams[i];
-    if (s != mVorbisState && s != mTheoraState && s != mSkeletonState) {
+    if (s != mVorbisState && s != mOpusState &&
+        s != mTheoraState && s != mSkeletonState) {
       s->Deactivate();
     }
   }
@@ -290,7 +272,13 @@ nsresult nsOggReader::ReadMetadata(nsVideoInfo* aInfo)
   } else {
     memset(&mVorbisInfo, 0, sizeof(mVorbisInfo));
   }
-
+#ifdef MOZ_OPUS
+  if (mOpusState && ReadHeaders(mOpusState)) {
+    mInfo.mHasAudio = true;
+    mInfo.mAudioRate = mOpusState->mRate;
+    mInfo.mAudioChannels = mOpusState->mChannels;
+  }
+#endif
   if (mSkeletonState) {
     if (!HasAudio() && !HasVideo()) {
       // We have a skeleton track, but no audio or video, may as well disable
@@ -386,20 +374,84 @@ nsresult nsOggReader::DecodeVorbis(ogg_packet* aPacket) {
   }
   return NS_OK;
 }
+#ifdef MOZ_OPUS
+nsresult nsOggReader::DecodeOpus(ogg_packet* aPacket) {
+  NS_ASSERTION(aPacket->granulepos != -1, "Must know opus granulepos!");
+
+  PRInt32 frames = opus_decoder_get_nb_samples(mOpusState->mDecoder,
+                                               aPacket->packet,
+                                               aPacket->bytes);
+  if (frames <= 0)
+    return NS_ERROR_FAILURE;
+  PRUint32 channels = mOpusState->mChannels;
+  nsAutoArrayPtr<AudioDataValue> buffer(new AudioDataValue[frames * channels]);
+
+  // Decode to the appropriate sample type.
+#ifdef MOZ_SAMPLE_TYPE_FLOAT32
+  int ret = opus_decode_float(mOpusState->mDecoder,
+                              aPacket->packet, aPacket->bytes,
+                              buffer, frames, false);
+#else
+  int ret = opus_decode(mOpusState->mDecoder,
+                        aPacket->packet, aPacket->bytes,
+                        buffer, frames, false);
+#endif
+  if (ret < 0)
+    return NS_ERROR_FAILURE;
+  NS_ASSERTION(ret == frames, "Opus decoded too few audio samples");
+
+  PRInt64 endFrame = aPacket->granulepos;
+  PRInt64 endTime = mOpusState->Time(endFrame);
+  PRInt64 startTime = mOpusState->Time(endFrame - frames);
+  PRInt64 duration = endTime - startTime;
+
+  // Trim the initial samples.
+  if (endTime < 0)
+    return NS_OK;
+  if (startTime < 0) {
+    PRInt32 skip = mOpusState->mPreSkip;
+    PRInt32 goodFrames = frames - skip;
+    NS_ASSERTION(goodFrames > 0, "endTime calculation was wrong");
+    nsAutoArrayPtr<AudioDataValue> goodBuffer(new AudioDataValue[goodFrames * channels]);
+    for (PRInt32 i = 0; i < goodFrames * PRInt32(channels); i++)
+      goodBuffer[i] = buffer[skip*channels + i];
+
+    startTime = mOpusState->Time(endFrame - goodFrames);
+    duration = endTime - startTime;
+    frames = goodFrames;
+    buffer = goodBuffer;
+  }
+
+  mAudioQueue.Push(new AudioData(mPageOffset,
+                                 startTime,
+                                 duration,
+                                 frames,
+                                 buffer.forget(),
+                                 channels));
+  return NS_OK;
+}
+#endif /* MOZ_OPUS */
 
 bool nsOggReader::DecodeAudioData()
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
-  NS_ASSERTION(mVorbisState!=0, "Need Vorbis state to decode audio");
+  NS_ASSERTION(mVorbisState != nsnull || mOpusState != nsnull,
+    "Need audio codec state to decode audio");
 
   // Read the next data packet. Skip any non-data packets we encounter.
   ogg_packet* packet = 0;
+  nsOggCodecState* codecState;
+  if (mVorbisState)
+    codecState = static_cast<nsOggCodecState*>(mVorbisState);
+  else
+    codecState = static_cast<nsOggCodecState*>(mOpusState);
   do {
     if (packet) {
       nsOggCodecState::ReleasePacket(packet);
     }
-    packet = NextOggPacket(mVorbisState);
-  } while (packet && mVorbisState->IsHeader(packet));
+    packet = NextOggPacket(codecState);
+  } while (packet && codecState->IsHeader(packet));
+
   if (!packet) {
     mAudioQueue.Finish();
     return false;
@@ -408,7 +460,14 @@ bool nsOggReader::DecodeAudioData()
   NS_ASSERTION(packet && packet->granulepos != -1,
     "Must have packet with known granulepos");
   nsAutoReleasePacket autoRelease(packet);
-  DecodeVorbis(packet);
+  if (mVorbisState) {
+    DecodeVorbis(packet);
+#ifdef MOZ_OPUS
+  } else if (mOpusState) {
+    DecodeOpus(packet);
+#endif
+  }
+
   if (packet->e_o_s) {
     // We've encountered an end of bitstream packet, or we've hit the end of
     // file while trying to decode, so inform the audio queue that there'll
@@ -1165,7 +1224,7 @@ nsresult nsOggReader::SeekBisection(PRInt64 aTarget,
   ogg_int64_t seekTarget = aTarget;
   PRInt64 seekLowerBound = NS_MAX(static_cast<PRInt64>(0), aTarget - aFuzz);
   int hops = 0;
-  ogg_int64_t previousGuess = -1;
+  DebugOnly<ogg_int64_t> previousGuess = -1;
   int backsteps = 0;
   const int maxBackStep = 10;
   NS_ASSERTION(static_cast<PRUint64>(PAGE_STEP) * pow(2.0, maxBackStep) < PR_INT32_MAX,
@@ -1295,11 +1354,14 @@ nsresult nsOggReader::SeekBisection(PRInt64 aTarget,
 
         ogg_int64_t granulepos = ogg_page_granulepos(&page);
 
-        if (HasAudio() &&
-            granulepos > 0 &&
-            serial == mVorbisState->mSerial &&
-            audioTime == -1) {
-          audioTime = mVorbisState->Time(granulepos);
+        if (HasAudio() && granulepos > 0 && audioTime == -1) {
+          if (mVorbisState && serial == mVorbisState->mSerial) {
+            audioTime = mVorbisState->Time(granulepos);
+#ifdef MOZ_OPUS
+          } else if (mOpusState && serial == mOpusState->mSerial) {
+            audioTime = mOpusState->Time(granulepos);
+#endif
+          }
         }
         
         if (HasVideo() &&

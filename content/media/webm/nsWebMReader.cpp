@@ -1,49 +1,21 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *  Chris Pearce <chris@pearce.org.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "nsError.h"
 #include "nsBuiltinDecoderStateMachine.h"
 #include "nsBuiltinDecoder.h"
 #include "MediaResource.h"
 #include "nsWebMReader.h"
+#include "nsWebMBufferedParser.h"
 #include "VideoUtils.h"
 #include "nsTimeRanges.h"
 #include "mozilla/Preferences.h"
+
+#define VPX_DONT_DEFINE_STDINT_TYPES
+#include "vpx/vp8dx.h"
+#include "vpx/vpx_decoder.h"
 
 using namespace mozilla;
 using namespace mozilla::layers;
@@ -443,12 +415,12 @@ bool nsWebMReader::DecodeAudioPacket(nestegg_packet* aPacket, PRInt64 aOffset)
   // from after the gap.
   CheckedInt64 tstamp_frames = UsecsToFrames(tstamp_usecs, rate);
   CheckedInt64 decoded_frames = UsecsToFrames(mAudioStartUsec, rate);
-  if (!tstamp_frames.valid() || !decoded_frames.valid()) {
+  if (!tstamp_frames.isValid() || !decoded_frames.isValid()) {
     NS_WARNING("Int overflow converting WebM times to frames");
     return false;
   }
   decoded_frames += mAudioFrames;
-  if (!decoded_frames.valid()) {
+  if (!decoded_frames.isValid()) {
     NS_WARNING("Int overflow adding decoded_frames");
     return false;
   }
@@ -456,7 +428,7 @@ bool nsWebMReader::DecodeAudioPacket(nestegg_packet* aPacket, PRInt64 aOffset)
 #ifdef DEBUG
     CheckedInt64 usecs = FramesToUsecs(tstamp_frames.value() - decoded_frames.value(), rate);
     LOG(PR_LOG_DEBUG, ("WebMReader detected gap of %lld, %lld frames, in audio stream\n",
-      usecs.valid() ? usecs.value(): -1,
+      usecs.isValid() ? usecs.value() : -1,
       tstamp_frames.value() - decoded_frames.value()));
 #endif
     mPacketCount++;
@@ -496,21 +468,21 @@ bool nsWebMReader::DecodeAudioPacket(nestegg_packet* aPacket, PRInt64 aOffset)
       }
 
       CheckedInt64 duration = FramesToUsecs(frames, rate);
-      if (!duration.valid()) {
+      if (!duration.isValid()) {
         NS_WARNING("Int overflow converting WebM audio duration");
         return false;
       }
       CheckedInt64 total_duration = FramesToUsecs(total_frames, rate);
-      if (!total_duration.valid()) {
+      if (!total_duration.isValid()) {
         NS_WARNING("Int overflow converting WebM audio total_duration");
         return false;
       }
       
       CheckedInt64 time = total_duration + tstamp_usecs;
-      if (!time.valid()) {
+      if (!time.isValid()) {
         NS_WARNING("Int overflow adding total_duration and tstamp_usecs");
         nestegg_free_packet(aPacket);
-        return PR_FALSE;
+        return false;
       };
 
       total_frames += frames;
@@ -786,24 +758,45 @@ nsresult nsWebMReader::GetBuffered(nsTimeRanges* aBuffered, PRInt64 aStartTime)
   }
 
   // Special case completely cached files.  This also handles local files.
-  if (resource->IsDataCachedToEndOfResource(0)) {
+  bool isFullyCached = resource->IsDataCachedToEndOfResource(0);
+  if (isFullyCached) {
     uint64_t duration = 0;
     if (nestegg_duration(mContext, &duration) == 0) {
       aBuffered->Add(0, duration / NS_PER_S);
     }
-  } else {
+  }
+
+  PRUint32 bufferedLength = 0;
+  aBuffered->GetLength(&bufferedLength);
+
+  // Either we the file is not fully cached, or we couldn't find a duration in
+  // the WebM bitstream.
+  if (!isFullyCached || !bufferedLength) {
     MediaResource* resource = mDecoder->GetResource();
     nsTArray<MediaByteRange> ranges;
     nsresult res = resource->GetCachedRanges(ranges);
     NS_ENSURE_SUCCESS(res, res);
 
-    PRInt64 startTimeOffsetNS = aStartTime * NS_PER_USEC;
     for (PRUint32 index = 0; index < ranges.Length(); index++) {
-      mBufferedState->CalculateBufferedForRange(aBuffered,
-                                                ranges[index].mStart,
-                                                ranges[index].mEnd,
-                                                timecodeScale,
-                                                startTimeOffsetNS);
+      PRUint64 start, end;
+      bool rv = mBufferedState->CalculateBufferedForRange(ranges[index].mStart,
+                                                          ranges[index].mEnd,
+                                                          &start, &end);
+      if (rv) {
+        double startTime = start * timecodeScale / NS_PER_S - aStartTime;
+        double endTime = end * timecodeScale / NS_PER_S - aStartTime;
+
+        // If this range extends to the end of the file, the true end time
+        // is the file's duration.
+        if (resource->IsDataCachedToEndOfResource(ranges[index].mStart)) {
+          uint64_t duration = 0;
+          if (nestegg_duration(mContext, &duration) == 0) {
+            endTime = duration / NS_PER_S;
+          }
+        }
+
+        aBuffered->Add(startTime, endTime);
+      }
     }
   }
 

@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is thebes gfx code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxPlatformMac.h"
 
@@ -57,7 +24,6 @@
 #include "qcms.h"
 
 #include <dlfcn.h>
-#include "mozilla/gfx/2D.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -263,6 +229,108 @@ gfxPlatformMac::UpdateFontList()
     gfxPlatformFontList::PlatformFontList()->UpdateFontList();
     return NS_OK;
 }
+
+static const char kFontArialUnicodeMS[] = "Arial Unicode MS";
+static const char kFontAppleBraille[] = "Apple Braille";
+static const char kFontAppleSymbols[] = "Apple Symbols";
+static const char kFontAppleMyungjo[] = "AppleMyungjo";
+static const char kFontGeneva[] = "Geneva";
+static const char kFontGeezaPro[] = "Geeza Pro";
+static const char kFontHiraginoKakuGothic[] = "Hiragino Kaku Gothic ProN";
+static const char kFontLucidaGrande[] = "Lucida Grande";
+static const char kFontMenlo[] = "Menlo";
+static const char kFontPlantagenetCherokee[] = "Plantagenet Cherokee";
+static const char kFontSTHeiti[] = "STHeiti";
+
+void
+gfxPlatformMac::GetCommonFallbackFonts(const PRUint32 aCh,
+                                       PRInt32 aRunScript,
+                                       nsTArray<const char*>& aFontList)
+{
+    aFontList.AppendElement(kFontLucidaGrande);
+
+    if (!IS_IN_BMP(aCh)) {
+        PRUint32 p = aCh >> 16;
+        if (p == 1) {
+            aFontList.AppendElement(kFontAppleSymbols);
+            aFontList.AppendElement(kFontGeneva);
+        }
+    } else {
+        PRUint32 b = (aCh >> 8) & 0xff;
+
+        switch (b) {
+        case 0x03:
+        case 0x05:
+            aFontList.AppendElement(kFontGeneva);
+            break;
+        case 0x07:
+            aFontList.AppendElement(kFontGeezaPro);
+            break;
+        case 0x10:
+            aFontList.AppendElement(kFontMenlo);
+            break;
+        case 0x13:  // Cherokee
+            aFontList.AppendElement(kFontPlantagenetCherokee);
+            break;
+        case 0x18:  // Mongolian
+            aFontList.AppendElement(kFontSTHeiti);
+            break;
+        case 0x1d:
+        case 0x1e:
+            aFontList.AppendElement(kFontGeneva);
+            break;
+        case 0x20:  // Symbol ranges
+        case 0x21:
+        case 0x22:
+        case 0x23:
+        case 0x24:
+        case 0x25:
+        case 0x26:
+        case 0x27:
+        case 0x29:
+        case 0x2a:
+        case 0x2b:
+        case 0x2e:
+            aFontList.AppendElement(kFontAppleSymbols);
+            aFontList.AppendElement(kFontMenlo);
+            aFontList.AppendElement(kFontGeneva);
+            aFontList.AppendElement(kFontHiraginoKakuGothic);
+            break;
+        case 0x2c:
+        case 0x2d:
+            aFontList.AppendElement(kFontGeneva);
+            break;
+        case 0x28:  // Braille
+            aFontList.AppendElement(kFontAppleBraille);
+            break;
+        case 0x4d:
+            aFontList.AppendElement(kFontAppleSymbols);
+            break;
+        case 0xa0:  // Yi
+        case 0xa1:
+        case 0xa2:
+        case 0xa3:
+        case 0xa4:
+            aFontList.AppendElement(kFontSTHeiti);
+            break;
+        case 0xa6:
+        case 0xa7:
+            aFontList.AppendElement(kFontGeneva);
+            aFontList.AppendElement(kFontAppleSymbols);
+            break;
+        case 0xfc:
+        case 0xff:
+            aFontList.AppendElement(kFontAppleSymbols);
+            break;
+        default:
+            break;
+        }
+    }
+
+    // Arial Unicode MS has lots of glyphs for obscure, use it as a last resort
+    aFontList.AppendElement(kFontArialUnicodeMS);
+}
+
 
 PRInt32 
 gfxPlatformMac::OSXVersion()

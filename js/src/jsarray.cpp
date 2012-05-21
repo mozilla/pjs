@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set sw=4 ts=8 et tw=78:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * JS array class.
@@ -96,11 +63,13 @@
  * SlowArrayClass, but have the same performance characteristics as a dense
  * array for slot accesses, at some cost in code complexity.
  */
+
+#include "mozilla/FloatingPoint.h"
+#include "mozilla/RangedPtr.h"
+
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "mozilla/RangedPtr.h"
 
 #include "jstypes.h"
 #include "jsutil.h"
@@ -113,21 +82,22 @@
 #include "jsversion.h"
 #include "jsfun.h"
 #include "jsgc.h"
-#include "jsgcmark.h"
 #include "jsinterp.h"
 #include "jsiter.h"
 #include "jslock.h"
 #include "jsnum.h"
 #include "jsobj.h"
 #include "jsscope.h"
-#include "jsstr.h"
 #include "jswrapper.h"
 #include "methodjit/MethodJIT.h"
 #include "methodjit/StubCalls.h"
 #include "methodjit/StubCalls-inl.h"
 
+#include "gc/Marking.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/MethodGuard.h"
+#include "vm/NumericConversions.h"
+#include "vm/StringBuffer.h"
 
 #include "ds/Sort.h"
 
@@ -136,10 +106,10 @@
 #include "jscntxtinlines.h"
 #include "jsobjinlines.h"
 #include "jsscopeinlines.h"
-#include "jscntxtinlines.h"
 #include "jsstrinlines.h"
 
 #include "vm/ArgumentsObject-inl.h"
+#include "vm/ObjectImpl-inl.h"
 #include "vm/Stack-inl.h"
 
 using namespace mozilla;
@@ -148,7 +118,7 @@ using namespace js::gc;
 using namespace js::types;
 
 JSBool
-js_GetLengthProperty(JSContext *cx, JSObject *obj, jsuint *lengthp)
+js_GetLengthProperty(JSContext *cx, JSObject *obj, uint32_t *lengthp)
 {
     if (obj->isArray()) {
         *lengthp = obj->getArrayLength();
@@ -163,17 +133,17 @@ js_GetLengthProperty(JSContext *cx, JSObject *obj, jsuint *lengthp)
         }
     }
 
-    AutoValueRooter tvr(cx);
-    if (!obj->getProperty(cx, cx->runtime->atomState.lengthAtom, tvr.addr()))
+    RootedVarValue value(cx);
+    if (!obj->getProperty(cx, cx->runtime->atomState.lengthAtom, value.address()))
         return false;
 
-    if (tvr.value().isInt32()) {
-        *lengthp = jsuint(jsint(tvr.value().toInt32())); /* jsuint cast does ToUint32_t */
+    if (value.reference().isInt32()) {
+        *lengthp = uint32_t(value.reference().toInt32()); /* uint32_t cast does ToUint32_t */
         return true;
     }
 
-    JS_STATIC_ASSERT(sizeof(jsuint) == sizeof(uint32_t));
-    return ToUint32(cx, tvr.value(), (uint32_t *)lengthp);
+
+    return ToUint32(cx, value, (uint32_t *)lengthp);
 }
 
 namespace js {
@@ -198,7 +168,7 @@ namespace js {
  *
  */
 JS_FRIEND_API(bool)
-StringIsArrayIndex(JSLinearString *str, jsuint *indexp)
+StringIsArrayIndex(JSLinearString *str, uint32_t *indexp)
 {
     const jschar *s = str->chars();
     uint32_t length = str->length();
@@ -237,10 +207,10 @@ StringIsArrayIndex(JSLinearString *str, jsuint *indexp)
 }
 
 static JSBool
-BigIndexToId(JSContext *cx, JSObject *obj, jsuint index, JSBool createAtom,
+BigIndexToId(JSContext *cx, JSObject *obj, uint32_t index, JSBool createAtom,
              jsid *idp)
 {
-    JS_STATIC_ASSERT((jsuint)-1 == 4294967295U);
+
     JS_ASSERT(index > JSID_INT_MAX);
 
     jschar buf[10];
@@ -271,23 +241,23 @@ BigIndexToId(JSContext *cx, JSObject *obj, jsuint index, JSBool createAtom,
             return JS_FALSE;
     }
 
-    *idp = ATOM_TO_JSID(atom);
+    *idp = NON_INTEGER_ATOM_TO_JSID(atom);
     return JS_TRUE;
 }
 
 bool
-JSObject::willBeSparseDenseArray(uintN requiredCapacity, uintN newElementsHint)
+JSObject::willBeSparseDenseArray(unsigned requiredCapacity, unsigned newElementsHint)
 {
     JS_ASSERT(isDenseArray());
     JS_ASSERT(requiredCapacity > MIN_SPARSE_INDEX);
 
-    uintN cap = getDenseArrayCapacity();
+    unsigned cap = getDenseArrayCapacity();
     JS_ASSERT(requiredCapacity >= cap);
 
     if (requiredCapacity >= JSObject::NELEMENTS_LIMIT)
         return true;
 
-    uintN minimalDenseCount = requiredCapacity / 4;
+    unsigned minimalDenseCount = requiredCapacity / 4;
     if (newElementsHint >= minimalDenseCount)
         return false;
     minimalDenseCount -= newElementsHint;
@@ -295,9 +265,9 @@ JSObject::willBeSparseDenseArray(uintN requiredCapacity, uintN newElementsHint)
     if (minimalDenseCount > cap)
         return true;
 
-    uintN len = getDenseArrayInitializedLength();
+    unsigned len = getDenseArrayInitializedLength();
     const Value *elems = getDenseArrayElements();
-    for (uintN i = 0; i < len; i++) {
+    for (unsigned i = 0; i < len; i++) {
         if (!elems[i].isMagic(JS_ARRAY_HOLE) && !--minimalDenseCount)
             return false;
     }
@@ -305,13 +275,13 @@ JSObject::willBeSparseDenseArray(uintN requiredCapacity, uintN newElementsHint)
 }
 
 static bool
-ReallyBigIndexToId(JSContext* cx, jsdouble index, jsid* idp)
+ReallyBigIndexToId(JSContext* cx, double index, jsid* idp)
 {
-    return js_ValueToStringId(cx, DoubleValue(index), idp);
+    return ValueToId(cx, DoubleValue(index), idp);
 }
 
 static bool
-IndexToId(JSContext* cx, JSObject* obj, jsdouble index, JSBool* hole, jsid* idp,
+IndexToId(JSContext* cx, JSObject* obj, double index, JSBool* hole, jsid* idp,
           JSBool createAtom = JS_FALSE)
 {
     if (index <= JSID_INT_MAX) {
@@ -319,8 +289,8 @@ IndexToId(JSContext* cx, JSObject* obj, jsdouble index, JSBool* hole, jsid* idp,
         return JS_TRUE;
     }
 
-    if (index <= jsuint(-1)) {
-        if (!BigIndexToId(cx, obj, jsuint(index), createAtom, idp))
+    if (index <= uint32_t(-1)) {
+        if (!BigIndexToId(cx, obj, uint32_t(index), createAtom, idp))
             return JS_FALSE;
         if (hole && JSID_IS_VOID(*idp))
             *hole = JS_TRUE;
@@ -363,12 +333,13 @@ JSObject::arrayGetOwnDataElement(JSContext *cx, size_t i, Value *vp)
  * properly rooted and can be used as GC-protected storage for temporaries.
  */
 static inline JSBool
-DoGetElement(JSContext *cx, JSObject *obj, jsdouble index, JSBool *hole, Value *vp)
+DoGetElement(JSContext *cx, JSObject *obj_, double index, JSBool *hole, Value *vp)
 {
-    AutoIdRooter idr(cx);
+    RootedVarObject obj(cx, obj_);
+    RootedVarId id(cx);
 
     *hole = JS_FALSE;
-    if (!IndexToId(cx, obj, index, hole, idr.addr()))
+    if (!IndexToId(cx, obj, index, hole, id.address()))
         return JS_FALSE;
     if (*hole) {
         vp->setUndefined();
@@ -377,13 +348,13 @@ DoGetElement(JSContext *cx, JSObject *obj, jsdouble index, JSBool *hole, Value *
 
     JSObject *obj2;
     JSProperty *prop;
-    if (!obj->lookupGeneric(cx, idr.id(), &obj2, &prop))
+    if (!obj->lookupGeneric(cx, id, &obj2, &prop))
         return JS_FALSE;
     if (!prop) {
         vp->setUndefined();
         *hole = JS_TRUE;
     } else {
-        if (!obj->getGeneric(cx, idr.id(), vp))
+        if (!obj->getGeneric(cx, id, vp))
             return JS_FALSE;
         *hole = JS_FALSE;
     }
@@ -391,7 +362,7 @@ DoGetElement(JSContext *cx, JSObject *obj, jsdouble index, JSBool *hole, Value *
 }
 
 static inline JSBool
-DoGetElement(JSContext *cx, JSObject *obj, uint32_t index, JSBool *hole, Value *vp)
+DoGetElement(JSContext *cx, HandleObject obj, uint32_t index, JSBool *hole, Value *vp)
 {
     bool present;
     if (!obj->getElementIfPresent(cx, obj, index, vp, &present))
@@ -405,10 +376,23 @@ DoGetElement(JSContext *cx, JSObject *obj, uint32_t index, JSBool *hole, Value *
 }
 
 template<typename IndexType>
+static void
+AssertGreaterThanZero(IndexType index)
+{
+    JS_ASSERT(index >= 0);
+}
+
+template<>
+void
+AssertGreaterThanZero(uint32_t index)
+{
+}
+
+template<typename IndexType>
 static JSBool
 GetElement(JSContext *cx, JSObject *obj, IndexType index, JSBool *hole, Value *vp)
 {
-    JS_ASSERT(index >= 0);
+    AssertGreaterThanZero(index);
     if (obj->isDenseArray() && index < obj->getDenseArrayInitializedLength() &&
         !(*vp = obj->getDenseArrayElement(uint32_t(index))).isMagic(JS_ARRAY_HOLE)) {
         *hole = JS_FALSE;
@@ -427,7 +411,7 @@ GetElement(JSContext *cx, JSObject *obj, IndexType index, JSBool *hole, Value *v
 namespace js {
 
 static bool
-GetElementsSlow(JSContext *cx, JSObject *aobj, uint32_t length, Value *vp)
+GetElementsSlow(JSContext *cx, HandleObject aobj, uint32_t length, Value *vp)
 {
     for (uint32_t i = 0; i < length; i++) {
         if (!aobj->getElement(cx, i, &vp[i]))
@@ -438,7 +422,7 @@ GetElementsSlow(JSContext *cx, JSObject *aobj, uint32_t length, Value *vp)
 }
 
 bool
-GetElements(JSContext *cx, JSObject *aobj, jsuint length, Value *vp)
+GetElements(JSContext *cx, HandleObject aobj, uint32_t length, Value *vp)
 {
     if (aobj->isDenseArray() && length <= aobj->getDenseArrayInitializedLength() &&
         !js_PrototypeHasIndexedProperties(cx, aobj)) {
@@ -468,7 +452,7 @@ GetElements(JSContext *cx, JSObject *aobj, jsuint length, Value *vp)
  * Set the value of the property at the given index to v assuming v is rooted.
  */
 static JSBool
-SetArrayElement(JSContext *cx, JSObject *obj, jsdouble index, const Value &v)
+SetArrayElement(JSContext *cx, HandleObject obj, double index, const Value &v)
 {
     JS_ASSERT(index >= 0);
 
@@ -476,9 +460,9 @@ SetArrayElement(JSContext *cx, JSObject *obj, jsdouble index, const Value &v)
         /* Predicted/prefetched code should favor the remains-dense case. */
         JSObject::EnsureDenseResult result = JSObject::ED_SPARSE;
         do {
-            if (index > jsuint(-1))
+            if (index > uint32_t(-1))
                 break;
-            jsuint idx = jsuint(index);
+            uint32_t idx = uint32_t(index);
             result = obj->ensureDenseArrayElements(cx, idx, 1);
             if (result != JSObject::ED_OK)
                 break;
@@ -491,18 +475,18 @@ SetArrayElement(JSContext *cx, JSObject *obj, jsdouble index, const Value &v)
         if (result == JSObject::ED_FAILED)
             return false;
         JS_ASSERT(result == JSObject::ED_SPARSE);
-        if (!obj->makeDenseArraySlow(cx))
+        if (!JSObject::makeDenseArraySlow(cx, obj))
             return JS_FALSE;
     }
 
-    AutoIdRooter idr(cx);
+    RootedVarId id(cx);
 
-    if (!IndexToId(cx, obj, index, NULL, idr.addr(), JS_TRUE))
+    if (!IndexToId(cx, obj, index, NULL, id.address(), JS_TRUE))
         return JS_FALSE;
-    JS_ASSERT(!JSID_IS_VOID(idr.id()));
+    JS_ASSERT(!JSID_IS_VOID(id));
 
-    Value tmp = v;
-    return obj->setGeneric(cx, idr.id(), &tmp, true);
+    RootedVarValue tmp(cx, v);
+    return obj->setGeneric(cx, id, tmp.address(), true);
 }
 
 /*
@@ -519,7 +503,7 @@ SetArrayElement(JSContext *cx, JSObject *obj, jsdouble index, const Value &v)
  * - Return -1 if an exception occurs (that is, [[Delete]] would throw).
  */
 static int
-DeleteArrayElement(JSContext *cx, JSObject *obj, jsdouble index, bool strict)
+DeleteArrayElement(JSContext *cx, HandleObject obj, double index, bool strict)
 {
     JS_ASSERT(index >= 0);
     JS_ASSERT(floor(index) == index);
@@ -554,7 +538,7 @@ DeleteArrayElement(JSContext *cx, JSObject *obj, jsdouble index, bool strict)
  * its value to v assuming v is rooted.
  */
 static JSBool
-SetOrDeleteArrayElement(JSContext *cx, JSObject *obj, jsdouble index,
+SetOrDeleteArrayElement(JSContext *cx, HandleObject obj, double index,
                         JSBool hole, const Value &v)
 {
     if (hole) {
@@ -565,7 +549,7 @@ SetOrDeleteArrayElement(JSContext *cx, JSObject *obj, jsdouble index,
 }
 
 JSBool
-js_SetLengthProperty(JSContext *cx, JSObject *obj, jsdouble length)
+js_SetLengthProperty(JSContext *cx, JSObject *obj, double length)
 {
     Value v = NumberValue(length);
 
@@ -581,8 +565,9 @@ js_SetLengthProperty(JSContext *cx, JSObject *obj, jsdouble length)
  * the JSPROP_SHARED attribute, we must define a shadowing length property.
  */
 static JSBool
-array_length_getter(JSContext *cx, JSObject *obj, jsid id, Value *vp)
+array_length_getter(JSContext *cx, HandleObject obj_, HandleId id, Value *vp)
 {
+    JSObject *obj = obj_;
     do {
         if (obj->isArray()) {
             vp->setNumber(obj->getArrayLength());
@@ -593,7 +578,7 @@ array_length_getter(JSContext *cx, JSObject *obj, jsid id, Value *vp)
 }
 
 static JSBool
-array_length_setter(JSContext *cx, JSObject *obj, jsid id, JSBool strict, Value *vp)
+array_length_setter(JSContext *cx, HandleObject obj, HandleId id, JSBool strict, Value *vp)
 {
     if (!obj->isArray()) {
         return obj->defineProperty(cx, cx->runtime->atomState.lengthAtom, *vp,
@@ -604,7 +589,7 @@ array_length_setter(JSContext *cx, JSObject *obj, jsid id, JSBool strict, Value 
     if (!ToUint32(cx, *vp, &newlen))
         return false;
 
-    jsdouble d;
+    double d;
     if (!ToNumber(cx, *vp, &d))
         return false;
 
@@ -630,8 +615,8 @@ array_length_setter(JSContext *cx, JSObject *obj, jsid id, JSBool strict, Value 
          * us to disregard length when reading from arrays as long we are within
          * the initialized capacity.
          */
-        jsuint oldcap = obj->getDenseArrayCapacity();
-        jsuint oldinit = obj->getDenseArrayInitializedLength();
+        uint32_t oldcap = obj->getDenseArrayCapacity();
+        uint32_t oldinit = obj->getDenseArrayInitializedLength();
         if (oldinit > newlen)
             obj->setDenseArrayInitializedLength(newlen);
         if (oldcap > newlen)
@@ -661,15 +646,16 @@ array_length_setter(JSContext *cx, JSObject *obj, jsid id, JSBool strict, Value 
         if (!iter)
             return false;
 
-        jsuint gap = oldlen - newlen;
+        uint32_t gap = oldlen - newlen;
         for (;;) {
-            if (!JS_CHECK_OPERATION_LIMIT(cx) || !JS_NextProperty(cx, iter, &id))
+            jsid nid;
+            if (!JS_CHECK_OPERATION_LIMIT(cx) || !JS_NextProperty(cx, iter, &nid))
                 return false;
-            if (JSID_IS_VOID(id))
+            if (JSID_IS_VOID(nid))
                 break;
-            jsuint index;
+            uint32_t index;
             Value junk;
-            if (js_IdIsIndex(id, &index) && index - newlen < gap &&
+            if (js_IdIsIndex(nid, &index) && index - newlen < gap &&
                 !obj->deleteElement(cx, index, &junk, false)) {
                 return false;
             }
@@ -705,11 +691,11 @@ IsDenseArrayId(JSContext *cx, JSObject *obj, jsid id)
 }
 
 static JSBool
-array_lookupGeneric(JSContext *cx, JSObject *obj, jsid id, JSObject **objp,
+array_lookupGeneric(JSContext *cx, HandleObject obj, HandleId id, JSObject **objp,
                     JSProperty **propp)
 {
     if (!obj->isDenseArray())
-        return js_LookupProperty(cx, obj, id, objp, propp);
+        return baseops::LookupProperty(cx, obj, id, objp, propp);
 
     if (IsDenseArrayId(cx, obj, id)) {
         *propp = (JSProperty *) 1;  /* non-null to indicate found */
@@ -727,18 +713,18 @@ array_lookupGeneric(JSContext *cx, JSObject *obj, jsid id, JSObject **objp,
 }
 
 static JSBool
-array_lookupProperty(JSContext *cx, JSObject *obj, PropertyName *name, JSObject **objp,
+array_lookupProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, JSObject **objp,
                      JSProperty **propp)
 {
-    return array_lookupGeneric(cx, obj, ATOM_TO_JSID(name), objp, propp);
+    return array_lookupGeneric(cx, obj, RootedVarId(cx, NameToId(name)), objp, propp);
 }
 
 static JSBool
-array_lookupElement(JSContext *cx, JSObject *obj, uint32_t index, JSObject **objp,
+array_lookupElement(JSContext *cx, HandleObject obj, uint32_t index, JSObject **objp,
                     JSProperty **propp)
 {
     if (!obj->isDenseArray())
-        return js_LookupElement(cx, obj, index, objp, propp);
+        return baseops::LookupElement(cx, obj, index, objp, propp);
 
     if (IsDenseArrayIndex(obj, index)) {
         *propp = (JSProperty *) 1;  /* non-null to indicate found */
@@ -755,10 +741,10 @@ array_lookupElement(JSContext *cx, JSObject *obj, uint32_t index, JSObject **obj
 }
 
 static JSBool
-array_lookupSpecial(JSContext *cx, JSObject *obj, SpecialId sid, JSObject **objp,
+array_lookupSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, JSObject **objp,
                     JSProperty **propp)
 {
-    return array_lookupGeneric(cx, obj, SPECIALID_TO_JSID(sid), objp, propp);
+    return array_lookupGeneric(cx, obj, RootedVarId(cx, SPECIALID_TO_JSID(sid)), objp, propp);
 }
 
 JSBool
@@ -777,7 +763,7 @@ js_GetDenseArrayElementValue(JSContext *cx, JSObject *obj, jsid id, Value *vp)
 }
 
 static JSBool
-array_getProperty(JSContext *cx, JSObject *obj, JSObject *receiver, PropertyName *name, Value *vp)
+array_getProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandlePropertyName name, Value *vp)
 {
     if (name == cx->runtime->atomState.lengthAtom) {
         vp->setNumber(obj->getArrayLength());
@@ -790,7 +776,7 @@ array_getProperty(JSContext *cx, JSObject *obj, JSObject *receiver, PropertyName
     }
 
     if (!obj->isDenseArray())
-        return js_GetProperty(cx, obj, receiver, ATOM_TO_JSID(name), vp);
+        return baseops::GetProperty(cx, obj, receiver, RootedVarId(cx, NameToId(name)), vp);
 
     JSObject *proto = obj->getProto();
     if (!proto) {
@@ -802,10 +788,10 @@ array_getProperty(JSContext *cx, JSObject *obj, JSObject *receiver, PropertyName
 }
 
 static JSBool
-array_getElement(JSContext *cx, JSObject *obj, JSObject *receiver, uint32_t index, Value *vp)
+array_getElement(JSContext *cx, HandleObject obj, HandleObject receiver, uint32_t index, Value *vp)
 {
     if (!obj->isDenseArray())
-        return js_GetElement(cx, obj, receiver, index, vp);
+        return baseops::GetElement(cx, obj, receiver, index, vp);
 
     if (index < obj->getDenseArrayInitializedLength()) {
         *vp = obj->getDenseArrayElement(index);
@@ -828,18 +814,18 @@ array_getElement(JSContext *cx, JSObject *obj, JSObject *receiver, uint32_t inde
 }
 
 static JSBool
-array_getSpecial(JSContext *cx, JSObject *obj, JSObject *receiver, SpecialId sid, Value *vp)
+array_getSpecial(JSContext *cx, HandleObject obj, HandleObject receiver, HandleSpecialId sid, Value *vp)
 {
     if (obj->isDenseArray() && !obj->getProto()) {
         vp->setUndefined();
         return true;
     }
 
-    return js_GetProperty(cx, obj, receiver, SPECIALID_TO_JSID(sid), vp);
+    return baseops::GetProperty(cx, obj, receiver, RootedVarId(cx, SPECIALID_TO_JSID(sid)), vp);
 }
 
 static JSBool
-array_getGeneric(JSContext *cx, JSObject *obj, JSObject *receiver, jsid id, Value *vp)
+array_getGeneric(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id, Value *vp)
 {
     Value idval = IdToValue(id);
 
@@ -849,7 +835,7 @@ array_getGeneric(JSContext *cx, JSObject *obj, JSObject *receiver, jsid id, Valu
 
     SpecialId sid;
     if (ValueIsSpecial(obj, &idval, &sid, cx))
-        return array_getSpecial(cx, obj, receiver, sid, vp);
+        return array_getSpecial(cx, obj, receiver, RootedVar<SpecialId>(cx, sid), vp);
 
     JSAtom *atom;
     if (!js_ValueToAtom(cx, idval, &atom))
@@ -858,13 +844,13 @@ array_getGeneric(JSContext *cx, JSObject *obj, JSObject *receiver, jsid id, Valu
     if (atom->isIndex(&index))
         return array_getElement(cx, obj, receiver, index, vp);
 
-    return array_getProperty(cx, obj, receiver, atom->asPropertyName(), vp);
+    return array_getProperty(cx, obj, receiver, RootedVarPropertyName(cx, atom->asPropertyName()), vp);
 }
 
 static JSBool
-slowarray_addProperty(JSContext *cx, JSObject *obj, jsid id, Value *vp)
+slowarray_addProperty(JSContext *cx, HandleObject obj, HandleId id, Value *vp)
 {
-    jsuint index, length;
+    uint32_t index, length;
 
     if (!js_IdIsIndex(id, &index))
         return JS_TRUE;
@@ -875,23 +861,22 @@ slowarray_addProperty(JSContext *cx, JSObject *obj, jsid id, Value *vp)
 }
 
 static JSType
-array_typeOf(JSContext *cx, JSObject *obj)
+array_typeOf(JSContext *cx, HandleObject obj)
 {
     return JSTYPE_OBJECT;
 }
 
 static JSBool
-array_setGeneric(JSContext *cx, JSObject *obj, jsid id, Value *vp, JSBool strict)
+array_setGeneric(JSContext *cx, HandleObject obj, HandleId id, Value *vp, JSBool strict)
 {
-    uint32_t i;
-
     if (JSID_IS_ATOM(id, cx->runtime->atomState.lengthAtom))
         return array_length_setter(cx, obj, id, strict, vp);
 
     if (!obj->isDenseArray())
-        return js_SetPropertyHelper(cx, obj, id, 0, vp, strict);
+        return baseops::SetPropertyHelper(cx, obj, id, 0, vp, strict);
 
     do {
+        uint32_t i;
         if (!js_IdIsIndex(id, &i))
             break;
         if (js_PrototypeHasIndexedProperties(cx, obj))
@@ -911,26 +896,26 @@ array_setGeneric(JSContext *cx, JSObject *obj, jsid id, Value *vp, JSBool strict
         return true;
     } while (false);
 
-    if (!obj->makeDenseArraySlow(cx))
+    if (!JSObject::makeDenseArraySlow(cx, obj))
         return false;
-    return js_SetPropertyHelper(cx, obj, id, 0, vp, strict);
+    return baseops::SetPropertyHelper(cx, obj, id, 0, vp, strict);
 }
 
 static JSBool
-array_setProperty(JSContext *cx, JSObject *obj, PropertyName *name, Value *vp, JSBool strict)
+array_setProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, Value *vp, JSBool strict)
 {
-    return array_setGeneric(cx, obj, ATOM_TO_JSID(name), vp, strict);
+    return array_setGeneric(cx, obj, RootedVarId(cx, NameToId(name)), vp, strict);
 }
 
 static JSBool
-array_setElement(JSContext *cx, JSObject *obj, uint32_t index, Value *vp, JSBool strict)
+array_setElement(JSContext *cx, HandleObject obj, uint32_t index, Value *vp, JSBool strict)
 {
-    jsid id;
-    if (!IndexToId(cx, index, &id))
+    RootedVarId id(cx);
+    if (!IndexToId(cx, index, id.address()))
         return false;
 
     if (!obj->isDenseArray())
-        return js_SetPropertyHelper(cx, obj, id, 0, vp, strict);
+        return baseops::SetPropertyHelper(cx, obj, id, 0, vp, strict);
 
     do {
         /*
@@ -956,15 +941,15 @@ array_setElement(JSContext *cx, JSObject *obj, uint32_t index, Value *vp, JSBool
         return true;
     } while (false);
 
-    if (!obj->makeDenseArraySlow(cx))
+    if (!JSObject::makeDenseArraySlow(cx, obj))
         return false;
-    return js_SetPropertyHelper(cx, obj, id, 0, vp, strict);
+    return baseops::SetPropertyHelper(cx, obj, id, 0, vp, strict);
 }
 
 static JSBool
-array_setSpecial(JSContext *cx, JSObject *obj, SpecialId sid, Value *vp, JSBool strict)
+array_setSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, Value *vp, JSBool strict)
 {
-    return array_setGeneric(cx, obj, SPECIALID_TO_JSID(sid), vp, strict);
+    return array_setGeneric(cx, obj, RootedVarId(cx, SPECIALID_TO_JSID(sid)), vp, strict);
 }
 
 JSBool
@@ -990,14 +975,14 @@ js_PrototypeHasIndexedProperties(JSContext *cx, JSObject *obj)
 }
 
 static JSBool
-array_defineGeneric(JSContext *cx, JSObject *obj, jsid id, const Value *value,
-                    JSPropertyOp getter, StrictPropertyOp setter, uintN attrs)
+array_defineGeneric(JSContext *cx, HandleObject obj, HandleId id, const Value *value,
+                    JSPropertyOp getter, StrictPropertyOp setter, unsigned attrs)
 {
     if (JSID_IS_ATOM(id, cx->runtime->atomState.lengthAtom))
         return JS_TRUE;
 
     if (!obj->isDenseArray())
-        return js_DefineProperty(cx, obj, id, value, getter, setter, attrs);
+        return baseops::DefineProperty(cx, obj, id, value, getter, setter, attrs);
 
     do {
         uint32_t i = 0;       // init to shut GCC up
@@ -1019,31 +1004,29 @@ array_defineGeneric(JSContext *cx, JSObject *obj, jsid id, const Value *value,
         return true;
     } while (false);
 
-    if (!obj->makeDenseArraySlow(cx))
+    RootGetterSetter gsRoot(cx, attrs, &getter, &setter);
+
+    if (!JSObject::makeDenseArraySlow(cx, obj))
         return false;
-    return js_DefineProperty(cx, obj, id, value, getter, setter, attrs);
+    return baseops::DefineProperty(cx, obj, id, value, getter, setter, attrs);
 }
 
 static JSBool
-array_defineProperty(JSContext *cx, JSObject *obj, PropertyName *name, const Value *value,
-                     JSPropertyOp getter, StrictPropertyOp setter, uintN attrs)
+array_defineProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, const Value *value,
+                     JSPropertyOp getter, StrictPropertyOp setter, unsigned attrs)
 {
-    return array_defineGeneric(cx, obj, ATOM_TO_JSID(name), value, getter, setter, attrs);
+    return array_defineGeneric(cx, obj, RootedVarId(cx, NameToId(name)), value, getter, setter, attrs);
 }
 
 namespace js {
 
 /* non-static for direct definition of array elements within the engine */
 JSBool
-array_defineElement(JSContext *cx, JSObject *obj, uint32_t index, const Value *value,
-                    PropertyOp getter, StrictPropertyOp setter, uintN attrs)
+array_defineElement(JSContext *cx, HandleObject obj, uint32_t index, const Value *value,
+                    PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
 {
     if (!obj->isDenseArray())
-        return js_DefineElement(cx, obj, index, value, getter, setter, attrs);
-
-    jsid id;
-    if (!IndexToId(cx, index, &id))
-        return false;
+        return baseops::DefineElement(cx, obj, index, value, getter, setter, attrs);
 
     do {
         /*
@@ -1067,22 +1050,26 @@ array_defineElement(JSContext *cx, JSObject *obj, uint32_t index, const Value *v
         return true;
     } while (false);
 
-    if (!obj->makeDenseArraySlow(cx))
+    RootValue valueRoot(cx, value);
+    RootGetterSetter gsRoot(cx, attrs, &getter, &setter);
+
+    if (!JSObject::makeDenseArraySlow(cx, obj))
         return false;
-    return js_DefineElement(cx, obj, index, value, getter, setter, attrs);
+    return baseops::DefineElement(cx, obj, index, value, getter, setter, attrs);
 }
 
 } // namespace js
 
 static JSBool
-array_defineSpecial(JSContext *cx, JSObject *obj, SpecialId sid, const Value *value,
-                    PropertyOp getter, StrictPropertyOp setter, uintN attrs)
+array_defineSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, const Value *value,
+                    PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
 {
-    return array_defineGeneric(cx, obj, SPECIALID_TO_JSID(sid), value, getter, setter, attrs);
+    return array_defineGeneric(cx, obj, RootedVarId(cx, SPECIALID_TO_JSID(sid)),
+                               value, getter, setter, attrs);
 }
 
 static JSBool
-array_getGenericAttributes(JSContext *cx, JSObject *obj, jsid id, uintN *attrsp)
+array_getGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
 {
     *attrsp = JSID_IS_ATOM(id, cx->runtime->atomState.lengthAtom)
         ? JSPROP_PERMANENT : JSPROP_ENUMERATE;
@@ -1090,7 +1077,7 @@ array_getGenericAttributes(JSContext *cx, JSObject *obj, jsid id, uintN *attrsp)
 }
 
 static JSBool
-array_getPropertyAttributes(JSContext *cx, JSObject *obj, PropertyName *name, uintN *attrsp)
+array_getPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp)
 {
     *attrsp = (name == cx->runtime->atomState.lengthAtom)
               ? JSPROP_PERMANENT
@@ -1099,52 +1086,52 @@ array_getPropertyAttributes(JSContext *cx, JSObject *obj, PropertyName *name, ui
 }
 
 static JSBool
-array_getElementAttributes(JSContext *cx, JSObject *obj, uint32_t index, uintN *attrsp)
+array_getElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp)
 {
     *attrsp = JSPROP_ENUMERATE;
     return true;
 }
 
 static JSBool
-array_getSpecialAttributes(JSContext *cx, JSObject *obj, SpecialId sid, uintN *attrsp)
+array_getSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp)
 {
     *attrsp = JSPROP_ENUMERATE;
     return true;
 }
 
 static JSBool
-array_setGenericAttributes(JSContext *cx, JSObject *obj, jsid id, uintN *attrsp)
+array_setGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
 {
     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_SET_ARRAY_ATTRS);
     return false;
 }
 
 static JSBool
-array_setPropertyAttributes(JSContext *cx, JSObject *obj, PropertyName *name, uintN *attrsp)
+array_setPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp)
 {
     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_SET_ARRAY_ATTRS);
     return false;
 }
 
 static JSBool
-array_setElementAttributes(JSContext *cx, JSObject *obj, uint32_t index, uintN *attrsp)
+array_setElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp)
 {
     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_SET_ARRAY_ATTRS);
     return false;
 }
 
 static JSBool
-array_setSpecialAttributes(JSContext *cx, JSObject *obj, SpecialId sid, uintN *attrsp)
+array_setSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp)
 {
     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_SET_ARRAY_ATTRS);
     return false;
 }
 
 static JSBool
-array_deleteProperty(JSContext *cx, JSObject *obj, PropertyName *name, Value *rval, JSBool strict)
+array_deleteProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, Value *rval, JSBool strict)
 {
     if (!obj->isDenseArray())
-        return js_DeleteProperty(cx, obj, name, rval, strict);
+        return baseops::DeleteProperty(cx, obj, name, rval, strict);
 
     if (name == cx->runtime->atomState.lengthAtom) {
         rval->setBoolean(false);
@@ -1159,17 +1146,17 @@ namespace js {
 
 /* non-static for direct deletion of array elements within the engine */
 JSBool
-array_deleteElement(JSContext *cx, JSObject *obj, uint32_t index, Value *rval, JSBool strict)
+array_deleteElement(JSContext *cx, HandleObject obj, uint32_t index, Value *rval, JSBool strict)
 {
     if (!obj->isDenseArray())
-        return js_DeleteElement(cx, obj, index, rval, strict);
+        return baseops::DeleteElement(cx, obj, index, rval, strict);
 
     if (index < obj->getDenseArrayInitializedLength()) {
         obj->markDenseArrayNotPacked(cx);
         obj->setDenseArrayElement(index, MagicValue(JS_ARRAY_HOLE));
     }
 
-    if (!js_SuppressDeletedElement(cx, obj, index))
+    if (!js_SuppressDeletedElement(cx, RootedVarObject(cx, obj), index))
         return false;
 
     rval->setBoolean(true);
@@ -1179,10 +1166,10 @@ array_deleteElement(JSContext *cx, JSObject *obj, uint32_t index, Value *rval, J
 } // namespace js
 
 static JSBool
-array_deleteSpecial(JSContext *cx, JSObject *obj, SpecialId sid, Value *rval, JSBool strict)
+array_deleteSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, Value *rval, JSBool strict)
 {
     if (!obj->isDenseArray())
-        return js_DeleteSpecial(cx, obj, sid, rval, strict);
+        return baseops::DeleteSpecial(cx, obj, sid, rval, strict);
 
     rval->setBoolean(true);
     return true;
@@ -1194,24 +1181,7 @@ array_trace(JSTracer *trc, JSObject *obj)
     JS_ASSERT(obj->isDenseArray());
 
     uint32_t initLength = obj->getDenseArrayInitializedLength();
-    MarkValueRange(trc, initLength, obj->getDenseArrayElements(), "element");
-}
-
-static JSBool
-array_fix(JSContext *cx, JSObject *obj, bool *success, AutoIdVector *props)
-{
-    JS_ASSERT(obj->isDenseArray());
-
-    /*
-     * We must slowify dense arrays; otherwise, we'd need to detect assignments to holes,
-     * since that is effectively adding a new property to the array.
-     */
-    if (!obj->makeDenseArraySlow(cx) ||
-        !GetPropertyNames(cx, obj, JSITER_HIDDEN | JSITER_OWNONLY, props))
-        return false;
-
-    *success = true;
-    return true;
+    MarkArraySlots(trc, initLength, obj->getDenseArrayElements(), "element");
 }
 
 Class js::ArrayClass = {
@@ -1270,7 +1240,6 @@ Class js::ArrayClass = {
         array_deleteSpecial,
         NULL,       /* enumerate      */
         array_typeOf,
-        array_fix,
         NULL,       /* thisObject     */
         NULL,       /* clear          */
     }
@@ -1326,7 +1295,7 @@ AddLengthProperty(JSContext *cx, JSObject *obj)
      * as accesses to 'length' will use the elements header.
      */
 
-    const jsid lengthId = ATOM_TO_JSID(cx->runtime->atomState.lengthAtom);
+    RootedVarId lengthId(cx, NameToId(cx->runtime->atomState.lengthAtom));
     JS_ASSERT(!obj->nativeLookup(cx, lengthId));
 
     if (!obj->allocateSlowArrayElements(cx))
@@ -1339,26 +1308,26 @@ AddLengthProperty(JSContext *cx, JSObject *obj)
 /*
  * Convert an array object from fast-and-dense to slow-and-flexible.
  */
-JSBool
-JSObject::makeDenseArraySlow(JSContext *cx)
+/* static */ bool
+JSObject::makeDenseArraySlow(JSContext *cx, HandleObject obj)
 {
-    JS_ASSERT(isDenseArray());
+    JS_ASSERT(obj->isDenseArray());
 
-    MarkTypeObjectFlags(cx, this,
+    MarkTypeObjectFlags(cx, obj,
                         OBJECT_FLAG_NON_PACKED_ARRAY |
                         OBJECT_FLAG_NON_DENSE_ARRAY);
 
-    uint32_t arrayCapacity = getDenseArrayCapacity();
-    uint32_t arrayInitialized = getDenseArrayInitializedLength();
+    uint32_t arrayCapacity = obj->getDenseArrayCapacity();
+    uint32_t arrayInitialized = obj->getDenseArrayInitializedLength();
 
     /*
      * Get an allocated array of the existing elements, evicting from the fixed
      * slots if necessary.
      */
-    if (!hasDynamicElements()) {
-        if (!growElements(cx, arrayCapacity))
+    if (!obj->hasDynamicElements()) {
+        if (!obj->growElements(cx, arrayCapacity))
             return false;
-        JS_ASSERT(hasDynamicElements());
+        JS_ASSERT(obj->hasDynamicElements());
     }
 
     /*
@@ -1366,19 +1335,19 @@ JSObject::makeDenseArraySlow(JSContext *cx)
      * on error. This is gross, but a better way is not obvious. Note: the
      * exact contents of the array are not preserved on error.
      */
-    js::Shape *oldShape = lastProperty();
+    js::Shape *oldShape = obj->lastProperty();
 
     /* Create a native scope. */
-    gc::AllocKind kind = getAllocKind();
-    Shape *shape = EmptyShape::getInitialShape(cx, &SlowArrayClass, getProto(),
+    gc::AllocKind kind = obj->getAllocKind();
+    Shape *shape = EmptyShape::getInitialShape(cx, &SlowArrayClass, obj->getProto(),
                                                oldShape->getObjectParent(), kind);
     if (!shape)
         return false;
-    this->shape_ = shape;
+    obj->shape_ = shape;
 
     /* Take ownership of the dense elements, reset to an empty dense array. */
-    HeapValue *elems = elements;
-    elements = emptyObjectElements;
+    HeapSlot *elems = obj->elements;
+    obj->elements = emptyObjectElements;
 
     /* Root all values in the array during conversion. */
     AutoValueArray autoArray(cx, (Value *) elems, arrayInitialized);
@@ -1387,10 +1356,11 @@ JSObject::makeDenseArraySlow(JSContext *cx)
      * Begin with the length property to share more of the property tree.
      * The getter/setter here will directly access the object's private value.
      */
-    if (!AddLengthProperty(cx, this)) {
-        this->shape_ = oldShape;
-        cx->free_(getElementsHeader());
-        elements = elems;
+    if (!AddLengthProperty(cx, obj)) {
+        obj->shape_ = oldShape;
+        if (obj->elements != emptyObjectElements)
+            cx->free_(obj->getElementsHeader());
+        obj->elements = elems;
         return false;
     }
 
@@ -1407,21 +1377,21 @@ JSObject::makeDenseArraySlow(JSContext *cx)
         if (elems[i].isMagic(JS_ARRAY_HOLE))
             continue;
 
-        if (!addDataProperty(cx, id, next, JSPROP_ENUMERATE)) {
-            this->shape_ = oldShape;
-            cx->free_(getElementsHeader());
-            elements = elems;
+        if (!obj->addDataProperty(cx, id, next, JSPROP_ENUMERATE)) {
+            obj->shape_ = oldShape;
+            cx->free_(obj->getElementsHeader());
+            obj->elements = elems;
             return false;
         }
 
-        initSlot(next, elems[i]);
+        obj->initSlot(next, elems[i]);
 
         next++;
     }
 
     ObjectElements *oldheader = ObjectElements::fromElements(elems);
 
-    getElementsHeader()->length = oldheader->length;
+    obj->getElementsHeader()->length = oldheader->length;
     cx->free_(oldheader);
 
     return true;
@@ -1443,7 +1413,7 @@ class ArraySharpDetector
         sharp(false)
     {}
 
-    bool init(JSObject *obj) {
+    bool init(HandleObject obj) {
         success = js_EnterSharpObject(cx, obj, NULL, &alreadySeen, &sharp);
         if (!success)
             return false;
@@ -1462,12 +1432,12 @@ class ArraySharpDetector
 };
 
 static JSBool
-array_toSource(JSContext *cx, uintN argc, Value *vp)
+array_toSource(JSContext *cx, unsigned argc, Value *vp)
 {
     JS_CHECK_RECURSION(cx, return false);
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
     if (!obj->isArray())
@@ -1488,11 +1458,11 @@ array_toSource(JSContext *cx, uintN argc, Value *vp)
     if (!sb.append('['))
         return false;
 
-    jsuint length;
+    uint32_t length;
     if (!js_GetLengthProperty(cx, obj, &length))
         return false;
 
-    for (jsuint index = 0; index < length; index++) {
+    for (uint32_t index = 0; index < length; index++) {
         JSBool hole;
         Value elt;
         if (!JS_CHECK_OPERATION_LIMIT(cx) ||
@@ -1583,17 +1553,15 @@ class AutoArrayCycleDetector
 };
 
 static JSBool
-array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
-                   JSString *sepstr, CallArgs &args)
+array_toString_sub(JSContext *cx, HandleObject obj, JSBool locale,
+                   HandleString sepstr, CallArgs &args)
 {
     static const jschar comma = ',';
     const jschar *sep;
     size_t seplen;
     if (sepstr) {
+        sep = NULL;
         seplen = sepstr->length();
-        sep = sepstr->getChars(cx);
-        if (!sep)
-            return false;
     } else {
         sep = &comma;
         seplen = 1;
@@ -1608,7 +1576,7 @@ array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
         return true;
     }
 
-    jsuint length;
+    uint32_t length;
     if (!js_GetLengthProperty(cx, obj, &length))
         return false;
 
@@ -1649,7 +1617,7 @@ array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
             }
         }
     } else {
-        for (jsuint index = 0; index < length; index++) {
+        for (uint32_t index = 0; index < length; index++) {
             if (!JS_CHECK_OPERATION_LIMIT(cx))
                 return false;
 
@@ -1663,7 +1631,7 @@ array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
                     JSObject *robj = ToObject(cx, &elt);
                     if (!robj)
                         return false;
-                    jsid id = ATOM_TO_JSID(cx->runtime->atomState.toLocaleStringAtom);
+                    RootedVarId id(cx, NameToId(cx->runtime->atomState.toLocaleStringAtom));
                     if (!robj->callMethod(cx, id, 0, NULL, &elt))
                         return false;
                 }
@@ -1672,7 +1640,8 @@ array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
             }
 
             if (index + 1 != length) {
-                if (!sb.append(sep, seplen))
+                const jschar *sepchars = sep ? sep : sepstr->getChars(cx);
+                if (!sepchars || !sb.append(sepchars, seplen))
                     return false;
             }
         }
@@ -1687,12 +1656,12 @@ array_toString_sub(JSContext *cx, JSObject *obj, JSBool locale,
 
 /* ES5 15.4.4.2. NB: The algorithm here differs from the one in ES3. */
 static JSBool
-array_toString(JSContext *cx, uintN argc, Value *vp)
+array_toString(JSContext *cx, unsigned argc, Value *vp)
 {
     JS_CHECK_RECURSION(cx, return false);
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -1723,12 +1692,12 @@ array_toString(JSContext *cx, uintN argc, Value *vp)
 }
 
 static JSBool
-array_toLocaleString(JSContext *cx, uintN argc, Value *vp)
+array_toLocaleString(JSContext *cx, unsigned argc, Value *vp)
 {
     JS_CHECK_RECURSION(cx, return false);
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -1736,7 +1705,7 @@ array_toLocaleString(JSContext *cx, uintN argc, Value *vp)
      *  Passing comma here as the separator. Need a way to get a
      *  locale-specific version.
      */
-    return array_toString_sub(cx, obj, JS_TRUE, NULL, args);
+    return array_toString_sub(cx, obj, JS_TRUE, RootedVarString(cx), args);
 }
 
 static inline bool
@@ -1766,7 +1735,7 @@ enum ShouldUpdateTypes
 };
 
 static bool
-InitArrayElements(JSContext *cx, JSObject *obj, uint32_t start, uint32_t count, const Value *vector, ShouldUpdateTypes updateTypes)
+InitArrayElements(JSContext *cx, HandleObject obj, uint32_t start, uint32_t count, const Value *vector, ShouldUpdateTypes updateTypes)
 {
     JS_ASSERT(count <= MAX_ARRAY_INDEX);
 
@@ -1793,7 +1762,7 @@ InitArrayElements(JSContext *cx, JSObject *obj, uint32_t start, uint32_t count, 
             JS_ASSERT(result == JSObject::ED_SPARSE);
             break;
         }
-        jsuint newlen = start + count;
+        uint32_t newlen = start + count;
         if (newlen > obj->getArrayLength())
             obj->setDenseArrayLength(newlen);
 
@@ -1815,17 +1784,17 @@ InitArrayElements(JSContext *cx, JSObject *obj, uint32_t start, uint32_t count, 
         return true;
 
     /* Finish out any remaining elements past the max array index. */
-    if (obj->isDenseArray() && !obj->makeDenseArraySlow(cx))
+    if (obj->isDenseArray() && !JSObject::makeDenseArraySlow(cx, obj))
         return false;
 
     JS_ASSERT(start == MAX_ARRAY_INDEX + 1);
-    AutoValueRooter tvr(cx);
-    AutoIdRooter idr(cx);
+    RootedVarValue value(cx);
+    RootedVarId id(cx);
     Value idval = DoubleValue(MAX_ARRAY_INDEX + 1);
     do {
-        *tvr.addr() = *vector++;
-        if (!js_ValueToStringId(cx, idval, idr.addr()) ||
-            !obj->setGeneric(cx, idr.id(), tvr.addr(), true)) {
+        value = *vector++;
+        if (!ValueToId(cx, idval, id.address()) ||
+            !obj->setGeneric(cx, id, value.address(), true)) {
             return false;
         }
         idval.getDoubleRef() += 1;
@@ -1836,7 +1805,7 @@ InitArrayElements(JSContext *cx, JSObject *obj, uint32_t start, uint32_t count, 
 
 #if 0
 static JSBool
-InitArrayObject(JSContext *cx, JSObject *obj, jsuint length, const Value *vector)
+InitArrayObject(JSContext *cx, JSObject *obj, uint32_t length, const Value *vector)
 {
     JS_ASSERT(obj->isArray());
 
@@ -1855,7 +1824,7 @@ InitArrayObject(JSContext *cx, JSObject *obj, jsuint length, const Value *vector
     obj->setDenseArrayInitializedLength(length);
 
     bool hole = false;
-    for (jsuint i = 0; i < length; i++) {
+    for (uint32_t i = 0; i < length; i++) {
         obj->setDenseArrayElement(i, vector[i]);
         hole |= vector[i].isMagic(JS_ARRAY_HOLE);
     }
@@ -1870,35 +1839,35 @@ InitArrayObject(JSContext *cx, JSObject *obj, jsuint length, const Value *vector
  * Perl-inspired join, reverse, and sort.
  */
 static JSBool
-array_join(JSContext *cx, uintN argc, Value *vp)
+array_join(JSContext *cx, unsigned argc, Value *vp)
 {
     JS_CHECK_RECURSION(cx, return false);
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSString *str;
-    if (args.length() == 0 || args[0].isUndefined()) {
-        str = NULL;
-    } else {
+    RootedVarString str(cx);
+    if (args.hasDefined(0)) {
         str = ToString(cx, args[0]);
         if (!str)
             return JS_FALSE;
         args[0].setString(str);
+    } else {
+        str = NULL;
     }
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
     return array_toString_sub(cx, obj, JS_FALSE, str, args);
 }
 
 static JSBool
-array_reverse(JSContext *cx, uintN argc, Value *vp)
+array_reverse(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
-    jsuint len;
+    uint32_t len;
     if (!js_GetLengthProperty(cx, obj, &len))
         return false;
 
@@ -1960,7 +1929,7 @@ array_reverse(JSContext *cx, uintN argc, Value *vp)
     } while (false);
 
     Value lowval, hival;
-    for (jsuint i = 0, half = len / 2; i < half; i++) {
+    for (uint32_t i = 0, half = len / 2; i < half; i++) {
         JSBool hole, hole2;
         if (!JS_CHECK_OPERATION_LIMIT(cx) ||
             !GetElement(cx, obj, i, &hole, &lowval) ||
@@ -1992,8 +1961,8 @@ CompareStringValues(JSContext *cx, const Value &a, const Value &b, bool *lessOrE
     return true;
 }
 
-static uint32_t const powersOf10[] = {
-    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000
+static uint64_t const powersOf10[] = {
+    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 1000000000000ULL
 };
 
 static inline unsigned
@@ -2060,12 +2029,15 @@ CompareLexicographicInt32(JSContext *cx, const Value &a, const Value &b, bool *l
          */
         unsigned digitsa = NumDigitsBase10(auint);
         unsigned digitsb = NumDigitsBase10(buint);
-        if (digitsa == digitsb)
+        if (digitsa == digitsb) {
             *lessOrEqualp = (auint <= buint);
-        else if (digitsa > digitsb)
+        } else if (digitsa > digitsb) {
+            JS_ASSERT((digitsa - digitsb) < ArrayLength(powersOf10));
             *lessOrEqualp = (uint64_t(auint) < uint64_t(buint) * powersOf10[digitsa - digitsb]);
-        else /* if (digitsb > digitsa) */
+        } else { /* if (digitsb > digitsa) */
+            JS_ASSERT((digitsb - digitsa) < ArrayLength(powersOf10));
             *lessOrEqualp = (uint64_t(auint) * powersOf10[digitsb - digitsa] <= uint64_t(buint));
+        }
     }
 
     return true;
@@ -2168,7 +2140,7 @@ SortComparatorFunction::operator()(const Value &a, const Value &b, bool *lessOrE
     if (!Invoke(cx, ag))
         return false;
 
-    jsdouble cmp;
+    double cmp;
     if (!ToNumber(cx, ag.rval(), &cmp))
         return false;
 
@@ -2177,18 +2149,18 @@ SortComparatorFunction::operator()(const Value &a, const Value &b, bool *lessOrE
      * 'consistent compare functions' that don't return NaN, but is silent
      * about what the result should be. So we currently ignore it.
      */
-    *lessOrEqualp = (JSDOUBLE_IS_NaN(cmp) || cmp <= 0);
+    *lessOrEqualp = (MOZ_DOUBLE_IS_NaN(cmp) || cmp <= 0);
     return true;
 }
 
 } /* namespace anonymous */
 
 JSBool
-js::array_sort(JSContext *cx, uintN argc, Value *vp)
+js::array_sort(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     Value fval;
-    if (args.length() > 0 && !args[0].isUndefined()) {
+    if (args.hasDefined(0)) {
         if (args[0].isPrimitive()) {
             JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BAD_SORT_ARG);
             return false;
@@ -2198,11 +2170,13 @@ js::array_sort(JSContext *cx, uintN argc, Value *vp)
         fval.setNull();
     }
 
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootValue fvalRoot(cx, &fval);
+
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
-    jsuint len;
+    uint32_t len;
     if (!js_GetLengthProperty(cx, obj, &len))
         return false;
     if (len == 0) {
@@ -2249,7 +2223,7 @@ js::array_sort(JSContext *cx, uintN argc, Value *vp)
         undefs = 0;
         bool allStrings = true;
         bool allInts = true;
-        for (jsuint i = 0; i < len; i++) {
+        for (uint32_t i = 0; i < len; i++) {
             if (!JS_CHECK_OPERATION_LIMIT(cx))
                 return false;
 
@@ -2340,7 +2314,7 @@ js::array_sort(JSContext *cx, uintN argc, Value *vp)
             }
         }
 
-        if (!InitArrayElements(cx, obj, 0, jsuint(n), result, DontUpdateTypes))
+        if (!InitArrayElements(cx, obj, 0, uint32_t(n), result, DontUpdateTypes))
             return false;
     }
 
@@ -2364,9 +2338,9 @@ js::array_sort(JSContext *cx, uintN argc, Value *vp)
  * Perl-inspired push, pop, shift, unshift, and splice methods.
  */
 static bool
-array_push_slowly(JSContext *cx, JSObject *obj, CallArgs &args)
+array_push_slowly(JSContext *cx, HandleObject obj, CallArgs &args)
 {
-    jsuint length;
+    uint32_t length;
 
     if (!js_GetLengthProperty(cx, obj, &length))
         return false;
@@ -2374,13 +2348,13 @@ array_push_slowly(JSContext *cx, JSObject *obj, CallArgs &args)
         return false;
 
     /* Per ECMA-262, return the new array length. */
-    jsdouble newlength = length + jsdouble(args.length());
+    double newlength = length + double(args.length());
     args.rval().setNumber(newlength);
     return js_SetLengthProperty(cx, obj, newlength);
 }
 
 static bool
-array_push1_dense(JSContext* cx, JSObject* obj, CallArgs &args)
+array_push1_dense(JSContext* cx, HandleObject obj, CallArgs &args)
 {
     JS_ASSERT(args.length() == 1);
 
@@ -2390,7 +2364,7 @@ array_push1_dense(JSContext* cx, JSObject* obj, CallArgs &args)
         if (result == JSObject::ED_FAILED)
             return false;
         JS_ASSERT(result == JSObject::ED_SPARSE);
-        if (!obj->makeDenseArraySlow(cx))
+        if (!JSObject::makeDenseArraySlow(cx, obj))
             return false;
         return array_push_slowly(cx, obj, args);
     }
@@ -2402,16 +2376,16 @@ array_push1_dense(JSContext* cx, JSObject* obj, CallArgs &args)
 }
 
 JS_ALWAYS_INLINE JSBool
-NewbornArrayPushImpl(JSContext *cx, JSObject *obj, const Value &v)
+NewbornArrayPushImpl(JSContext *cx, HandleObject obj, const Value &v)
 {
     JS_ASSERT(!v.isMagic());
 
     uint32_t length = obj->getArrayLength();
     if (obj->isSlowArray()) {
         /* This can happen in one evil case. See bug 630377. */
-        jsid id;
-        return IndexToId(cx, length, &id) &&
-               js_DefineProperty(cx, obj, id, &v, NULL, NULL, JSPROP_ENUMERATE);
+        RootedVarId id(cx);
+        return IndexToId(cx, length, id.address()) &&
+               baseops::DefineProperty(cx, obj, id, &v, NULL, NULL, JSPROP_ENUMERATE);
     }
 
     JS_ASSERT(obj->isDenseArray());
@@ -2427,16 +2401,16 @@ NewbornArrayPushImpl(JSContext *cx, JSObject *obj, const Value &v)
 }
 
 JSBool
-js_NewbornArrayPush(JSContext *cx, JSObject *obj, const Value &vp)
+js_NewbornArrayPush(JSContext *cx, HandleObject obj, const Value &vp)
 {
     return NewbornArrayPushImpl(cx, obj, vp);
 }
 
 JSBool
-js::array_push(JSContext *cx, uintN argc, Value *vp)
+js::array_push(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -2448,9 +2422,9 @@ js::array_push(JSContext *cx, uintN argc, Value *vp)
 }
 
 static JSBool
-array_pop_slowly(JSContext *cx, JSObject* obj, CallArgs &args)
+array_pop_slowly(JSContext *cx, HandleObject obj, CallArgs &args)
 {
-    jsuint index;
+    uint32_t index;
     if (!js_GetLengthProperty(cx, obj, &index))
         return false;
 
@@ -2462,8 +2436,8 @@ array_pop_slowly(JSContext *cx, JSObject* obj, CallArgs &args)
     index--;
 
     JSBool hole;
-    Value elt;
-    if (!GetElement(cx, obj, index, &hole, &elt))
+    RootedVarValue elt(cx);
+    if (!GetElement(cx, obj, index, &hole, elt.address()))
         return false;
 
     if (!hole && DeleteArrayElement(cx, obj, index, true) < 0)
@@ -2474,9 +2448,9 @@ array_pop_slowly(JSContext *cx, JSObject* obj, CallArgs &args)
 }
 
 static JSBool
-array_pop_dense(JSContext *cx, JSObject* obj, CallArgs &args)
+array_pop_dense(JSContext *cx, HandleObject obj, CallArgs &args)
 {
-    jsuint index = obj->getArrayLength();
+    uint32_t index = obj->getArrayLength();
     if (index == 0) {
         args.rval().setUndefined();
         return JS_TRUE;
@@ -2485,8 +2459,8 @@ array_pop_dense(JSContext *cx, JSObject* obj, CallArgs &args)
     index--;
 
     JSBool hole;
-    Value elt;
-    if (!GetElement(cx, obj, index, &hole, &elt))
+    RootedVarValue elt(cx);
+    if (!GetElement(cx, obj, index, &hole, elt.address()))
         return JS_FALSE;
 
     if (!hole && DeleteArrayElement(cx, obj, index, true) < 0)
@@ -2501,10 +2475,10 @@ array_pop_dense(JSContext *cx, JSObject* obj, CallArgs &args)
 }
 
 JSBool
-js::array_pop(JSContext *cx, uintN argc, Value *vp)
+js::array_pop(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
     if (obj->isDenseArray())
@@ -2530,14 +2504,14 @@ mjit::stubs::ArrayShift(VMFrame &f)
 #endif /* JS_METHODJIT */
 
 JSBool
-js::array_shift(JSContext *cx, uintN argc, Value *vp)
+js::array_shift(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return JS_FALSE;
 
-    jsuint length;
+    uint32_t length;
     if (!js_GetLengthProperty(cx, obj, &length))
         return JS_FALSE;
 
@@ -2565,11 +2539,11 @@ js::array_shift(JSContext *cx, uintN argc, Value *vp)
             return JS_FALSE;
 
         /* Slide down the array above the first element. */
-        AutoValueRooter tvr(cx);
-        for (jsuint i = 0; i < length; i++) {
+        RootedVarValue value(cx);
+        for (uint32_t i = 0; i < length; i++) {
             if (!JS_CHECK_OPERATION_LIMIT(cx) ||
-                !GetElement(cx, obj, i + 1, &hole, tvr.addr()) ||
-                !SetOrDeleteArrayElement(cx, obj, i, hole, tvr.value())) {
+                !GetElement(cx, obj, i + 1, &hole, value.address()) ||
+                !SetOrDeleteArrayElement(cx, obj, i, hole, value)) {
                 return JS_FALSE;
             }
         }
@@ -2582,18 +2556,18 @@ js::array_shift(JSContext *cx, uintN argc, Value *vp)
 }
 
 static JSBool
-array_unshift(JSContext *cx, uintN argc, Value *vp)
+array_unshift(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
-    jsuint length;
+    uint32_t length;
     if (!js_GetLengthProperty(cx, obj, &length))
         return JS_FALSE;
 
-    jsdouble newlen = length;
+    double newlen = length;
     if (args.length() > 0) {
         /* Slide up the array to make room for all args at the bottom. */
         if (length > 0) {
@@ -2617,15 +2591,15 @@ array_unshift(JSContext *cx, uintN argc, Value *vp)
             } while (false);
 
             if (!optimized) {
-                jsdouble last = length;
-                jsdouble upperIndex = last + args.length();
-                AutoValueRooter tvr(cx);
+                double last = length;
+                double upperIndex = last + args.length();
+                RootedVarValue value(cx);
                 do {
                     --last, --upperIndex;
                     JSBool hole;
                     if (!JS_CHECK_OPERATION_LIMIT(cx) ||
-                        !GetElement(cx, obj, last, &hole, tvr.addr()) ||
-                        !SetOrDeleteArrayElement(cx, obj, upperIndex, hole, tvr.value())) {
+                        !GetElement(cx, obj, last, &hole, value.address()) ||
+                        !SetOrDeleteArrayElement(cx, obj, upperIndex, hole, value)) {
                         return JS_FALSE;
                     }
                 } while (last != 0);
@@ -2702,12 +2676,12 @@ CanOptimizeForDenseStorage(JSObject *arr, uint32_t startingIndex, uint32_t count
 
 /* ES5 15.4.4.12. */
 static JSBool
-array_splice(JSContext *cx, uintN argc, Value *vp)
+array_splice(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
     /* Step 1. */
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -2731,7 +2705,7 @@ array_splice(JSContext *cx, uintN argc, Value *vp)
     /* Step 7. */
     uint32_t actualDeleteCount;
     if (argc != 1) {
-        jsdouble deleteCountDouble;
+        double deleteCountDouble;
         if (!ToInteger(cx, argc >= 2 ? args[1] : Int32Value(0), &deleteCountDouble))
             return false;
         actualDeleteCount = JS_MIN(JS_MAX(deleteCountDouble, 0), len - actualStart);
@@ -2746,7 +2720,7 @@ array_splice(JSContext *cx, uintN argc, Value *vp)
     JS_ASSERT(len - actualStart >= actualDeleteCount);
 
     /* Steps 2, 8-9. */
-    JSObject *arr;
+    RootedVarObject arr(cx);
     if (CanOptimizeForDenseStorage(obj, actualStart, actualDeleteCount, cx)) {
         arr = NewDenseCopiedArray(cx, actualDeleteCount,
                                   obj->getDenseArrayElements() + actualStart);
@@ -2838,7 +2812,7 @@ array_splice(JSContext *cx, uintN argc, Value *vp)
                 return false;
 
             if (res == JSObject::ED_SPARSE) {
-                if (!obj->makeDenseArraySlow(cx))
+                if (!JSObject::makeDenseArraySlow(cx, obj))
                     return false;
             } else {
                 JS_ASSERT(res == JSObject::ED_OK);
@@ -2853,9 +2827,9 @@ array_splice(JSContext *cx, uintN argc, Value *vp)
             if (cx->typeInferenceEnabled())
                 obj->setDenseArrayInitializedLength(len + itemCount - actualDeleteCount);
         } else {
-            for (jsdouble k = len - actualDeleteCount; k > actualStart; k--) {
-                jsdouble from = k + actualDeleteCount - 1;
-                jsdouble to = k + itemCount - 1;
+            for (double k = len - actualDeleteCount; k > actualStart; k--) {
+                double from = k + actualDeleteCount - 1;
+                double to = k + itemCount - 1;
 
                 JSBool hole;
                 Value fromValue;
@@ -2879,7 +2853,7 @@ array_splice(JSContext *cx, uintN argc, Value *vp)
     }
 
     /* Step 16. */
-    jsdouble finalLength = jsdouble(len) - actualDeleteCount + itemCount;
+    double finalLength = double(len) - actualDeleteCount + itemCount;
     if (!js_SetLengthProperty(cx, obj, finalLength))
         return false;
 
@@ -2924,22 +2898,22 @@ mjit::stubs::ArrayConcatTwoArrays(VMFrame &f)
  * Python-esque sequence operations.
  */
 JSBool
-js::array_concat(JSContext *cx, uintN argc, Value *vp)
+js::array_concat(JSContext *cx, unsigned argc, Value *vp)
 {
     /* Treat our |this| object as the first argument; see ECMA 15.4.4.4. */
     Value *p = JS_ARGV(cx, vp) - 1;
 
     /* Create a new Array object and root it using *vp. */
-    JSObject *aobj = ToObject(cx, &vp[1]);
+    RootedVarObject aobj(cx, ToObject(cx, &vp[1]));
     if (!aobj)
         return false;
 
-    JSObject *nobj;
-    jsuint length;
+    RootedVarObject nobj(cx);
+    uint32_t length;
     if (aobj->isDenseArray()) {
         length = aobj->getArrayLength();
         const Value *vector = aobj->getDenseArrayElements();
-        jsuint initlen = aobj->getDenseArrayInitializedLength();
+        uint32_t initlen = aobj->getDenseArrayInitializedLength();
         nobj = NewDenseCopiedArray(cx, initlen, vector);
         if (!nobj)
             return JS_FALSE;
@@ -2959,20 +2933,20 @@ js::array_concat(JSContext *cx, uintN argc, Value *vp)
     }
 
     /* Loop over [0, argc] to concat args into nobj, expanding all Arrays. */
-    for (uintN i = 0; i <= argc; i++) {
+    for (unsigned i = 0; i <= argc; i++) {
         if (!JS_CHECK_OPERATION_LIMIT(cx))
             return false;
         const Value &v = p[i];
         if (v.isObject()) {
-            JSObject &obj = v.toObject();
-            if (ObjectClassIs(obj, ESClass_Array, cx)) {
-                jsuint alength;
-                if (!js_GetLengthProperty(cx, &obj, &alength))
+            RootedVarObject obj(cx, &v.toObject());
+            if (ObjectClassIs(*obj, ESClass_Array, cx)) {
+                uint32_t alength;
+                if (!js_GetLengthProperty(cx, obj, &alength))
                     return false;
                 for (uint32_t slot = 0; slot < alength; slot++) {
                     JSBool hole;
                     Value tmp;
-                    if (!JS_CHECK_OPERATION_LIMIT(cx) || !GetElement(cx, &obj, slot, &hole, &tmp))
+                    if (!JS_CHECK_OPERATION_LIMIT(cx) || !GetElement(cx, obj, slot, &hole, &tmp))
                         return false;
 
                     /*
@@ -2996,15 +2970,14 @@ js::array_concat(JSContext *cx, uintN argc, Value *vp)
 }
 
 static JSBool
-array_slice(JSContext *cx, uintN argc, Value *vp)
+array_slice(JSContext *cx, unsigned argc, Value *vp)
 {
-    JSObject *nobj;
-    jsuint length, begin, end, slot;
+    uint32_t length, begin, end, slot;
     JSBool hole;
 
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -3014,7 +2987,7 @@ array_slice(JSContext *cx, uintN argc, Value *vp)
     end = length;
 
     if (args.length() > 0) {
-        jsdouble d;
+        double d;
         if (!ToInteger(cx, args[0], &d))
             return false;
         if (d < 0) {
@@ -3024,9 +2997,9 @@ array_slice(JSContext *cx, uintN argc, Value *vp)
         } else if (d > length) {
             d = length;
         }
-        begin = (jsuint)d;
+        begin = (uint32_t)d;
 
-        if (args.length() > 1 && !args[1].isUndefined()) {
+        if (args.hasDefined(1)) {
             if (!ToInteger(cx, args[1], &d))
                 return false;
             if (d < 0) {
@@ -3036,12 +3009,14 @@ array_slice(JSContext *cx, uintN argc, Value *vp)
             } else if (d > length) {
                 d = length;
             }
-            end = (jsuint)d;
+            end = (uint32_t)d;
         }
     }
 
     if (begin > end)
         begin = end;
+
+    RootedVarObject nobj(cx);
 
     if (obj->isDenseArray() && end <= obj->getDenseArrayInitializedLength() &&
         !js_PrototypeHasIndexedProperties(cx, obj)) {
@@ -3058,13 +3033,13 @@ array_slice(JSContext *cx, uintN argc, Value *vp)
         return JS_FALSE;
     TryReuseArrayType(obj, nobj);
 
-    AutoValueRooter tvr(cx);
+    RootedVarValue value(cx);
     for (slot = begin; slot < end; slot++) {
         if (!JS_CHECK_OPERATION_LIMIT(cx) ||
-            !GetElement(cx, obj, slot, &hole, tvr.addr())) {
+            !GetElement(cx, obj, slot, &hole, value.address())) {
             return JS_FALSE;
         }
-        if (!hole && !SetArrayElement(cx, nobj, slot - begin, tvr.value()))
+        if (!hole && !SetArrayElement(cx, nobj, slot - begin, value))
             return JS_FALSE;
     }
 
@@ -3080,9 +3055,9 @@ enum IndexOfKind {
 static JSBool
 array_indexOfHelper(JSContext *cx, IndexOfKind mode, CallArgs &args)
 {
-    jsuint length, i, stop;
+    uint32_t length, i, stop;
     Value tosearch;
-    jsint direction;
+    int direction;
     JSBool hole;
 
     JSObject *obj = ToObject(cx, &args.thisv());
@@ -3097,7 +3072,7 @@ array_indexOfHelper(JSContext *cx, IndexOfKind mode, CallArgs &args)
         i = (mode == LastIndexOf) ? length - 1 : 0;
         tosearch = (args.length() != 0) ? args[0] : UndefinedValue();
     } else {
-        jsdouble start;
+        double start;
 
         tosearch = args[0];
         if (!ToInteger(cx, args[1], &start))
@@ -3109,14 +3084,14 @@ array_indexOfHelper(JSContext *cx, IndexOfKind mode, CallArgs &args)
                     goto not_found;
                 i = 0;
             } else {
-                i = (jsuint)start;
+                i = (uint32_t)start;
             }
         } else if (start >= length) {
             if (mode == IndexOf)
                 goto not_found;
             i = length - 1;
         } else {
-            i = (jsuint)start;
+            i = (uint32_t)start;
         }
     }
 
@@ -3131,7 +3106,7 @@ array_indexOfHelper(JSContext *cx, IndexOfKind mode, CallArgs &args)
     for (;;) {
         Value elt;
         if (!JS_CHECK_OPERATION_LIMIT(cx) ||
-            !GetElement(cx, obj, (jsuint)i, &hole, &elt)) {
+            !GetElement(cx, obj, (uint32_t)i, &hole, &elt)) {
             return JS_FALSE;
         }
         if (!hole) {
@@ -3154,14 +3129,14 @@ array_indexOfHelper(JSContext *cx, IndexOfKind mode, CallArgs &args)
 }
 
 static JSBool
-array_indexOf(JSContext *cx, uintN argc, Value *vp)
+array_indexOf(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_indexOfHelper(cx, IndexOf, args);
 }
 
 static JSBool
-array_lastIndexOf(JSContext *cx, uintN argc, Value *vp)
+array_lastIndexOf(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_indexOfHelper(cx, LastIndexOf, args);
@@ -3208,7 +3183,7 @@ static inline bool
 array_readonlyCommon(JSContext *cx, CallArgs &args)
 {
     /* Step 1. */
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -3222,7 +3197,7 @@ array_readonlyCommon(JSContext *cx, CallArgs &args)
         js_ReportMissingArg(cx, args.calleev(), 0);
         return false;
     }
-    JSObject *callable = js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK);
+    RootedVarObject callable(cx, js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK));
     if (!callable)
         return false;
 
@@ -3271,7 +3246,7 @@ array_readonlyCommon(JSContext *cx, CallArgs &args)
 
 /* ES5 15.4.4.16. */
 static JSBool
-array_every(JSContext *cx, uintN argc, Value *vp)
+array_every(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_readonlyCommon<ArrayEveryBehavior>(cx, args);
@@ -3279,7 +3254,7 @@ array_every(JSContext *cx, uintN argc, Value *vp)
 
 /* ES5 15.4.4.17. */
 static JSBool
-array_some(JSContext *cx, uintN argc, Value *vp)
+array_some(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_readonlyCommon<ArraySomeBehavior>(cx, args);
@@ -3287,7 +3262,7 @@ array_some(JSContext *cx, uintN argc, Value *vp)
 
 /* ES5 15.4.4.18. */
 static JSBool
-array_forEach(JSContext *cx, uintN argc, Value *vp)
+array_forEach(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_readonlyCommon<ArrayForEachBehavior>(cx, args);
@@ -3295,12 +3270,12 @@ array_forEach(JSContext *cx, uintN argc, Value *vp)
 
 /* ES5 15.4.4.19. */
 static JSBool
-array_map(JSContext *cx, uintN argc, Value *vp)
+array_map(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
     /* Step 1. */
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -3314,7 +3289,7 @@ array_map(JSContext *cx, uintN argc, Value *vp)
         js_ReportMissingArg(cx, args.calleev(), 0);
         return false;
     }
-    JSObject *callable = js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK);
+    RootedVarObject callable(cx, js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK));
     if (!callable)
         return false;
 
@@ -3322,7 +3297,7 @@ array_map(JSContext *cx, uintN argc, Value *vp)
     Value thisv = args.length() >= 2 ? args[1] : UndefinedValue();
 
     /* Step 6. */
-    JSObject *arr = NewDenseAllocatedArray(cx, len);
+    RootedVarObject arr(cx, NewDenseAllocatedArray(cx, len));
     if (!arr)
         return false;
     TypeObject *newtype = GetTypeCallerInitObject(cx, JSProto_Array);
@@ -3371,12 +3346,12 @@ array_map(JSContext *cx, uintN argc, Value *vp)
 
 /* ES5 15.4.4.20. */
 static JSBool
-array_filter(JSContext *cx, uintN argc, Value *vp)
+array_filter(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
     /* Step 1. */
-    JSObject *obj = ToObject(cx, &args.thisv());
+    RootedVarObject obj(cx, ToObject(cx, &args.thisv()));
     if (!obj)
         return false;
 
@@ -3390,7 +3365,7 @@ array_filter(JSContext *cx, uintN argc, Value *vp)
         js_ReportMissingArg(cx, args.calleev(), 0);
         return false;
     }
-    JSObject *callable = js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK);
+    RootedVarObject callable(cx, js_ValueToCallableObject(cx, &args[0], JSV2F_SEARCH_STACK));
     if (!callable)
         return false;
 
@@ -3398,7 +3373,7 @@ array_filter(JSContext *cx, uintN argc, Value *vp)
     Value thisv = args.length() >= 2 ? args[1] : UndefinedValue();
 
     /* Step 6. */
-    JSObject *arr = NewDenseAllocatedArray(cx, 0);
+    RootedVarObject arr(cx, NewDenseAllocatedArray(cx, 0));
     if (!arr)
         return false;
     TypeObject *newtype = GetTypeCallerInitObject(cx, JSProto_Array);
@@ -3568,7 +3543,7 @@ array_reduceCommon(JSContext *cx, CallArgs &args)
 
 /* ES5 15.4.4.21. */
 static JSBool
-array_reduce(JSContext *cx, uintN argc, Value *vp)
+array_reduce(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_reduceCommon<ArrayReduceBehavior>(cx, args);
@@ -3576,14 +3551,14 @@ array_reduce(JSContext *cx, uintN argc, Value *vp)
 
 /* ES5 15.4.4.22. */
 static JSBool
-array_reduceRight(JSContext *cx, uintN argc, Value *vp)
+array_reduceRight(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return array_reduceCommon<ArrayReduceRightBehavior>(cx, args);
 }
 
 static JSBool
-array_isArray(JSContext *cx, uintN argc, Value *vp)
+array_isArray(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     bool isArray = args.length() > 0 && IsObjectWithClass(args[0], ESClass_Array, cx);
@@ -3634,10 +3609,10 @@ static JSFunctionSpec array_static_methods[] = {
 
 /* ES5 15.4.2 */
 JSBool
-js_Array(JSContext *cx, uintN argc, Value *vp)
+js_Array(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    TypeObject *type = GetTypeCallerInitObject(cx, JSProto_Array);
+    RootedVarTypeObject type(cx, GetTypeCallerInitObject(cx, JSProto_Array));
     if (!type)
         return JS_FALSE;
 
@@ -3663,9 +3638,9 @@ js_Array(JSContext *cx, uintN argc, Value *vp)
         }
         length = uint32_t(i);
     } else {
-        jsdouble d = args[0].toDouble();
-        length = js_DoubleToECMAUint32(d);
-        if (d != jsdouble(length)) {
+        double d = args[0].toDouble();
+        length = ToUint32(d);
+        if (d != double(length)) {
             JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BAD_ARRAY_LENGTH);
             return false;
         }
@@ -3700,8 +3675,7 @@ js_InitArrayClass(JSContext *cx, JSObject *obj)
     arrayProto->setArrayLength(cx, 0);
 
     RootedVarFunction ctor(cx);
-    ctor = global->createConstructor(cx, js_Array, &ArrayClass,
-                                     CLASS_ATOM(cx, Array), 1);
+    ctor = global->createConstructor(cx, js_Array, CLASS_NAME(cx, Array), 1);
     if (!ctor)
         return NULL;
 
@@ -3735,7 +3709,7 @@ js_InitArrayClass(JSContext *cx, JSObject *obj)
 namespace js {
 
 static inline bool
-EnsureNewArrayElements(JSContext *cx, JSObject *obj, jsuint length)
+EnsureNewArrayElements(JSContext *cx, JSObject *obj, uint32_t length)
 {
     /*
      * If ensureElements creates dynamically allocated slots, then having
@@ -3764,7 +3738,7 @@ NewArray(JSContext *cx, uint32_t length, JSObject *proto)
 
     GlobalObject *parent = GetCurrentGlobal(cx);
 
-    NewObjectCache &cache = cx->compartment->newObjectCache;
+    NewObjectCache &cache = cx->runtime->newObjectCache;
 
     NewObjectCache::EntryIndex entry = -1;
     if (cache.lookupGlobal(&ArrayClass, parent, kind, &entry)) {
@@ -3779,7 +3753,7 @@ NewArray(JSContext *cx, uint32_t length, JSObject *proto)
         return obj;
     }
 
-    Root<GlobalObject*> parentRoot(cx, &parent);
+    JS::Root<GlobalObject*> parentRoot(cx, &parent);
 
     if (!proto && !FindProto(cx, &ArrayClass, parentRoot, &proto))
         return NULL;
@@ -3845,10 +3819,9 @@ mjit::stubs::NewDenseUnallocatedArray(VMFrame &f, uint32_t length)
 {
     JSObject *proto = (JSObject *) f.scratch;
     JSObject *obj = NewArray<false>(f.cx, length, proto);
-    if (!obj) {
-        js_ReportOutOfMemory(f.cx);
+    if (!obj)
         THROWV(NULL);
-    }
+
     return obj;
 }
 #endif
@@ -3856,6 +3829,9 @@ mjit::stubs::NewDenseUnallocatedArray(VMFrame &f, uint32_t length)
 JSObject *
 NewDenseCopiedArray(JSContext *cx, uint32_t length, const Value *vp, JSObject *proto /* = NULL */)
 {
+    // XXX vp may be an internal pointer to an object's dense array elements.
+    SkipRoot skip(cx, &vp);
+
     JSObject* obj = NewArray<true>(cx, length, proto);
     if (!obj)
         return NULL;
@@ -3873,7 +3849,7 @@ NewDenseCopiedArray(JSContext *cx, uint32_t length, const Value *vp, JSObject *p
 JSObject *
 NewSlowEmptyArray(JSContext *cx)
 {
-    JSObject *obj = NewBuiltinClassInstance(cx, &SlowArrayClass);
+    RootedVarObject obj(cx, NewBuiltinClassInstance(cx, &SlowArrayClass));
     if (!obj || !AddLengthProperty(cx, obj))
         return NULL;
 
@@ -3886,12 +3862,12 @@ NewSlowEmptyArray(JSContext *cx)
 
 #ifdef DEBUG
 JSBool
-js_ArrayInfo(JSContext *cx, uintN argc, jsval *vp)
+js_ArrayInfo(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     JSObject *array;
 
-    for (uintN i = 0; i < args.length(); i++) {
+    for (unsigned i = 0; i < args.length(); i++) {
         Value arg = args[i];
 
         char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, NULL);

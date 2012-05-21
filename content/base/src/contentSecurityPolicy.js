@@ -1,38 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the ContentSecurityPolicy module.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation
- *
- * Contributor(s):
- *   Sid Stamm <sid@mozilla.com>
- *   Brandon Sterne <bsterne@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 /**
@@ -238,8 +206,10 @@ ContentSecurityPolicy.prototype = {
 
     // If there is a policy-uri, fetch the policy, then re-call this function.
     // (1) parse and create a CSPRep object
+    // Note that we pass the full URI since when it's parsed as 'self' to construct a 
+    // CSPSource only the scheme, host, and port are kept. 
     var newpolicy = CSPRep.fromString(aPolicy,
-                                      selfURI.scheme + "://" + selfURI.hostPort,
+				      selfURI,
                                       this._docRequest,
                                       this);
 
@@ -301,7 +271,7 @@ ContentSecurityPolicy.prototype = {
 
         var failure = function(aEvt) {  
           if (req.readyState == 4 && req.status != 200) {
-            CSPError("Failed to send report to " + reportURI);
+            CSPError("Failed to send report to " + uris[i]);
           }  
         };  
         var req = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]  
@@ -312,6 +282,10 @@ ContentSecurityPolicy.prototype = {
           req.setRequestHeader('Content-Type', 'application/json');
           req.upload.addEventListener("error", failure, false);
           req.upload.addEventListener("abort", failure, false);
+
+          // we need to set an nsIChannelEventSink on the XHR object
+          // so we can tell it to not follow redirects when posting the reports
+          req.channel.notificationCallbacks = new CSPReportRedirectSink();
 
           req.send(JSON.stringify(report));
           CSPdebug("Sent violation report to " + uris[i]);
@@ -492,6 +466,56 @@ ContentSecurityPolicy.prototype = {
                                  aSourceFile, aScriptSample, aLineNum);
       }, Ci.nsIThread.DISPATCH_NORMAL);
   },
+};
+
+// The POST of the violation report (if it happens) should not follow
+// redirects, per the spec. hence, we implement an nsIChannelEventSink
+// with an object so we can tell XHR to abort if a redirect happens.
+function CSPReportRedirectSink() {
+}
+
+CSPReportRedirectSink.prototype = {
+  QueryInterface: function requestor_qi(iid) {
+    if (iid.equals(Ci.nsISupports) ||
+        iid.equals(Ci.nsIInterfaceRequestor) ||
+        iid.equals(Ci.nsIChannelEventSink))
+      return this;
+    throw Cr.NS_ERROR_NO_INTERFACE;
+  },
+
+  // nsIInterfaceRequestor
+  getInterface: function requestor_gi(iid) {
+    if (iid.equals(Ci.nsIChannelEventSink))
+      return this;
+
+    throw Components.results.NS_ERROR_NO_INTERFACE;
+  },
+
+  // nsIChannelEventSink
+  asyncOnChannelRedirect: function channel_redirect(oldChannel, newChannel,
+                                                    flags, callback) {
+    CSPWarning("Post of violation report to " + oldChannel.URI.asciiSpec +
+               " failed, as a redirect occurred");
+
+    // cancel the old channel so XHR failure callback happens
+    oldChannel.cancel(Cr.NS_ERROR_ABORT);
+
+    // notify an observer that we have blocked the report POST due to a redirect,
+    // used in testing, do this async since we're in an async call now to begin with
+    Services.tm.mainThread.dispatch(
+      function() {
+        observerSubject = Cc["@mozilla.org/supports-cstring;1"]
+                             .createInstance(Ci.nsISupportsCString);
+        observerSubject.data = oldChannel.URI.asciiSpec;
+
+        Services.obs.notifyObservers(observerSubject,
+                                     CSP_VIOLATION_TOPIC,
+                                     "denied redirect while sending violation report");
+      }, Ci.nsIThread.DISPATCH_NORMAL);
+
+    // throw to stop the redirect happening
+    throw Cr.NS_BINDING_REDIRECTED;
+  }
 };
 
 var NSGetFactory = XPCOMUtils.generateNSGetFactory([ContentSecurityPolicy]);

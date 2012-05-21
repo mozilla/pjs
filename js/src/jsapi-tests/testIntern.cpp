@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "tests.h"
 #include "jsatom.h"
 
@@ -23,12 +27,11 @@ struct StringWrapper
     bool     strOk;
 } sw;
 
-JSBool
-GCCallback(JSContext *cx, JSGCStatus status)
+void
+FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status)
 {
-    if (status == JSGC_MARK_END)
+    if (status == JSFINALIZE_START)
         sw.strOk = !JS_IsAboutToBeFinalized(sw.str);
-    return true;
 }
 
 BEGIN_TEST(testInternAcrossGC)
@@ -36,8 +39,8 @@ BEGIN_TEST(testInternAcrossGC)
     sw.str = JS_InternString(cx, "wrapped chars that another test shouldn't be using");
     sw.strOk = false;
     CHECK(sw.str);
-    JS_SetGCCallback(cx, GCCallback);
-    JS_GC(cx);
+    JS_SetFinalizeCallback(rt, FinalizeCallback);
+    JS_GC(rt);
     CHECK(sw.strOk);
     return true;
 }

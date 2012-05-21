@@ -9,6 +9,12 @@ let gFocusManager = Cc["@mozilla.org/focus-manager;1"].
 
 function test() {
   waitForExplicitFinish();
+
+  registerCleanupFunction(function () {
+    Services.prefs.clearUserPref("browser.altClickSave");
+  });
+  Services.prefs.setBoolPref("browser.altClickSave", true);
+
   runAltLeftClickTest();
 }
 
@@ -26,7 +32,7 @@ function runAltLeftClickTest() {
 }
 
 function runShiftLeftClickTest() {
-  let listener = new WindowListener("chrome://browser/content/browser.xul", function(aWindow) {
+  let listener = new WindowListener(getBrowserURL(), function(aWindow) {
     Services.wm.removeListener(listener);
     addPageShowListener(aWindow.gBrowser, function() {
       info("URL should be loaded in a new window");

@@ -56,6 +56,10 @@ ifneq (Android,$(OS_TARGET))
 CPPSRCS += http_upload.cc
 endif
 
+ifeq (gonk,$(MOZ_WIDGET_TOOLKIT))
+DEFINES += -DELFSIZE=32
+endif
+
 HOST_CPPSRCS = \
   dump_symbols.cc \
   file_id.cc \
@@ -66,3 +70,6 @@ HOST_CPPSRCS = \
 FORCE_STATIC_LIB = 1
 
 include $(topsrcdir)/config/rules.mk
+
+# See https://bugzilla.mozilla.org/show_bug.cgi?id=741348#c11
+file_id.$(OBJ_SUFFIX): STL_FLAGS=

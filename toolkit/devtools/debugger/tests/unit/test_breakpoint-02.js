@@ -15,7 +15,9 @@ function run_test()
   gDebuggee = addTestGlobal("test-stack");
   gClient = new DebuggerClient(DebuggerServer.connectPipe());
   gClient.connect(function () {
-    attachTestGlobalClientAndResume(gClient, "test-stack", function (aResponse, aThreadClient) {
+    attachTestGlobalClientAndResume(gClient,
+                                    "test-stack",
+                                    function (aResponse, aThreadClient) {
       gThreadClient = aThreadClient;
       test_breakpoint_running();
     });
@@ -25,7 +27,8 @@ function run_test()
 
 function test_breakpoint_running()
 {
-  let path = getFilePath('test_breakpoint-01.js');
+  let path = getFilePath('test_breakpoint-02.js');
+  let location = { url: path, line: gDebuggee.line0 + 2};
 
   gDebuggee.eval("var line0 = Error().lineNumber;\n" +
                  "var a = 1;\n" +  // line0 + 1
@@ -37,7 +40,7 @@ function test_breakpoint_running()
     do_check_eq(aPacket.why.type, "interrupted");
   });
 
-  gThreadClient.setBreakpoint({ url: path, line: gDebuggee.line0 + 3}, function(aResponse) {
+  gThreadClient.setBreakpoint(location, function(aResponse) {
     // Eval scripts don't stick around long enough for the breakpoint to be set,
     // so just make sure we got the expected response from the actor.
     do_check_eq(aResponse.error, "noScript");

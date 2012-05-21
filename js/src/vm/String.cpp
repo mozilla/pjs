@@ -1,46 +1,13 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=79 ft=cpp:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey JavaScript engine.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Luke Wagner <luke@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/RangedPtr.h"
 
-#include "jsgcmark.h"
+#include "gc/Marking.h"
 
 #include "String.h"
 #include "String-inl.h"
@@ -306,7 +273,7 @@ JSRope::flatten(JSContext *maybecx)
 }
 
 JSString * JS_FASTCALL
-js_ConcatStrings(JSContext *cx, JSString *left, JSString *right)
+js_ConcatStrings(JSContext *cx, HandleString left, HandleString right)
 {
     JS_ASSERT_IF(!left->isAtom(), left->compartment() == cx->compartment);
     JS_ASSERT_IF(!right->isAtom(), right->compartment() == cx->compartment);
@@ -372,7 +339,7 @@ JSDependentString::undepend(JSContext *cx)
 }
 
 bool
-JSFlatString::isIndex(uint32_t *indexp) const
+JSFlatString::isIndexSlow(uint32_t *indexp) const
 {
     const jschar *s = charsZ();
     jschar ch = *s;
@@ -500,19 +467,19 @@ StaticStrings::trace(JSTracer *trc)
     /* These strings never change, so barriers are not needed. */
 
     for (uint32_t i = 0; i < UNIT_STATIC_LIMIT; i++) {
-        if (JSAtom *atom = unitStaticTable[i])
-            MarkStringUnbarriered(trc, atom, "unit-static-string");
+        if (unitStaticTable[i])
+            MarkStringUnbarriered(trc, &unitStaticTable[i], "unit-static-string");
     }
 
     for (uint32_t i = 0; i < NUM_SMALL_CHARS * NUM_SMALL_CHARS; i++) {
-        if (JSAtom *atom = length2StaticTable[i])
-            MarkStringUnbarriered(trc, atom, "length2-static-string");
+        if (length2StaticTable[i])
+            MarkStringUnbarriered(trc, &length2StaticTable[i], "length2-static-string");
     }
 
     /* This may mark some strings more than once, but so be it. */
     for (uint32_t i = 0; i < INT_STATIC_LIMIT; i++) {
-        if (JSAtom *atom = intStaticTable[i])
-            MarkStringUnbarriered(trc, atom, "int-static-string");
+        if (intStaticTable[i])
+            MarkStringUnbarriered(trc, &intStaticTable[i], "int-static-string");
     }
 }
 
@@ -529,11 +496,11 @@ StaticStrings::isStatic(JSAtom *atom)
         if ('1' <= chars[0] && chars[0] <= '9' &&
             '0' <= chars[1] && chars[1] <= '9' &&
             '0' <= chars[2] && chars[2] <= '9') {
-            jsint i = (chars[0] - '0') * 100 +
+            int i = (chars[0] - '0') * 100 +
                       (chars[1] - '0') * 10 +
                       (chars[2] - '0');
 
-            return (jsuint(i) < INT_STATIC_LIMIT);
+            return (unsigned(i) < INT_STATIC_LIMIT);
         }
         return false;
       default:

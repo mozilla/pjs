@@ -77,8 +77,10 @@
     {
       //////////////////////////////////////////////////////////////////////////
       // xul:listbox (bug 417317)
-      testGroupAttrs("item1", 1, 2);
-      testGroupAttrs("item2", 2, 2);
+      testGroupAttrs("listitem1", 1, 4);
+      testGroupAttrs("listitem2", 2, 4);
+      testGroupAttrs("listitem3", 3, 4);
+      testGroupAttrs("listitem4", 4, 4);
 
       //////////////////////////////////////////////////////////////////////////
       // xul:tab
@@ -89,6 +91,13 @@
       // xul:radio
       testGroupAttrs("radio1", 1, 2);
       testGroupAttrs("radio2", 2, 2);
+
+      //////////////////////////////////////////////////////////////////////////
+      // xul:menulist
+      testGroupAttrs("menulist1.1", 1);
+      testGroupAttrs("menulist1.2", 2);
+      testGroupAttrs("menulist1.3", 3);
+      testGroupAttrs("menulist1.4", 4);
 
       //////////////////////////////////////////////////////////////////////////
       // ARIA menu (bug 441888)
@@ -136,9 +145,12 @@
   </body>
 
   <vbox flex="1">
+
   <listbox>
-    <listitem label="item1" id="item1"/>
-    <listitem label="item2" id="item2"/>
+    <listitem label="listitem1" id="listitem1"/>
+    <listitem label="listitem2" id="listitem2" type="checkbox"/>
+    <listitem label="listitem3" id="listitem3" type="checkbox"/>
+    <listitem label="listitem4" id="listitem4"/>
   </listbox>
 
   <menubar>
@@ -174,6 +186,15 @@
     <radio id="radio1" label="radio1"/>
     <radio id="radio2" label="radio2"/>
   </radiogroup>
+
+  <menulist id="menulist1" label="Vehicle">
+    <menupopup>
+      <menuitem id="menulist1.1" label="Car"/>
+      <menuitem id="menulist1.2" label="Taxi"/>
+      <menuitem id="menulist1.3" label="Bus" selected="true"/>
+      <menuitem id="menulist1.4" label="Train"/>
+    </menupopup>
+  </menulist>
 
   <vbox>
     <description role="menuitem" id="aria-menuitem"

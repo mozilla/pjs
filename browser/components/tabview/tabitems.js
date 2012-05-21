@@ -1,45 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is tabitems.js.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- * Ian Gilman <ian@iangilman.com>
- * Aza Raskin <aza@mozilla.com>
- * Michael Yoshitaka Erlewine <mitcho@mitcho.com>
- * Ehsan Akhgari <ehsan@mozilla.com>
- * Raymond Lee <raymond@appcoast.com>
- * Tim Taubert <tim.taubert@gmx.de>
- * Sean Dunn <seanedunn@yahoo.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // **********
 // Title: tabitems.js
@@ -68,8 +29,7 @@ function TabItem(tab, options) {
   let div = document.body.lastChild;
   let $div = iQ(div);
 
-  this._cachedImageData = null;
-  this._thumbnailNeedsSaving = false;
+  this._showsCachedData = false;
   this.canvasSizeForced = false;
   this.$thumb = iQ('.thumb', $div);
   this.$fav   = iQ('.favicon', $div);
@@ -81,13 +41,6 @@ function TabItem(tab, options) {
 
   this.tabCanvas = new TabCanvas(this.tab, this.$canvas[0]);
 
-  let self = this;
-
-  // when we paint onto the canvas make sure our thumbnail gets saved
-  this.tabCanvas.addSubscriber("painted", function () {
-    self._thumbnailNeedsSaving = true;
-  });
-
   this.defaultSize = new Point(TabItems.tabWidth, TabItems.tabHeight);
   this._hidden = false;
   this.isATabItem = true;
@@ -96,7 +49,6 @@ function TabItem(tab, options) {
   this._reconnected = false;
   this.isDragging = false;
   this.isStacked = false;
-  this.url = "";
 
   // Read off the total vertical and horizontal padding on the tab container
   // and cache this value, as it must be the same for every TabItem.
@@ -123,6 +75,8 @@ function TabItem(tab, options) {
   };
 
   this.draggable();
+
+  let self = this;
 
   // ___ more div setup
   $div.mousedown(function(e) {
@@ -191,42 +145,32 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
   // Returns a boolean indicates whether the cached data is being displayed or
   // not. 
   isShowingCachedData: function TabItem_isShowingCachedData() {
-    return (this._cachedImageData != null);
+    return this._showsCachedData;
   },
 
   // ----------
   // Function: showCachedData
   // Shows the cached data i.e. image and title.  Note: this method should only
   // be called at browser startup with the cached data avaliable.
-  //
-  // Parameters:
-  //   tabData - the tab data
-  //   imageData - the image data
-  showCachedData: function TabItem_showCachedData(tabData, imageData) {
-    this._cachedImageData = imageData;
-    this.$cachedThumb.attr("src", this._cachedImageData).show();
-    this.$canvas.css({opacity: 0});
-    let label = "";
-    let title;
-    if (tabData.title) {
-      label = tabData.title;
-      title = label + "\n" + tabData.url;
-    } else {
-      title = tabData.url;
-    }
-    this.$tabTitle.text(label).attr("title", title);
+  showCachedData: function TabItem_showCachedData() {
+    let {title, url} = this.getTabState();
+    let thumbnailURL = gPageThumbnails.getThumbnailURL(url);
 
-    this._sendToSubscribers("showingCachedData");
+    this.$cachedThumb.attr("src", thumbnailURL).show();
+    this.$canvas.css({opacity: 0});
+
+    let tooltip = (title && title != url ? title + "\n" + url : url);
+    this.$tabTitle.text(title).attr("title", tooltip);
+    this._showsCachedData = true;
   },
 
   // ----------
   // Function: hideCachedData
   // Hides the cached data i.e. image and title and show the canvas.
   hideCachedData: function TabItem_hideCachedData() {
-    this.$cachedThumb.hide();
+    this.$cachedThumb.attr("src", "").hide();
     this.$canvas.css({opacity: 1.0});
-    if (this._cachedImageData)
-      this._cachedImageData = null;
+    this._showsCachedData = false;
   },
 
   // ----------
@@ -234,9 +178,7 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
   // Get data to be used for persistent storage of this object.
   getStorageData: function TabItem_getStorageData() {
     let data = {
-      url: this.tab.linkedBrowser.currentURI.spec,
-      groupID: (this.parent ? this.parent.id : 0),
-      title: this.tab.label
+      groupID: (this.parent ? this.parent.id : 0)
     };
     if (this.parent && this.parent.getActiveTab() == this)
       data.active = true;
@@ -249,7 +191,7 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
   // Store persistent for this object.
   save: function TabItem_save() {
     try {
-      if (!this.tab || this.tab.parentNode == null || !this._reconnected) // too soon/late to save
+      if (!this.tab || !Utils.isValidXULTab(this.tab) || !this._reconnected) // too soon/late to save
         return;
 
       let data = this.getStorageData();
@@ -261,94 +203,39 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
   },
 
   // ----------
-  // Function: loadThumbnail
-  // Loads the tabItems thumbnail.
-  loadThumbnail: function TabItem_loadThumbnail(tabData) {
-    Utils.assert(tabData, "invalid or missing argument <tabData>");
+  // Function: _getCurrentTabStateEntry
+  // Returns the current tab state's active history entry.
+  _getCurrentTabStateEntry: function TabItem__getCurrentTabStateEntry() {
+    let tabState = Storage.getTabState(this.tab);
 
-    let self = this;
-
-    function TabItem_loadThumbnail_callback(error, imageData) {
-      // we could have been unlinked while waiting for the thumbnail to load
-      if (!self.tab)
-        return;
-
-      if (error || !imageData) {
-        // paint the canvas to avoid leaving traces when dragging tab over it
-        self.tabCanvas.paint();
-        return;
-      }
-
-      self._sendToSubscribers("loadedCachedImageData");
-
-      // If we have a cached image, then show it if the loaded URL matches
-      // what the cache is from, OR the loaded URL is blank, which means
-      // that the page hasn't loaded yet.
-      let currentUrl = self.tab.linkedBrowser.currentURI.spec;
-      if (tabData.url == currentUrl || currentUrl == "about:blank")
-        self.showCachedData(tabData, imageData);
+    if (tabState) {
+      let index = (tabState.index || tabState.entries.length) - 1;
+      if (index in tabState.entries)
+        return tabState.entries[index];
     }
 
-    ThumbnailStorage.loadThumbnail(tabData.url, TabItem_loadThumbnail_callback);
+    return null;
   },
 
   // ----------
-  // Function: saveThumbnail
-  // Saves the tabItems thumbnail.
-  saveThumbnail: function TabItem_saveThumbnail(options) {
-    if (!this.tabCanvas)
-      return;
+  // Function: getTabState
+  // Returns the current tab state, i.e. the title and URL of the active
+  // history entry.
+  getTabState: function TabItem_getTabState() {
+    let entry = this._getCurrentTabStateEntry();
+    let title = "";
+    let url = "";
 
-    // nothing to do if the thumbnail hasn't changed
-    if (!this._thumbnailNeedsSaving)
-      return;
+    if (entry) {
+      if (entry.title)
+        title = entry.title;
 
-    // check the storage policy to see if we're allowed to store the thumbnail
-    if (!StoragePolicy.canStoreThumbnailForTab(this.tab)) {
-      this._sendToSubscribers("deniedToSaveImageData");
-      return;
-    }
-
-    let url = this.tab.linkedBrowser.currentURI.spec;
-    let delayed = this._saveThumbnailDelayed;
-    let synchronously = (options && options.synchronously);
-
-    // is there a delayed save waiting?
-    if (delayed) {
-      // check if url has changed since last call to saveThumbnail
-      if (!synchronously && url == delayed.url)
-        return;
-
-      // url has changed in the meantime, clear the timeout
-      clearTimeout(delayed.timeout);
-    }
-
-    let self = this;
-
-    function callback(error) {
-      if (!error) {
-        self._thumbnailNeedsSaving = false;
-        self._sendToSubscribers("savedCachedImageData");
-      }
-    }
-
-    function doSaveThumbnail() {
-      self._saveThumbnailDelayed = null;
-
-      // we could have been unlinked in the meantime
-      if (!self.tabCanvas)
-        return;
-
-      let imageData = self.tabCanvas.toImageData();
-      ThumbnailStorage.saveThumbnail(url, imageData, callback, options);
-    }
-
-    if (synchronously) {
-      doSaveThumbnail();
+      url = entry.url;
     } else {
-      let timeout = setTimeout(doSaveThumbnail, 2000);
-      this._saveThumbnailDelayed = {url: url, timeout: timeout};
+      url = this.tab.linkedBrowser.currentURI.spec;
     }
+
+    return {title: title, url: url};
   },
 
   // ----------
@@ -370,7 +257,9 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
     let groupItem;
 
     if (tabData && TabItems.storageSanity(tabData)) {
-      this.loadThumbnail(tabData);
+      // Show the cached data while we're waiting for the tabItem to be updated.
+      // If the tab isn't restored yet this acts as a placeholder until it is.
+      this.showCachedData();
 
       if (this.parent)
         this.parent.remove(this, {immediately: true});
@@ -547,7 +436,7 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
 
     Utils.assert(Utils.isRect(this.bounds), 'TabItem.setBounds: this.bounds is not a real rectangle!');
 
-    if (!this.parent && this.tab.parentNode != null)
+    if (!this.parent && Utils.isValidXULTab(this.tab))
       this.setTrenches(rect);
 
     this.save();
@@ -777,6 +666,32 @@ TabItem.prototype = Utils.extend(new Item(), new Subscribable(), {
       transformOrigin: xOrigin + "% " + yOrigin + "%",
       transform: "scale(" + zoomScaleFactor + ")"
     };
+  },
+
+  // ----------
+  // Function: updateCanvas
+  // Updates the tabitem's canvas.
+  updateCanvas: function TabItem_updateCanvas() {
+    // ___ thumbnail
+    let $canvas = this.$canvas;
+    if (!this.canvasSizeForced) {
+      let w = $canvas.width();
+      let h = $canvas.height();
+      if (w != $canvas[0].width || h != $canvas[0].height) {
+        $canvas[0].width = w;
+        $canvas[0].height = h;
+      }
+    }
+
+    TabItems._lastUpdateTime = Date.now();
+    this._lastTabUpdateTime = TabItems._lastUpdateTime;
+
+    if (this.tabCanvas)
+      this.tabCanvas.paint();
+
+    // ___ cache
+    if (this.isShowingCachedData())
+      this.hideCachedData();
   }
 });
 
@@ -804,6 +719,7 @@ let TabItems = {
   tempCanvas: null,
   _reconnectingPaused: false,
   tabItemPadding: {},
+  _mozAfterPaintHandler: null,
 
   // ----------
   // Function: toString
@@ -834,6 +750,10 @@ let TabItems = {
     // algorithm breaks down
     this.tempCanvas.width = 150;
     this.tempCanvas.height = 112;
+
+    let mm = gWindow.messageManager;
+    this._mozAfterPaintHandler = this.onMozAfterPaint.bind(this);
+    mm.addMessageListener("Panorama:MozAfterPaint", this._mozAfterPaintHandler);
 
     // When a tab is opened, create the TabItem
     this._eventListeners.open = function (event) {
@@ -884,6 +804,9 @@ let TabItems = {
   // ----------
   // Function: uninit
   uninit: function TabItems_uninit() {
+    let mm = gWindow.messageManager;
+    mm.removeMessageListener("Panorama:MozAfterPaint", this._mozAfterPaintHandler);
+
     for (let name in this._eventListeners) {
       AllTabs.unregister(name, this._eventListeners[name]);
     }
@@ -922,20 +845,33 @@ let TabItems = {
     return this._fragment;
   },
 
-  // ----------
-  // Function: isComplete
-  // Return whether the xul:tab has fully loaded.
-  isComplete: function TabItems_isComplete(tab) {
-    // If our readyState is complete, but we're showing about:blank,
-    // and we're not loading about:blank, it means we haven't really
-    // started loading. This can happen to the first few tabs in a
-    // page.
+  // Function: _isComplete
+  // Checks whether the xul:tab has fully loaded and calls a callback with a 
+  // boolean indicates whether the tab is loaded or not.
+  _isComplete: function TabItems__isComplete(tab, callback) {
     Utils.assertThrow(tab, "tab");
-    return (
-      tab.linkedBrowser.contentDocument.readyState == 'complete' &&
-      !(tab.linkedBrowser.contentDocument.URL == 'about:blank' &&
-        tab._tabViewTabItem.url != 'about:blank')
-    );
+
+    let mm = tab.linkedBrowser.messageManager;
+    let message = "Panorama:isDocumentLoaded";
+
+    mm.addMessageListener(message, function onMessage(cx) {
+      mm.removeMessageListener(cx.name, onMessage);
+      callback(cx.json.isLoaded);
+    });
+    mm.sendAsyncMessage(message);
+  },
+
+  // ----------
+  // Function: onMozAfterPaint
+  // Called when a web page is painted.
+  onMozAfterPaint: function TabItems_onMozAfterPaint(cx) {
+    let index = gBrowser.browsers.indexOf(cx.target);
+    if (index == -1)
+      return;
+
+    let tab = gBrowser.tabs[index];
+    if (!tab.pinned)
+      this.update(tab);
   },
 
   // ----------
@@ -985,20 +921,21 @@ let TabItems = {
       let tabItem = tab._tabViewTabItem;
 
       // Even if the page hasn't loaded, display the favicon and title
-
       // ___ icon
-      if (UI.shouldLoadFavIcon(tab.linkedBrowser)) {
-        let iconUrl = UI.getFavIconUrlForTab(tab);
-
-        if (tabItem.$favImage[0].src != iconUrl)
-          tabItem.$favImage[0].src = iconUrl;
-
-        iQ(tabItem.$fav[0]).show();
-      } else {
-        if (tabItem.$favImage[0].hasAttribute("src"))
-          tabItem.$favImage[0].removeAttribute("src");
-        iQ(tabItem.$fav[0]).hide();
-      }
+      FavIcons.getFavIconUrlForTab(tab, function TabItems__update_getFavIconUrlCallback(iconUrl) {
+        let favImage = tabItem.$favImage[0];
+        let fav = tabItem.$fav;
+        if (iconUrl) {
+          if (favImage.src != iconUrl)
+            favImage.src = iconUrl;
+          fav.show();
+        } else {
+          if (favImage.hasAttribute("src"))
+            favImage.removeAttribute("src");
+          fav.hide();
+        }
+        tabItem._sendToSubscribers("iconUpdated");
+      });
 
       // ___ label
       let label = tab.label;
@@ -1012,42 +949,26 @@ let TabItems = {
 
       // ___ URL
       let tabUrl = tab.linkedBrowser.currentURI.spec;
-      if (tabUrl != tabItem.url) {
-        tabItem.url = tabUrl;
-        tabItem.save();
-      }
-      tabItem.$container.attr("title", label + "\n" + tabUrl);
+      let tooltip = (label == tabUrl ? label : label + "\n" + tabUrl);
+      tabItem.$container.attr("title", tooltip);
 
       // ___ Make sure the tab is complete and ready for updating.
-      if (!this.isComplete(tab) && (!options || !options.force)) {
-        // If it's incomplete, stick it on the end of the queue
-        this._tabsWaitingForUpdate.push(tab);
-        return;
+      if (options && options.force) {
+        tabItem.updateCanvas();
+        tabItem._sendToSubscribers("updated");
+      } else {
+        this._isComplete(tab, function TabItems__update_isComplete(isComplete) {
+          if (!Utils.isValidXULTab(tab) || tab.pinned)
+            return;
+
+          if (isComplete) {
+            tabItem.updateCanvas();
+            tabItem._sendToSubscribers("updated");
+          } else {
+            this._tabsWaitingForUpdate.push(tab);
+          }
+        }.bind(this));
       }
-
-      // ___ thumbnail
-      let $canvas = tabItem.$canvas;
-      if (!tabItem.canvasSizeForced) {
-        let w = $canvas.width();
-        let h = $canvas.height();
-        if (w != tabItem.$canvas[0].width || h != tabItem.$canvas[0].height) {
-          tabItem.$canvas[0].width = w;
-          tabItem.$canvas[0].height = h;
-        }
-      }
-
-      this._lastUpdateTime = Date.now();
-      tabItem._lastTabUpdateTime = this._lastUpdateTime;
-
-      tabItem.tabCanvas.paint();
-      tabItem.saveThumbnail();
-
-      // ___ cache
-      if (tabItem.isShowingCachedData())
-        tabItem.hideCachedData();
-
-      // ___ notify subscribers that a full update has completed.
-      tabItem._sendToSubscribers("updated");
     } catch(e) {
       Utils.log(e);
     }
@@ -1256,17 +1177,6 @@ let TabItems = {
 
     tabItems.forEach(function TabItems_saveAll_forEach(tabItem) {
       tabItem.save();
-    });
-  },
-
-  // ----------
-  // Function: saveAllThumbnails
-  // Saves thumbnails of all open <TabItem>s.
-  saveAllThumbnails: function TabItems_saveAllThumbnails(options) {
-    let tabItems = this.getItems();
-
-    tabItems.forEach(function TabItems_saveAllThumbnails_forEach(tabItem) {
-      tabItem.saveThumbnail(options);
     });
   },
 

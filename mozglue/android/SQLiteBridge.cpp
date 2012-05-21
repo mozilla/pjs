@@ -1,38 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2012
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Gian-Carlo Pascutto <gpascutto@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -96,53 +64,60 @@ static bool initialized = false;
 static jclass stringClass;
 static jclass objectClass;
 static jclass byteBufferClass;
-static jclass arrayListClass;
+static jclass cursorClass;
 static jmethodID jByteBufferAllocateDirect;
-static jmethodID jArrayListAdd;
-static jobject jNull;
-
-static void
-JNI_Throw(JNIEnv* jenv, const char* name, const char* msg)
-{
-    jclass cls = jenv->FindClass(name);
-    if (cls == NULL) {
-        LOG("Couldn't find exception class (or exception pending)\n");
-        return;
-    }
-    int rc = jenv->ThrowNew(cls, msg);
-    if (rc < 0) {
-        LOG("Error throwing exception\n");
-    }
-    jenv->DeleteLocalRef(cls);
-}
+static jmethodID jCursorConstructor;
+static jmethodID jCursorAddRow;
 
 static void
 JNI_Setup(JNIEnv* jenv)
 {
     if (initialized) return;
 
-    objectClass     = jenv->FindClass("java/lang/Object");
-    stringClass     = jenv->FindClass("java/lang/String");
-    byteBufferClass = jenv->FindClass("java/nio/ByteBuffer");
-    arrayListClass  = jenv->FindClass("java/util/ArrayList");
-    jNull           = jenv->NewGlobalRef(NULL);
+    jclass lObjectClass       = jenv->FindClass("java/lang/Object");
+    jclass lStringClass       = jenv->FindClass("java/lang/String");
+    jclass lByteBufferClass   = jenv->FindClass("java/nio/ByteBuffer");
+    jclass lCursorClass       = jenv->FindClass("org/mozilla/gecko/sqlite/MatrixBlobCursor");
 
-    if (stringClass == NULL || objectClass == NULL
-        || byteBufferClass == NULL || arrayListClass == NULL) {
+    if (lStringClass == NULL
+        || lObjectClass == NULL
+        || lByteBufferClass == NULL
+        || lCursorClass == NULL) {
         LOG("Error finding classes");
         JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException",
                   "FindClass error");
         return;
     }
 
+    // Those are only local references. Make them global so they work
+    // across calls and threads.
+    objectClass = (jclass)jenv->NewGlobalRef(lObjectClass);
+    stringClass = (jclass)jenv->NewGlobalRef(lStringClass);
+    byteBufferClass = (jclass)jenv->NewGlobalRef(lByteBufferClass);
+    cursorClass = (jclass)jenv->NewGlobalRef(lCursorClass);
+
+    if (stringClass == NULL || objectClass == NULL
+        || byteBufferClass == NULL
+        || cursorClass == NULL) {
+        LOG("Error getting global references");
+        JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException",
+                  "NewGlobalRef error");
+        return;
+    }
+
     // public static ByteBuffer allocateDirect(int capacity)
     jByteBufferAllocateDirect =
         jenv->GetStaticMethodID(byteBufferClass, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
-    // boolean add(Object o)
-    jArrayListAdd =
-        jenv->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+    // new MatrixBlobCursor(String [])
+    jCursorConstructor =
+        jenv->GetMethodID(cursorClass, "<init>", "([Ljava/lang/String;)V");
+    // public void addRow (Object[] columnValues)
+    jCursorAddRow =
+        jenv->GetMethodID(cursorClass, "addRow", "([Ljava/lang/Object;)V");
 
-    if (jByteBufferAllocateDirect == NULL || jArrayListAdd == NULL) {
+    if (jByteBufferAllocateDirect == NULL
+        || jCursorConstructor == NULL
+        || jCursorAddRow == NULL) {
         LOG("Error finding methods");
         JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException",
                   "GetMethodId error");
@@ -152,36 +127,103 @@ JNI_Setup(JNIEnv* jenv)
     initialized = true;
 }
 
-extern "C" NS_EXPORT void JNICALL
+extern "C" NS_EXPORT jobject JNICALL
 Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCall(JNIEnv* jenv, jclass,
                                                       jstring jDb,
                                                       jstring jQuery,
                                                       jobjectArray jParams,
-                                                      jobject jColumns,
-                                                      jobject jArrayList)
+                                                      jlongArray jQueryRes)
 {
     JNI_Setup(jenv);
 
+    int rc;
+    jobject jCursor = NULL;
+    const char* dbPath;
+    sqlite3 *db;
+    char* errorMsg;
+
+    dbPath = jenv->GetStringUTFChars(jDb, NULL);
+    rc = f_sqlite3_open(dbPath, &db);
+    jenv->ReleaseStringUTFChars(jDb, dbPath);
+    if (rc != SQLITE_OK) {
+        asprintf(&errorMsg, "Can't open database: %s\n", f_sqlite3_errmsg(db));
+        LOG("Error in SQLiteBridge: %s\n", errorMsg);
+        JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException", errorMsg);
+        free(errorMsg);
+    } else {
+      jCursor = sqliteInternalCall(jenv, db, jQuery, jParams, jQueryRes);
+    }
+    f_sqlite3_close(db);
+    return jCursor;
+}
+
+extern "C" NS_EXPORT jobject JNICALL
+Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCallWithDb(JNIEnv* jenv, jclass,
+                                                            jlong jDb,
+                                                            jstring jQuery,
+                                                            jobjectArray jParams,
+                                                            jlongArray jQueryRes)
+{
+    JNI_Setup(jenv);
+
+    jobject jCursor = NULL;
+    sqlite3 *db = (sqlite3*)jDb;
+    jCursor = sqliteInternalCall(jenv, db, jQuery, jParams, jQueryRes);
+    return jCursor;
+}
+
+extern "C" NS_EXPORT jlong JNICALL
+Java_org_mozilla_gecko_sqlite_SQLiteBridge_openDatabase(JNIEnv* jenv, jclass,
+                                                        jstring jDb)
+{
+    JNI_Setup(jenv);
+
+    int rc;
+    const char* dbPath;
+    sqlite3 *db;
+    char* errorMsg;
+
+    dbPath = jenv->GetStringUTFChars(jDb, NULL);
+    rc = f_sqlite3_open(dbPath, &db);
+    jenv->ReleaseStringUTFChars(jDb, dbPath);
+    if (rc != SQLITE_OK) {
+        asprintf(&errorMsg, "Can't open database: %s\n", f_sqlite3_errmsg(db));
+        LOG("Error in SQLiteBridge: %s\n", errorMsg);
+        JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException", errorMsg);
+        free(errorMsg);
+    }
+    return (jlong)db;
+}
+
+extern "C" NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_sqlite_SQLiteBridge_closeDatabase(JNIEnv* jenv, jclass,
+                                                        jlong jDb)
+{
+    JNI_Setup(jenv);
+
+    sqlite3 *db = (sqlite3*)jDb;
+    f_sqlite3_close(db);
+}
+
+static jobject
+sqliteInternalCall(JNIEnv* jenv,
+                   sqlite3 *db,
+                   jstring jQuery,
+                   jobjectArray jParams,
+                   jlongArray jQueryRes)
+{
+    JNI_Setup(jenv);
+
+    jobject jCursor = NULL;
     char* errorMsg;
     jsize numPars = 0;
 
-    const char* queryStr;
-    queryStr = jenv->GetStringUTFChars(jQuery, NULL);
-
-    const char* dbPath;
-    dbPath = jenv->GetStringUTFChars(jDb, NULL);
-
     const char *pzTail;
     sqlite3_stmt *ppStmt;
-    sqlite3 *db;
     int rc;
-    rc = f_sqlite3_open(dbPath, &db);
-    jenv->ReleaseStringUTFChars(jDb, dbPath);
 
-    if (rc != SQLITE_OK) {
-        asprintf(&errorMsg, "Can't open database: %s\n", f_sqlite3_errmsg(db));
-        goto error_close;
-    }
+    const char* queryStr;
+    queryStr = jenv->GetStringUTFChars(jQuery, NULL);
 
     rc = f_sqlite3_prepare_v2(db, queryStr, -1, &ppStmt, &pzTail);
     if (rc != SQLITE_OK || ppStmt == NULL) {
@@ -234,39 +276,44 @@ Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCall(JNIEnv* jenv, jclass,
         goto error_close;
     }
 
-    // Get the column names
+    // Get the column count and names
     int cols;
     cols = f_sqlite3_column_count(ppStmt);
-    for (int i = 0; i < cols; i++) {
-        const char* colName = f_sqlite3_column_name(ppStmt, i);
-        jstring jStr = jenv->NewStringUTF(colName);
-        jenv->CallBooleanMethod(jColumns, jArrayListAdd, jStr);
-        jenv->DeleteLocalRef(jStr);
-    }
 
-    // if the statement doesn't return any results, instead return the id and number of changed rows
-    if (rc == SQLITE_DONE) {
-        jclass integerClass = jenv->FindClass("java/lang/Integer");
-        jmethodID intConstructor = jenv->GetMethodID(integerClass, "<init>", "(I)V");
-        
-        jobjectArray jRow = jenv->NewObjectArray(2, objectClass, NULL);
-        if (jRow == NULL) {
-            asprintf(&errorMsg, "Can't allocate jRow Object[]\n");
+    {
+        // Allocate a String[cols]
+        jobjectArray jStringArray = jenv->NewObjectArray(cols,
+                                                         stringClass,
+                                                         NULL);
+        if (jStringArray == NULL) {
+            asprintf(&errorMsg, "Can't allocate String[]\n");
             goto error_close;
         }
 
-        int id = f_sqlite3_last_insert_rowid(db);
-        jobject jId = jenv->NewObject(integerClass, intConstructor, id);
-        jenv->SetObjectArrayElement(jRow, 0, jId);
-        jenv->DeleteLocalRef(jId);
+        // Assign column names to the String[]
+        for (int i = 0; i < cols; i++) {
+            const char* colName = f_sqlite3_column_name(ppStmt, i);
+            jstring jStr = jenv->NewStringUTF(colName);
+            jenv->SetObjectArrayElement(jStringArray, i, jStr);
+        }
 
-        int changed = f_sqlite3_changes(db);
-        jobject jChanged = jenv->NewObject(integerClass, intConstructor, changed);
-        jenv->SetObjectArrayElement(jRow, 1, jChanged);
-        jenv->DeleteLocalRef(jChanged);
+        // Construct the MatrixCursor(String[]) with given column names
+        jCursor = jenv->NewObject(cursorClass,
+                                  jCursorConstructor,
+                                  jStringArray);
+        if (jCursor == NULL) {
+            asprintf(&errorMsg, "Can't allocate MatrixBlobCursor\n");
+            goto error_close;
+        }
+    }
 
-        jenv->CallBooleanMethod(jArrayList, jArrayListAdd, jRow);
-        jenv->DeleteLocalRef(jRow);
+    // Return the id and number of changed rows in jQueryRes
+    {
+        jlong id = f_sqlite3_last_insert_rowid(db);
+        jenv->SetLongArrayRegion(jQueryRes, 0, 1, &id);
+
+        jlong changed = f_sqlite3_changes(db);
+        jenv->SetLongArrayRegion(jQueryRes, 1, 1, &changed);
     }
 
     // For each row, add an Object[] to the passed ArrayList,
@@ -310,7 +357,7 @@ Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCall(JNIEnv* jenv, jclass,
                 jenv->SetObjectArrayElement(jRow, i, jByteBuffer);
                 jenv->DeleteLocalRef(jByteBuffer);
             } else if (colType == SQLITE_NULL) {
-                jenv->SetObjectArrayElement(jRow, i, jNull);
+                jenv->SetObjectArrayElement(jRow, i, NULL);
             } else {
                 // Treat everything else as text
                 const char* txt = (const char*)f_sqlite3_column_text(ppStmt, i);
@@ -320,9 +367,8 @@ Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCall(JNIEnv* jenv, jclass,
             }
         }
 
-        // Append Object[] to ArrayList<Object[]>
-        // JNI doesn't know about the generic, so use Object[] as Object
-        jenv->CallBooleanMethod(jArrayList, jArrayListAdd, jRow);
+        // Append Object[] to Cursor
+        jenv->CallVoidMethod(jCursor, jCursorAddRow, jRow);
 
         // Clean up
         jenv->DeleteLocalRef(jRow);
@@ -342,13 +388,11 @@ Java_org_mozilla_gecko_sqlite_SQLiteBridge_sqliteCall(JNIEnv* jenv, jclass,
         goto error_close;
     }
 
-    f_sqlite3_close(db);
-    return;
+    return jCursor;
 
 error_close:
-    f_sqlite3_close(db);
     LOG("Error in SQLiteBridge: %s\n", errorMsg);
     JNI_Throw(jenv, "org/mozilla/gecko/sqlite/SQLiteBridgeException", errorMsg);
     free(errorMsg);
-    return;
+    return jCursor;
 }

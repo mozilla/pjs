@@ -95,6 +95,7 @@ fails == anim-fillcolor-1.svg      anim-standard-ref.svg # bug 436296
 == anim-length-reset-01.svg lime.svg
 == anim-nonpixel-length-reset-01.svg lime.svg
 == anim-use-length-01.svg lime.svg
+== anim-use-length-02.svg lime.svg
 
 # animate some <number> attributes:
 == anim-feComponentTransfer-01.svg lime.svg
@@ -122,7 +123,7 @@ fails == anim-fillcolor-1.svg      anim-standard-ref.svg # bug 436296
 == anim-polyline-points-01.svg anim-polyline-points-01-ref.svg
 
 # animate path data:
-fuzzy-if(/^Windows\x20NT\x205\.1/.test(http.oscpu),2,1) == anim-path-d-01.svg anim-path-d-01-ref.svg # Bug 726400
+fuzzy-if(/^Windows\x20NT\x205\.1/.test(http.oscpu),2,1) fuzzy-if(cocoaWidget&&layersGPUAccelerated,1,13) == anim-path-d-01.svg anim-path-d-01-ref.svg # Bug 726400
 
 # animate some enumeration attributes:
 == anim-feComposite-operator-01.svg lime.svg
@@ -225,6 +226,7 @@ random == anim-text-x-y-dx-dy-01.svg anim-text-x-y-dx-dy-01-ref.svg # bug 579588
 == anim-pattern-attr-presence-01.svg anim-pattern-attr-presence-01-ref.svg
 fails == anim-pattern-attr-presence-02.svg anim-pattern-attr-presence-02-ref.svg
 # ^ bug 621651
+== anim-gradient-attr-presence-01.svg anim-gradient-attr-presence-01-ref.svg
 
 == api-sanity-1.svg lime.svg
 
@@ -232,6 +234,7 @@ fails == anim-pattern-attr-presence-02.svg anim-pattern-attr-presence-02-ref.svg
 == freeze-applied-late-2.svg anim-standard-ref.svg
 == freeze-applied-late-3.svg anim-standard-ref.svg
 == freeze-applied-late-4.svg anim-standard-ref.svg
+== frozen-to-anim-1.svg lime.svg
 
 == inactivate-with-active-unchanged-1.svg anim-standard-ref.svg
 == inactivate-with-active-unchanged-2.svg anim-standard-ref.svg

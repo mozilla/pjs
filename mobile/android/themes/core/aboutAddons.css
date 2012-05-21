@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Mobile Browser.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mark Finkle <mfinkle@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 html {
   font-family: "Droid Sans",helvetica,arial,clean,sans-serif;
@@ -73,25 +40,16 @@ body {
   border-bottom: 2px solid;
   -moz-border-bottom-colors: #ffffff #bac2ac;
   position: relative;
-  height: 86px;
 }
 
 .addon-item[isDisabled="true"] {
   color: #999999;
 }
 
-.addon-item:not([optionsURL]) .options-header,
-.addon-item[optionsURL=""] .options-header,
-.addon-item:not([optionsURL]) .options-box,
-.addon-item[optionsURL=""] .options-box {
-  display: none;
-}
-
 .inner {
   background-image: url("chrome://browser/skin/images/row-bg-light.png");
-  height: 100%;
-  -moz-padding-start: 8px;
-  -moz-padding-end: 8px;
+  min-height: 70px;
+  padding: 8px;
 
   /* make room for the favicon */
   -moz-margin-start: 82px;
@@ -99,7 +57,6 @@ body {
 
 .details {
   width: 100%;
-  padding-top: 8px;
 }
 
 .details > div {
@@ -178,4 +135,198 @@ body[dir="ltr"] .favicon {
 
 .addon-item[isDisabled="true"] .favicon {
   opacity: 0.3;
+}
+
+.options-header {
+  font-weight: bold;
+  padding: 18px 24px;
+}
+
+.options-box {
+  margin: 0 12px;
+}
+
+.addon-item[isDisabled="true"] .options-header,
+.addon-item:not([optionsURL]) .options-header,
+.addon-item[optionsURL=""] .options-header,
+.addon-item[isDisabled="true"] .options-box,
+.addon-item:not([optionsURL]) .options-box,
+.addon-item[optionsURL=""] .options-box {
+  display: none;
+}
+
+setting {
+  padding: 18px 12px;
+  border-top: 2px solid;
+  -moz-border-top-colors: #bac2ac #ffffff;
+  -moz-box-align: center;
+  -moz-box-sizing: border-box;
+  width: 100%;
+}
+
+setting > vbox {
+  -moz-box-flex: 1;
+}
+
+.preferences-title {
+  font-weight: bold;
+}
+
+.preferences-description {
+  margin-top: 4px;
+}
+
+.preferences-description:empty {
+  display: none;
+}
+
+/* Put setting textboxes on a separate row */
+setting[type="integer"],
+setting[type="string"] {
+  -moz-box-align: stretch;
+  -moz-box-orient: vertical;
+}
+
+.preferences-alignment > textbox {
+  margin: 12px 0 0 0;
+  font-size: 22px !important;
+}
+
+checkbox {
+  -moz-binding: url("chrome://global/content/bindings/checkbox.xml#checkbox-with-spacing") !important;
+}
+
+checkbox[label=""] > .checkbox-label-box,
+checkbox:not([label]) > .checkbox-label-box {
+  display: none;
+}
+
+.checkbox-check {
+  background: url("chrome://browser/skin/images/checkbox_unchecked.png") no-repeat 50% 50%;
+  border: 0 transparent;
+  width: 48px;
+  height: 48px;
+}
+
+setting:active checkbox > .checkbox-spacer-box > .checkbox-check {
+  background-image: url("chrome://browser/skin/images/checkbox_unchecked_pressed.png");
+}
+
+checkbox[disabled="true"] > .checkbox-spacer-box > .checkbox-check {
+  background-image: url("chrome://browser/skin/images/checkbox_unchecked_disabled.png");
+}
+
+checkbox[checked="true"] > .checkbox-spacer-box > .checkbox-check {
+  background-image: url("chrome://browser/skin/images/checkbox_checked.png");
+}
+
+setting:active checkbox[checked="true"] > .checkbox-spacer-box > .checkbox-check {
+  background-image: url("chrome://browser/skin/images/checkbox_checked_pressed.png");
+}
+
+checkbox[checked="true"][disabled="true"] > .checkbox-spacer-box > .checkbox-check {
+  background-image: url("chrome://browser/skin/images/checkbox_checked_disabled.png");
+}
+
+/* Textbox */
+
+textbox[type="number"] > spinbuttons {
+  visibility: collapse;
+}
+
+textbox {
+  background: white -moz-linear-gradient(top, rgba(27,113,177,0.5) 0, rgba(198,225,246,0.2) 3px, rgba(255,255,255,0.2) 16px);
+  border-radius: 3px;
+  border-color: rgb(94,128,153);
+  padding: 0 !important;
+}
+
+.textbox-input-box {
+  padding: 8px 12px;
+}
+
+/* Menulist */
+
+menulist {
+  -moz-appearance: none !important;
+  -moz-user-focus: ignore;
+  /* min-width: 200px !important; */
+  color: #000 !important;
+  border-radius: 5px;
+  border-color: rgb(94,128,153);
+  border-style: solid;
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #cacdd5;
+  border-style: solid;
+  border-color: rgb(94,128,153);
+  min-width: 200px;
+}
+
+.menulist-label {
+  background-color: transparent !important;
+}
+
+menulist > menupopup > menuitem > label{
+-moz-padding-start:3px !important;
+-moz-padding-end:7px !important;
+}
+
+menulist > dropmarker {
+  height: 32px;
+  width: 32px;
+  margin-left: @margin_snormal@;
+  background-color: transparent; /* for windows */
+  border: none;                  /* for windows */
+  -moz-box-align: center;
+  -moz-box-pack: center;
+  list-style-image: url("chrome://browser/skin/images/dropmarker.svg") !important;
+  -moz-image-region: auto;
+  display: block;
+}
+
+/* XBL bindings */
+
+settings {
+  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#settings");
+}
+
+setting {
+  display: none;
+}
+
+setting[type="bool"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://browser/content/bindings/settings.xml#setting-fulltoggle-bool");
+}
+
+setting[type="bool"][localized="true"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://browser/content/bindings/settings.xml#setting-fulltoggle-localized-bool");
+}
+
+setting[type="boolint"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://browser/content/bindings/settings.xml#setting-fulltoggle-boolint");
+}
+
+setting[type="integer"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-integer");
+}
+
+setting[type="control"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-control");
+}
+
+setting[type="string"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-string");
+}
+
+setting[type="radio"],
+setting[type="menulist"] {
+  display: -moz-box;
+  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-multi");
 }

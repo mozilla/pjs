@@ -1,43 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla Inspector Module.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Joe Walker <jwalker@mozilla.com> (original author)
- *   Mihai Șucan <mihai.sucan@gmail.com>
- *   Michael Ratcliffe <mratcliffe@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * About the objects defined in this file:
@@ -77,10 +42,18 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+const RX_UNIVERSAL_SELECTOR = /\s*\*\s*/g;
+const RX_NOT = /:not\((.*?)\)/g;
+const RX_PSEUDO_CLASS_OR_ELT = /(:[\w-]+\().*?\)/g;
+const RX_CONNECTORS = /\s*[\s>+~]\s*/g;
+const RX_ID = /\s*#\w+\s*/g;
+const RX_CLASS_OR_ATTRIBUTE = /\s*(?:\.\w+|\[.+?\])\s*/g;
+const RX_PSEUDO = /\s*:?:([\w-]+)(\(?\)?)\s*/g;
+
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-var EXPORTED_SYMBOLS = ["CssLogic"];
+var EXPORTED_SYMBOLS = ["CssLogic", "CssSelector"];
 
 function CssLogic()
 {
@@ -640,6 +613,10 @@ CssLogic.prototype = {
     this._passId++;
     this._matchedRules = [];
 
+    if (!element) {
+      return;
+    }
+
     do {
       let status = this.viewedElement === element ?
                    CssLogic.STATUS.MATCHED : CssLogic.STATUS.PARENT_MATCH;
@@ -919,7 +896,8 @@ CssLogic.shortSource = function CssLogic_shortSource(aSheet)
     return url.query;
   }
 
-  return aSheet.href;
+  let dataUrl = aSheet.href.match(/^(data:[^,]*),/);
+  return dataUrl ? dataUrl[1] : aSheet.href;
 }
 
 /**
@@ -1190,11 +1168,19 @@ function CssRule(aCssSheet, aDomRule, aElement)
   this._cssSheet = aCssSheet;
   this._domRule = aDomRule;
 
+  let parentRule = aDomRule.parentRule;
+  if (parentRule && parentRule.type == Ci.nsIDOMCSSRule.MEDIA_RULE) {
+    this.mediaText = parentRule.media.mediaText;
+  }
+
   if (this._cssSheet) {
     // parse _domRule.selectorText on call to this.selectors
     this._selectors = null;
     this.line = this._cssSheet._cssLogic.domUtils.getRuleLine(this._domRule);
     this.source = this._cssSheet.shortSource + ":" + this.line;
+    if (this.mediaText) {
+      this.source += " @media " + this.mediaText;
+    }
     this.href = this._cssSheet.href;
     this.contentRule = this._cssSheet.contentSheet;
   } else if (aElement) {
@@ -1209,6 +1195,13 @@ function CssRule(aCssSheet, aDomRule, aElement)
 
 CssRule.prototype = {
   _passId: null,
+
+  mediaText: "",
+
+  get isMediaRule()
+  {
+    return !!this.mediaText;
+  },
 
   /**
    * Check if the parent stylesheet is allowed by the CssLogic.sourceFilter.
@@ -1432,6 +1425,31 @@ CssSelector.prototype = {
   },
 
   /**
+   * Retrieve the pseudo-elements that we support. This list should match the
+   * elements specified in layout/style/nsCSSPseudoElementList.h
+   */
+  get pseudoElements()
+  {
+    if (!CssSelector._pseudoElements) {
+      let pseudos = CssSelector._pseudoElements = new Set();
+      pseudos.add("after");
+      pseudos.add("before");
+      pseudos.add("first-letter");
+      pseudos.add("first-line");
+      pseudos.add("selection");
+      pseudos.add("-moz-focus-inner");
+      pseudos.add("-moz-focus-outer");
+      pseudos.add("-moz-list-bullet");
+      pseudos.add("-moz-list-number");
+      pseudos.add("-moz-math-anonymous");
+      pseudos.add("-moz-math-stretchy");
+      pseudos.add("-moz-progress-bar");
+      pseudos.add("-moz-selection");
+    }
+    return CssSelector._pseudoElements;
+  },
+
+  /**
    * Retrieve specificity information for the current selector.
    *
    * @see http://www.w3.org/TR/css3-selectors/#specificity
@@ -1446,37 +1464,58 @@ CssSelector.prototype = {
       return this._specificity;
     }
 
-    let specificity = {};
+    let specificity = {
+      ids: 0,
+      classes: 0,
+      tags: 0
+    };
 
-    specificity.ids = 0;
-    specificity.classes = 0;
-    specificity.tags = 0;
+    let text = this.text;
 
-    // Split on CSS combinators (section 5.2).
-    // TODO: We need to properly parse the selector. See bug 592743.
     if (!this.elementStyle) {
-      this.text.split(/[ >+]/).forEach(function(aSimple) {
-        // The regex leaves empty nodes combinators like ' > '
-        if (!aSimple) {
-          return;
-        }
-        // See http://www.w3.org/TR/css3-selectors/#specificity
-        // We can count the IDs by counting the '#' marks.
-        specificity.ids += (aSimple.match(/#/g) || []).length;
-        // Similar with class names and attribute matchers
-        specificity.classes += (aSimple.match(/\./g) || []).length;
-        specificity.classes += (aSimple.match(/\[/g) || []).length;
-        // Pseudo elements count as elements.
-        specificity.tags += (aSimple.match(/:/g) || []).length;
-        // If we have anything of substance before we get into ids/classes/etc
-        // then it must be a tag if it isn't '*'.
-        let tag = aSimple.split(/[#.[:]/)[0];
-        if (tag && tag != "*") {
+      // Remove universal selectors as they are not relevant as far as specificity
+      // is concerned.
+      text = text.replace(RX_UNIVERSAL_SELECTOR, "");
+
+      // not() is ignored but any selectors contained by it are counted. Let's
+      // remove the not() and keep the contents.
+      text = text.replace(RX_NOT, " $1");
+
+      // Simplify remaining psuedo classes & elements.
+      text = text.replace(RX_PSEUDO_CLASS_OR_ELT, " $1)");
+
+      // Replace connectors with spaces
+      text = text.replace(RX_CONNECTORS, " ");
+
+      text.split(/\s/).forEach(function(aSimple) {
+        // Count IDs.
+        aSimple = aSimple.replace(RX_ID, function() {
+          specificity.ids++;
+          return "";
+        });
+
+        // Count class names and attribute matchers.
+        aSimple = aSimple.replace(RX_CLASS_OR_ATTRIBUTE, function() {
+          specificity.classes++;
+          return "";
+        });
+
+        aSimple = aSimple.replace(RX_PSEUDO, function(aDummy, aPseudoName) {
+          if (this.pseudoElements.has(aPseudoName)) {
+            // Pseudo elements count as tags.
+            specificity.tags++;
+          } else {
+            // Pseudo classes count as classes.
+            specificity.classes++;
+          }
+          return "";
+        }.bind(this));
+
+        if (aSimple) {
           specificity.tags++;
         }
       }, this);
     }
-
     this._specificity = specificity;
 
     return this._specificity;

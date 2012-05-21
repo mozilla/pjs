@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Indexed Database.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "IDBDatabase.h"
 
@@ -162,9 +129,10 @@ IDBDatabase::Create(IDBWrapperCache* aOwnerCache,
 
   nsRefPtr<IDBDatabase> db(new IDBDatabase());
 
-  db->mScriptContext = aOwnerCache->GetScriptContext();
-  db->mOwner = aOwnerCache->GetOwner();
-  db->mScriptOwner = aOwnerCache->GetScriptOwner();
+  db->BindToOwner(aOwnerCache);
+  if (!db->SetScriptOwner(aOwnerCache->GetScriptOwner())) {
+    return nsnull;
+  }
 
   db->mDatabaseId = databaseInfo->id;
   db->mName = databaseInfo->name;
@@ -221,7 +189,10 @@ IDBDatabase::Invalidate()
   // When the IndexedDatabaseManager needs to invalidate databases, all it has
   // is an origin, so we call back into the manager to cancel any prompts for
   // our owner.
-  IndexedDatabaseManager::CancelPromptsForWindow(GetOwner());
+  nsPIDOMWindow* owner = GetOwner();
+  if (owner) {
+    IndexedDatabaseManager::CancelPromptsForWindow(owner);
+  }
 
   mInvalidated = true;
 }
@@ -283,8 +254,6 @@ void
 IDBDatabase::OnUnlink()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-  NS_ASSERTION(!GetOwner() && !GetScriptOwner(),
-               "Should have been cleared already!");
 
   // We've been unlinked, at the very least we should be able to prevent further
   // transactions from starting and unblock any other SetVersion callers.
@@ -385,7 +354,7 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
   IDBTransaction* transaction = AsyncConnectionHelper::GetCurrentTransaction();
 
   if (!transaction ||
-      transaction->Mode() != nsIIDBTransaction::VERSION_CHANGE) {
+      transaction->GetMode() != IDBTransaction::VERSION_CHANGE) {
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
@@ -408,7 +377,7 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
     
         JSObject* obj = JSVAL_TO_OBJECT(val);
     
-        jsuint length;
+        uint32_t length;
         if (!JS_GetArrayLength(aCx, obj, &length)) {
           return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
         }
@@ -419,7 +388,7 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
     
         keyPathArray.SetCapacity(length);
     
-        for (jsuint index = 0; index < length; index++) {
+        for (uint32_t index = 0; index < length; index++) {
           jsval val;
           JSString* jsstr;
           nsDependentJSString str;
@@ -505,7 +474,7 @@ IDBDatabase::DeleteObjectStore(const nsAString& aName)
   IDBTransaction* transaction = AsyncConnectionHelper::GetCurrentTransaction();
 
   if (!transaction ||
-      transaction->Mode() != nsIIDBTransaction::VERSION_CHANGE) {
+      transaction->GetMode() != IDBTransaction::VERSION_CHANGE) {
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
@@ -527,7 +496,7 @@ IDBDatabase::DeleteObjectStore(const nsAString& aName)
 
 NS_IMETHODIMP
 IDBDatabase::Transaction(const jsval& aStoreNames,
-                         PRUint16 aMode,
+                         const nsAString& aMode,
                          JSContext* aCx,
                          PRUint8 aOptionalArgCount,
                          nsIIDBTransaction** _retval)
@@ -546,14 +515,14 @@ IDBDatabase::Transaction(const jsval& aStoreNames,
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
+  IDBTransaction::Mode transactionMode = IDBTransaction::READ_ONLY;
   if (aOptionalArgCount) {
-    if (aMode != nsIIDBTransaction::READ_WRITE &&
-        aMode != nsIIDBTransaction::READ_ONLY) {
-      return NS_ERROR_DOM_INDEXEDDB_NON_TRANSIENT_ERR;
+    if (aMode.EqualsLiteral("readwrite")) {
+      transactionMode = IDBTransaction::READ_WRITE;
     }
-  }
-  else {
-    aMode = nsIIDBTransaction::READ_ONLY;
+    else if (!aMode.EqualsLiteral("readonly")) {
+      return NS_ERROR_TYPE_ERR;
+    }
   }
 
   nsresult rv;
@@ -564,7 +533,7 @@ IDBDatabase::Transaction(const jsval& aStoreNames,
 
     // See if this is a JS array.
     if (JS_IsArrayObject(aCx, obj)) {
-      jsuint length;
+      uint32_t length;
       if (!JS_GetArrayLength(aCx, obj, &length)) {
         return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
@@ -575,7 +544,7 @@ IDBDatabase::Transaction(const jsval& aStoreNames,
 
       storesToOpen.SetCapacity(length);
 
-      for (jsuint index = 0; index < length; index++) {
+      for (uint32_t index = 0; index < length; index++) {
         jsval val;
         JSString* jsstr;
         nsDependentJSString str;
@@ -656,7 +625,7 @@ IDBDatabase::Transaction(const jsval& aStoreNames,
   }
 
   nsRefPtr<IDBTransaction> transaction =
-    IDBTransaction::Create(this, storesToOpen, aMode, false);
+    IDBTransaction::Create(this, storesToOpen, transactionMode, false);
   NS_ENSURE_TRUE(transaction, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   transaction.forget(_retval);
@@ -679,7 +648,8 @@ IDBDatabase::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
 {
   NS_ENSURE_TRUE(aVisitor.mDOMEvent, NS_ERROR_UNEXPECTED);
 
-  if (!mOwner) {
+  nsPIDOMWindow* owner = GetOwner();
+  if (!owner) {
     return NS_OK;
   }
 
@@ -693,7 +663,7 @@ IDBDatabase::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
         CreateGenericEvent(type, eDoesNotBubble, eNotCancelable);
       NS_ENSURE_STATE(duplicateEvent);
 
-      nsCOMPtr<nsIDOMEventTarget> target(do_QueryInterface(mOwner));
+      nsCOMPtr<nsIDOMEventTarget> target(do_QueryInterface(owner));
       NS_ASSERTION(target, "How can this happen?!");
 
       bool dummy;

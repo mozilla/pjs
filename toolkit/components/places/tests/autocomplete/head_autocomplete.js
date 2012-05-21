@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places Test Code.
- *
- * The Initial Developer of the Original Code is
- * Edward Lee <edward.lee@engineering.uiuc.edu>.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Drew Willcoxon <adw@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
@@ -187,76 +154,11 @@ var iosvc = Cc["@mozilla.org/network/io-service;1"].
             getService(Ci.nsIIOService);
 var prefs = Cc["@mozilla.org/preferences-service;1"].
             getService(Ci.nsIPrefBranch);
-var lmsvc = Cc["@mozilla.org/browser/livemark-service;2"].
-            getService(Ci.nsILivemarkService);
 
 // Some date not too long ago
 let gDate = new Date(Date.now() - 1000 * 60 * 60) * 1000;
 // Store the page info for each uri
 let gPages = [];
-
-
-/**
- * Adds a livemark container with a single child, and creates various properties
- * for it depending on the parameters passed in.
- *
- * @param aContainerSiteURI
- *        An index into kURIs that holds the string for the URI of site of the
- *        livemark container we are to add.
- * @param aContainerFeedURI
- *        An index into kURIs that holds the string for the URI of feed of the
- *        livemark container we are to add.
- * @param aContainerTitle
- *        An index into kTitles that holds the string for the title we are to
- *        associate with the livemark container.
- * @param aChildURI
- *        An index into kURIs that holds the string for the URI of single
- *        livemark child we are to add.
- * @param aChildTitle
- *        An index into kTitles that holds the string for the title we are to
- *        associate with the single livemark child.
- * @param aTransitionType [optional]
- *        The transition type to use when adding the visit.  The default is
- *        nsINavHistoryService::TRANSITION_LINK.
- * @param aNoChildVisit [optional]
- *        If true, no visit is added for the child's URI.  If false or
- *        undefined, a visit is added.
- */
-function addLivemark(aContainerSiteURI, aContainerFeedURI, aContainerTitle,
-                     aChildURI, aChildTitle, aTransitionType, aNoChildVisit)
-{
-  // Add a page entry for the child uri
-  gPages[aChildURI] = [aChildURI, aChildTitle, null];
-
-  let out = [aChildURI, aChildTitle];
-  out.push("\nchild uri=" + kURIs[aChildURI]);
-  out.push("\nchild title=" + kTitles[aChildTitle]);
-
-  // Create the container
-  let containerSiteURI = toURI(kURIs[aContainerSiteURI]);
-  let containerFeedURI = toURI(kURIs[aContainerFeedURI]);
-  let containerTitle = kTitles[aContainerTitle];
-  let containerId = lmsvc.createLivemarkFolderOnly(bmsvc.unfiledBookmarksFolder,
-                                                   containerTitle,
-                                                   containerSiteURI,
-                                                   containerFeedURI,
-                                                   bmsvc.DEFAULT_INDEX);
-  // Insert the child
-  let childURI = toURI(kURIs[aChildURI]);
-  let childTitle = kTitles[aChildTitle];
-  bmsvc.insertBookmark(containerId, childURI, bmsvc.DEFAULT_INDEX, childTitle);
-
-  // Add a visit to the child if we need to
-  if (!aNoChildVisit) {
-    let tt = aTransitionType || TRANSITION_LINK;
-    let isRedirect = tt == TRANSITION_REDIRECT_PERMANENT ||
-                     tt == TRANSITION_REDIRECT_TEMPORARY;
-    histsvc.addVisit(childURI, gDate, null, tt, isRedirect, 0);
-    out.push("\nwith visit");
-  }
-
-  print("\nAdding livemark: " + out.join(", "));
-}
 
 /**
  * Adds a page, and creates various properties for it depending on the

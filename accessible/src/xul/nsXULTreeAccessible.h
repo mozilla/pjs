@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Author: Kyle Yuan (kyle.yuan@sun.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef __nsXULTreeAccessible_h__
 #define __nsXULTreeAccessible_h__
 
@@ -53,14 +20,6 @@ const PRUint32 kDefaultTreeCacheSize = 256;
  * Accessible class for XUL tree element.
  */
 
-#define NS_XULTREEACCESSIBLE_IMPL_CID                   \
-{  /* 2692e149-6176-42ee-b8e1-2c44b04185e3 */           \
-  0x2692e149,                                           \
-  0x6176,                                               \
-  0x42ee,                                               \
-  { 0xb8, 0xe1, 0x2c, 0x44, 0xb0, 0x41, 0x85, 0xe3 }    \
-}
-
 class nsXULTreeAccessible : public nsAccessibleWrap
 {
 public:
@@ -74,14 +33,11 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsXULTreeAccessible,
                                            nsAccessible)
 
-  // nsIAccessible
-  NS_IMETHOD GetValue(nsAString& aValue);
-
   // nsAccessNode
-  virtual bool IsDefunct() const;
   virtual void Shutdown();
 
   // nsAccessible
+  virtual void Value(nsString& aValue);
   virtual mozilla::a11y::role NativeRole();
   virtual PRUint64 NativeState();
   virtual nsAccessible* ChildAtPoint(PRInt32 aX, PRInt32 aY,
@@ -111,8 +67,6 @@ public:
   virtual nsAccessible* ContainerWidget() const;
 
   // nsXULTreeAccessible
-
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_XULTREEACCESSIBLE_IMPL_CID)
 
   /**
    * Return tree item accessible at the givem row. If accessible doesn't exist
@@ -147,7 +101,7 @@ public:
   /**
    * Invalidates children created for previous tree view.
    */
-  void TreeViewChanged();
+  void TreeViewChanged(nsITreeView* aView);
 
 protected:
   /**
@@ -156,12 +110,9 @@ protected:
   virtual already_AddRefed<nsAccessible> CreateTreeItemAccessible(PRInt32 aRow);
 
   nsCOMPtr<nsITreeBoxObject> mTree;
-  nsCOMPtr<nsITreeView> mTreeView;
+  nsITreeView* mTreeView;
   nsAccessibleHashtable mAccessibleCache;
 };
-
-NS_DEFINE_STATIC_IID_ACCESSOR(nsXULTreeAccessible,
-                              NS_XULTREEACCESSIBLE_IMPL_CID)
 
 /**
  * Base class for tree item accessibles.
@@ -204,7 +155,6 @@ public:
   NS_IMETHOD DoAction(PRUint8 aIndex);
 
   // nsAccessNode
-  virtual bool IsDefunct() const;
   virtual void Shutdown();
   virtual bool IsPrimaryForNode() const;
 
@@ -261,7 +211,7 @@ protected:
   void GetCellName(nsITreeColumn* aColumn, nsAString& aName);
 
   nsCOMPtr<nsITreeBoxObject> mTree;
-  nsCOMPtr<nsITreeView> mTreeView;
+  nsITreeView* mTreeView;
   PRInt32 mRow;
 };
 
@@ -284,14 +234,12 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsXULTreeItemAccessible,
                                            nsXULTreeItemAccessibleBase)
 
-  NS_IMETHOD GetName(nsAString& aName);
-
   // nsAccessNode
-  virtual bool IsDefunct() const;
   virtual bool Init();
   virtual void Shutdown();
 
   // nsAccessible
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName);
   virtual mozilla::a11y::role NativeRole();
 
   // nsXULTreeItemAccessibleBase
@@ -322,5 +270,15 @@ protected:
   virtual nsAccessible* GetSiblingAtOffset(PRInt32 aOffset,
                                            nsresult *aError = nsnull) const;
 };
+
+////////////////////////////////////////////////////////////////////////////////
+// nsAccessible downcasting method
+
+inline nsXULTreeAccessible*
+nsAccessible::AsXULTree()
+{
+  return IsXULTree() ?
+    static_cast<nsXULTreeAccessible*>(this) : nsnull;
+}
 
 #endif

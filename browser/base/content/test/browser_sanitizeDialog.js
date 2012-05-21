@@ -1,41 +1,8 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is sanitize dialog test code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Drew Willcoxon <adw@mozilla.com> (Original Author)
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * Tests the sanitize dialog (a.k.a. the clear recent history dialog).
@@ -59,6 +26,8 @@ const dm = Cc["@mozilla.org/download-manager;1"].
            getService(Ci.nsIDownloadManager);
 const formhist = Cc["@mozilla.org/satchel/form-history;1"].
                  getService(Ci.nsIFormHistory2);
+
+const kUsecPerMin = 60 * 1000000;
 
 // Add tests here.  Each is a function that's called by doNextTest().
 var gAllTests = [
@@ -831,8 +800,8 @@ function addDownloadWithMinutesAgo(aMinutesAgo) {
     name:      name,
     source:   "https://bugzilla.mozilla.org/show_bug.cgi?id=480169",
     target:    name,
-    startTime: now_uSec - (aMinutesAgo * 60 * 1000000),
-    endTime:   now_uSec - ((aMinutesAgo + 1) *60 * 1000000),
+    startTime: now_uSec - (aMinutesAgo * kUsecPerMin),
+    endTime:   now_uSec - ((aMinutesAgo + 1) * kUsecPerMin),
     state:     Ci.nsIDownloadManager.DOWNLOAD_FINISHED,
     currBytes: 0, maxBytes: -1, preferredAction: 0, autoResume: 0
   };
@@ -872,7 +841,7 @@ function addFormEntryWithMinutesAgo(aMinutesAgo) {
 
   // Artifically age the entry to the proper vintage.
   let db = formhist.DBConnection;
-  let timestamp = now_uSec - (aMinutesAgo * 60 * 1000000);
+  let timestamp = now_uSec - (aMinutesAgo * kUsecPerMin);
   db.executeSimpleSQL("UPDATE moz_formhistory SET firstUsed = " +
                       timestamp +  " WHERE fieldname = '" + name + "'");
 
@@ -889,10 +858,12 @@ function addFormEntryWithMinutesAgo(aMinutesAgo) {
  */
 function addHistoryWithMinutesAgo(aMinutesAgo) {
   let pURI = makeURI("http://" + aMinutesAgo + "-minutes-ago.com/");
-  PlacesUtils.bhistory
-             .addPageWithDetails(pURI,
-                                 aMinutesAgo + " minutes ago",
-                                 now_uSec - (aMinutesAgo * 60 * 1000 * 1000));
+  PlacesUtils.history.addVisit(pURI,
+                               now_uSec - aMinutesAgo * kUsecPerMin,
+                               null,
+                               Ci.nsINavHistoryService.TRANSITION_LINK,
+                               false,
+                               0);
   is(PlacesUtils.bhistory.isVisited(pURI), true,
      "Sanity check: history visit " + pURI.spec +
      " should exist after creating it");

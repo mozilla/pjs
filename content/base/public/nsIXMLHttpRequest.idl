@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIDOMEventTarget.idl"
 
@@ -111,7 +79,7 @@ interface nsIXMLHttpRequestUpload : nsIXMLHttpRequestEventTarget {
  * you're aware of all the security implications.  And then think twice about
  * it.
  */
-[scriptable, uuid(88ffc45a-22e2-44f4-9a6e-f4586fbde376)]
+[scriptable, uuid(8681ffbc-4755-45de-9fc1-b63e6930e76a)]
 interface nsIXMLHttpRequest : nsISupports
 {
   /**
@@ -161,19 +129,20 @@ interface nsIXMLHttpRequest : nsISupports
   /**
    * The status of the response to the request for HTTP requests.
    */
+  // XXX spec says unsigned short
   readonly attribute unsigned long status;
 
   /**
    * The string representing the status of the response for
    * HTTP requests.
    */
-  readonly attribute AUTF8String statusText;
+  readonly attribute DOMString statusText;
 
   /**
    * If the request has been sent already, this method will
    * abort the request.
    */
-  void   abort();
+  [binaryname(SlowAbort)] void abort();
 
   /**
    * Returns all of the response headers as a string for HTTP
@@ -259,7 +228,7 @@ interface nsIXMLHttpRequest : nsISupports
    *             Type header via the setRequestHeader method before
    *             calling send.
    */
-  void   send([optional] in nsIVariant body);
+  [implicit_jscontext] void   send([optional] in nsIVariant body);
 
   /**
    * A variant of the send() method used to send binary data.
@@ -268,7 +237,7 @@ interface nsIXMLHttpRequest : nsISupports
    *             converted to a single-byte string by truncation (i.e., the
    *             high-order byte of each character will be discarded).
    */
-  void   sendAsBinary(in DOMString body);
+  [implicit_jscontext] void   sendAsBinary(in DOMString body);
 
   /**
    * Sets a HTTP request header for HTTP requests. You must call open
@@ -312,7 +281,7 @@ interface nsIXMLHttpRequest : nsISupports
    * @param mimetype The type used to override that returned by the server
    *                 (if any).
    */
-  void   overrideMimeType(in AUTF8String mimetype);
+  [binaryname(SlowOverrideMimeType)] void overrideMimeType(in DOMString mimetype);
 
   /**
    * Set to true if the response is expected to be a stream of

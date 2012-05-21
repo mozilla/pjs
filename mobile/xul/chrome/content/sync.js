@@ -1,41 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Bookmarks sync code.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Mark Finkle <mfinkle@mozila.com>
- *  Matt Brubeck <mbrubeck@mozila.com>
- *  Jono DiCarlo <jdicarlo@mozilla.com>
- *  Allison Naaktgeboren <ally@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 let WeaveGlue = {
   setupData: null,
@@ -335,7 +300,7 @@ let WeaveGlue = {
 
     // Now try to re-connect. If successful, this will reset the UI into the
     // correct state automatically.
-    Weave.Service.login(Weave.Service.username, this.setupData.password, this.setupData.synckey);
+    Weave.Service.login(Weave.Identity.username, this.setupData.password, this.setupData.synckey);
   },
 
   connect: function connect(aSetupData) {
@@ -344,7 +309,7 @@ let WeaveGlue = {
       this.setupData = aSetupData;
 
     // Cause the Sync system to reset internals if we seem to be switching accounts
-    if (this.setupData.account != Weave.Service.account)
+    if (this.setupData.account != Weave.Identity.account)
       Weave.Service.startOver();
 
     // Remove any leftover connection error string
@@ -355,9 +320,9 @@ let WeaveGlue = {
       Weave.Service.serverURL = this.setupData.serverURL;
 
     // Sync will use the account value and munge it into a username, as needed
-    Weave.Service.account = this.setupData.account;
-    Weave.Service.password = this.setupData.password;
-    Weave.Service.passphrase = this.setupData.synckey;
+    Weave.Identity.account = this.setupData.account;
+    Weave.Identity.basicPassword = this.setupData.password;
+    Weave.Identity.syncKey = this.setupData.synckey;
     Weave.Service.persistLogin();
     Weave.Svc.Obs.notify("weave:service:setup-complete");
     setTimeout(function () { Weave.Service.sync(); }, 0);
@@ -505,7 +470,7 @@ let WeaveGlue = {
     }, 0, this);
 
     // Dynamically generate some strings
-    let accountStr = this._bundle.formatStringFromName("account.label", [Weave.Service.account], 1);
+    let accountStr = this._bundle.formatStringFromName("account.label", [Weave.Identity.account], 1);
     disconnect.setAttribute("title", accountStr);
 
     // Show the day-of-week and time (HH:MM) of last sync
@@ -589,9 +554,9 @@ let WeaveGlue = {
 
   loadSetupData: function _loadSetupData() {
     this.setupData = {};
-    this.setupData.account = Weave.Service.account || "";
-    this.setupData.password = Weave.Service.password || "";
-    this.setupData.synckey = Weave.Service.passphrase || "";
+    this.setupData.account = Weave.Identity.account || "";
+    this.setupData.password = Weave.Identity.basicPassword || "";
+    this.setupData.synckey = Weave.Identity.syncKey || "";
 
     let serverURL = Weave.Service.serverURL;
     let defaultPrefs = Services.prefs.getDefaultBranch(null);
@@ -652,9 +617,9 @@ let SyncPairDevice = {
     let self = this;
     let jpake = this.jpake = new Weave.JPAKEClient({
       onPaired: function onPaired() {
-        let credentials = {account:   Weave.Service.account,
-                           password:  Weave.Service.password,
-                           synckey:   Weave.Service.passphrase,
+        let credentials = {account:   Weave.Identity.account,
+                           password:  Weave.Identity.basicPassword,
+                           synckey:   Weave.Identity.syncKey,
                            serverURL: Weave.Service.serverURL};
         jpake.sendAndComplete(credentials);
       },

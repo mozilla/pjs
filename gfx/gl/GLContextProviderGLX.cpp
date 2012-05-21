@@ -1,38 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Matt Woodrow <mwoodrow@mozilla.com>
- *   Bas Schouten <bschouten@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_WIDGET_GTK2
 #include <gdk/gdk.h>
@@ -40,8 +9,7 @@
 #define GET_NATIVE_WINDOW(aWidget) GDK_WINDOW_XID((GdkWindow *) aWidget->GetNativeData(NS_NATIVE_WINDOW))
 #elif defined(MOZ_WIDGET_QT)
 #include <QWidget>
-#include <QX11Info>
-#define GET_NATIVE_WINDOW(aWidget) static_cast<QWidget*>(aWidget->GetNativeData(NS_NATIVE_SHELLWIDGET))->handle()
+#define GET_NATIVE_WINDOW(aWidget) static_cast<QWidget*>(aWidget->GetNativeData(NS_NATIVE_SHELLWIDGET))->winId()
 #endif
 
 #include <X11/Xlib.h>
@@ -51,6 +19,7 @@
 
 #include "prenv.h"
 #include "GLContextProvider.h"
+#include "GLLibraryLoader.h"
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include "GLXLibrary.h"
@@ -62,6 +31,10 @@
 #include "gfxUtils.h"
 
 #include "gfxCrashReporterUtils.h"
+
+#ifdef MOZ_WIDGET_GTK2
+#include "gfxPlatformGtk.h"
+#endif
 
 namespace mozilla {
 namespace gl {
@@ -120,7 +93,7 @@ GLXLibrary::EnsureInitialized()
         mDebug = true;
     }
 
-    LibrarySymbolLoader::SymLoadStruct symbols[] = {
+    GLLibraryLoader::SymLoadStruct symbols[] = {
         /* functions that were in GLX 1.0 */
         { (PRFuncPtr*) &xDestroyContextInternal, { "glXDestroyContext", NULL } },
         { (PRFuncPtr*) &xMakeCurrentInternal, { "glXMakeCurrent", NULL } },
@@ -136,7 +109,7 @@ GLXLibrary::EnsureInitialized()
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols13[] = {
+    GLLibraryLoader::SymLoadStruct symbols13[] = {
         /* functions introduced in GLX 1.3 */
         { (PRFuncPtr*) &xChooseFBConfigInternal, { "glXChooseFBConfig", NULL } },
         { (PRFuncPtr*) &xGetFBConfigAttribInternal, { "glXGetFBConfigAttrib", NULL } },
@@ -150,7 +123,7 @@ GLXLibrary::EnsureInitialized()
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols13_ext[] = {
+    GLLibraryLoader::SymLoadStruct symbols13_ext[] = {
         /* extension equivalents for functions introduced in GLX 1.3 */
         // GLX_SGIX_fbconfig extension
         { (PRFuncPtr*) &xChooseFBConfigInternal, { "glXChooseFBConfigSGIX", NULL } },
@@ -164,31 +137,31 @@ GLXLibrary::EnsureInitialized()
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols14[] = {
+    GLLibraryLoader::SymLoadStruct symbols14[] = {
         /* functions introduced in GLX 1.4 */
         { (PRFuncPtr*) &xGetProcAddressInternal, { "glXGetProcAddress", NULL } },
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols14_ext[] = {
+    GLLibraryLoader::SymLoadStruct symbols14_ext[] = {
         /* extension equivalents for functions introduced in GLX 1.4 */
         // GLX_ARB_get_proc_address extension
         { (PRFuncPtr*) &xGetProcAddressInternal, { "glXGetProcAddressARB", NULL } },
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols_texturefrompixmap[] = {
+    GLLibraryLoader::SymLoadStruct symbols_texturefrompixmap[] = {
         { (PRFuncPtr*) &xBindTexImageInternal, { "glXBindTexImageEXT", NULL } },
         { (PRFuncPtr*) &xReleaseTexImageInternal, { "glXReleaseTexImageEXT", NULL } },
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct symbols_robustness[] = {
+    GLLibraryLoader::SymLoadStruct symbols_robustness[] = {
         { (PRFuncPtr*) &xCreateContextAttribsInternal, { "glXCreateContextAttribsARB", NULL } },
         { NULL, { NULL } }
     };
 
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &symbols[0])) {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &symbols[0])) {
         NS_WARNING("Couldn't find required entry point in OpenGL shared library");
         return false;
     }
@@ -215,7 +188,7 @@ GLXLibrary::EnsureInitialized()
 
     extensionsStr = xQueryExtensionsString(display, screen);
 
-    LibrarySymbolLoader::SymLoadStruct *sym13;
+    GLLibraryLoader::SymLoadStruct *sym13;
     if (!GLXVersionCheck(1, 3)) {
         // Even if we don't have 1.3, we might have equivalent extensions
         // (as on the Intel X server).
@@ -226,12 +199,12 @@ GLXLibrary::EnsureInitialized()
     } else {
         sym13 = symbols13;
     }
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, sym13)) {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, sym13)) {
         NS_WARNING("Couldn't find required entry point in OpenGL shared library");
         return false;
     }
 
-    LibrarySymbolLoader::SymLoadStruct *sym14;
+    GLLibraryLoader::SymLoadStruct *sym14;
     if (!GLXVersionCheck(1, 4)) {
         // Even if we don't have 1.4, we might have equivalent extensions
         // (as on the Intel X server).
@@ -242,22 +215,27 @@ GLXLibrary::EnsureInitialized()
     } else {
         sym14 = symbols14;
     }
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, sym14)) {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, sym14)) {
         NS_WARNING("Couldn't find required entry point in OpenGL shared library");
         return false;
     }
 
     if (HasExtension(extensionsStr, "GLX_EXT_texture_from_pixmap") &&
-        LibrarySymbolLoader::LoadSymbols(mOGLLibrary, symbols_texturefrompixmap, 
-                                         (LibrarySymbolLoader::PlatformLookupFunction)&xGetProcAddress))
+        GLLibraryLoader::LoadSymbols(mOGLLibrary, symbols_texturefrompixmap, 
+                                         (GLLibraryLoader::PlatformLookupFunction)&xGetProcAddress))
     {
-        mHasTextureFromPixmap = true;
+#ifdef MOZ_WIDGET_GTK2
+        mUseTextureFromPixmap = gfxPlatformGtk::UseXRender();
+#else
+        mUseTextureFromPixmap = true;
+#endif
     } else {
+        mUseTextureFromPixmap = false;
         NS_WARNING("Texture from pixmap disabled");
     }
 
     if (HasExtension(extensionsStr, "GLX_ARB_create_context_robustness") &&
-        LibrarySymbolLoader::LoadSymbols(mOGLLibrary, symbols_robustness)) {
+        GLLibraryLoader::LoadSymbols(mOGLLibrary, symbols_robustness)) {
         mHasRobustness = true;
     }
 
@@ -278,7 +256,7 @@ GLXLibrary::SupportsTextureFromPixmap(gfxASurface* aSurface)
         return false;
     }
     
-    if (aSurface->GetType() != gfxASurface::SurfaceTypeXlib || !mHasTextureFromPixmap) {
+    if (aSurface->GetType() != gfxASurface::SurfaceTypeXlib || !mUseTextureFromPixmap) {
         return false;
     }
 
@@ -328,7 +306,7 @@ GLXLibrary::CreatePixmap(gfxASurface* aSurface)
 void
 GLXLibrary::DestroyPixmap(GLXPixmap aPixmap)
 {
-    if (!mHasTextureFromPixmap) {
+    if (!mUseTextureFromPixmap) {
         return;
     }
 
@@ -339,7 +317,7 @@ GLXLibrary::DestroyPixmap(GLXPixmap aPixmap)
 void
 GLXLibrary::BindTexImage(GLXPixmap aPixmap)
 {    
-    if (!mHasTextureFromPixmap) {
+    if (!mUseTextureFromPixmap) {
         return;
     }
 
@@ -352,7 +330,7 @@ GLXLibrary::BindTexImage(GLXPixmap aPixmap)
 void
 GLXLibrary::ReleaseTexImage(GLXPixmap aPixmap)
 {
-    if (!mHasTextureFromPixmap) {
+    if (!mUseTextureFromPixmap) {
         return;
     }
 
@@ -776,7 +754,12 @@ TRY_AGAIN_NO_SHARING:
             return false;
         }
 
-        return IsExtensionSupported("GL_EXT_framebuffer_object");
+        if (!IsExtensionSupported(EXT_framebuffer_object))
+            return false;
+
+        InitFramebuffers();
+
+        return true;
     }
 
     bool MakeCurrentImpl(bool aForce = false)
@@ -838,14 +821,14 @@ TRY_AGAIN_NO_SHARING:
 
     bool TextureImageSupportsGetBackingSurface()
     {
-        return sGLXLibrary.HasTextureFromPixmap();
+        return sGLXLibrary.UseTextureFromPixmap();
     }
 
     virtual already_AddRefed<TextureImage>
     CreateTextureImage(const nsIntSize& aSize,
                        TextureImage::ContentType aContentType,
                        GLenum aWrapMode,
-                       bool aUseNearestFilter = false);
+                       TextureImage::Flags aFlags = TextureImage::NoFlags);
 
 private:
     friend class GLContextProviderGLX;
@@ -882,7 +865,7 @@ class TextureImageGLX : public TextureImage
     GLContextGLX::CreateTextureImage(const nsIntSize&,
                                      ContentType,
                                      GLenum,
-                                     bool);
+                                     TextureImage::Flags);
 
 public:
     virtual ~TextureImageGLX()
@@ -946,8 +929,9 @@ private:
                    ContentType aContentType,
                    GLContext* aContext,
                    gfxASurface* aSurface,
-                   GLXPixmap aPixmap)
-        : TextureImage(aSize, aWrapMode, aContentType)
+                   GLXPixmap aPixmap,
+                   TextureImage::Flags aFlags = TextureImage::NoFlags)
+        : TextureImage(aSize, aWrapMode, aContentType, aFlags)
         , mGLContext(aContext)
         , mUpdateSurface(aSurface)
         , mPixmap(aPixmap)
@@ -977,13 +961,13 @@ already_AddRefed<TextureImage>
 GLContextGLX::CreateTextureImage(const nsIntSize& aSize,
                                  TextureImage::ContentType aContentType,
                                  GLenum aWrapMode,
-                                 bool aUseNearestFilter)
+                                 TextureImage::Flags aFlags)
 {
     if (!TextureImageSupportsGetBackingSurface()) {
         return GLContext::CreateTextureImage(aSize, 
                                              aContentType, 
                                              aWrapMode, 
-                                             aUseNearestFilter);
+                                             aFlags);
     }
 
     Display *display = DefaultXDisplay();
@@ -1018,9 +1002,9 @@ GLContextGLX::CreateTextureImage(const nsIntSize& aSize,
     fBindTexture(LOCAL_GL_TEXTURE_2D, texture);
 
     nsRefPtr<TextureImageGLX> teximage =
-        new TextureImageGLX(texture, aSize, aWrapMode, aContentType, this, surface, pixmap);
+        new TextureImageGLX(texture, aSize, aWrapMode, aContentType, this, surface, pixmap, aFlags);
 
-    GLint texfilter = aUseNearestFilter ? LOCAL_GL_NEAREST : LOCAL_GL_LINEAR;
+    GLint texfilter = aFlags & TextureImage::UseNearestFilter ? LOCAL_GL_NEAREST : LOCAL_GL_LINEAR;
     fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MIN_FILTER, texfilter);
     fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MAG_FILTER, texfilter);
     fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_S, aWrapMode);
@@ -1161,6 +1145,7 @@ GLContextProviderGLX::CreateForWindow(nsIWidget *aWidget)
                                                                      vinfo,
                                                                      shareContext,
                                                                      false);
+
     return glContext.forget();
 }
 
@@ -1285,7 +1270,8 @@ DONE_CREATING_PIXMAP:
 
 already_AddRefed<GLContext>
 GLContextProviderGLX::CreateOffscreen(const gfxIntSize& aSize,
-                                      const ContextFormat& aFormat)
+                                      const ContextFormat& aFormat,
+                                      const ContextFlags)
 {
     nsRefPtr<GLContextGLX> glContext =
         CreateOffscreenPixmapContext(aSize, aFormat, true);
@@ -1300,7 +1286,7 @@ GLContextProviderGLX::CreateOffscreen(const gfxIntSize& aSize,
         return nsnull;
     }
 
-    if (!glContext->ResizeOffscreenFBO(aSize, true)) {
+    if (!glContext->ResizeOffscreenFBOs(aSize, true)) {
         // we weren't able to create the initial
         // offscreen FBO, so this is dead
         return nsnull;

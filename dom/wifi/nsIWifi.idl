@@ -1,50 +1,148 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Telephony.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Blake Kaplan <mrbkap@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
+#include "nsIDOMDOMRequest.idl"
+#include "nsIDOMEvent.idl"
 
-[scriptable, uuid(14c815f0-e9db-41d4-a15e-f3e69140f83b)]
-interface nsIWifiNetwork : nsISupports {
-    readonly attribute DOMString ssid; // can be null
-    readonly attribute DOMString bssid; // can be null
-    readonly attribute DOMString flags; // TODO make this be real flags instead of a string
-    readonly attribute long signal;
+[scriptable, uuid(abb936bc-ba81-4c23-8dfa-3e5d96557044)]
+interface nsIWifi : nsISupports {
+    /**
+     * Shutdown the wifi system.
+     */
+    void shutdown();
 };
 
-[scriptable, uuid(9DCE05BF-659C-4427-A050-0EAC3BB6C1C0)]
-interface nsIWifi : nsISupports {
+[scriptable, uuid(e3d5a7d7-6abd-4ac2-83dc-5315ec08a1c3)]
+interface nsIDOMWifiManager : nsISupports {
+    /**
+     * TODO Remove in favor of a settings API.
+     * Activates or disactivates wifi.
+     * onsuccess: Wifi has been successfully activated and can start
+     *            attempting to connect to networks. request.value will be true.
+     * onerror: Wifi was not successfully activated. (TODO provide details!)
+     */
+    nsIDOMDOMRequest setEnabled(in boolean enabled);
+
+    /**
+     * Returns the list of currently available networks as well as the list of
+     * currently configured networks.
+     * onsuccess: We have obtained the current list of networks. request.value
+     *            is an object whose property names are SSIDs and values are
+     *            network objects.
+     * onerror: We were unable to obtain a list of property names.
+     */
+    nsIDOMDOMRequest getNetworks();
+
+    /**
+     * Takes one of the networks returned from getNetworks and tries to
+     * connect to it.
+     * @param network A network object with information about the network,
+     *                such as the SSID, key management desired, etc.
+     * onsuccess: We have started attempting to associate with the network.
+     *            request.value is true.
+     * onerror: We were unable to select the network. This most likely means a
+     *          configuration error.
+     */
+    nsIDOMDOMRequest associate(in jsval network);
+
+    /**
+     * Given a network, removes it from the list of networks that we'll
+     * automatically connect to. In order to re-connect to the network, it is
+     * necessary to call associate on it.
+     * @param network A network object with the SSID of the network to remove.
+     * onsuccess: We have removed this network. If we were previously
+     *            connected to it, we have started reconnecting to the next
+     *            network in the list.
+     * onerror: We were unable to remove the network.
+     */
+    nsIDOMDOMRequest forget(in jsval network);
+
+    /**
+     * TODO Remove in favor of a settings API.
+     * Returns whether or not wifi is currently enabled.
+     */
+    readonly attribute boolean enabled;
+
+    /**
+     * An non-null object containing the following information:
+     *  - status ("disconnected", "connecting", "associated", "connected")
+     *  - network
+     *
+     *  Note that the object returned is read only. Any changes required must
+     *  be done by calling other APIs.
+     */
+    readonly attribute jsval connection;
+
+    /**
+     * A connectionInformation object with the same information found in an
+     * nsIDOMWifiConnectionInfoEvent (but without the network).
+     * If we are not currently connected to a network, this will be null.
+     */
+    readonly attribute jsval connectionInformation;
+
+    /**
+     * State notification listeners. These all take an
+     * nsIDOMWifiStatusChangeEvent with the new status and a network (which
+     * may be null).
+     *
+     * The possible statuses are:
+     *   - connecting: Fires when we start the process of connecting to a
+     *                 network.
+     *   - associated: Fires when we have connected to an access point but do
+     *                 not yet have an IP address.
+     *   - connected: Fires once we are fully connected to an access point and
+     *                can access the internet.
+     *   - disconnected: Fires when we either fail to connect to an access
+     *                   point (transition: associated -> disconnected) or
+     *                   when we were connected to a network but have
+     *                   disconnected for any reason (transition: connected ->
+     *                   disconnected).
+     */
+             attribute nsIDOMEventListener onstatuschange;
+
+    /**
+     * An event listener that is called with information about the signal
+     * strength and link speed every 5 seconds.
+     */
+             attribute nsIDOMEventListener connectionInfoUpdate;
+};
+
+[scriptable, uuid(4674c6f1-ea64-44db-ac2f-e7bd6514dfd6)]
+interface nsIDOMWifiStatusChangeEvent : nsIDOMEvent {
+    /**
+     * Network object with a SSID field describing the network affected by
+     * this change. This might be null.
+     */
+    readonly attribute jsval network;
+
+    /**
+     * String describing the current status of the wifi manager. See above for
+     * the possible values.
+     */
+    readonly attribute string status;
+};
+
+[scriptable, uuid(5c9ee332-dd98-4227-b7fc-768418fd50e3)]
+interface nsIDOMWifiConnectionInfoEvent : nsIDOMEvent {
+    /**
+     * Network object with an SSID field.
+     */
+    readonly attribute jsval network;
+
+    /**
+     * Strength of the signal to network, in dBm between -55 and -100 dBm.
+     */
+    readonly attribute short signalStrength;
+
+    /**
+     * Relative signal strength between 0 and 100.
+     */
+    readonly attribute short relSignalStrength;
+
+    /**
+     * Link spead in Mb/s.
+     */
+    readonly attribute long linkSpeed;
 };

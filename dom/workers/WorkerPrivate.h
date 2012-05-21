@@ -1,40 +1,7 @@
 /* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Web Workers.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_dom_workers_workerprivate_h__
 #define mozilla_dom_workers_workerprivate_h__
@@ -55,6 +22,7 @@
 #include "nsStringGlue.h"
 #include "nsTArray.h"
 #include "nsTPriorityQueue.h"
+#include "StructuredCloneTags.h"
 
 #include "EventTarget.h"
 #include "Queue.h"
@@ -68,6 +36,7 @@ class nsIScriptContext;
 class nsIURI;
 class nsPIDOMWindow;
 class nsITimer;
+class nsIXPCScriptNotify;
 
 BEGIN_WORKERS_NAMESPACE
 
@@ -132,6 +101,8 @@ protected:
   virtual void
   PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate, bool aRunResult);
 
+  void NotifyScriptExecutedIfNeeded() const;
+
 private:
   NS_DECL_NSIRUNNABLE
 };
@@ -176,7 +147,7 @@ protected:
 };
 
 template <class Derived>
-class WorkerPrivateParent : public events::EventTarget
+class WorkerPrivateParent : public EventTarget
 {
 public:
   struct LocationInfo
@@ -206,6 +177,7 @@ private:
   // Main-thread things.
   nsCOMPtr<nsPIDOMWindow> mWindow;
   nsCOMPtr<nsIScriptContext> mScriptContext;
+  nsCOMPtr<nsIXPCScriptNotify> mScriptNotify;
   nsCOMPtr<nsIURI> mBaseURI;
   nsCOMPtr<nsIURI> mScriptURI;
   nsCOMPtr<nsIPrincipal> mPrincipal;
@@ -223,6 +195,7 @@ private:
   bool mParentSuspended;
   bool mIsChromeWorker;
   bool mPrincipalIsSystem;
+  bool mMainThreadObjectsForgotten;
 
 protected:
   WorkerPrivateParent(JSContext* aCx, JSObject* aObject, WorkerPrivate* aParent,
@@ -243,13 +216,15 @@ private:
     return static_cast<Derived*>(const_cast<WorkerPrivateParent*>(this));
   }
 
+  // aCx is null when called from the finalizer
   bool
-  NotifyPrivate(JSContext* aCx, Status aStatus, bool aFromJSFinalizer);
+  NotifyPrivate(JSContext* aCx, Status aStatus);
 
+  // aCx is null when called from the finalizer
   bool
-  TerminatePrivate(JSContext* aCx, bool aFromJSFinalizer)
+  TerminatePrivate(JSContext* aCx)
   {
-    return NotifyPrivate(aCx, Terminating, aFromJSFinalizer);
+    return NotifyPrivate(aCx, Terminating);
   }
 
 public:
@@ -261,7 +236,7 @@ public:
   bool
   Notify(JSContext* aCx, Status aStatus)
   {
-    return NotifyPrivate(aCx, aStatus, false);
+    return NotifyPrivate(aCx, aStatus);
   }
 
   bool
@@ -282,22 +257,24 @@ public:
   bool
   Resume(JSContext* aCx);
 
-  void
-  TraceInstance(JSTracer* aTrc)
-  {
-    // This should only happen on the parent thread but we can't assert that
-    // because it can also happen on the cycle collector thread when this is a
-    // top-level worker.
-    events::EventTarget::TraceInstance(aTrc);
-  }
+  virtual void
+  _Trace(JSTracer* aTrc) MOZ_OVERRIDE;
+
+  virtual void
+  _Finalize(JSFreeOp* aFop) MOZ_OVERRIDE;
 
   void
-  FinalizeInstance(JSContext* aCx, bool aFromJSFinalizer);
+  Finish(JSContext* aCx)
+  {
+    RootJSObject(aCx, false);
+  }
 
   bool
   Terminate(JSContext* aCx)
   {
-    return TerminatePrivate(aCx, false);
+    AssertIsOnParentThread();
+    RootJSObject(aCx, false);
+    return TerminatePrivate(aCx);
   }
 
   bool
@@ -332,9 +309,6 @@ public:
   void
   GarbageCollect(JSContext* aCx, bool aShrinking);
 
-  using events::EventTarget::GetEventListenerOnEventTarget;
-  using events::EventTarget::SetEventListenerOnEventTarget;
-
   void
   QueueRunnable(WorkerRunnable* aRunnable)
   {
@@ -355,6 +329,17 @@ public:
     return mParentSuspended;
   }
 
+  bool
+  IsAcceptingEvents()
+  {
+    AssertIsOnParentThread();
+    bool acceptingEvents;
+    mMutex.Lock();
+    acceptingEvents = mParentStatus < Terminating;
+    mMutex.Unlock();
+    return acceptingEvents;
+  }
+
   Status
   ParentStatus() const
   {
@@ -370,6 +355,13 @@ public:
   {
     AssertIsOnMainThread();
     return mScriptContext;
+  }
+
+  nsIXPCScriptNotify*
+  GetScriptNotify() const
+  {
+    AssertIsOnMainThread();
+    return mScriptNotify;
   }
 
   JSObject*
@@ -563,7 +555,7 @@ class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
 public:
   ~WorkerPrivate();
 
-  static WorkerPrivate*
+  static already_AddRefed<WorkerPrivate>
   Create(JSContext* aCx, JSObject* aObj, WorkerPrivate* aParent,
          JSString* aScriptURL, bool aIsChromeWorker);
 
@@ -655,7 +647,7 @@ public:
   ReportError(JSContext* aCx, const char* aMessage, JSErrorReport* aReport);
 
   bool
-  SetTimeout(JSContext* aCx, uintN aArgc, jsval* aVp, bool aIsInterval);
+  SetTimeout(JSContext* aCx, unsigned aArgc, jsval* aVp, bool aIsInterval);
 
   bool
   ClearTimeout(JSContext* aCx, uint32 aId);
@@ -799,7 +791,7 @@ GetWorkerPrivateFromContext(JSContext* aCx);
 
 enum WorkerStructuredDataType
 {
-  DOMWORKER_SCTAG_FILE = JS_SCTAG_USER_MIN + 0x1000,
+  DOMWORKER_SCTAG_FILE = SCTAG_DOM_MAX,
   DOMWORKER_SCTAG_BLOB,
 
   DOMWORKER_SCTAG_END

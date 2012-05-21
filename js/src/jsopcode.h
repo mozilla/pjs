@@ -1,41 +1,8 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsopcode_h___
 #define jsopcode_h___
@@ -82,7 +49,7 @@ typedef enum JSOp {
 #define JOF_LOOKUPSWITCH  5       /* lookup switch */
 #define JOF_QARG          6       /* quickened get/set function argument ops */
 #define JOF_LOCAL         7       /* var or block-local variable */
-/* 8 is unused */
+#define JOF_DOUBLE        8       /* uint32_t index for double value */
 #define JOF_UINT24        12      /* extended unsigned 24-bit literal (index) */
 #define JOF_UINT8         13      /* uint8_t immediate, e.g. top 8 bits of 24-bit
                                      atom index */
@@ -93,13 +60,13 @@ typedef enum JSOp {
 #define JOF_INT8          18      /* int8_t immediate operand */
 #define JOF_ATOMOBJECT    19      /* uint16_t constant index + object index */
 #define JOF_UINT16PAIR    20      /* pair of uint16_t immediates */
+#define JOF_SCOPECOORD    21      /* pair of uint16_t immediates followed by atom index */
 #define JOF_TYPEMASK      0x001f  /* mask for above immediate types */
 
 #define JOF_NAME          (1U<<5) /* name operation */
 #define JOF_PROP          (2U<<5) /* obj.prop operation */
 #define JOF_ELEM          (3U<<5) /* obj[index] operation */
 #define JOF_XMLNAME       (4U<<5) /* XML name: *, a::b, @a, @a::b, etc. */
-#define JOF_VARPROP       (5U<<5) /* x.prop for this, arg, var, or local x */
 #define JOF_MODEMASK      (7U<<5) /* mask for above addressing modes */
 #define JOF_SET           (1U<<8) /* set (i.e., assignment) operation */
 #define JOF_DEL           (1U<<9) /* delete operation */
@@ -113,7 +80,7 @@ typedef enum JSOp {
 #define JOF_BACKPATCH    (1U<<15) /* backpatch placeholder during codegen */
 #define JOF_LEFTASSOC    (1U<<16) /* left-associative operator */
 #define JOF_DECLARING    (1U<<17) /* var, const, or function declaration op */
-#define JOF_INDEXBASE    (1U<<18) /* atom segment base setting prefix op */
+/* (1U<<18) is unused */
 #define JOF_PARENHEAD    (1U<<20) /* opcode consumes value of expression in
                                      parenthesized statement head */
 #define JOF_INVOKE       (1U<<21) /* JSOP_CALL, JSOP_NEW, JSOP_EVAL */
@@ -165,9 +132,9 @@ SET_UINT8(jsbytecode *pc, uint8_t u)
 #define UINT16_LEN              2
 #define UINT16_HI(i)            ((jsbytecode)((i) >> 8))
 #define UINT16_LO(i)            ((jsbytecode)(i))
-#define GET_UINT16(pc)          ((uintN)(((pc)[1] << 8) | (pc)[2]))
+#define GET_UINT16(pc)          ((unsigned)(((pc)[1] << 8) | (pc)[2]))
 #define SET_UINT16(pc,i)        ((pc)[1] = UINT16_HI(i), (pc)[2] = UINT16_LO(i))
-#define UINT16_LIMIT            ((uintN)1 << 16)
+#define UINT16_LIMIT            ((unsigned)1 << 16)
 
 /* Helpers for accessing the offsets of jump opcodes. */
 #define JUMP_OFFSET_LEN         4
@@ -192,7 +159,7 @@ SET_JUMP_OFFSET(jsbytecode *pc, int32_t off)
 #define UINT32_INDEX_LEN        4
 
 static JS_ALWAYS_INLINE uint32_t
-GET_UINT32_INDEX(jsbytecode *pc)
+GET_UINT32_INDEX(const jsbytecode *pc)
 {
     return (pc[1] << 24) | (pc[2] << 16) | (pc[3] << 8) | pc[4];
 }
@@ -206,22 +173,6 @@ SET_UINT32_INDEX(jsbytecode *pc, uint32_t index)
     pc[4] = (jsbytecode)index;
 }
 
-/*
- * A literal is indexed by a per-script atom map.  Most scripts have relatively
- * few literals, so the standard JOF_ATOM format specifies a fixed 16 bits of
- * immediate operand index.  A script with more than 64K literals must wrap the
- * bytecode into an JSOP_INDEXBASE and JSOP_RESETBASE pair.
- */
-#define INDEX_LEN               2
-#define INDEX_HI(i)             ((jsbytecode)((i) >> 8))
-#define INDEX_LO(i)             ((jsbytecode)(i))
-#define GET_INDEX(pc)           GET_UINT16(pc)
-#define SET_INDEX(pc,i)         ((pc)[1] = INDEX_HI(i), (pc)[2] = INDEX_LO(i))
-
-#define GET_INDEXBASE(pc)       (JS_ASSERT(*(pc) == JSOP_INDEXBASE),          \
-                                 ((uintN)((pc)[1])) << 16)
-#define INDEXBASE_LEN           1
-
 #define UINT24_HI(i)            ((jsbytecode)((i) >> 16))
 #define UINT24_MID(i)           ((jsbytecode)((i) >> 8))
 #define UINT24_LO(i)            ((jsbytecode)(i))
@@ -232,12 +183,12 @@ SET_UINT32_INDEX(jsbytecode *pc, uint32_t index)
                                  (pc)[2] = UINT24_MID(i),                     \
                                  (pc)[3] = UINT24_LO(i))
 
-#define GET_INT8(pc)            ((jsint)int8_t((pc)[1]))
+#define GET_INT8(pc)            (int8_t((pc)[1]))
 
-#define GET_INT32(pc)           ((jsint)((uint32_t((pc)[1]) << 24) |          \
-                                         (uint32_t((pc)[2]) << 16) |          \
-                                         (uint32_t((pc)[3]) << 8)  |          \
-                                         uint32_t((pc)[4])))
+#define GET_INT32(pc)           (((uint32_t((pc)[1]) << 24) |                 \
+                                  (uint32_t((pc)[2]) << 16) |                 \
+                                  (uint32_t((pc)[3]) << 8)  |                 \
+                                  uint32_t((pc)[4])))
 #define SET_INT32(pc,i)         ((pc)[1] = (jsbytecode)(uint32_t(i) >> 24),   \
                                  (pc)[2] = (jsbytecode)(uint32_t(i) >> 16),   \
                                  (pc)[3] = (jsbytecode)(uint32_t(i) >> 8),    \
@@ -275,7 +226,7 @@ struct JSCodeSpec {
 };
 
 extern const JSCodeSpec js_CodeSpec[];
-extern uintN            js_NumCodeSpecs;
+extern unsigned            js_NumCodeSpecs;
 extern const char       *js_CodeName[];
 extern const char       js_EscapeMap[];
 
@@ -306,7 +257,7 @@ js_QuoteString(JSContext *cx, JSString *str, jschar quote);
 
 extern JSPrinter *
 js_NewPrinter(JSContext *cx, const char *name, JSFunction *fun,
-              uintN indent, JSBool pretty, JSBool grouped, JSBool strict);
+              unsigned indent, JSBool pretty, JSBool grouped, JSBool strict);
 
 extern void
 js_DestroyPrinter(JSPrinter *jp);
@@ -320,26 +271,10 @@ js_printf(JSPrinter *jp, const char *format, ...);
 extern JSBool
 js_puts(JSPrinter *jp, const char *s);
 
-/*
- * Get index operand from the bytecode using a bytecode analysis to deduce the
- * the index register. This function is infallible, in spite of taking cx as
- * its first parameter; it uses only cx->runtime when calling JS_GetTrapOpcode.
- * The GET_*_FROM_BYTECODE macros that call it pick up cx from their caller's
- * lexical environments.
- */
-uintN
-js_GetIndexFromBytecode(JSScript *script, jsbytecode *pc, ptrdiff_t pcoff);
-
-/*
- * A slower version of GET_ATOM when the caller does not want to maintain
- * the index segment register itself.
- */
 #define GET_ATOM_FROM_BYTECODE(script, pc, pcoff, atom)                       \
     JS_BEGIN_MACRO                                                            \
-        JS_ASSERT(*(pc) != JSOP_DOUBLE);                                      \
         JS_ASSERT(js_CodeSpec[*(pc)].format & JOF_ATOM);                      \
-        uintN index_ = js_GetIndexFromBytecode((script), (pc), (pcoff));      \
-        (atom) = (script)->getAtom(index_);                                   \
+        (atom) = (script)->getAtom(GET_UINT32_INDEX((pc) + (pcoff)));         \
     JS_END_MACRO
 
 #define GET_NAME_FROM_BYTECODE(script, pc, pcoff, name)                       \
@@ -350,19 +285,12 @@ js_GetIndexFromBytecode(JSScript *script, jsbytecode *pc, ptrdiff_t pcoff);
         (name) = atom_->asPropertyName();                                     \
     JS_END_MACRO
 
-#define GET_DOUBLE_FROM_BYTECODE(script, pc, pcoff, dbl)                      \
-    JS_BEGIN_MACRO                                                            \
-        uintN index_ = js_GetIndexFromBytecode((script), (pc), (pcoff));      \
-        JS_ASSERT(index_ < (script)->consts()->length);                       \
-        (dbl) = (script)->getConst(index_).toDouble();                        \
-    JS_END_MACRO
-
 namespace js {
 
-extern uintN
+extern unsigned
 StackUses(JSScript *script, jsbytecode *pc);
 
-extern uintN
+extern unsigned
 StackDefs(JSScript *script, jsbytecode *pc);
 
 }  /* namespace js */
@@ -390,7 +318,7 @@ typedef JSBool (* JSDecompilerPtr)(JSPrinter *);
 
 extern JSString *
 js_DecompileToString(JSContext *cx, const char *name, JSFunction *fun,
-                     uintN indent, JSBool pretty, JSBool grouped, JSBool strict,
+                     unsigned indent, JSBool pretty, JSBool grouped, JSBool strict,
                      JSDecompilerPtr decompiler);
 
 /*
@@ -406,14 +334,14 @@ js_DecompileToString(JSContext *cx, const char *name, JSFunction *fun,
  * The caller must call JS_free on the result after a succsesful call.
  */
 extern char *
-js_DecompileValueGenerator(JSContext *cx, intN spindex, jsval v,
+js_DecompileValueGenerator(JSContext *cx, int spindex, jsval v,
                            JSString *fallback);
 
 /*
  * Given bytecode address pc in script's main program code, return the operand
  * stack depth just before (JSOp) *pc executes.
  */
-extern uintN
+extern unsigned
 js_ReconstructStackDepth(JSContext *cx, JSScript *script, jsbytecode *pc);
 
 #ifdef _MSC_VER
@@ -434,7 +362,7 @@ js_GetVariableBytecodeLength(jsbytecode *pc);
 namespace js {
 
 static inline char *
-DecompileValueGenerator(JSContext *cx, intN spindex, const Value &v,
+DecompileValueGenerator(JSContext *cx, int spindex, const Value &v,
                         JSString *fallback)
 {
     return js_DecompileValueGenerator(cx, spindex, v, fallback);
@@ -525,18 +453,18 @@ Sprint(Sprinter *sp, const char *format, ...);
 extern bool
 CallResultEscapes(jsbytecode *pc);
 
-static inline uintN
+static inline unsigned
 GetDecomposeLength(jsbytecode *pc, size_t len)
 {
     /*
-     * The last byte of a DECOMPOSE op stores the decomposed length. This can
-     * vary across different instances of an opcode due to INDEXBASE ops.
+     * The last byte of a DECOMPOSE op stores the decomposed length.  This is a
+     * constant: perhaps we should just hardcode values instead?
      */
     JS_ASSERT(size_t(js_CodeSpec[*pc].length) == len);
-    return (uintN) pc[len - 1];
+    return (unsigned) pc[len - 1];
 }
 
-static inline uintN
+static inline unsigned
 GetBytecodeLength(jsbytecode *pc)
 {
     JSOp op = (JSOp)*pc;
@@ -560,10 +488,10 @@ FlowsIntoNext(JSOp op)
 
 /*
  * Counts accumulated for a single opcode in a script. The counts tracked vary
- * between opcodes, and this structure ensures that counts are accessed in
- * a coherent fashion.
+ * between opcodes, and this structure ensures that counts are accessed in a
+ * coherent fashion.
  */
-class OpcodeCounts
+class PCCounts
 {
     friend struct ::JSScript;
     double *counts;
@@ -581,11 +509,11 @@ class OpcodeCounts
         BASE_METHODJIT_CODE,
         BASE_METHODJIT_PICS,
 
-        BASE_COUNT
+        BASE_LIMIT
     };
 
     enum AccessCounts {
-        ACCESS_MONOMORPHIC = BASE_COUNT,
+        ACCESS_MONOMORPHIC = BASE_LIMIT,
         ACCESS_DIMORPHIC,
         ACCESS_POLYMORPHIC,
 
@@ -600,7 +528,7 @@ class OpcodeCounts
         ACCESS_STRING,
         ACCESS_OBJECT,
 
-        ACCESS_COUNT
+        ACCESS_LIMIT
     };
 
     static bool accessOp(JSOp op) {
@@ -608,7 +536,7 @@ class OpcodeCounts
          * Access ops include all name, element and property reads, as well as
          * SETELEM and SETPROP (for ElementCounts/PropertyCounts alignment).
          */
-        if (op == JSOP_SETELEM || op == JSOP_SETPROP || op == JSOP_SETMETHOD)
+        if (op == JSOP_SETELEM || op == JSOP_SETPROP)
             return true;
         int format = js_CodeSpec[op].format;
         return !!(format & (JOF_NAME | JOF_GNAME | JOF_ELEM | JOF_PROP))
@@ -616,7 +544,7 @@ class OpcodeCounts
     }
 
     enum ElementCounts {
-        ELEM_ID_INT = ACCESS_COUNT,
+        ELEM_ID_INT = ACCESS_LIMIT,
         ELEM_ID_DOUBLE,
         ELEM_ID_OTHER,
         ELEM_ID_UNKNOWN,
@@ -626,7 +554,7 @@ class OpcodeCounts
         ELEM_OBJECT_DENSE,
         ELEM_OBJECT_OTHER,
 
-        ELEM_COUNT
+        ELEM_LIMIT
     };
 
     static bool elementOp(JSOp op) {
@@ -634,11 +562,11 @@ class OpcodeCounts
     }
 
     enum PropertyCounts {
-        PROP_STATIC = ACCESS_COUNT,
+        PROP_STATIC = ACCESS_LIMIT,
         PROP_DEFINITE,
         PROP_OTHER,
 
-        PROP_COUNT
+        PROP_LIMIT
     };
 
     static bool propertyOp(JSOp op) {
@@ -646,12 +574,12 @@ class OpcodeCounts
     }
 
     enum ArithCounts {
-        ARITH_INT = BASE_COUNT,
+        ARITH_INT = BASE_LIMIT,
         ARITH_DOUBLE,
         ARITH_OTHER,
         ARITH_UNKNOWN,
 
-        ARITH_COUNT
+        ARITH_LIMIT
     };
 
     static bool arithOp(JSOp op) {
@@ -662,14 +590,14 @@ class OpcodeCounts
     {
         if (accessOp(op)) {
             if (elementOp(op))
-                return ELEM_COUNT;
+                return ELEM_LIMIT;
             if (propertyOp(op))
-                return PROP_COUNT;
-            return ACCESS_COUNT;
+                return PROP_LIMIT;
+            return ACCESS_LIMIT;
         }
         if (arithOp(op))
-            return ARITH_COUNT;
-        return BASE_COUNT;
+            return ARITH_LIMIT;
+        return BASE_LIMIT;
     }
 
     static const char *countName(JSOp op, size_t which);
@@ -696,8 +624,8 @@ class OpcodeCounts
 extern JS_FRIEND_API(JSBool)
 js_Disassemble(JSContext *cx, JSScript *script, JSBool lines, js::Sprinter *sp);
 
-extern JS_FRIEND_API(uintN)
-js_Disassemble1(JSContext *cx, JSScript *script, jsbytecode *pc, uintN loc,
+extern JS_FRIEND_API(unsigned)
+js_Disassemble1(JSContext *cx, JSScript *script, jsbytecode *pc, unsigned loc,
                 JSBool lines, js::Sprinter *sp);
 
 extern JS_FRIEND_API(void)

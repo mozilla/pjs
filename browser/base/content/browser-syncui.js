@@ -1,42 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is the Bookmarks Sync.
-#
-# The Initial Developer of the Original Code is the Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2007
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#  Dan Mills <thunder@mozilla.com>
-#  Chris Beard <cbeard@mozilla.com>
-#  Dan Mosedale <dmose@mozilla.org>
-#  Paul O’Shannessy <paul@oshannessy.com>
-#  Philipp von Weitershausen <philipp@weitershausen.de>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 // gSyncUI handles updating the tools menu
 let gSyncUI = {
@@ -175,21 +139,7 @@ let gSyncUI = {
     this.clearError(title);
   },
 
-  // Set visibility of "Setup Sync" link
-  showSetupSyncAboutHome: function SUI_showSetupSyncAboutHome(toShow) {
-    let browsers = gBrowser.browsers;
-    for (let i = 0; i < browsers.length; i++) {
-      let b = browsers[i];
-      if ("about:home" == b.currentURI.spec) {
-        b.contentDocument.getElementById("setupSyncLink").hidden = !toShow;
-      }
-    }
-  },
-
   onSetupComplete: function SUI_onSetupComplete() {
-    // Remove "setup sync" link in about:home if it is open. 
-    this.showSetupSyncAboutHome(false);
-
     onLoginFinish();
   },
 
@@ -237,8 +187,6 @@ let gSyncUI = {
 
   onStartOver: function SUI_onStartOver() {
     this.clearError();
-    // Make "setup sync" link visible in about:home if it is open. 
-    this.showSetupSyncAboutHome(true);
   },
 
   onQuotaNotice: function onQuotaNotice(subject, data) {
@@ -291,7 +239,7 @@ let gSyncUI = {
     if (win)
       win.focus();
     else {
-      window.openDialog("chrome://browser/content/syncSetup.xul",
+      window.openDialog("chrome://browser/content/sync/setup.xul",
                         "weaveSetup", "centerscreen,chrome,resizable=no",
                         wizardType);
     }
@@ -305,7 +253,7 @@ let gSyncUI = {
     if (win)
       win.focus();
     else
-      window.openDialog("chrome://browser/content/syncAddDevice.xul",
+      window.openDialog("chrome://browser/content/sync/addDevice.xul",
                         "syncAddDevice", "centerscreen,chrome,resizable=no");
   },
 
@@ -315,7 +263,7 @@ let gSyncUI = {
       win.focus();
     else
       Services.ww.activeWindow.openDialog(
-        "chrome://browser/content/syncQuota.xul", "",
+        "chrome://browser/content/sync/quota.xul", "",
         "centerscreen,chrome,dialog,modal");
   },
 

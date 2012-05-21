@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* a presentation of a document, part 1 */
 
@@ -67,7 +33,6 @@
 #include "nsIWeakReferenceUtils.h"
 #include "nsCSSRendering.h"
 #include "prprf.h"
-#include "nsContentPolicyUtils.h"
 #include "nsIDOMDocument.h"
 #include "nsAutoPtr.h"
 #include "nsEventStateManager.h"
@@ -197,7 +162,7 @@ IsVisualCharset(const nsCString& aCharset)
 
 
 static PLDHashOperator
-destroy_loads(const void * aKey, nsRefPtr<nsImageLoader>& aData, void* closure)
+destroy_loads(nsIFrame* aKey, nsRefPtr<nsImageLoader>& aData, void* closure)
 {
   aData->Destroy();
   return PL_DHASH_NEXT;
@@ -210,7 +175,8 @@ destroy_loads(const void * aKey, nsRefPtr<nsImageLoader>& aData, void* closure)
 
 nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   : mType(aType), mDocument(aDocument), mMinFontSize(0),
-    mTextZoom(1.0), mFullZoom(1.0), mPageSize(-1, -1), mPPScale(1.0f),
+    mTextZoom(1.0), mFullZoom(1.0), mLastFontInflationScreenWidth(-1.0),
+    mPageSize(-1, -1), mPPScale(1.0f),
     mViewportStyleOverflow(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
     mImageAnimationModePref(imgIContainer::kNormalAnimMode)
 {
@@ -345,12 +311,13 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsPresContext)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsPresContext)
 
 static PLDHashOperator
-TraverseImageLoader(const void * aKey, nsRefPtr<nsImageLoader>& aData,
+TraverseImageLoader(nsIFrame* aKey, nsRefPtr<nsImageLoader>& aData,
                     void* aClosure)
 {
   nsCycleCollectionTraversalCallback *cb =
     static_cast<nsCycleCollectionTraversalCallback*>(aClosure);
 
+  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mImageLoaders[i] item");
   cb->NoteXPCOMChild(aData);
 
   return PL_DHASH_NEXT;
@@ -364,6 +331,18 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsPresContext)
 
   for (PRUint32 i = 0; i < IMAGE_LOAD_TYPE_COUNT; ++i)
     tmp->mImageLoaders[i].Enumerate(TraverseImageLoader, &cb);
+
+  // We own only the items in mDOMMediaQueryLists that have listeners;
+  // this reference is managed by their AddListener and RemoveListener
+  // methods.
+  for (PRCList *l = PR_LIST_HEAD(&tmp->mDOMMediaQueryLists);
+       l != &tmp->mDOMMediaQueryLists; l = PR_NEXT_LINK(l)) {
+    nsDOMMediaQueryList *mql = static_cast<nsDOMMediaQueryList*>(l);
+    if (mql->HasListeners()) {
+      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mDOMMediaQueryLists item");
+      cb.NoteXPCOMChild(mql);
+    }
+  }
 
   // NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mTheme); // a service
   // NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mLangService); // a service
@@ -380,6 +359,17 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsPresContext)
     tmp->mEventManager->SetPresContext(nsnull);
 
     NS_RELEASE(tmp->mEventManager);
+  }
+
+  // We own only the items in mDOMMediaQueryLists that have listeners;
+  // this reference is managed by their AddListener and RemoveListener
+  // methods.
+  for (PRCList *l = PR_LIST_HEAD(&tmp->mDOMMediaQueryLists);
+       l != &tmp->mDOMMediaQueryLists; ) {
+    PRCList *next = PR_NEXT_LINK(l);
+    nsDOMMediaQueryList *mql = static_cast<nsDOMMediaQueryList*>(l);
+    mql->RemoveAllListeners();
+    l = next;
   }
 
   // NS_RELEASE(tmp->mLanguage); // an atom
@@ -535,7 +525,8 @@ nsPresContext::GetFontPrefsForLang(nsIAtom *aLanguage) const
     &prefs->mDefaultCursiveFont,
     &prefs->mDefaultFantasyFont
   };
-  PR_STATIC_ASSERT(NS_ARRAY_LENGTH(fontTypes) == eDefaultFont_COUNT);
+  MOZ_STATIC_ASSERT(NS_ARRAY_LENGTH(fontTypes) == eDefaultFont_COUNT,
+                    "FontTypes array count is not correct");
 
   // Get attributes specific to each generic font. We do not get the user's
   // generic-font-name-to-specific-family-name preferences because its the
@@ -929,9 +920,9 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
     mDeviceContext->FlushFontCache();
   mCurAppUnitsPerDevPixel = AppUnitsPerDevPixel();
 
-  for (PRUint32 i = 0; i < IMAGE_LOAD_TYPE_COUNT; ++i)
-    if (!mImageLoaders[i].Init())
-      return NS_ERROR_OUT_OF_MEMORY;
+  for (PRUint32 i = 0; i < IMAGE_LOAD_TYPE_COUNT; ++i) {
+    mImageLoaders[i].Init();
+  }
 
   mEventManager = new nsEventStateManager();
   NS_ADDREF(mEventManager);
@@ -1230,7 +1221,7 @@ static void SetImgAnimModeOnImgReq(imgIRequest* aImgReq, PRUint16 aMode)
 
  // Enumeration call back for HashTable
 static PLDHashOperator
-set_animation_mode(const void * aKey, nsRefPtr<nsImageLoader>& aData, void* closure)
+set_animation_mode(nsIFrame* aKey, nsRefPtr<nsImageLoader>& aData, void* closure)
 {
   for (nsImageLoader *loader = aData; loader;
        loader = loader->GetNextLoader()) {
@@ -1386,6 +1377,34 @@ nsPresContext::SetFullZoom(float aZoom)
   mSupressResizeReflow = false;
 
   mCurAppUnitsPerDevPixel = AppUnitsPerDevPixel();
+}
+
+float
+nsPresContext::ScreenWidthInchesForFontInflation(bool* aChanged)
+{
+  if (aChanged) {
+    *aChanged = false;
+  }
+
+  nsDeviceContext *dx = DeviceContext();
+  nsRect clientRect;
+  dx->GetClientRect(clientRect); // FIXME: GetClientRect looks expensive
+  float deviceWidthInches =
+    float(clientRect.width) / float(dx->AppUnitsPerPhysicalInch());
+
+  if (deviceWidthInches != mLastFontInflationScreenWidth) {
+    if (mLastFontInflationScreenWidth != -1.0) {
+      if (aChanged) {
+        *aChanged = true;
+      } else {
+        NS_NOTREACHED("somebody should have checked for screen width change "
+                      "and triggered a reflow");
+      }
+    }
+    mLastFontInflationScreenWidth = deviceWidthInches;
+  }
+
+  return deviceWidthInches;
 }
 
 void
@@ -1712,6 +1731,7 @@ nsPresContext::MediaFeatureValuesChanged(bool aCallerWillRebuildStyleData)
 
       for (PRUint32 i = 0, i_end = notifyList.Length(); i != i_end; ++i) {
         if (pusher.RePush(et)) {
+          nsAutoMicroTask mt;
           nsDOMMediaQueryList::HandleChangeData &d = notifyList[i];
           d.listener->HandleChange(d.mql);
         }
@@ -2334,6 +2354,16 @@ nsPresContext::CheckForInterrupt(nsIFrame* aFrame)
   return mHasPendingInterrupt;
 }
 
+size_t
+nsPresContext::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+{
+  return mPropertyTable.SizeOfExcludingThis(aMallocSizeOf);
+         mLangGroupFontPrefs.SizeOfExcludingThis(aMallocSizeOf);
+
+  // Measurement of other members may be added later if DMD finds it is
+  // worthwhile.
+}
+
 bool
 nsPresContext::IsRootContentDocument()
 {
@@ -2454,7 +2484,7 @@ RecoverPluginGeometry(nsDisplayListBuilder* aBuilder,
         aClosure->mAffectedPlugins.GetEntry(f);
       // Windowed plugins in transforms are always ignored, we don't
       // create configurations for them
-      if (entry && (!aInTransform || !f->GetWidget())) {
+      if (entry && (!aInTransform || f->PaintedByGecko())) {
         displayPlugin->GetWidgetConfiguration(aBuilder,
                                               aClosure->mOutputConfigurations);
         // we've dealt with this plugin now
@@ -2763,3 +2793,20 @@ nsRootPresContext::FlushWillPaintObservers()
     observers[i]->Run();
   }
 }
+
+size_t
+nsRootPresContext::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+{
+  return nsPresContext::SizeOfExcludingThis(aMallocSizeOf);
+
+  // Measurement of the following members may be added later if DMD finds it is
+  // worthwhile:
+  // - mNotifyDidPaintTimer
+  // - mRegisteredPlugins
+  // - mWillPaintObservers
+  // - mWillPaintFallbackEvent
+  //
+  // The following member are not measured:
+  // - mUpdatePluginGeometryForFrame, because it is non-owning
+}
+

@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <stuart@mozilla.com>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   Masatoshi Kimura <VYV03354@nifty.ne.jp>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -87,6 +52,12 @@ using namespace mozilla::gfx;
 
 #include "nsMemory.h"
 #endif
+
+/*
+ * Required headers are not available in the current consumer preview Win8
+ * dev kit, disabling for now.
+ */
+#undef MOZ_WINSDK_TARGETVER
 
 /**
  * XXX below should be >= MOZ_NTDDI_WIN8 or such which is not defined yet
@@ -143,7 +114,7 @@ NS_MEMORY_REPORTER_IMPLEMENT(
     KIND_OTHER,
     UNITS_BYTES,
     GetD2DSurfaceVramUsage,
-    "Video memory used by D2D surfaces")
+    "Video memory used by D2D surfaces.")
 
 #endif
 
@@ -293,29 +264,28 @@ public:
         
         FreeLibrary(gdi32Handle);
         
-        aCb->Callback(EmptyCString(),
-                      NS_LITERAL_CSTRING("gpu-committed"),
-                      nsIMemoryReporter::KIND_OTHER,
-                      nsIMemoryReporter::UNITS_BYTES,
-                      committedBytesUsed,
-                      NS_LITERAL_CSTRING("Memory committed by the Windows graphics system."),
-                      aClosure);
-        aCb->Callback(EmptyCString(),
-                      NS_LITERAL_CSTRING("gpu-dedicated"),
-                      nsIMemoryReporter::KIND_OTHER,
-                      nsIMemoryReporter::UNITS_BYTES,
-                      dedicatedBytesUsed,
-                      NS_LITERAL_CSTRING("Out-of-process memory allocated for this process in a "
-                                         "physical GPU adapter's memory."),
-                      aClosure);
-        aCb->Callback(EmptyCString(),
-                      NS_LITERAL_CSTRING("gpu-shared"),
-                      nsIMemoryReporter::KIND_OTHER,
-                      nsIMemoryReporter::UNITS_BYTES,
-                      sharedBytesUsed,
-                      NS_LITERAL_CSTRING("In-process memory that is shared with the GPU."),
-                      aClosure);
+#define REPORT(_path, _amount, _desc)                                         \
+    do {                                                                      \
+      nsresult rv;                                                            \
+      rv = aCb->Callback(EmptyCString(), NS_LITERAL_CSTRING(_path),           \
+                         nsIMemoryReporter::KIND_OTHER,                       \
+                         nsIMemoryReporter::UNITS_BYTES, _amount,             \
+                         NS_LITERAL_CSTRING(_desc), aClosure);                \
+      NS_ENSURE_SUCCESS(rv, rv);                                              \
+    } while (0)
+
+        REPORT("gpu-committed", committedBytesUsed,
+               "Memory committed by the Windows graphics system.");
+
+        REPORT("gpu-dedicated", dedicatedBytesUsed,
+               "Out-of-process memory allocated for this process in a "
+               "physical GPU adapter's memory.");
+
+        REPORT("gpu-shared", sharedBytesUsed,
+               "In-process memory that is shared with the GPU.");
         
+#undef REPORT
+
         return NS_OK;
     }
 
@@ -420,12 +390,7 @@ gfxWindowsPlatform::UpdateRenderMode()
         PRInt32 status;
         if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT2D, &status))) {
             if (status != nsIGfxInfo::FEATURE_NO_INFO) {
-                d2dDisabled = true;
-                if (status == nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION ||
-                    status == nsIGfxInfo::FEATURE_BLOCKED_DEVICE)
-                {
-                    d2dBlocked = true;
-                }
+                d2dBlocked = true;
             }
         }
     }
@@ -501,7 +466,7 @@ gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
         mD2DDevice = nsnull;
     }
 
-    mozilla::ScopedGfxFeatureReporter reporter("D2D");
+    mozilla::ScopedGfxFeatureReporter reporter("D2D", aAttemptForce);
 
     HMODULE d3d10module = LoadLibraryA("d3d10_1.dll");
     D3D10CreateDevice1Func createD3DDevice = (D3D10CreateDevice1Func)
@@ -527,7 +492,6 @@ gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
               return;
             }
     
-            nsRefPtr<IDXGIAdapter1> adapter1; 
             hr = factory1->EnumAdapters1(0, getter_AddRefs(adapter1));
 
             if (SUCCEEDED(hr) && adapter1) {
@@ -718,25 +682,30 @@ gfxWindowsPlatform::CreateOffscreenSurface(const gfxIntSize& size,
 RefPtr<ScaledFont>
 gfxWindowsPlatform::GetScaledFontForFont(gfxFont *aFont)
 {
-  if(mUseDirectWrite) {
-    gfxDWriteFont *font = static_cast<gfxDWriteFont*>(aFont);
+    if (aFont->GetType() == gfxFont::FONT_TYPE_DWRITE) {
+        gfxDWriteFont *font = static_cast<gfxDWriteFont*>(aFont);
+
+        NativeFont nativeFont;
+        nativeFont.mType = NATIVE_FONT_DWRITE_FONT_FACE;
+        nativeFont.mFont = font->GetFontFace();
+        RefPtr<ScaledFont> scaledFont =
+            mozilla::gfx::Factory::CreateScaledFontForNativeFont(nativeFont, font->GetAdjustedSize());
+
+        return scaledFont;
+    }
+
+    NS_ASSERTION(aFont->GetType() == gfxFont::FONT_TYPE_GDI,
+        "Fonts on windows should be GDI or DWrite!");
 
     NativeFont nativeFont;
-    nativeFont.mType = NATIVE_FONT_DWRITE_FONT_FACE;
-    nativeFont.mFont = font->GetFontFace();
+    nativeFont.mType = NATIVE_FONT_GDI_FONT_FACE;
+    LOGFONT lf;
+    GetObject(static_cast<gfxGDIFont*>(aFont)->GetHFONT(), sizeof(LOGFONT), &lf);
+    nativeFont.mFont = &lf;
     RefPtr<ScaledFont> scaledFont =
-      mozilla::gfx::Factory::CreateScaledFontForNativeFont(nativeFont, font->GetAdjustedSize());
-
-    return scaledFont;
-  }
-
-  NativeFont nativeFont;
-  nativeFont.mType = NATIVE_FONT_GDI_FONT_FACE;
-  nativeFont.mFont = aFont;
-  RefPtr<ScaledFont> scaledFont =
     Factory::CreateScaledFontForNativeFont(nativeFont, aFont->GetAdjustedSize());
 
-  return scaledFont;
+    return scaledFont;
 }
 
 already_AddRefed<gfxASurface>
@@ -826,6 +795,175 @@ gfxWindowsPlatform::UpdateFontList()
     gfxPlatformFontList::PlatformFontList()->UpdateFontList();
 
     return NS_OK;
+}
+
+static const char kFontArabicTypesetting[] = "Arabic Typesetting";
+static const char kFontArial[] = "Arial";
+static const char kFontArialUnicodeMS[] = "Arial Unicode MS";
+static const char kFontCambria[] = "Cambria";
+static const char kFontCambriaMath[] = "Cambria Math";
+static const char kFontEbrima[] = "Ebrima";
+static const char kFontEstrangeloEdessa[] = "Estrangelo Edessa";
+static const char kFontEuphemia[] = "Euphemia";
+static const char kFontGabriola[] = "Gabriola";
+static const char kFontKhmerUI[] = "Khmer UI";
+static const char kFontLaoUI[] = "Lao UI";
+static const char kFontMVBoli[] = "MV Boli";
+static const char kFontMalgunGothic[] = "Malgun Gothic";
+static const char kFontMicrosoftJhengHei[] = "Microsoft JhengHei";
+static const char kFontMicrosoftNewTaiLue[] = "Microsoft New Tai Lue";
+static const char kFontMicrosoftPhagsPa[] = "Microsoft PhagsPa";
+static const char kFontMicrosoftTaiLe[] = "Microsoft Tai Le";
+static const char kFontMicrosoftUighur[] = "Microsoft Uighur";
+static const char kFontMicrosoftYaHei[] = "Microsoft YaHei";
+static const char kFontMicrosoftYiBaiti[] = "Microsoft Yi Baiti";
+static const char kFontMeiryo[] = "Meiryo";
+static const char kFontMongolianBaiti[] = "Mongolian Baiti";
+static const char kFontNyala[] = "Nyala";
+static const char kFontPlantagenetCherokee[] = "Plantagenet Cherokee";
+static const char kFontSegoeUI[] = "Segoe UI";
+static const char kFontSegoeUISymbol[] = "Segoe UI Symbol";
+static const char kFontSylfaen[] = "Sylfaen";
+static const char kFontTraditionalArabic[] = "Traditional Arabic";
+
+void
+gfxWindowsPlatform::GetCommonFallbackFonts(const PRUint32 aCh,
+                                           PRInt32 aRunScript,
+                                           nsTArray<const char*>& aFontList)
+{
+    // Arial is used as the default fallback for system fallback
+    aFontList.AppendElement(kFontArial);
+
+    if (!IS_IN_BMP(aCh)) {
+        PRUint32 p = aCh >> 16;
+        if (p == 1) { // SMP plane
+            aFontList.AppendElement(kFontCambriaMath);
+            aFontList.AppendElement(kFontSegoeUISymbol);
+            aFontList.AppendElement(kFontEbrima);
+        }
+    } else {
+        PRUint32 b = (aCh >> 8) & 0xff;
+
+        switch (b) {
+        case 0x05:
+            aFontList.AppendElement(kFontEstrangeloEdessa);
+            aFontList.AppendElement(kFontCambria);
+            break;
+        case 0x06:
+            aFontList.AppendElement(kFontMicrosoftUighur);
+            break;
+        case 0x07:
+            aFontList.AppendElement(kFontEstrangeloEdessa);
+            aFontList.AppendElement(kFontMVBoli);
+            aFontList.AppendElement(kFontEbrima);
+            break;
+        case 0x0e:
+            aFontList.AppendElement(kFontLaoUI);
+            break;
+        case 0x12:
+        case 0x13:
+            aFontList.AppendElement(kFontNyala);
+            aFontList.AppendElement(kFontPlantagenetCherokee);
+            break;
+        case 0x14:
+        case 0x15:
+        case 0x16:
+            aFontList.AppendElement(kFontEuphemia);
+            aFontList.AppendElement(kFontSegoeUISymbol);
+            break;
+        case 0x17:
+            aFontList.AppendElement(kFontKhmerUI);
+            break;
+        case 0x18:  // Mongolian
+            aFontList.AppendElement(kFontMongolianBaiti);
+            break;
+        case 0x19:
+            aFontList.AppendElement(kFontMicrosoftTaiLe);
+            aFontList.AppendElement(kFontMicrosoftNewTaiLue);
+            aFontList.AppendElement(kFontKhmerUI);
+            break;
+            break;
+        case 0x20:  // Symbol ranges
+        case 0x21:
+        case 0x22:
+        case 0x23:
+        case 0x24:
+        case 0x25:
+        case 0x26:
+        case 0x27:
+        case 0x29:
+        case 0x2a:
+        case 0x2b:
+        case 0x2c:
+            aFontList.AppendElement(kFontSegoeUI);
+            aFontList.AppendElement(kFontSegoeUISymbol);
+            aFontList.AppendElement(kFontCambria);
+            aFontList.AppendElement(kFontCambriaMath);
+            aFontList.AppendElement(kFontMeiryo);
+            aFontList.AppendElement(kFontArial);
+            aFontList.AppendElement(kFontEbrima);
+            break;
+        case 0x2d:
+        case 0x2e:
+        case 0x2f:
+            aFontList.AppendElement(kFontEbrima);
+            aFontList.AppendElement(kFontNyala);
+            aFontList.AppendElement(kFontMeiryo);
+            break;
+        case 0x28:  // Braille
+            aFontList.AppendElement(kFontSegoeUISymbol);
+            break;
+        case 0x30:
+        case 0x31:
+            aFontList.AppendElement(kFontMicrosoftYaHei);
+            break;
+        case 0x32:
+            aFontList.AppendElement(kFontMalgunGothic);
+            break;
+        case 0x4d:
+            aFontList.AppendElement(kFontSegoeUISymbol);
+            break;
+        case 0xa0:  // Yi
+        case 0xa1:
+        case 0xa2:
+        case 0xa3:
+        case 0xa4:
+            aFontList.AppendElement(kFontMicrosoftYiBaiti);
+            break;
+        case 0xa5:
+        case 0xa6:
+        case 0xa7:
+            aFontList.AppendElement(kFontEbrima);
+            aFontList.AppendElement(kFontCambriaMath);
+            break;
+        case 0xa8:
+             aFontList.AppendElement(kFontMicrosoftPhagsPa);
+             break;
+        case 0xfb:
+            aFontList.AppendElement(kFontMicrosoftUighur);
+            aFontList.AppendElement(kFontGabriola);
+            aFontList.AppendElement(kFontSylfaen);
+            break;
+        case 0xfc:
+        case 0xfd:
+            aFontList.AppendElement(kFontTraditionalArabic);
+            aFontList.AppendElement(kFontArabicTypesetting);
+            break;
+        case 0xfe:
+            aFontList.AppendElement(kFontTraditionalArabic);
+            aFontList.AppendElement(kFontMicrosoftJhengHei);
+           break;
+       case 0xff:
+            aFontList.AppendElement(kFontMicrosoftJhengHei);
+            break;
+        default:
+            break;
+        }
+    }
+
+    // Arial Unicode MS has lots of glyphs for obscure characters,
+    // use it as a last resort
+    aFontList.AppendElement(kFontArialUnicodeMS);
 }
 
 struct ResolveData {
@@ -1185,6 +1323,9 @@ gfxWindowsPlatform::FontsPrefsChanged(const char *aPref)
     }
 }
 
+#define ENHANCED_CONTRAST_REGISTRY_KEY \
+    HKEY_CURRENT_USER, "Software\\Microsoft\\Avalon.Graphics\\DISPLAY1\\EnhancedContrastLevel"
+
 void
 gfxWindowsPlatform::SetupClearTypeParams()
 {
@@ -1242,6 +1383,59 @@ gfxWindowsPlatform::SetupClearTypeParams()
             mMeasuringMode = DWRITE_MEASURING_MODE_NATURAL;
             break;
         }
+
+        nsRefPtr<IDWriteRenderingParams> defaultRenderingParams;
+        GetDWriteFactory()->CreateRenderingParams(getter_AddRefs(defaultRenderingParams));
+        // For EnhancedContrast, we override the default if the user has not set it
+        // in the registry (by using the ClearType Tuner).
+        if (contrast >= 0.0 && contrast <= 10.0) {
+	    contrast = contrast;
+        } else {
+            HKEY hKey;
+            if (RegOpenKeyExA(ENHANCED_CONTRAST_REGISTRY_KEY,
+                              0, KEY_READ, &hKey) == ERROR_SUCCESS)
+            {
+                contrast = defaultRenderingParams->GetEnhancedContrast();
+                RegCloseKey(hKey);
+            } else {
+                contrast = 1.0;
+            }
+        }
+
+        // For parameters that have not been explicitly set,
+        // we copy values from default params (or our overridden value for contrast)
+        if (gamma < 1.0 || gamma > 2.2) {
+            gamma = defaultRenderingParams->GetGamma();
+        }
+
+        if (level < 0.0 || level > 1.0) {
+            level = defaultRenderingParams->GetClearTypeLevel();
+        }
+
+        DWRITE_PIXEL_GEOMETRY dwriteGeometry =
+          static_cast<DWRITE_PIXEL_GEOMETRY>(geometry);
+        DWRITE_RENDERING_MODE renderMode =
+          static_cast<DWRITE_RENDERING_MODE>(mode);
+
+        if (dwriteGeometry < DWRITE_PIXEL_GEOMETRY_FLAT ||
+            dwriteGeometry > DWRITE_PIXEL_GEOMETRY_BGR) {
+            dwriteGeometry = defaultRenderingParams->GetPixelGeometry();
+        }
+
+        if (renderMode < DWRITE_RENDERING_MODE_DEFAULT ||
+            renderMode > DWRITE_RENDERING_MODE_CLEARTYPE_NATURAL_SYMMETRIC) {
+            renderMode = defaultRenderingParams->GetRenderingMode();
+        }
+
+        mRenderingParams[TEXT_RENDERING_NO_CLEARTYPE] = defaultRenderingParams;
+
+        GetDWriteFactory()->CreateCustomRenderingParams(gamma, contrast, level,
+	    dwriteGeometry, renderMode,
+            getter_AddRefs(mRenderingParams[TEXT_RENDERING_NORMAL]));
+
+        GetDWriteFactory()->CreateCustomRenderingParams(gamma, contrast, level,
+	    dwriteGeometry, DWRITE_RENDERING_MODE_CLEARTYPE_GDI_CLASSIC,
+            getter_AddRefs(mRenderingParams[TEXT_RENDERING_GDI_CLASSIC]));
     }
 #endif
 }

@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla browser.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Eric Vaughan <evaughan@netscape.com> (original author)
- *   Alexander Surkov <surkov.alexander@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef _nsIAccessibilityService_h_
 #define _nsIAccessibilityService_h_
@@ -85,50 +51,7 @@ public:
   virtual nsAccessible* GetRootDocumentAccessible(nsIPresShell* aPresShell,
                                                   bool aCanCreate) = 0;
 
-  /**
-   * Creates accessible for the given DOM node or frame.
-   */
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLBRAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLCaptionAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLCheckboxAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLComboboxAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLGroupboxAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLHRAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLImageAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLLabelAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLLIAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLListboxAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLMediaAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLObjectFrameAccessible(nsObjectFrame* aFrame, nsIContent* aContent,
-                                    nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLRadioButtonAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLTableAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLTableCellAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLTextAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHTMLTextFieldAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateHyperTextAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-  virtual already_AddRefed<nsAccessible>
-    CreateOuterDocAccessible(nsIContent* aContent, nsIPresShell* aPresShell) = 0;
-
-  /**
+   /**
    * Adds/remove ATK root accessible for gtk+ native window to/from children
    * of the application accessible.
    */
@@ -161,12 +84,6 @@ public:
    * being destroyed.
    */
   virtual void PresShellDestroyed(nsIPresShell *aPresShell) = 0;
-
-  /**
-   * Recreate an accessible for the given content node in the presshell.
-   */
-  virtual void RecreateAccessible(nsIPresShell* aPresShell,
-                                  nsIContent* aContent) = 0;
 
   /**
    * Fire accessible event of the given type for the given target.

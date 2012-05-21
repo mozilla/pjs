@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=4 sw=4 sts=4 tw=80 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Gonk.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Michael Wu <mwu@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #define _GNU_SOURCE
 
@@ -50,10 +17,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "mozilla/Hal.h"
+#include "base/basictypes.h"
 #include "nscore.h"
 #include "mozilla/FileUtils.h"
-#include "mozilla/HalSensor.h"
+#include "mozilla/Hal.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Services.h"
 #include "nsAppShell.h"
@@ -64,11 +31,12 @@
 #include "nsIScreen.h"
 #include "nsScreenManagerGonk.h"
 #include "nsWindow.h"
+#include "OrientationObserver.h"
 
 #include "android/log.h"
-#include "ui/EventHub.h"
-#include "ui/InputReader.h"
-#include "ui/InputDispatcher.h"
+#include "libui/EventHub.h"
+#include "libui/InputReader.h"
+#include "libui/InputDispatcher.h"
 
 #define LOG(args...)                                            \
     __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
@@ -80,9 +48,9 @@
     (void)0
 #endif
 
-using namespace mozilla;
 using namespace android;
-using namespace hal;
+using namespace mozilla;
+using namespace mozilla::dom;
 
 bool gDrawRequest = false;
 static nsAppShell *gAppShell = NULL;
@@ -148,10 +116,6 @@ sendMouseEvent(PRUint32 msg, uint64_t timeMs, int x, int y)
     event.refPoint.x = x;
     event.refPoint.y = y;
     event.time = timeMs;
-    event.isShift = false;
-    event.isControl = false;
-    event.isMeta = false;
-    event.isAlt = false;
     event.button = nsMouseEvent::eLeftButton;
     if (msg != NS_MOUSE_MOVE)
         event.clickCount = 1;
@@ -165,10 +129,12 @@ addDOMTouch(UserInputData& data, nsTouchEvent& event, int i)
     const Touch& touch = data.motion.touches[i];
     event.touches.AppendElement(
         new nsDOMTouch(touch.id,
-                       nsIntPoint(touch.coords.x, touch.coords.y),
-                       nsIntPoint(touch.coords.size, touch.coords.size),
+                       nsIntPoint(touch.coords.getX(), touch.coords.getY()),
+                       nsIntPoint(touch.coords.getAxisValue(AMOTION_EVENT_AXIS_SIZE),
+                                  touch.coords.getAxisValue(AMOTION_EVENT_AXIS_SIZE)),
                        0,
-                       touch.coords.pressure));
+                       touch.coords.getAxisValue(AMOTION_EVENT_AXIS_PRESSURE))
+    );
 }
 
 static nsEventStatus
@@ -197,10 +163,6 @@ sendTouchEvent(UserInputData& data)
     nsTouchEvent event(true, msg, NULL);
 
     event.time = data.timeMs;
-    event.isShift = false;
-    event.isControl = false;
-    event.isMeta = false;
-    event.isAlt = false;
 
     int32_t i;
     if (msg == NS_TOUCH_END) {
@@ -223,6 +185,7 @@ sendKeyEventWithMsg(PRUint32 keyCode,
 {
     nsKeyEvent event(true, msg, NULL);
     event.keyCode = keyCode;
+    event.location = nsIDOMKeyEvent::DOM_KEY_LOCATION_MOBILE;
     event.time = timeMs;
     event.flags |= flags;
     return nsWindow::DispatchInputEvent(event);
@@ -241,14 +204,6 @@ sendKeyEvent(PRUint32 keyCode, bool down, uint64_t timeMs)
 }
 
 static void
-sendSpecialKeyEvent(nsIAtom *command, uint64_t timeMs)
-{
-    nsCommandEvent event(true, nsGkAtoms::onAppCommand, command, NULL);
-    event.time = timeMs;
-    nsWindow::DispatchInputEvent(event);
-}
-
-static void
 maybeSendKeyEvent(int keyCode, bool pressed, uint64_t timeMs)
 {
     switch (keyCode) {
@@ -256,12 +211,10 @@ maybeSendKeyEvent(int keyCode, bool pressed, uint64_t timeMs)
         sendKeyEvent(NS_VK_ESCAPE, pressed, timeMs);
         break;
     case KEY_MENU:
-        if (!pressed)
-            sendSpecialKeyEvent(nsGkAtoms::Menu, timeMs);
+         sendKeyEvent(NS_VK_CONTEXT_MENU, pressed, timeMs);
         break;
     case KEY_SEARCH:
-        if (pressed)
-            sendSpecialKeyEvent(nsGkAtoms::Search, timeMs);
+        sendKeyEvent(NS_VK_F5, pressed, timeMs);
         break;
     case KEY_HOME:
         sendKeyEvent(NS_VK_HOME, pressed, timeMs);
@@ -270,12 +223,13 @@ maybeSendKeyEvent(int keyCode, bool pressed, uint64_t timeMs)
         sendKeyEvent(NS_VK_SLEEP, pressed, timeMs);
         break;
     case KEY_VOLUMEUP:
-        if (pressed)
-            sendSpecialKeyEvent(nsGkAtoms::VolumeUp, timeMs);
+        sendKeyEvent(NS_VK_PAGE_UP, pressed, timeMs);
         break;
     case KEY_VOLUMEDOWN:
-        if (pressed)
-            sendSpecialKeyEvent(nsGkAtoms::VolumeDown, timeMs);
+        sendKeyEvent(NS_VK_PAGE_DOWN, pressed, timeMs);
+        break;
+    case KEY_CAMERA:
+        sendKeyEvent(NS_VK_PRINTSCREEN, pressed, timeMs);
         break;
     default:
         VERBOSE_LOG("Got unknown key event code. type 0x%04x code 0x%04x value %d",
@@ -284,19 +238,14 @@ maybeSendKeyEvent(int keyCode, bool pressed, uint64_t timeMs)
 }
 
 class GeckoInputReaderPolicy : public InputReaderPolicyInterface {
+    InputReaderConfiguration mConfig;
 public:
     GeckoInputReaderPolicy() {}
 
-    virtual bool getDisplayInfo(int32_t displayId,
-            int32_t* width, int32_t* height, int32_t* orientation);
-    virtual bool filterTouchEvents();
-    virtual bool filterJumpyTouchEvents();
-    virtual nsecs_t getVirtualKeyQuietTime();
-    virtual void getVirtualKeyDefinitions(const String8& deviceName,
-            Vector<VirtualKeyDefinition>& outVirtualKeyDefinitions);
-    virtual void getInputDeviceCalibration(const String8& deviceName,
-            InputDeviceCalibration& outCalibration);
-    virtual void getExcludedDeviceNames(Vector<String8>& outExcludedDeviceNames);
+    virtual void getReaderConfiguration(InputReaderConfiguration* outConfig);
+    virtual sp<PointerControllerInterface> obtainPointerController(int32_t
+deviceId) { return NULL; };
+    void setDisplayInfo();
 
 protected:
     virtual ~GeckoInputReaderPolicy() {}
@@ -310,29 +259,35 @@ public:
 
     virtual void dump(String8& dump);
 
+    virtual void monitor() {}
+
     // Called on the main thread
     virtual void dispatchOnce();
 
     // notify* methods are called on the InputReaderThread
-    virtual void notifyConfigurationChanged(nsecs_t eventTime);
-    virtual void notifyKey(nsecs_t eventTime, int32_t deviceId, int32_t source,
-            uint32_t policyFlags, int32_t action, int32_t flags, int32_t keyCode,
-            int32_t scanCode, int32_t metaState, nsecs_t downTime);
-    virtual void notifyMotion(nsecs_t eventTime, int32_t deviceId, int32_t source,
-            uint32_t policyFlags, int32_t action, int32_t flags,
-            int32_t metaState, int32_t edgeFlags,
-            uint32_t pointerCount, const int32_t* pointerIds, const PointerCoords* pointerCoords,
-            float xPrecision, float yPrecision, nsecs_t downTime);
-    virtual void notifySwitch(nsecs_t when,
-            int32_t switchCode, int32_t switchValue, uint32_t policyFlags);
+    virtual void notifyConfigurationChanged(const NotifyConfigurationChangedArgs* args);
+    virtual void notifyKey(const NotifyKeyArgs* args);
+    virtual void notifyMotion(const NotifyMotionArgs* args);
+    virtual void notifySwitch(const NotifySwitchArgs* args);
+    virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args);
 
     virtual int32_t injectInputEvent(const InputEvent* event,
-            int32_t injectorPid, int32_t injectorUid, int32_t syncMode, int32_t timeoutMillis);
-    virtual void setInputWindows(const Vector<InputWindow>& inputWindows);
-    virtual void setFocusedApplication(const InputApplication* inputApplication);
+            int32_t injectorPid, int32_t injectorUid, int32_t syncMode, int32_t timeoutMillis,
+            uint32_t policyFlags);
+
+    virtual void setInputWindows(const Vector<sp<InputWindowHandle> >& inputWindowHandles);
+    virtual void setFocusedApplication(const sp<InputApplicationHandle>& inputApplicationHandle);
+
     virtual void setInputDispatchMode(bool enabled, bool frozen);
-    virtual status_t registerInputChannel(const sp<InputChannel>& inputChannel, bool monitor);
+    virtual void setInputFilterEnabled(bool enabled) {}
+    virtual bool transferTouchFocus(const sp<InputChannel>& fromChannel,
+            const sp<InputChannel>& toChannel) { return true; }
+
+    virtual status_t registerInputChannel(const sp<InputChannel>& inputChannel,
+            const sp<InputWindowHandle>& inputWindowHandle, bool monitor);
     virtual status_t unregisterInputChannel(const sp<InputChannel>& inputChannel);
+
+
 
 protected:
     virtual ~GeckoInputDispatcher() {}
@@ -346,138 +301,30 @@ private:
 };
 
 // GeckoInputReaderPolicy
-bool
-GeckoInputReaderPolicy::getDisplayInfo(int32_t displayId,
-                                       int32_t* width,
-                                       int32_t* height,
-                                       int32_t* orientation)
+void
+GeckoInputReaderPolicy::setDisplayInfo()
 {
     MOZ_STATIC_ASSERT(nsIScreen::ROTATION_0_DEG ==
-                      InputReaderPolicyInterface::ROTATION_0,
+                      DISPLAY_ORIENTATION_0,
                       "Orientation enums not matched!");
     MOZ_STATIC_ASSERT(nsIScreen::ROTATION_90_DEG ==
-                      InputReaderPolicyInterface::ROTATION_90,
+                      DISPLAY_ORIENTATION_90,
                       "Orientation enums not matched!");
     MOZ_STATIC_ASSERT(nsIScreen::ROTATION_180_DEG ==
-                      InputReaderPolicyInterface::ROTATION_180,
+                      DISPLAY_ORIENTATION_180,
                       "Orientation enums not matched!");
     MOZ_STATIC_ASSERT(nsIScreen::ROTATION_270_DEG ==
-                      InputReaderPolicyInterface::ROTATION_270,
+                      DISPLAY_ORIENTATION_270,
                       "Orientation enums not matched!");
 
-    // 0 is the default displayId. We only support one display
-    if (displayId)
-        return false;
-
-    if (width)
-        *width = gScreenBounds.width;
-    if (height)
-        *height = gScreenBounds.height;
-    if (orientation)
-        *orientation = nsScreenGonk::GetRotation();
-    return true;
+    mConfig.setDisplayInfo(0, false, gScreenBounds.width, gScreenBounds.height, nsScreenGonk::GetRotation());
 }
 
-bool
-GeckoInputReaderPolicy::filterTouchEvents()
+void GeckoInputReaderPolicy::getReaderConfiguration(InputReaderConfiguration* outConfig)
 {
-    return false;
+    *outConfig = mConfig;
 }
 
-bool
-GeckoInputReaderPolicy::filterJumpyTouchEvents()
-{
-    return false;
-}
-
-nsecs_t
-GeckoInputReaderPolicy::getVirtualKeyQuietTime()
-{
-    return 0;
-}
-
-void
-GeckoInputReaderPolicy::getVirtualKeyDefinitions(const String8& deviceName,
-    Vector<VirtualKeyDefinition>& outVirtualKeyDefinitions)
-{
-    outVirtualKeyDefinitions.clear();
-
-    char vbuttonsPath[PATH_MAX];
-    snprintf(vbuttonsPath, sizeof(vbuttonsPath),
-             "/sys/board_properties/virtualkeys.%s",
-             deviceName.string());
-    ScopedClose fd(open(vbuttonsPath, O_RDONLY));
-    if (0 > fd.mFd) {
-        LOG("No vbuttons for mt device %s", deviceName.string());
-        return;
-    }
-
-    // This device has vbuttons.  Process the configuration.
-    char config[1024];
-    ssize_t nread;
-    do {
-        nread = read(fd.mFd, config, sizeof(config));
-    } while (-1 == nread && EINTR == errno);
-
-    if (0 > nread) {
-        LOG("Error reading virtualkey configuration");
-        return;
-    }
-
-    config[nread] = '\0';
-
-    LOG("Device %s has vbutton config '%s'", deviceName.string(), config);
-
-    char* first = config;
-    char* magic;
-    char* state;
-    while ((magic = strtok_r(first, ":", &state))) {
-        // XXX not clear what "0x01" is ... maybe a version
-        // number?  See InputManager.java.
-        if (strcmp(magic, "0x01")) {
-            LOG("  magic 0x01 tag missing");
-            break;
-        }
-        first = NULL;
-
-        const char *scanCode, *centerX, *centerY, *width, *height;
-        if (!((scanCode = strtok_r(NULL, ":", &state)) &&
-              (centerX = strtok_r(NULL, ":", &state)) &&
-              (centerY = strtok_r(NULL, ":", &state)) &&
-              (width = strtok_r(NULL, ":", &state)) &&
-              (height = strtok_r(NULL, ":", &state)))) {
-            LOG("  failed to read bound params");
-            break;
-        }
-
-        // NB: these coordinates are in *screen* space, not input
-        // space.  That means the values in /sys/board_config make
-        // assumptions about how the raw input events are mapped
-        // ... le sigh.
-        VirtualKeyDefinition def;
-        def.scanCode = atoi(scanCode);
-        def.centerX = atoi(centerX);
-        def.centerY = atoi(centerY);
-        def.width = atoi(width);
-        def.height = atoi(height);
-        outVirtualKeyDefinitions.push(def);
-
-        LOG("  configured vbutton code=%d at <x=%d,y=%d,w=%d,h=%d>",
-            def.scanCode, def.centerX, def.centerY, def.width, def.height);
-    }
-}
-
-void
-GeckoInputReaderPolicy::getInputDeviceCalibration(const String8& deviceName,            InputDeviceCalibration& outCalibration)
-{
-    outCalibration.clear();
-}
-
-void
-GeckoInputReaderPolicy::getExcludedDeviceNames(Vector<String8>& outExcludedDeviceNames)
-{
-    outExcludedDeviceNames.clear();
-}
 
 // GeckoInputDispatcher
 void
@@ -523,8 +370,8 @@ GeckoInputDispatcher::dispatchOnce()
         }
         sendMouseEvent(msg,
                        data.timeMs,
-                       data.motion.touches[0].coords.x,
-                       data.motion.touches[0].coords.y);
+                       data.motion.touches[0].coords.getX(),
+                       data.motion.touches[0].coords.getY());
         break;
     }
     case UserInputData::KEY_DATA:
@@ -537,7 +384,7 @@ GeckoInputDispatcher::dispatchOnce()
 
 
 void
-GeckoInputDispatcher::notifyConfigurationChanged(nsecs_t eventTime)
+GeckoInputDispatcher::notifyConfigurationChanged(const NotifyConfigurationChangedArgs*)
 {
 }
 
@@ -548,25 +395,16 @@ nanosecsToMillisecs(nsecs_t nsecs)
 }
 
 void
-GeckoInputDispatcher::notifyKey(nsecs_t eventTime,
-                                int32_t deviceId,
-                                int32_t source,
-                                uint32_t policyFlags,
-                                int32_t action,
-                                int32_t flags,
-                                int32_t keyCode,
-                                int32_t scanCode,
-                                int32_t metaState,
-                                nsecs_t downTime)
+GeckoInputDispatcher::notifyKey(const NotifyKeyArgs* args)
 {
     UserInputData data;
-    data.timeMs = nanosecsToMillisecs(eventTime);
+    data.timeMs = nanosecsToMillisecs(args->eventTime);
     data.type = UserInputData::KEY_DATA;
-    data.action = action;
-    data.flags = flags;
-    data.metaState = metaState;
-    data.key.keyCode = keyCode;
-    data.key.scanCode = scanCode;
+    data.action = args->action;
+    data.flags = args->flags;
+    data.metaState = args->metaState;
+    data.key.keyCode = args->keyCode;
+    data.key.scanCode = args->scanCode;
     {
         MutexAutoLock lock(mQueueLock);
         mEventQueue.push(data);
@@ -574,34 +412,22 @@ GeckoInputDispatcher::notifyKey(nsecs_t eventTime,
     gAppShell->NotifyNativeEvent();
 }
 
+
 void
-GeckoInputDispatcher::notifyMotion(nsecs_t eventTime,
-                                   int32_t deviceId,
-                                   int32_t source,
-                                   uint32_t policyFlags,
-                                   int32_t action,
-                                   int32_t flags,
-                                   int32_t metaState,
-                                   int32_t edgeFlags,
-                                   uint32_t pointerCount,
-                                   const int32_t* pointerIds,
-                                   const PointerCoords* pointerCoords,
-                                   float xPrecision,
-                                   float yPrecision,
-                                   nsecs_t downTime)
+GeckoInputDispatcher::notifyMotion(const NotifyMotionArgs* args)
 {
     UserInputData data;
-    data.timeMs = nanosecsToMillisecs(eventTime);
+    data.timeMs = nanosecsToMillisecs(args->eventTime);
     data.type = UserInputData::MOTION_DATA;
-    data.action = action;
-    data.flags = flags;
-    data.metaState = metaState;
-    MOZ_ASSERT(pointerCount <= MAX_POINTERS);
-    data.motion.touchCount = pointerCount;
-    for (int32_t i = 0; i < pointerCount; ++i) {
+    data.action = args->action;
+    data.flags = args->flags;
+    data.metaState = args->metaState;
+    MOZ_ASSERT(args->pointerCount <= MAX_POINTERS);
+    data.motion.touchCount = args->pointerCount;
+    for (uint32_t i = 0; i < args->pointerCount; ++i) {
         Touch& touch = data.motion.touches[i];
-        touch.id = pointerIds[i];
-        memcpy(&touch.coords, &pointerCoords[i], sizeof(*pointerCoords));
+        touch.id = args->pointerProperties[i].id;
+        memcpy(&touch.coords, &args->pointerCoords[i], sizeof(*args->pointerCoords));
     }
     {
         MutexAutoLock lock(mQueueLock);
@@ -616,32 +442,31 @@ GeckoInputDispatcher::notifyMotion(nsecs_t eventTime,
     gAppShell->NotifyNativeEvent();
 }
 
-void
-GeckoInputDispatcher::notifySwitch(nsecs_t when,
-                                   int32_t switchCode,
-                                   int32_t switchValue,
-                                   uint32_t policyFlags)
+
+
+void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 {
 }
 
+void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
+{
+}
 
-int32_t
-GeckoInputDispatcher::injectInputEvent(const InputEvent* event,
-                                       int32_t injectorPid,
-                                       int32_t injectorUid,
-                                       int32_t syncMode,
-                                       int32_t timeoutMillis)
+int32_t GeckoInputDispatcher::injectInputEvent(
+    const InputEvent* event,
+    int32_t injectorPid, int32_t injectorUid, int32_t syncMode,
+    int32_t timeoutMillis, uint32_t policyFlags)
 {
     return INPUT_EVENT_INJECTION_SUCCEEDED;
 }
 
 void
-GeckoInputDispatcher::setInputWindows(const Vector<InputWindow>& inputWindows)
+GeckoInputDispatcher::setInputWindows(const Vector<sp<InputWindowHandle> >& inputWindowHandles)
 {
 }
 
 void
-GeckoInputDispatcher::setFocusedApplication(const InputApplication* inputApplication)
+GeckoInputDispatcher::setFocusedApplication(const sp<InputApplicationHandle>& inputApplicationHandle)
 {
 }
 
@@ -652,7 +477,7 @@ GeckoInputDispatcher::setInputDispatchMode(bool enabled, bool frozen)
 
 status_t
 GeckoInputDispatcher::registerInputChannel(const sp<InputChannel>& inputChannel,
-                                           bool monitor)
+                                           const sp<InputWindowHandle>& inputWindowHandle, bool monitor)
 {
     return OK;
 }
@@ -663,81 +488,15 @@ GeckoInputDispatcher::unregisterInputChannel(const sp<InputChannel>& inputChanne
     return OK;
 }
 
-class ScreenRotateEvent : public nsRunnable {
-public:
-  ScreenRotateEvent(nsIScreen* aScreen, PRUint32 aRotation)
-    : mScreen(aScreen),
-      mRotation(aRotation) {
-  }
-  NS_IMETHOD Run() {
-    return mScreen->SetRotation(mRotation);
-  }
-
-private:
-  nsCOMPtr<nsIScreen> mScreen;
-  PRUint32 mRotation;
-};
-
-class OrientationSensorObserver : public ISensorObserver {
-public:
-  OrientationSensorObserver ()
-    : mLastUpdate(0) {
-  }
-  void Notify(const SensorData& aSensorData) {
-    nsCOMPtr<nsIScreenManager> screenMgr =
-        do_GetService("@mozilla.org/gfx/screenmanager;1");
-    nsCOMPtr<nsIScreen> screen;
-    screenMgr->GetPrimaryScreen(getter_AddRefs(screen));
-
-    MOZ_ASSERT(aSensorData.sensor() == SensorType::SENSOR_ORIENTATION);
-    InfallibleTArray<float> values = aSensorData.values();
-    // float azimuth = values[0]; // unused
-    float pitch = values[1];
-    float roll = values[2];
-    PRUint32 rotation;
-    if (roll > 45)
-      rotation = nsIScreen::ROTATION_90_DEG;
-    else if (roll < -45)
-      rotation = nsIScreen::ROTATION_270_DEG;
-    else if (pitch < -45)
-      rotation = nsIScreen::ROTATION_0_DEG;
-    else if (pitch > 45)
-      rotation = nsIScreen::ROTATION_180_DEG;
-    else
-      return;  // don't rotate if undecidable
-
-    PRUint32 currRotation;
-    nsresult res;
-    res = screen->GetRotation(&currRotation);
-    if (NS_FAILED(res) || rotation == currRotation)
-      return;
-
-    PRTime now = PR_Now();
-    MOZ_ASSERT(now > mLastUpdate);
-    if (now - mLastUpdate < sMinUpdateInterval)
-      return;
-
-    mLastUpdate = now;
-    NS_DispatchToMainThread(new ScreenRotateEvent(screen, rotation));
-
-  }
-private:
-  PRTime mLastUpdate;
-  static const PRTime sMinUpdateInterval = 500 * 1000; // 500 ms
-};
-
 nsAppShell::nsAppShell()
     : mNativeCallbackRequest(false)
     , mHandlers()
-    , mObserver(new OrientationSensorObserver())
 {
     gAppShell = this;
-    RegisterSensorObserver(SENSOR_ORIENTATION, mObserver);
 }
 
 nsAppShell::~nsAppShell()
 {
-    UnregisterSensorObserver(SENSOR_ORIENTATION, mObserver);
     status_t result = mReaderThread->requestExitAndWait();
     if (result)
         LOG("Could not stop reader thread - %d", result);
@@ -759,16 +518,26 @@ nsAppShell::Init()
     rv = AddFdHandler(signalfds[0], pipeHandler, "");
     NS_ENSURE_SUCCESS(rv, rv);
 
+    // Delay initializing input devices until the screen has been
+    // initialized (and we know the resolution).
+    return rv;
+}
+
+void
+nsAppShell::InitInputDevices()
+{
     mEventHub = new EventHub();
     mReaderPolicy = new GeckoInputReaderPolicy();
+    mReaderPolicy->setDisplayInfo();
     mDispatcher = new GeckoInputDispatcher();
 
     mReader = new InputReader(mEventHub, mReaderPolicy, mDispatcher);
     mReaderThread = new InputReaderThread(mReader);
 
     status_t result = mReaderThread->run("InputReader", PRIORITY_URGENT_DISPLAY);
-    NS_ENSURE_FALSE(result, NS_ERROR_UNEXPECTED);
-    return rv;
+    if (result) {
+        LOG("Failed to initialize InputReader thread, bad things are going to happen...");
+    }
 }
 
 nsresult
@@ -808,7 +577,8 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
     for (int i = 0; i < event_count; i++)
         mHandlers[events[i].data.u32].run();
 
-    mDispatcher->dispatchOnce();
+    if (mDispatcher.get())
+        mDispatcher->dispatchOnce();
 
     // NativeEventCallback always schedules more if it needs it
     // so we can coalesce these.
@@ -832,3 +602,20 @@ nsAppShell::NotifyNativeEvent()
     write(signalfds[1], "w", 1);
 }
 
+/* static */ void
+nsAppShell::NotifyScreenInitialized()
+{
+    gAppShell->InitInputDevices();
+
+    // Getting the instance of OrientationObserver to initialize it.
+    OrientationObserver::GetInstance();
+}
+
+/* static */ void
+nsAppShell::NotifyScreenRotation()
+{
+    gAppShell->mReaderPolicy->setDisplayInfo();
+    gAppShell->mReader->requestRefreshConfiguration(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
+
+    hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
+}

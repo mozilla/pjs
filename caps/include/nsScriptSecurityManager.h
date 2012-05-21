@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998-2000
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Norris Boyd  <nboyd@atg.com>
- *   Mitch Stoltz <mstoltz@netscape.com>
- *   Christopher A. Aillon <christopher@aillon.com>
- *   Giorgio Maone <g.maone@informaction.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsScriptSecurityManager_h__
 #define nsScriptSecurityManager_h__
@@ -56,6 +20,8 @@
 #include "pldhash.h"
 #include "plstr.h"
 #include "nsIScriptExternalNameSet.h"
+
+#include "mozilla/StandardInteger.h"
 
 class nsIDocShell;
 class nsString;
@@ -147,8 +113,8 @@ private:
 // Property Policy
 union SecurityLevel
 {
-    PRWord   level;
-    char*    capability;
+    intptr_t   level;
+    char*      capability;
 };
 
 // Security levels
@@ -424,10 +390,13 @@ private:
     virtual ~nsScriptSecurityManager();
 
     static JSBool
-    CheckObjectAccess(JSContext *cx, JSObject *obj,
-                      jsid id, JSAccessMode mode,
+    CheckObjectAccess(JSContext *cx, JSHandleObject obj,
+                      JSHandleId id, JSAccessMode mode,
                       jsval *vp);
 
+    static JSPrincipals *
+    ObjectPrincipalFinder(JSObject *obj);
+    
     // Decides, based on CSP, whether or not eval() and stuff can be executed.
     static JSBool
     ContentSecurityPolicyPermitsJSAction(JSContext *cx);
@@ -498,7 +467,7 @@ private:
     // when this happens -- this means that there was no script.  Callers MUST
     // pass in a non-null rv here.
     static nsIPrincipal*
-    GetScriptPrincipal(JSContext* cx, JSScript* script, nsresult* rv);
+    GetScriptPrincipal(JSScript* script, nsresult* rv);
 
     // Returns null if a principal cannot be found.  Note that rv can be NS_OK
     // when this happens -- this means that there was no script associated
@@ -518,15 +487,8 @@ private:
                          JSStackFrame** frameResult,
                          nsresult* rv);
 
-    static bool
-    CheckConfirmDialog(JSContext* cx, nsIPrincipal* aPrincipal,
-                       const char* aCapability, bool *checkValue);
-
     static void
     FormatCapabilityString(nsAString& aCapability);
-
-    nsresult
-    SavePrincipal(nsIPrincipal* aToSave);
 
     /**
      * Check capability levels for an |aObj| that implements

@@ -1,43 +1,8 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com> (original author)
- *   Mark Steele <mwsteele@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if !defined(LOCALGL_H_)
-
 #define LOCALGL_H_
 
 #if !defined(__gltypes_h_) && !defined(__gl_h_)
@@ -70,6 +35,16 @@ typedef ptrdiff_t GLsizeiptr;
 typedef ptrdiff_t GLintptr;
 #endif
 
+#endif /* #if !defined(__gltypes_h_) && !defined(__gl_h_) */
+
+#include "mozilla/StandardInteger.h"
+
+// ARB_sync
+typedef struct __GLsync *GLsync;
+typedef int64_t GLint64;
+typedef uint64_t GLuint64;
+
+
 #ifndef GLAPIENTRY
 # ifdef WIN32
 #  define GLAPIENTRY APIENTRY
@@ -79,8 +54,6 @@ typedef ptrdiff_t GLintptr;
 #  define GLAPI
 # endif
 #endif
-
-#endif /* #if !defined(__gltypes_h_) && !defined(__gl_h_) */
 
 #define LOCAL_GL_VERSION_1_1 1
 #define LOCAL_GL_ACCUM 0x0100
@@ -3031,6 +3004,23 @@ typedef ptrdiff_t GLintptr;
 #define LOCAL_GL_WIN_specular_fog 1
 #define LOCAL_GL_FOG_SPECULAR_TEXTURE_WIN 0x80EC
 #define LOCAL_GL_WIN_swap_hint 1
+
+// ARB_sync
+#define LOCAL_GL_MAX_SERVER_WAIT_TIMEOUT          0x9111
+#define LOCAL_GL_OBJECT_TYPE                      0x9112
+#define LOCAL_GL_SYNC_CONDITION                   0x9113
+#define LOCAL_GL_SYNC_STATUS                      0x9114
+#define LOCAL_GL_SYNC_FLAGS                       0x9115
+#define LOCAL_GL_SYNC_FENCE                       0x9116
+#define LOCAL_GL_SYNC_GPU_COMMANDS_COMPLETE       0x9117
+#define LOCAL_GL_UNSIGNALED                       0x9118
+#define LOCAL_GL_SIGNALED                         0x9119
+#define LOCAL_GL_SYNC_FLUSH_COMMANDS_BIT          0x00000001
+#define LOCAL_GL_TIMEOUT_IGNORED                  0xFFFFFFFFFFFFFFFFull
+#define LOCAL_GL_ALREADY_SIGNALED                 0x911A
+#define LOCAL_GL_TIMEOUT_EXPIRED                  0x911B
+#define LOCAL_GL_CONDITION_SATISFIED              0x911C
+#define LOCAL_GL_WAIT_FAILED                      0x911D
 
 #define LOCAL_GL_MAX_VERTEX_UNIFORM_VECTORS       0x8DFB
 #define LOCAL_GL_MAX_VARYING_VECTORS              0x8DFC

@@ -1,52 +1,24 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is
- * Crocodile Clips Ltd..
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Alex Fritze <alex.fritze@crocodile-clips.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Main header first:
 #include "nsSVGPathGeometryFrame.h"
-#include "nsGkAtoms.h"
-#include "nsSVGMarkerFrame.h"
-#include "nsSVGUtils.h"
-#include "nsSVGEffects.h"
-#include "nsSVGGraphicElement.h"
-#include "nsSVGOuterSVGFrame.h"
-#include "nsSVGRect.h"
-#include "nsSVGPathGeometryElement.h"
+
+// Keep others in (case-insensitive) order:
 #include "gfxContext.h"
 #include "gfxPlatform.h"
+#include "nsGkAtoms.h"
+#include "nsRenderingContext.h"
+#include "nsSVGEffects.h"
+#include "nsSVGGraphicElement.h"
+#include "nsSVGMarkerFrame.h"
+#include "nsSVGPathGeometryElement.h"
+#include "nsSVGUtils.h"
+#include "SVGAnimatedTransformList.h"
+
+using namespace mozilla;
 
 //----------------------------------------------------------------------
 // Implementation
@@ -79,7 +51,7 @@ nsSVGPathGeometryFrame::AttributeChanged(PRInt32         aNameSpaceID,
       (static_cast<nsSVGPathGeometryElement*>
                   (mContent)->AttributeDefinesGeometry(aAttribute) ||
        aAttribute == nsGkAtoms::transform))
-    nsSVGUtils::UpdateGraphic(this);
+    nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
 
   return NS_OK;
 }
@@ -95,7 +67,7 @@ nsSVGPathGeometryFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
   // style_hints don't map very well onto svg. Here seems to be the
   // best place to deal with style changes:
 
-  nsSVGUtils::UpdateGraphic(this);
+  nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
 }
 
 nsIAtom *
@@ -104,11 +76,37 @@ nsSVGPathGeometryFrame::GetType() const
   return nsGkAtoms::svgPathGeometryFrame;
 }
 
+bool
+nsSVGPathGeometryFrame::IsSVGTransformed(gfxMatrix *aOwnTransform,
+                                         gfxMatrix *aFromParentTransform) const
+{
+  bool foundTransform = false;
+
+  // Check if our parent has children-only transforms:
+  nsIFrame *parent = GetParent();
+  if (parent &&
+      parent->IsFrameOfType(nsIFrame::eSVG | nsIFrame::eSVGContainer)) {
+    foundTransform = static_cast<nsSVGContainerFrame*>(parent)->
+                       HasChildrenOnlyTransform(aFromParentTransform);
+  }
+
+  nsSVGElement *content = static_cast<nsSVGElement*>(mContent);
+  const SVGAnimatedTransformList *list = content->GetAnimatedTransformList();
+  if (list && !list->GetAnimValue().IsEmpty()) {
+    if (aOwnTransform) {
+      *aOwnTransform = content->PrependLocalTransformsTo(gfxMatrix(),
+                                  nsSVGElement::eUserSpaceToParent);
+    }
+    foundTransform = true;
+  }
+  return foundTransform;
+}
+
 //----------------------------------------------------------------------
 // nsISVGChildFrame methods
 
 NS_IMETHODIMP
-nsSVGPathGeometryFrame::PaintSVG(nsSVGRenderState *aContext,
+nsSVGPathGeometryFrame::PaintSVG(nsRenderingContext *aContext,
                                  const nsIntRect *aDirtyRect)
 {
   if (!GetStyleVisibility()->IsVisible())
@@ -209,9 +207,19 @@ nsSVGPathGeometryFrame::GetCoveredRegion()
   return mCoveredRegion;
 }
 
-NS_IMETHODIMP
-nsSVGPathGeometryFrame::UpdateCoveredRegion()
+void
+nsSVGPathGeometryFrame::UpdateBounds()
 {
+  NS_ASSERTION(nsSVGUtils::OuterSVGIsCallingUpdateBounds(this),
+               "This call is probaby a wasteful mistake");
+
+  NS_ABORT_IF_FALSE(!(GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD),
+                    "UpdateBounds mechanism not designed for this");
+
+  if (!nsSVGUtils::NeedsUpdatedBounds(this)) {
+    return;
+  }
+
   gfxRect extent = GetBBoxContribution(gfxMatrix(),
     nsSVGUtils::eBBoxIncludeFill | nsSVGUtils::eBBoxIgnoreFillIfNone |
     nsSVGUtils::eBBoxIncludeStroke | nsSVGUtils::eBBoxIgnoreStrokeIfNone |
@@ -223,57 +231,54 @@ nsSVGPathGeometryFrame::UpdateCoveredRegion()
   mCoveredRegion = nsSVGUtils::TransformFrameRectToOuterSVG(
     mRect, GetCanvasTM(), PresContext());
 
-  return NS_OK;
-}
+  if (mState & NS_FRAME_FIRST_REFLOW) {
+    // Make sure we have our filter property (if any) before calling
+    // FinishAndStoreOverflow (subsequent filter changes are handled off
+    // nsChangeHint_UpdateEffects):
+    nsSVGEffects::UpdateEffects(this);
+  }
 
-NS_IMETHODIMP
-nsSVGPathGeometryFrame::InitialUpdate()
-{
-  NS_ASSERTION(GetStateBits() & NS_FRAME_FIRST_REFLOW,
-               "Yikes! We've been called already! Hopefully we weren't called "
-               "before our nsSVGOuterSVGFrame's initial Reflow()!!!");
+  nsRect overflow = nsRect(nsPoint(0,0), mRect.Size());
+  nsOverflowAreas overflowAreas(overflow, overflow);
+  FinishAndStoreOverflow(overflowAreas, mRect.Size());
 
-  nsSVGUtils::UpdateGraphic(this);
-
-  NS_ASSERTION(!(mState & NS_FRAME_IN_REFLOW),
-               "We don't actually participate in reflow");
-  
-  // Do unset the various reflow bits, though.
   mState &= ~(NS_FRAME_FIRST_REFLOW | NS_FRAME_IS_DIRTY |
               NS_FRAME_HAS_DIRTY_CHILDREN);
-  return NS_OK;
+
+  // XXXSDL get rid of this in favor of the invalidate call in
+  // FinishAndStoreOverflow?
+  if (!(GetParent()->GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
+    // We only invalidate if our outer-<svg> has already had its
+    // initial reflow (since if it hasn't, its entire area will be
+    // invalidated when it gets that initial reflow):
+    nsSVGUtils::InvalidateBounds(this, true);
+  }
 }
 
 void
 nsSVGPathGeometryFrame::NotifySVGChanged(PRUint32 aFlags)
 {
-  if (!(aFlags & SUPPRESS_INVALIDATION)) {
-    nsSVGUtils::UpdateGraphic(this);
+  NS_ABORT_IF_FALSE(!(aFlags & DO_NOT_NOTIFY_RENDERING_OBSERVERS) ||
+                    (GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD),
+                    "Must be NS_STATE_SVG_NONDISPLAY_CHILD!");
+
+  NS_ABORT_IF_FALSE(aFlags & (TRANSFORM_CHANGED | COORD_CONTEXT_CHANGED),
+                    "Invalidation logic may need adjusting");
+
+  if (!(aFlags & DO_NOT_NOTIFY_RENDERING_OBSERVERS)) {
+    nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
   }
 }
 
-void
-nsSVGPathGeometryFrame::NotifyRedrawSuspended()
-{
-  AddStateBits(NS_STATE_SVG_REDRAW_SUSPENDED);
-}
-
-void
-nsSVGPathGeometryFrame::NotifyRedrawUnsuspended()
-{
-  RemoveStateBits(NS_STATE_SVG_REDRAW_SUSPENDED);
-
-  if (GetStateBits() & NS_STATE_SVG_DIRTY)
-    nsSVGUtils::UpdateGraphic(this);
-}
-
-gfxRect
+SVGBBox
 nsSVGPathGeometryFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
                                             PRUint32 aFlags)
 {
+  SVGBBox bbox;
+
   if (aToBBoxUserspace.IsSingular()) {
     // XXX ReportToConsole
-    return gfxRect(0.0, 0.0, 0.0, 0.0);
+    return bbox;
   }
 
   nsRefPtr<gfxContext> context =
@@ -281,8 +286,6 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
 
   GeneratePath(context, &aToBBoxUserspace);
   context->IdentityMatrix();
-
-  gfxRect bbox;
 
   // Be careful when replacing the following logic to get the fill and stroke
   // extents independently (instead of computing the stroke extents from the
@@ -322,10 +325,9 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
       pathExtents.MoveTo(context->GetUserStrokeExtent().Center());
       pathExtents.SizeTo(0, 0);
     }
-    bbox =
-      bbox.Union(nsSVGUtils::PathExtentsToMaxStrokeExtents(pathExtents,
-                                                           this,
-                                                           aToBBoxUserspace));
+    bbox.UnionEdges(nsSVGUtils::PathExtentsToMaxStrokeExtents(pathExtents,
+                                                              this,
+                                                              aToBBoxUserspace));
   }
 
   // Account for markers:
@@ -343,28 +345,28 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
       if (num) {
         nsSVGMarkerFrame *frame = properties.GetMarkerStartFrame();
         if (frame) {
-          gfxRect mbbox =
+          SVGBBox mbbox =
             frame->GetMarkBBoxContribution(aToBBoxUserspace, aFlags, this,
                                            &marks[0], strokeWidth);
-          bbox.UnionRect(bbox, mbbox);
+          bbox.UnionEdges(mbbox);
         }
 
         frame = properties.GetMarkerMidFrame();
         if (frame) {
           for (PRUint32 i = 1; i < num - 1; i++) {
-            gfxRect mbbox =
+            SVGBBox mbbox =
               frame->GetMarkBBoxContribution(aToBBoxUserspace, aFlags, this,
                                              &marks[i], strokeWidth);
-            bbox.UnionRect(bbox, mbbox);
+            bbox.UnionEdges(mbbox);
           }
         }
 
         frame = properties.GetMarkerEndFrame();
         if (frame) {
-          gfxRect mbbox =
+          SVGBBox mbbox =
             frame->GetMarkBBoxContribution(aToBBoxUserspace, aFlags, this,
                                            &marks[num-1], strokeWidth);
-          bbox.UnionRect(bbox, mbbox);
+          bbox.UnionEdges(mbbox);
         }
       }
     }
@@ -437,11 +439,11 @@ nsSVGPathGeometryFrame::MarkerProperties::GetMarkerEndFrame()
 }
 
 void
-nsSVGPathGeometryFrame::Render(nsSVGRenderState *aContext)
+nsSVGPathGeometryFrame::Render(nsRenderingContext *aContext)
 {
-  gfxContext *gfx = aContext->GetGfxContext();
+  gfxContext *gfx = aContext->ThebesContext();
 
-  PRUint16 renderMode = aContext->GetRenderMode();
+  PRUint16 renderMode = SVGAutoRenderState::GetRenderMode(aContext);
 
   switch (GetStyleSVG()->mShapeRendering) {
   case NS_STYLE_SHAPE_RENDERING_OPTIMIZESPEED:
@@ -458,7 +460,7 @@ nsSVGPathGeometryFrame::Render(nsSVGRenderState *aContext)
 
   GeneratePath(gfx);
 
-  if (renderMode != nsSVGRenderState::NORMAL) {
+  if (renderMode != SVGAutoRenderState::NORMAL) {
     gfx->Restore();
 
     if (GetClipRule() == NS_STYLE_FILL_RULE_EVENODD)
@@ -466,7 +468,7 @@ nsSVGPathGeometryFrame::Render(nsSVGRenderState *aContext)
     else
       gfx->SetFillRule(gfxContext::FILL_RULE_WINDING);
 
-    if (renderMode == nsSVGRenderState::CLIP_MASK) {
+    if (renderMode == SVGAutoRenderState::CLIP_MASK) {
       gfx->SetColor(gfxRGBA(1.0f, 1.0f, 1.0f, 1.0f));
       gfx->Fill();
       gfx->NewPath();

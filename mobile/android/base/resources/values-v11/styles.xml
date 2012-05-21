@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
 <resources>
     
     <!--
@@ -25,6 +29,8 @@
         <item name="android:layout_width">fill_parent</item>
         <item name="android:layout_height">fill_parent</item>
         <item name="android:layout_weight">1</item>
+        <item name="android:divider">#E5E5E5</item>
+        <item name="android:dividerHeight">1dp</item>
     </style>
  
     <!-- ActionBar -->
@@ -36,12 +42,12 @@
          <item name="android:displayOptions">showCustom</item>
          <item name="android:customNavigationLayout">@layout/browser_toolbar</item>
     </style>
- 
+
     <!-- AwesomeBar ActionBar -->
     <style name="ActionBar.AwesomeBar">
-         <item name="android:background">@android:color/transparent</item>
          <item name="android:displayOptions">showCustom</item>
-         <item name="android:customNavigationLayout">@layout/awesomebar_search</item>
+         <item name="android:customNavigationLayout">@layout/awesomebar_actionbar</item>
+         <item name="android:visibility">gone</item>
     </style>
  
     <!-- GeckoPreferences ActionBar -->

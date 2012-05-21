@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developers of the Original Code are
- * Sun Microsystems and IBM Corporation
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ginn Chen (ginn.chen@sun.com)
- *   Aaron Leventhal (aleventh@us.ibm.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef _nsHyperTextAccessible_H_
 #define _nsHyperTextAccessible_H_
@@ -46,7 +12,6 @@
 
 #include "AccCollector.h"
 #include "nsAccessibleWrap.h"
-#include "nsTextAttrs.h"
 
 #include "nsFrameSelection.h"
 #include "nsISelectionController.h"
@@ -202,6 +167,12 @@ public:
                                       nsIDOMNode **aEndNode,
                                       PRInt32 *aEndOffset);
 
+  /**
+   * Return true if the used ARIA role (if any) allows the hypertext accessible
+   * to expose text interfaces.
+   */
+  bool IsTextRole();
+
   //////////////////////////////////////////////////////////////////////////////
   // TextAccessible
 
@@ -264,6 +235,30 @@ public:
   {
     return GetChildAt(GetChildIndexAtOffset(aOffset));
   }
+
+  /**
+   * Return the bounds of the text between given start and end offset.
+   */
+  nsIntRect GetTextBounds(PRInt32 aStartOffset, PRInt32 aEndOffset)
+  {
+    nsIntRect bounds;
+    GetPosAndText(aStartOffset, aEndOffset, nsnull, nsnull, &bounds);
+    return bounds;
+  }
+
+  /**
+   * Provide the line number for the caret.
+   * @return 1-based index for the line number with the caret
+   */
+  PRInt32 CaretLineNumber();
+
+  //////////////////////////////////////////////////////////////////////////////
+  // EditableTextAccessible
+
+  /**
+   * Return the editor associated with the accessible.
+   */
+  virtual already_AddRefed<nsIEditor> GetEditor() const;
 
 protected:
   // nsHyperTextAccessible
@@ -366,17 +361,10 @@ protected:
 
   nsresult SetSelectionRange(PRInt32 aStartPos, PRInt32 aEndPos);
 
-  /**
-   * Provide the line number for the caret, relative to the
-   * current DOM node.
-   * @return 1-based index for the line number with the caret
-   */
-  PRInt32 GetCaretLineNumber();
-
   // Helpers
-  nsresult GetDOMPointByFrameOffset(nsIFrame *aFrame, PRInt32 aOffset,
-                                    nsIAccessible *aAccessible,
-                                    nsIDOMNode **aNode, PRInt32 *aNodeOffset);
+  nsresult GetDOMPointByFrameOffset(nsIFrame* aFrame, PRInt32 aOffset,
+                                    nsAccessible* aAccessible,
+                                    nsIDOMNode** aNode, PRInt32* aNodeOffset);
 
   
   /**
@@ -410,7 +398,7 @@ protected:
    * @param aEndOffset        [in, out] the end offset
    * @param aAttributes       [out, optional] result attributes
    */
-  nsresult GetSpellTextAttribute(nsIDOMNode *aNode, PRInt32 aNodeOffset,
+  nsresult GetSpellTextAttribute(nsINode* aNode, PRInt32 aNodeOffset,
                                  PRInt32 *aStartOffset,
                                  PRInt32 *aEndOffset,
                                  nsIPersistentProperties *aAttributes);

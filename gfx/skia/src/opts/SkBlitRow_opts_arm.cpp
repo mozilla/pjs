@@ -29,6 +29,9 @@ static void S32A_D565_Opaque_neon(uint16_t* SK_RESTRICT dst,
                       "vmov.u8    d31, #1<<7                  \n\t"
                       "vld1.16    {q12}, [%[dst]]             \n\t"
                       "vld4.8     {d0-d3}, [%[src]]           \n\t"
+                      // Thumb does not support the standard ARM conditional instructions but
+                      // instead requires the 'it' instruction to signal conditional execution.
+                      "it eq                                  \n\t"
                       "moveq      ip, #8                      \n\t"
                       "mov        %[keep_dst], %[dst]         \n\t"
                       
@@ -671,8 +674,13 @@ static void __attribute((noinline,optimize("-fomit-frame-pointer"))) S32A_Blend_
                   /* dst1_scale and dst2_scale*/
                   "lsr    r9, r5, #24                \n\t" /* src >> 24 */
                   "lsr    r10, r6, #24               \n\t" /* src >> 24 */
+#ifdef SK_ARM_HAS_EDSP
                   "smulbb r9, r9, %[alpha]           \n\t" /* r9 = SkMulS16 r9 with src_scale */
                   "smulbb r10, r10, %[alpha]         \n\t" /* r10 = SkMulS16 r10 with src_scale */
+#else
+                  "mul    r9, r9, %[alpha]           \n\t" /* r9 = SkMulS16 r9 with src_scale */
+                  "mul    r10, r10, %[alpha]         \n\t" /* r10 = SkMulS16 r10 with src_scale */
+#endif
                   "lsr    r9, r9, #8                 \n\t" /* r9 >> 8 */
                   "lsr    r10, r10, #8               \n\t" /* r10 >> 8 */
                   "rsb    r9, r9, #256               \n\t" /* dst1_scale = r9 = 255 - r9 + 1 */
@@ -741,7 +749,11 @@ static void __attribute((noinline,optimize("-fomit-frame-pointer"))) S32A_Blend_
 
                   "lsr    r6, r5, #24                \n\t" /* src >> 24 */
                   "and    r8, r12, r5, lsr #8        \n\t" /* ag = r8 = r5 masked by r12 lsr by #8 */
+#ifdef SK_ARM_HAS_EDSP
                   "smulbb r6, r6, %[alpha]           \n\t" /* r6 = SkMulS16 with src_scale */
+#else
+                  "mul    r6, r6, %[alpha]           \n\t" /* r6 = SkMulS16 with src_scale */
+#endif
                   "and    r9, r12, r5                \n\t" /* rb = r9 = r5 masked by r12 */
                   "lsr    r6, r6, #8                 \n\t" /* r6 >> 8 */
                   "mul    r8, r8, %[alpha]           \n\t" /* ag = r8 times scale */

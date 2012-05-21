@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set shiftwidth=4 tabstop=8 autoindent cindent expandtab: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla stack walking code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2000
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Michael Judge, 20-December-2000
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* API for getting a stack trace of the C/C++ stack on the current thread */
 
@@ -151,7 +117,8 @@ StackWalkInitCriticalAddress()
   // we force a situation where new_sem_from_pool is on the stack and
   // use dladdr to check the addresses.
 
-  MOZ_ASSERT(malloc_logger == NULL);
+  // malloc_logger can be set by external tools like 'Instruments' or 'leaks'
+  malloc_logger_t *old_malloc_logger = malloc_logger;
   malloc_logger = my_malloc_logger;
 
   pthread_cond_t cond;
@@ -164,7 +131,9 @@ StackWalkInitCriticalAddress()
   MOZ_ASSERT(r == 0);
   struct timespec abstime = {0, 1};
   r = pthread_cond_timedwait_relative_np(&cond, &mutex, &abstime);
-  malloc_logger = NULL;
+
+  // restore the previous malloc logger
+  malloc_logger = old_malloc_logger;
 
   // On Lion, malloc is no longer called from pthread_cond_*wait*. This prevents
   // us from finding the address, but that is fine, since with no call to malloc
@@ -258,19 +227,19 @@ void PrintError(char *prefix)
 {
     LPVOID lpMsgBuf;
     DWORD lastErr = GetLastError();
-    FormatMessage(
+    FormatMessageA(
       FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
       NULL,
       lastErr,
       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
-      (LPTSTR) &lpMsgBuf,
+      (LPSTR) &lpMsgBuf,
       0,
       NULL
     );
     fprintf(stderr, "### ERROR: %s: %s",
                     prefix, lpMsgBuf ? lpMsgBuf : "(null)\n");
     fflush(stderr);
-    LocalFree( lpMsgBuf );
+    LocalFree(lpMsgBuf);
 }
 
 bool
@@ -1083,7 +1052,7 @@ extern void *__libc_stack_end; // from ld-linux.so
 namespace mozilla {
 nsresult
 FramePointerStackWalk(NS_WalkStackCallback aCallback, PRUint32 aSkipFrames,
-                      void *aClosure, void **bp)
+                      void *aClosure, void **bp, void *aStackEnd)
 {
   // Stack walking code courtesy Kipp's "leaky".
 
@@ -1094,10 +1063,10 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, PRUint32 aSkipFrames,
     // -fomit-frame-pointer, so do some sanity checks.
     // (bp should be a frame pointer on ppc(64) but checking anyway may help
     // a little if the stack has been corrupted.)
+    // We don't need to check against the begining of the stack because
+    // we can assume that bp > sp
     if (next <= bp ||
-#if HAVE___LIBC_STACK_END
-        next > __libc_stack_end ||
-#endif
+        next > aStackEnd ||
         (long(next) & 3)) {
       break;
     }
@@ -1141,8 +1110,15 @@ NS_StackWalk(NS_WalkStackCallback aCallback, PRUint32 aSkipFrames,
   // end of the saved registers instead of the start.
   bp = (void**) __builtin_frame_address(0);
 #endif
+
+  void *stackEnd;
+#if HAVE___LIBC_STACK_END
+  stackEnd = __libc_stack_end;
+#else
+  stackEnd = reinterpret_cast<void*>(-1);
+#endif
   return FramePointerStackWalk(aCallback, aSkipFrames,
-                               aClosure, bp);
+                               aClosure, bp, stackEnd);
 
 }
 
@@ -1260,6 +1236,15 @@ NS_StackWalk(NS_WalkStackCallback aCallback, PRUint32 aSkipFrames,
     MOZ_ASSERT(gCriticalAddress.mInit);
     MOZ_ASSERT(!aThread);
     return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+namespace mozilla {
+nsresult
+FramePointerStackWalk(NS_WalkStackCallback aCallback, PRUint32 aSkipFrames,
+                      void *aClosure, void **bp)
+{
+    return NS_ERROR_NOT_IMPLEMENTED;
+}
 }
 
 EXPORT_XPCOM_API(nsresult)

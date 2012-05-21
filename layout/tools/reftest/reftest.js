@@ -1,40 +1,8 @@
 /* -*- Mode: Java; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- /
 /* vim: set shiftwidth=4 tabstop=8 autoindent cindent expandtab: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla's layout acceptance tests.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if BOOTSTRAP
 var EXPORTED_SYMBOLS = ["OnRefTestLoad"];
@@ -302,7 +270,7 @@ function InitAndStartRefTests()
     
     /* Get the logfile for android tests */
     try {
-        logFile = prefs.getCharPref("reftest.logFile");
+        var logFile = prefs.getCharPref("reftest.logFile");
         if (logFile) {
             try {
                 var f = FileUtils.File(logFile);
@@ -397,6 +365,7 @@ function StartHTTPServer()
 
 function StartTests()
 {
+    var uri;
 #if BOOTSTRAP
     /* These prefs are optional, so we don't need to spit an error to the log */
     try {
@@ -687,11 +656,11 @@ function ReadManifest(aURL, inherited_status)
         var maxAsserts = 0;
         var needs_focus = false;
         var slow = false;
-        var prefSettings = [];
+        var testPrefSettings = [], refPrefSettings = [];
         var fuzzy_max_delta = 2;
         var fuzzy_max_pixels = 1;
-        
-        while (items[0].match(/^(fails|needs-focus|random|skip|asserts|slow|require-or|silentfail|pref|fuzzy)/)) {
+
+        while (items[0].match(/^(fails|needs-focus|random|skip|asserts|slow|require-or|silentfail|pref|test-pref|ref-pref|fuzzy)/)) {
             var item = items.shift();
             var stat;
             var cond;
@@ -753,10 +722,11 @@ function ReadManifest(aURL, inherited_status)
             } else if (item == "silentfail") {
                 cond = false;
                 allow_silent_fail = true;
-            } else if ((m = item.match(/^pref\((.+?),(.*)\)$/))) {
+            } else if ((m = item.match(/^(|test-|ref-)pref\((.+?),(.*)\)$/))) {
                 cond = false;
-                var prefName = m[1];
-                var prefVal = Components.utils.evalInSandbox("(" + m[2] + ")", sandbox);
+                var where = m[1];
+                var prefName = m[2];
+                var prefVal = Components.utils.evalInSandbox("(" + m[3] + ")", sandbox);
                 var prefType;
                 var valType = typeof(prefVal);
                 if (valType == "boolean") {
@@ -768,9 +738,15 @@ function ReadManifest(aURL, inherited_status)
                 } else {
                     throw "Error in pref value in manifest file " + aURL.spec + " line " + lineNo;
                 }
-                prefSettings.push( { name: prefName,
-                                     type: prefType,
-                                     value: prefVal } );
+                var setting = { name: prefName,
+                                type: prefType,
+                                value: prefVal };
+                if (where != "ref-") {
+                    testPrefSettings.push(setting);
+                }
+                if (where != "test-") {
+                    refPrefSettings.push(setting);
+                }
             } else if ((m = item.match(/^fuzzy\((\d+),(\d+)\)$/))) {
               cond = false;
               expected_status = EXPECTED_FUZZY;
@@ -861,7 +837,8 @@ function ReadManifest(aURL, inherited_status)
                           maxAsserts: maxAsserts,
                           needsFocus: needs_focus,
                           slow: slow,
-                          prefSettings: prefSettings,
+                          prefSettings1: testPrefSettings,
+                          prefSettings2: refPrefSettings,
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
@@ -886,7 +863,8 @@ function ReadManifest(aURL, inherited_status)
                           maxAsserts: maxAsserts,
                           needsFocus: needs_focus,
                           slow: slow,
-                          prefSettings: prefSettings,
+                          prefSettings1: testPrefSettings,
+                          prefSettings2: refPrefSettings,
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
@@ -914,7 +892,8 @@ function ReadManifest(aURL, inherited_status)
                           maxAsserts: maxAsserts,
                           needsFocus: needs_focus,
                           slow: slow,
-                          prefSettings: prefSettings,
+                          prefSettings1: testPrefSettings,
+                          prefSettings2: refPrefSettings,
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
@@ -945,10 +924,13 @@ function BuildUseCounts()
         var url = gURLs[i];
         if (url.expected != EXPECTED_DEATH &&
             (url.type == TYPE_REFTEST_EQUAL ||
-             url.type == TYPE_REFTEST_NOTEQUAL) &&
-            url.prefSettings.length == 0) {
-            AddURIUseCount(gURLs[i].url1);
-            AddURIUseCount(gURLs[i].url2);
+             url.type == TYPE_REFTEST_NOTEQUAL)) {
+            if (url.prefSettings1.length == 0) {
+                AddURIUseCount(gURLs[i].url1);
+            }
+            if (url.prefSettings2.length == 0) {
+                AddURIUseCount(gURLs[i].url2);
+            }
         }
     }
 }
@@ -1017,8 +999,6 @@ function StartCurrentTest()
 {
     gTestLog = [];
 
-    RestoreChangedPreferences();
-
     // make sure we don't run tests that are expected to kill the browser
     while (gURLs.length > 0) {
         var test = gURLs[0];
@@ -1027,6 +1007,8 @@ function StartCurrentTest()
             gDumpLog("REFTEST TEST-KNOWN-FAIL | " + test.url1.spec + " | (SKIP)\n");
             gURLs.shift();
         } else if (test.needsFocus && !Focus()) {
+            // FIXME: Marking this as a known fail is dangerous!  What
+            // if it starts failing all the time?
             ++gTestResults.Skip;
             gDumpLog("REFTEST TEST-KNOWN-FAIL | " + test.url1.spec + " | (SKIPPED; COULDN'T GET FOCUS)\n");
             gURLs.shift();
@@ -1034,83 +1016,13 @@ function StartCurrentTest()
             ++gTestResults.Slow;
             gDumpLog("REFTEST TEST-KNOWN-SLOW | " + test.url1.spec + " | (SLOW)\n");
             gURLs.shift();
-        } else if (gURLs[0].prefSettings.length > 0) {
-            var prefs = Components.classes["@mozilla.org/preferences-service;1"].
-                        getService(Components.interfaces.nsIPrefBranch);
-            var badPref = undefined;
-            try {
-                gURLs[0].prefSettings.forEach(function(ps) {
-                    var oldVal;
-                    if (ps.type == PREF_BOOLEAN) {
-                        try {
-                            oldVal = prefs.getBoolPref(ps.name);
-                        } catch (e) {
-                            badPref = "boolean preference '" + ps.name + "'";
-                            throw "bad pref";
-                        }
-                    } else if (ps.type == PREF_STRING) {
-                        try {
-                            oldVal = prefs.getCharPref(ps.name);
-                        } catch (e) {
-                            badPref = "string preference '" + ps.name + "'";
-                            throw "bad pref";
-                        }
-                    } else if (ps.type == PREF_INTEGER) {
-                        try {
-                            oldVal = prefs.getIntPref(ps.name);
-                        } catch (e) {
-                            badPref = "integer preference '" + ps.name + "'";
-                            throw "bad pref";
-                        }
-                    } else {
-                        throw "internal error - unknown preference type";
-                    }
-                    if (oldVal != ps.value) {
-                        gPrefsToRestore.push( { name: ps.name,
-                                                type: ps.type,
-                                                value: oldVal } );
-                        var value = ps.value;
-                        if (ps.type == PREF_BOOLEAN) {
-                            prefs.setBoolPref(ps.name, value);
-                        } else if (ps.type == PREF_STRING) {
-                            prefs.setCharPref(ps.name, value);
-                            value = '"' + value + '"';
-                        } else if (ps.type == PREF_INTEGER) {
-                            prefs.setIntPref(ps.name, value);
-                        }
-                        gDumpLog("SET PREFERENCE pref(" + ps.name + "," + value + ")\n");
-                    }
-                });
-            } catch (e) {
-                if (e == "bad pref") {
-                    if (test.expected == EXPECTED_FAIL) {
-                        gDumpLog("REFTEST TEST-KNOWN-FAIL | " + test.url1.spec +
-                                 " | (SKIPPED; " + badPref + " not known or wrong type)\n");
-                        ++gTestResults.Skip;
-                    } else {
-                        gDumpLog("REFTEST TEST-UNEXPECTED-FAIL | " + test.url1.spec +
-                                 " | " + badPref + " not known or wrong type\n");
-                        ++gTestResults.UnexpectedFail;
-                    }
-                } else {
-                    throw e;
-                }
-            }
-            if (badPref != undefined) {
-                // undo anything we changed
-                RestoreChangedPreferences();
-
-                // skip the test that had a bad preference
-                gURLs.shift();
-            } else {
-                break;
-            }
         } else {
             break;
         }
     }
 
     if (gURLs.length == 0) {
+        RestoreChangedPreferences();
         DoneTests();
     }
     else {
@@ -1126,7 +1038,82 @@ function StartCurrentURI(aState)
     gState = aState;
     gCurrentURL = gURLs[0]["url" + aState].spec;
 
-    if (gURLs[0].prefSettings.length == 0 &&
+    RestoreChangedPreferences();
+
+    var prefSettings = gURLs[0]["prefSettings" + aState];
+    if (prefSettings.length > 0) {
+        var prefs = Components.classes["@mozilla.org/preferences-service;1"].
+                    getService(Components.interfaces.nsIPrefBranch);
+        var badPref = undefined;
+        try {
+            prefSettings.forEach(function(ps) {
+                var oldVal;
+                if (ps.type == PREF_BOOLEAN) {
+                    try {
+                        oldVal = prefs.getBoolPref(ps.name);
+                    } catch (e) {
+                        badPref = "boolean preference '" + ps.name + "'";
+                        throw "bad pref";
+                    }
+                } else if (ps.type == PREF_STRING) {
+                    try {
+                        oldVal = prefs.getCharPref(ps.name);
+                    } catch (e) {
+                        badPref = "string preference '" + ps.name + "'";
+                        throw "bad pref";
+                    }
+                } else if (ps.type == PREF_INTEGER) {
+                    try {
+                        oldVal = prefs.getIntPref(ps.name);
+                    } catch (e) {
+                        badPref = "integer preference '" + ps.name + "'";
+                        throw "bad pref";
+                    }
+                } else {
+                    throw "internal error - unknown preference type";
+                }
+                if (oldVal != ps.value) {
+                    gPrefsToRestore.push( { name: ps.name,
+                                            type: ps.type,
+                                            value: oldVal } );
+                    var value = ps.value;
+                    if (ps.type == PREF_BOOLEAN) {
+                        prefs.setBoolPref(ps.name, value);
+                    } else if (ps.type == PREF_STRING) {
+                        prefs.setCharPref(ps.name, value);
+                        value = '"' + value + '"';
+                    } else if (ps.type == PREF_INTEGER) {
+                        prefs.setIntPref(ps.name, value);
+                    }
+                    gDumpLog("SET PREFERENCE pref(" + ps.name + "," + value + ")\n");
+                }
+            });
+        } catch (e) {
+            if (e == "bad pref") {
+                var test = gURLs[0];
+                if (test.expected == EXPECTED_FAIL) {
+                    gDumpLog("REFTEST TEST-KNOWN-FAIL | " + test.url1.spec +
+                             " | (SKIPPED; " + badPref + " not known or wrong type)\n");
+                    ++gTestResults.Skip;
+                } else {
+                    gDumpLog("REFTEST TEST-UNEXPECTED-FAIL | " + test.url1.spec +
+                             " | " + badPref + " not known or wrong type\n");
+                    ++gTestResults.UnexpectedFail;
+                }
+            } else {
+                throw e;
+            }
+        }
+        if (badPref != undefined) {
+            // skip the test that had a bad preference
+            gURLs.shift();
+
+            StartCurrentTest();
+            return;
+        }
+    }
+
+    if (prefSettings.length == 0 &&
         gURICanvases[gCurrentURL] &&
         (gURLs[0].type == TYPE_REFTEST_EQUAL ||
          gURLs[0].type == TYPE_REFTEST_NOTEQUAL) &&
@@ -1389,7 +1376,7 @@ function RecordResult(testRunTime, errorMsg, scriptResults)
         return;
     }
 
-    if (gURLs[0].prefSettings.length == 0 &&
+    if (gURLs[0]["prefSettings" + gState].length == 0 &&
         gURICanvases[gCurrentURL]) {
         gCurrentCanvas = gURICanvases[gCurrentURL];
     }
@@ -1475,8 +1462,10 @@ function RecordResult(testRunTime, errorMsg, scriptResults)
                 FlushTestLog();
             }
 
-            if (gURLs[0].prefSettings.length == 0) {
+            if (gURLs[0].prefSettings1.length == 0) {
                 UpdateCanvasCache(gURLs[0].url1, gCanvas1);
+            }
+            if (gURLs[0].prefSettings2.length == 0) {
                 UpdateCanvasCache(gURLs[0].url2, gCanvas2);
             }
 

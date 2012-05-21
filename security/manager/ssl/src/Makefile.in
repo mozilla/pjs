@@ -67,6 +67,7 @@ CPPSRCS = 				\
 	nsNSSErrors.cpp			\
 	nsNSSIOLayer.cpp		\
 	SSLServerCertVerification.cpp   \
+	TransportSecurityInfo.cpp       \
 	nsSSLStatus.cpp		\
 	nsNSSModule.cpp			\
 	nsSSLSocketProvider.cpp		\
@@ -104,6 +105,7 @@ CPPSRCS = 				\
   NSSErrorsService.cpp \
   nsNSSCertificateFakeTransport.cpp \
   PSMRunnable.cpp \
+  nsNSSVersion.cpp \
   $(NULL)
 
 ifdef MOZ_XUL

@@ -123,6 +123,8 @@
  * jemalloc_purge_freed_pages(), which will force the OS to release those
  * MADV_FREE'd pages, making the process's RSS reflect its true memory usage.
  *
+ * The jemalloc_purge_freed_pages definition in jemalloc.h needs to be
+ * adjusted if MALLOC_DOUBLE_PURGE is ever enabled on Linux.
  */
 #ifdef MOZ_MEMORY_DARWIN
 #define MALLOC_DOUBLE_PURGE
@@ -374,7 +376,7 @@ __FBSDID("$FreeBSD: head/lib/libc/stdlib/malloc.c 180599 2008-07-18 19:35:44Z ja
 
 #endif
 
-#include "jemalloc.h"
+#include "jemalloc_types.h"
 #include "linkedlist.h"
 
 /* Some tools, such as /dev/dsp wrappers, LD_PRELOAD libraries that
@@ -403,9 +405,9 @@ void *_mmap(void *addr, size_t length, int prot, int flags,
 	struct {
 		void *addr;
 		size_t length;
-		int prot;
-		int flags;
-		int fd;
+		long prot;
+		long flags;
+		long fd;
 		off_t offset;
 	} args = { addr, length, prot, flags, fd, offset };
 	return (void *) syscall(SYS_mmap, &args);
@@ -425,7 +427,7 @@ void *_mmap(void *addr, size_t length, int prot, int flags,
 #endif
 
 #ifdef MOZ_MEMORY_DARWIN
-static const bool __isthreaded = true;
+static const bool isthreaded = true;
 #endif
 
 #if defined(MOZ_MEMORY_SOLARIS) && defined(MAP_ALIGN) && !defined(JEMALLOC_NEVER_USES_MAP_ALIGN)
@@ -461,7 +463,7 @@ static const bool __isthreaded = true;
 #endif
 #define PIC
 #ifndef MOZ_MEMORY_DARWIN
-static const bool __isthreaded = true;
+static const bool isthreaded = true;
 #else
 #  define NO_TLS
 #endif
@@ -989,10 +991,10 @@ struct arena_bin_s {
 };
 
 struct arena_s {
-	/* For bug 703087, we're temporarily adding arena.magic to release
-	   builds. */
+#ifdef MALLOC_DEBUG
 	uint32_t		magic;
 #  define ARENA_MAGIC 0x947d3d24
+#endif
 
 	/* All operations on this arena require that lock be locked. */
 #ifdef MOZ_MEMORY
@@ -1419,13 +1421,8 @@ static
 #endif
 bool		malloc_init_hard(void);
 
-#ifdef MOZ_MEMORY_ANDROID
-void	_malloc_prefork(void);
-void	_malloc_postfork(void);
-#else
 static void	_malloc_prefork(void);
 static void	_malloc_postfork(void);
-#endif
 
 #ifdef MOZ_MEMORY_DARWIN
 /*
@@ -1566,7 +1563,7 @@ static bool
 malloc_mutex_init(malloc_mutex_t *mutex)
 {
 #if defined(MOZ_MEMORY_WINDOWS)
-	if (__isthreaded)
+	if (isthreaded)
 		if (! __crtInitCritSecAndSpinCount(mutex, _CRT_SPINCOUNT))
 			return (true);
 #elif defined(MOZ_MEMORY_DARWIN)
@@ -1603,7 +1600,7 @@ malloc_mutex_lock(malloc_mutex_t *mutex)
 #elif defined(MOZ_MEMORY)
 	pthread_mutex_lock(mutex);
 #else
-	if (__isthreaded)
+	if (isthreaded)
 		_SPINLOCK(&mutex->lock);
 #endif
 }
@@ -1619,7 +1616,7 @@ malloc_mutex_unlock(malloc_mutex_t *mutex)
 #elif defined(MOZ_MEMORY)
 	pthread_mutex_unlock(mutex);
 #else
-	if (__isthreaded)
+	if (isthreaded)
 		_SPINUNLOCK(&mutex->lock);
 #endif
 }
@@ -1628,7 +1625,7 @@ static bool
 malloc_spin_init(malloc_spinlock_t *lock)
 {
 #if defined(MOZ_MEMORY_WINDOWS)
-	if (__isthreaded)
+	if (isthreaded)
 		if (! __crtInitCritSecAndSpinCount(lock, _CRT_SPINCOUNT))
 			return (true);
 #elif defined(MOZ_MEMORY_DARWIN)
@@ -1663,7 +1660,7 @@ malloc_spin_lock(malloc_spinlock_t *lock)
 #elif defined(MOZ_MEMORY)
 	pthread_mutex_lock(lock);
 #else
-	if (__isthreaded)
+	if (isthreaded)
 		_SPINLOCK(&lock->lock);
 #endif
 }
@@ -1678,7 +1675,7 @@ malloc_spin_unlock(malloc_spinlock_t *lock)
 #elif defined(MOZ_MEMORY)
 	pthread_mutex_unlock(lock);
 #else
-	if (__isthreaded)
+	if (isthreaded)
 		_SPINUNLOCK(&lock->lock);
 #endif
 }
@@ -1733,7 +1730,7 @@ malloc_spin_lock(pthread_mutex_t *lock)
 {
 	unsigned ret = 0;
 
-	if (__isthreaded) {
+	if (isthreaded) {
 		if (_pthread_mutex_trylock(lock) != 0) {
 			unsigned i;
 			volatile unsigned j;
@@ -1766,7 +1763,7 @@ static inline void
 malloc_spin_unlock(pthread_mutex_t *lock)
 {
 
-	if (__isthreaded)
+	if (isthreaded)
 		_pthread_mutex_unlock(lock);
 }
 #endif
@@ -2963,7 +2960,7 @@ choose_arena(void)
 	 * introduces a bootstrapping issue.
 	 */
 #ifndef NO_TLS
-	if (__isthreaded == false) {
+	if (isthreaded == false) {
 	    /* Avoid the overhead of TLS for single-threaded operation. */
 	    return (arenas[0]);
 	}
@@ -2979,7 +2976,7 @@ choose_arena(void)
 		assert(ret != NULL);
 	}
 #else
-	if (__isthreaded && narenas > 1) {
+	if (isthreaded && narenas > 1) {
 		unsigned long ind;
 
 		/*
@@ -3036,7 +3033,7 @@ choose_arena_hard(void)
 {
 	arena_t *ret;
 
-	assert(__isthreaded);
+	assert(isthreaded);
 
 #ifdef MALLOC_BALANCE
 	/* Seed the PRNG used for arena load balancing. */
@@ -4413,15 +4410,7 @@ isalloc_validate(const void *ptr)
 		return (0);
 
 	if (chunk != ptr) {
-		/* For bug 703087, we've temporarily made what is normally a
-		   debug-only assertion here into a fatal assertion. */
-		if (chunk->arena->magic != ARENA_MAGIC) {
-			char* boom = (char*) 0;
-			_malloc_message("isalloc_validate called with invalid pointer. "
-			                "Crashing...\n", "", "", "");
-			*boom = 1;
-		}
-
+		assert(chunk->arena->magic == ARENA_MAGIC);
 		return (arena_salloc(ptr));
 	} else {
 		size_t ret;
@@ -4931,9 +4920,10 @@ arena_new(arena_t *arena)
 #endif
 	}
 
-        /* For bug 703087, we're temporarily adding arena->magic for release
-           builds. */
+#ifdef MALLOC_DEBUG
 	arena->magic = ARENA_MAGIC;
+#endif
+
 	return (false);
 }
 
@@ -5930,10 +5920,8 @@ MALLOC_OUT:
 #endif
 	}
 
-#if (!defined(MOZ_MEMORY_WINDOWS) && !defined(MOZ_MEMORY_DARWIN) && !defined(MOZ_MEMORY_ANDROID))
+#if !defined(MOZ_MEMORY_WINDOWS) && !defined(MOZ_MEMORY_DARWIN)
 	/* Prevent potential deadlock on malloc locks after fork. */
-	/* XXX on Android there is no pthread_atfork, so we specifically
-	   call _malloc_prefork and _malloc_postfork in process_util_linux.cc */
 	pthread_atfork(_malloc_prefork, _malloc_postfork, _malloc_postfork);
 #endif
 
@@ -6218,17 +6206,6 @@ malloc_shutdown()
  * names it is given with __wrap_.
  */
 #define wrap(a) __wrap_ ## a
-
-/* Extra wrappers for NSPR alloc functions */
-void *
-__wrap_PR_Malloc(size_t size) __attribute__((alias("__wrap_malloc")));
-void *
-__wrap_PR_Calloc(size_t num, size_t size) __attribute__((alias("__wrap_calloc")));
-void *
-__wrap_PR_Realloc(void *ptr, size_t size) __attribute__((alias("__wrap_realloc")));
-void
-__wrap_PR_Free(void *ptr) __attribute__((alias("__wrap_free")));
-
 #else
 #define wrap(a) je_ ## a
 #endif
@@ -6241,22 +6218,6 @@ __wrap_PR_Free(void *ptr) __attribute__((alias("__wrap_free")));
 #define realloc(a, b)           wrap(realloc)(a, b)
 #define free(a)                 wrap(free)(a)
 #define malloc_usable_size(a)   wrap(malloc_usable_size)(a)
-
-void *malloc(size_t size);
-
-char *
-wrap(strndup)(const char *src, size_t len) {
-	char* dst = (char*) malloc(len + 1);
-	if (dst)
-		strncpy(dst, src, len + 1);
-	return dst;
-}
-
-char *
-wrap(strdup)(const char *src) {
-	size_t len = strlen(src);
-	return wrap(strndup)(src, len);
-}
 #endif
 
 /*
@@ -6591,8 +6552,11 @@ free(void *ptr)
  */
 
 /* This was added by Mozilla for use by SQLite. */
+#ifdef MOZ_MEMORY_DARWIN
+static
+#endif
 size_t
-je_malloc_usable_size_in_advance(size_t size)
+je_malloc_good_size(size_t size)
 {
 	/*
 	 * This duplicates the logic in imalloc(), arena_malloc() and
@@ -6622,7 +6586,7 @@ je_malloc_usable_size_in_advance(size_t size)
 		 * Huge.  We use PAGE_CEILING to get psize, instead of using
 		 * CHUNK_CEILING to get csize.  This ensures that this
 		 * malloc_usable_size(malloc(n)) always matches
-		 * je_malloc_usable_size_in_advance(n).
+		 * je_malloc_good_size(n).
 		 */
 		size = PAGE_CEILING(size);
 	}
@@ -6867,11 +6831,7 @@ _msize(const void *ptr)
  * is threaded here.
  */
 
-#ifdef MOZ_MEMORY_ANDROID
-void
-#else
 static void
-#endif
 _malloc_prefork(void)
 {
 	unsigned i;
@@ -6889,11 +6849,7 @@ _malloc_prefork(void)
 	malloc_mutex_lock(&huge_mtx);
 }
 
-#ifdef MOZ_MEMORY_ANDROID
-void
-#else
 static void
-#endif
 _malloc_postfork(void)
 {
 	unsigned i;
@@ -6964,7 +6920,7 @@ zone_destroy(malloc_zone_t *zone)
 static size_t
 zone_good_size(malloc_zone_t *zone, size_t size)
 {
-	return je_malloc_usable_size_in_advance(size);
+	return je_malloc_good_size(size);
 }
 
 static size_t
@@ -7201,31 +7157,4 @@ BOOL APIENTRY DllMain(HINSTANCE hModule,
 
   return TRUE;
 }
-
-/*
- *  There's a fun allocator mismatch in (at least) the VS 2010 CRT
- *  (see the giant comment in this directory's Makefile.in
- *  that gets redirected here to avoid a crash on shutdown.
- */
-void
-je_dumb_free_thunk(void *ptr)
-{
-  return; /* shutdown leaks that we don't care about */
-}
-
-#include <wchar.h>
-
-/*
- *  We also need to provide our own impl of wcsdup so that we don't ask
- *  the CRT for memory from its heap (which will then be unfreeable).
- */
-wchar_t *je_wcsdup(const wchar_t *src)
-{
-  size_t len = wcslen(src);
-  wchar_t* dst = (wchar_t*)je_malloc((len + 1) * sizeof(wchar_t));
-  if(dst)
-    wcsncpy(dst, src, len + 1);
-  return dst;
-}
-
 #endif

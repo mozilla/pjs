@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Breakpad integration
- *
- * The Initial Developer of the Original Code is
- * Ted Mielczarek <ted.mielczarek@gmail.com>
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Josh Aas <josh@mozilla.com>
- *  Justin Dolske <dolske@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/CrashReporterChild.h"
 #include "mozilla/Services.h"
@@ -57,6 +23,8 @@
 #include "client/windows/handler/exception_handler.h"
 #include <DbgHelp.h>
 #include <string.h>
+
+#include "nsWindowsDllInterceptor.h"
 #elif defined(XP_MACOSX)
 #include "client/mac/crash_generation/client_info.h"
 #include "client/mac/crash_generation/crash_generation_server.h"
@@ -263,6 +231,31 @@ static const char* kSubprocessBlacklist[] = {
 // they queue up here.
 class DelayedNote;
 nsTArray<nsAutoPtr<DelayedNote> >* gDelayedAnnotations;
+
+#if defined(XP_WIN)
+// the following are used to prevent other DLLs reverting the last chance
+// exception handler to the windows default. Any attempt to change the 
+// unhandled exception filter or to reset it is ignored and our crash
+// reporter is loaded instead (in case it became unloaded somehow)
+typedef LPTOP_LEVEL_EXCEPTION_FILTER (WINAPI *SetUnhandledExceptionFilter_func)
+  (LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter);
+static SetUnhandledExceptionFilter_func stub_SetUnhandledExceptionFilter = 0;
+static WindowsDllInterceptor gKernel32Intercept;
+static bool gBlockUnhandledExceptionFilter = true;
+
+static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+patched_SetUnhandledExceptionFilter (LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter)
+{
+  if (!gBlockUnhandledExceptionFilter ||
+      lpTopLevelExceptionFilter == google_breakpad::ExceptionHandler::HandleException) {
+    // don't intercept
+    return stub_SetUnhandledExceptionFilter(lpTopLevelExceptionFilter);
+  }
+
+  // intercept attempts to change the filter
+  return NULL;
+}
+#endif
 
 #ifdef XP_MACOSX
 static cpu_type_t pref_cpu_types[2] = {
@@ -670,8 +663,7 @@ nsresult SetExceptionHandler(nsILocalFile* aXREDirectory,
     new nsDataHashtable<nsCStringHashKey,nsCString>();
   NS_ENSURE_TRUE(crashReporterAPIData_Hash, NS_ERROR_OUT_OF_MEMORY);
 
-  rv = crashReporterAPIData_Hash->Init();
-  NS_ENSURE_SUCCESS(rv, rv);
+  crashReporterAPIData_Hash->Init();
 
   notesField = new nsCString();
   NS_ENSURE_TRUE(notesField, NS_ERROR_OUT_OF_MEMORY);
@@ -822,6 +814,17 @@ nsresult SetExceptionHandler(nsILocalFile* aXREDirectory,
 
 #ifdef XP_WIN
   gExceptionHandler->set_handle_debug_exceptions(true);
+  
+  // protect the crash reporter from being unloaded
+  gKernel32Intercept.Init("kernel32.dll");
+  bool ok = gKernel32Intercept.AddHook("SetUnhandledExceptionFilter",
+          reinterpret_cast<intptr_t>(patched_SetUnhandledExceptionFilter),
+          (void**) &stub_SetUnhandledExceptionFilter);
+
+#ifdef DEBUG
+  if (!ok)
+    printf_stderr ("SetUnhandledExceptionFilter hook failed; crash reporter is vulnerable.\n");
+#endif
 #endif
 
   // store application start time
@@ -1082,6 +1085,11 @@ static void OOPDeinit();
 
 nsresult UnsetExceptionHandler()
 {
+#ifdef XP_WIN
+  // allow SetUnhandledExceptionFilter
+  gBlockUnhandledExceptionFilter = false;
+#endif
+
   delete gExceptionHandler;
 
   // do this here in the unlikely case that we succeeded in allocating
@@ -1244,8 +1252,7 @@ nsresult AnnotateCrashReport(const nsACString& key, const nsACString& data)
 
   MutexAutoLock lock(*crashReporterAPILock);
 
-  rv = crashReporterAPIData_Hash->Put(key, escapedData);
-  NS_ENSURE_SUCCESS(rv, rv);
+  crashReporterAPIData_Hash->Put(key, escapedData);
 
   // now rebuild the file contents
   crashReporterAPIData->Truncate(0);

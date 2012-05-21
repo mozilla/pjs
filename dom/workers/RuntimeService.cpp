@@ -1,41 +1,8 @@
 /* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Web Workers.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -53,6 +20,7 @@
 #include "nsITimer.h"
 #include "nsPIDOMWindow.h"
 
+#include "mozilla/dom/EventTargetBinding.h"
 #include "mozilla/Preferences.h"
 #include "nsContentUtils.h"
 #include "nsDOMJSUtils.h"
@@ -65,18 +33,17 @@
 #include "xpcpublic.h"
 
 #include "Events.h"
-#include "EventTarget.h"
 #include "Worker.h"
 #include "WorkerPrivate.h"
 
 using namespace mozilla;
+using namespace mozilla::dom;
 
 USING_WORKERS_NAMESPACE
 
 using mozilla::MutexAutoLock;
 using mozilla::MutexAutoUnlock;
 using mozilla::Preferences;
-using namespace mozilla::xpconnect::memory;
 
 // The size of the worker runtime heaps in bytes. May be changed via pref.
 #define WORKER_DEFAULT_RUNTIME_HEAPSIZE 32 * 1024 * 1024
@@ -85,9 +52,14 @@ using namespace mozilla::xpconnect::memory;
 // consistency.
 #define WORKER_STACK_SIZE 256 * sizeof(size_t) * 1024
 
-// The stack limit the JS engine will check. Half the size of the
-// actual C stack, to be safe.
+// The stack limit the JS engine will check. 
+#ifdef MOZ_ASAN
+// For ASan, we need more stack space, so we use all that is available
+#define WORKER_CONTEXT_NATIVE_STACK_LIMIT WORKER_STACK_SIZE
+#else
+// Half the size of the actual C stack, to be safe.
 #define WORKER_CONTEXT_NATIVE_STACK_LIMIT 128 * sizeof(size_t) * 1024
+#endif
 
 // The maximum number of threads to use for workers, overridable via pref.
 #define MAX_WORKERS_PER_DOMAIN 10
@@ -314,7 +286,7 @@ CreateJSContextForWorker(WorkerPrivate* aWorkerPrivate)
     NS_ASSERTION(zeal <= 3, "Bad zeal value!");
 
     PRUint32 frequency = zeal <= 2 ? JS_DEFAULT_ZEAL_FREQ : 1;
-    JS_SetGCZeal(workerCx, zeal, frequency, false);
+    JS_SetGCZeal(workerCx, zeal, frequency);
   }
 #endif
 
@@ -389,7 +361,7 @@ BEGIN_WORKERS_NAMESPACE
 
 // Entry point for the DOM.
 JSBool
-ResolveWorkerClasses(JSContext* aCx, JSObject* aObj, jsid aId, uintN aFlags,
+ResolveWorkerClasses(JSContext* aCx, JSHandleObject aObj, JSHandleId aId, unsigned aFlags,
                      JSObject** aObjp)
 {
   AssertIsOnMainThread();
@@ -418,7 +390,7 @@ ResolveWorkerClasses(JSContext* aCx, JSObject* aObj, jsid aId, uintN aFlags,
   bool shouldResolve = false;
 
   for (PRUint32 i = 0; i < ID_COUNT; i++) {
-    if (aId == gStringIDs[i]) {
+    if (gStringIDs[i] == aId) {
       nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
       NS_ASSERTION(ssm, "This should never be null!");
 
@@ -432,7 +404,7 @@ ResolveWorkerClasses(JSContext* aCx, JSObject* aObj, jsid aId, uintN aFlags,
 
       // Don't resolve if this is ChromeWorker and we're not chrome. Otherwise
       // always resolve.
-      shouldResolve = aId == gStringIDs[ID_ChromeWorker] ? isChrome : true;
+      shouldResolve = gStringIDs[ID_ChromeWorker] == aId ? isChrome : true;
       break;
     }
   }
@@ -444,7 +416,7 @@ ResolveWorkerClasses(JSContext* aCx, JSObject* aObj, jsid aId, uintN aFlags,
       return true;
     }
 
-    JSObject* eventTarget = events::InitEventTargetClass(aCx, aObj, true);
+    JSObject* eventTarget = EventTargetBinding_workers::GetProtoObject(aCx, aObj, aObj);
     if (!eventTarget) {
       return false;
     }
@@ -634,11 +606,7 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
       domainInfo = new WorkerDomainInfo();
       domainInfo->mDomain = domain;
-
-      if (!mDomainMap.Put(domain, domainInfo)) {
-        delete domainInfo;
-        domainInfo = nsnull;
-      }
+      mDomainMap.Put(domain, domainInfo);
     }
 
     if (domainInfo) {
@@ -691,13 +659,7 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
       NS_ASSERTION(!parent, "Shouldn't have a parent here!");
 
       windowArray = new nsTArray<WorkerPrivate*>(1);
-
-      if (!mWindowMap.Put(window, windowArray)) {
-        delete windowArray;
-        UnregisterWorker(aCx, aWorkerPrivate);
-        JS_ReportOutOfMemory(aCx);
-        return false;
-      }
+      mWindowMap.Put(window, windowArray);
     }
 
     NS_ASSERTION(!windowArray->Contains(aWorkerPrivate),
@@ -910,11 +872,8 @@ RuntimeService::Init()
   mIdleThreadTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
   NS_ENSURE_STATE(mIdleThreadTimer);
 
-  bool ok = mDomainMap.Init();
-  NS_ENSURE_STATE(ok);
-
-  ok = mWindowMap.Init();
-  NS_ENSURE_STATE(ok);
+  mDomainMap.Init();
+  mWindowMap.Init();
 
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
   NS_ENSURE_TRUE(obs, NS_ERROR_FAILURE);
@@ -1331,8 +1290,8 @@ RuntimeService::AutoSafeJSContext::GetSafeContext()
   nsIThreadJSContextStack* stack = nsContentUtils::ThreadJSContextStack();
   NS_ASSERTION(stack, "This should never be null!");
 
-  JSContext* cx;
-  if (NS_FAILED(stack->GetSafeJSContext(&cx))) {
+  JSContext* cx = stack->GetSafeJSContext();
+  if (!cx) {
     NS_ERROR("Couldn't get safe JSContext!");
     return nsnull;
   }

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<org.mozilla.gecko.BrowserToolbar xmlns:android="http://schemas.android.com/apk/res/android"
-                                  android:id="@+id/browser_toolbar"
-                                  style="@style/BrowserToolbar">
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/browser_toolbar"
+              style="@style/BrowserToolbar">
 
     <RelativeLayout android:id="@+id/address_bar"
                     style="@style/AddressBar"
@@ -77,9 +81,9 @@
                     android:layout_width="fill_parent"
                     android:layout_height="2dp"
                     android:layout_alignParentBottom="true"
-                    android:src="@drawable/address_bar_bg_shadow"
+                    android:background="@drawable/address_bar_bg_shadow_repeat"
                     android:visibility="gone"/>
 
     </RelativeLayout>
 
-</org.mozilla.gecko.BrowserToolbar>
+</LinearLayout>

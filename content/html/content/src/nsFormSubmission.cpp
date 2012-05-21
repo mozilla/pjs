@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -60,7 +28,7 @@
 #include "nsNetUtil.h"
 #include "nsLinebreakConverter.h"
 #include "nsICharsetConverterManager.h"
-#include "nsICharsetAlias.h"
+#include "nsCharsetAlias.h"
 #include "nsEscape.h"
 #include "nsUnicharUtils.h"
 #include "nsIMultiplexInputStream.h"
@@ -269,7 +237,6 @@ HandleMailtoSubject(nsCString& aPath) {
                                            nsContentUtils::eFORMS_PROPERTIES,
                                            "DefaultFormSubject",
                                            formatStrings,
-                                           ArrayLength(formatStrings),
                                            subjectStr);
     if (NS_FAILED(rv))
       return;
@@ -718,15 +685,8 @@ nsEncodingFormSubmission::nsEncodingFormSubmission(const nsACString& aCharset,
     charset.AssignLiteral("windows-1252");
   }
 
-  // use UTF-8 for UTF-16* (per WHATWG and existing practice of
-  // MS IE/Opera). 
-  if (StringBeginsWith(charset, NS_LITERAL_CSTRING("UTF-16"))) {
-    charset.AssignLiteral("UTF-8");
-  }
-
   if (!(charset.EqualsLiteral("UTF-8") || charset.EqualsLiteral("gb18030"))) {
-    nsAutoString charsetUtf16;
-    CopyUTF8toUTF16(charset, charsetUtf16);
+    NS_ConvertUTF8toUTF16 charsetUtf16(charset);
     const PRUnichar* charsetPtr = charsetUtf16.get();
     SendJSWarning(aOriginatingElement ? aOriginatingElement->GetOwnerDocument()
                                       : nsnull,
@@ -789,7 +749,6 @@ GetSubmitCharset(nsGenericHTMLElement* aForm,
 {
   oCharset.AssignLiteral("UTF-8"); // default to utf-8
 
-  nsresult rv = NS_OK;
   nsAutoString acceptCharsetValue;
   aForm->GetAttr(kNameSpaceID_None, nsGkAtoms::acceptcharset,
                  acceptCharsetValue);
@@ -799,26 +758,19 @@ GetSubmitCharset(nsGenericHTMLElement* aForm,
     PRInt32 offset=0;
     PRInt32 spPos=0;
     // get charset from charsets one by one
-    nsCOMPtr<nsICharsetAlias> calias(do_GetService(NS_CHARSETALIAS_CONTRACTID, &rv));
-    if (NS_FAILED(rv)) {
-      return;
-    }
-    if (calias) {
-      do {
-        spPos = acceptCharsetValue.FindChar(PRUnichar(' '), offset);
-        PRInt32 cnt = ((-1==spPos)?(charsetLen-offset):(spPos-offset));
-        if (cnt > 0) {
-          nsAutoString uCharset;
-          acceptCharsetValue.Mid(uCharset, offset, cnt);
+    do {
+      spPos = acceptCharsetValue.FindChar(PRUnichar(' '), offset);
+      PRInt32 cnt = ((-1==spPos)?(charsetLen-offset):(spPos-offset));
+      if (cnt > 0) {
+        nsAutoString uCharset;
+        acceptCharsetValue.Mid(uCharset, offset, cnt);
 
-          if (NS_SUCCEEDED(calias->
-                           GetPreferred(NS_LossyConvertUTF16toASCII(uCharset),
-                                        oCharset)))
-            return;
-        }
-        offset = spPos + 1;
-      } while (spPos != -1);
-    }
+        if (NS_SUCCEEDED(nsCharsetAlias::GetPreferred(NS_LossyConvertUTF16toASCII(uCharset),
+                                                      oCharset)))
+          return;
+      }
+      offset = spPos + 1;
+    } while (spPos != -1);
   }
   // if there are no accept-charset or all the charset are not supported
   // Get the charset from document
@@ -868,6 +820,15 @@ GetSubmissionFromForm(nsGenericHTMLElement* aForm,
   // Get charset
   nsCAutoString charset;
   GetSubmitCharset(aForm, charset);
+
+  // We now have a canonical charset name, so we only have to check it
+  // against canonical names.
+
+  // use UTF-8 for UTF-16* (per WHATWG and existing practice of
+  // MS IE/Opera).
+  if (StringBeginsWith(charset, NS_LITERAL_CSTRING("UTF-16"))) {
+    charset.AssignLiteral("UTF-8");
+  }
 
   // Choose encoder
   if (method == NS_FORM_METHOD_POST &&

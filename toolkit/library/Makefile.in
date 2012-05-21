@@ -28,7 +28,6 @@ MAKE_FRAMEWORK=1
 endif
 
 VPATH += $(topsrcdir)/build/
-CPPSRCS += $(STDCXX_COMPAT)
 
 ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
 CPPSRCS += dlldeps-xul.cpp
@@ -56,7 +55,6 @@ CPPSRCS += \
   $(NULL)
 
 ifeq ($(OS_ARCH),WINNT)
-REQUIRES += widget gfx
 CPPSRCS += \
   nsDllMain.cpp \
   $(NULL)
@@ -82,7 +80,6 @@ DEFINES += -DZLIB_DLL=1
 endif
 
 ifeq ($(OS_ARCH),OS2)
-REQUIRES += widget gfx
 
 CPPSRCS += \
   nsGFXDeps.cpp \
@@ -107,13 +104,17 @@ STATIC_LIBS += \
   mozipc_s \
   mozipdlgen_s \
   ipcshell_s \
-  gfx2d \
   gfxipc_s \
   hal_s \
+  dombindings_s \
   $(NULL)
 
 ifdef MOZ_B2G_RIL #{
 STATIC_LIBS += mozril_s
+endif #}
+
+ifdef MOZ_B2G_BT #{
+STATIC_LIBS += mozdbus_s
 endif #}
 
 ifdef MOZ_IPDL_TESTS
@@ -282,7 +283,9 @@ endif
 
 STATIC_LIBS += thebes gl ycbcr
 
+ifdef MOZ_ENABLE_PROFILER_SPS
 COMPONENT_LIBS += profiler
+endif
 
 ifeq (windows,$(MOZ_WIDGET_TOOLKIT))
 COMPONENT_LIBS += widget_windows
@@ -333,19 +336,19 @@ endif
 
 EXTRA_DSO_LDOPTS += \
   $(LIBS_DIR) \
-  $(JPEG_LIBS) \
-  $(PNG_LIBS) \
-  $(QCMS_LIBS) \
   $(MOZ_JS_LIBS) \
   $(NSS_LIBS) \
-  $(MOZ_CAIRO_LIBS) \
-  $(MOZ_HARFBUZZ_LIBS) \
+  $(MOZ_CAIRO_OSLIBS) \
   $(MOZ_APP_EXTRA_LIBS) \
   $(SQLITE_LIBS) \
   $(NULL)
 
-ifdef MOZ_GRAPHITE
-EXTRA_DSO_LDOPTS += $(MOZ_GRAPHITE_LIBS)
+ifdef MOZ_NATIVE_JPEG
+EXTRA_DSO_LDOPTS += $(JPEG_LIBS)
+endif
+
+ifdef MOZ_NATIVE_PNG
+EXTRA_DSO_LDOPTS += $(PNG_LIBS)
 endif
 
 ifdef MOZ_NATIVE_ZLIB
@@ -394,13 +397,12 @@ OS_LIBS += \
   -lhardware \
   -lutils \
   -lcutils \
+  -lsysutils \
   -lcamera_client \
   -lbinder \
   -lsensorservice \
+  -ldbus \
   $(NULL)
-ifdef MOZ_B2G_BT
-OS_LIBS += -lbluedroid
-endif
 endif
 
 EXTRA_DEPS += \
@@ -496,7 +498,7 @@ EXTRA_DSO_LDOPTS += $(FT2_LIBS)
 endif
 
 ifeq (qt,$(MOZ_WIDGET_TOOLKIT))
-EXTRA_DSO_LDOPTS += $(XLDFLAGS) $(XLIBS) $(XT_LIBS) $(MOZ_QT_LIBS) -lgthread-2.0
+EXTRA_DSO_LDOPTS += $(XLDFLAGS) $(XLIBS) $(XT_LIBS) $(MOZ_QT_LIBS)
 EXTRA_DSO_LDOPTS += $(FT2_LIBS) $(MOZ_PANGO_LIBS)
 EXTRA_DSO_LDOPTS += $(LIBXUL_DIST)/../widget/qt/faststartupqt/$(LIB_PREFIX)faststartupqt.$(LIB_SUFFIX)
 endif
@@ -524,7 +526,7 @@ endif
 endif
 
 ifeq ($(OS_ARCH),WINNT)
-OS_LIBS += $(call EXPAND_LIBNAME,shell32 ole32 version winspool comdlg32 imm32 msimg32 shlwapi psapi ws2_32 dbghelp rasapi32 rasdlg iphlpapi uxtheme setupapi t2embed secur32)
+OS_LIBS += $(call EXPAND_LIBNAME,shell32 ole32 version winspool comdlg32 imm32 msimg32 shlwapi psapi ws2_32 dbghelp rasapi32 rasdlg iphlpapi uxtheme setupapi secur32 sensorsapi portabledeviceguids windowscodecs)
 ifdef MOZ_CRASHREPORTER
 OS_LIBS += $(call EXPAND_LIBNAME,wininet)
 endif
@@ -534,14 +536,12 @@ endif
 ifdef _MSC_VER
 OS_LIBS += $(call EXPAND_LIBNAME,delayimp)
 EXTRA_DSO_LDOPTS += \
-  -DELAYLOAD:gkmedias.dll \
   -DELAYLOAD:psapi.dll \
   -DELAYLOAD:dbghelp.dll \
   -DELAYLOAD:rasapi32.dll \
   -DELAYLOAD:rasdlg.dll \
   -DELAYLOAD:comdlg32.dll \
   -DELAYLOAD:winspool.drv \
-  -DELAYLOAD:t2embed.dll \
   -DELAYLOAD:secur32.dll \
   $(NULL)
 ifdef ACCESSIBILITY
@@ -556,6 +556,10 @@ endif
 
 ifdef MOZ_ENABLE_QT
 EXTRA_DSO_LDOPTS += $(MOZ_QT_LDFLAGS) $(XEXT_LIBS)
+endif
+
+ifdef MOZ_GSTREAMER
+EXTRA_DSO_LDOPTS += $(GSTREAMER_LIBS)
 endif
 
 include $(topsrcdir)/config/rules.mk

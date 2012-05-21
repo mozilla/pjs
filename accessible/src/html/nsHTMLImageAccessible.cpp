@@ -1,49 +1,18 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Author: Aaron Leventhal (aaronl@netscape.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHTMLImageAccessible.h"
 
 #include "nsAccUtils.h"
 #include "Role.h"
+#include "AccIterator.h"
 #include "States.h"
 
 #include "imgIContainer.h"
 #include "imgIRequest.h"
+#include "nsGenericHTMLElement.h"
 #include "nsIDocument.h"
 #include "nsIImageLoadingContent.h"
 #include "nsILink.h"
@@ -63,6 +32,7 @@ nsHTMLImageAccessible::
   nsHTMLImageAccessible(nsIContent* aContent, nsDocAccessible* aDoc) :
   nsLinkableAccessible(aContent, aDoc)
 {
+  mFlags |= eImageAccessible;
 }
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsHTMLImageAccessible, nsAccessible,
@@ -146,7 +116,7 @@ nsHTMLImageAccessible::GetActionName(PRUint8 aIndex, nsAString& aName)
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  if (IsValidLongDescIndex(aIndex)) {
+  if (IsLongDescIndex(aIndex) && HasLongDesc()) {
     aName.AssignLiteral("showlongdesc"); 
     return NS_OK;
   }
@@ -159,24 +129,27 @@ nsHTMLImageAccessible::DoAction(PRUint8 aIndex)
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  if (IsValidLongDescIndex(aIndex)) {
-    //get the long description uri and open in a new window
-    nsCOMPtr<nsIDOMHTMLImageElement> element(do_QueryInterface(mContent));
-    NS_ENSURE_TRUE(element, NS_ERROR_FAILURE);
+  // Get the long description uri and open in a new window.
+  if (!IsLongDescIndex(aIndex))
+    return nsLinkableAccessible::DoAction(aIndex);
 
-    nsAutoString longDesc;
-    nsresult rv = element->GetLongDesc(longDesc);
-    NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIURI> uri = GetLongDescURI();
+  if (!uri)
+    return NS_ERROR_INVALID_ARG;
 
-    nsIDocument* document = mContent->OwnerDoc();
-    nsCOMPtr<nsPIDOMWindow> piWindow = document->GetWindow();
-    nsCOMPtr<nsIDOMWindow> win = do_QueryInterface(piWindow);
-    NS_ENSURE_TRUE(win, NS_ERROR_FAILURE);
-    nsCOMPtr<nsIDOMWindow> tmp;
-    return win->Open(longDesc, EmptyString(), EmptyString(),
-                     getter_AddRefs(tmp));
-  }
-  return nsLinkableAccessible::DoAction(aIndex);
+  nsCAutoString utf8spec;
+  uri->GetSpec(utf8spec);
+  NS_ConvertUTF8toUTF16 spec(utf8spec);
+
+  nsIDocument* document = mContent->OwnerDoc();
+  nsCOMPtr<nsPIDOMWindow> piWindow = document->GetWindow();
+  nsCOMPtr<nsIDOMWindow> win = do_QueryInterface(piWindow);
+  NS_ENSURE_STATE(win);
+
+  nsCOMPtr<nsIDOMWindow> tmp;
+  return win->Open(spec, EmptyString(), EmptyString(),
+                   getter_AddRefs(tmp));
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -222,20 +195,41 @@ nsHTMLImageAccessible::GetAttributesInternal(nsIPersistentProperties *aAttribute
 ////////////////////////////////////////////////////////////////////////////////
 // Private methods
 
-bool
-nsHTMLImageAccessible::HasLongDesc()
+already_AddRefed<nsIURI>
+nsHTMLImageAccessible::GetLongDescURI() const
 {
-  if (IsDefunct())
-    return false;
+  if (mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::longdesc)) {
+    nsGenericHTMLElement* element = 
+      nsGenericHTMLElement::FromContent(mContent);
+    if (element) {
+      nsCOMPtr<nsIURI> uri;
+      element->GetURIAttr(nsGkAtoms::longdesc, nsnull, getter_AddRefs(uri));
+      return uri.forget();
+    }
+  }
 
-  return mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::longdesc);
+  nsDocAccessible* document = Document();
+  if (document) {
+    IDRefsIterator iter(document, mContent, nsGkAtoms::aria_describedby);
+    while (nsIContent* target = iter.NextElem()) {
+      if ((target->IsHTML(nsGkAtoms::a) || target->IsHTML(nsGkAtoms::area)) &&
+          target->HasAttr(kNameSpaceID_None, nsGkAtoms::href)) {
+        nsGenericHTMLElement* element =
+          nsGenericHTMLElement::FromContent(target);
+
+        nsCOMPtr<nsIURI> uri;
+        element->GetURIAttr(nsGkAtoms::href, nsnull, getter_AddRefs(uri));
+        return uri.forget();
+      }
+    }
+  }
+
+  return nsnull;
 }
 
 bool
-nsHTMLImageAccessible::IsValidLongDescIndex(PRUint8 aIndex)
+nsHTMLImageAccessible::IsLongDescIndex(PRUint8 aIndex)
 {
-  if (!HasLongDesc())
-    return false;
-
   return aIndex == nsLinkableAccessible::ActionCount();
 }
+

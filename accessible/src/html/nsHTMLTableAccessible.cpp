@@ -1,44 +1,11 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Aaron Leventhal <aaronl@netscape.com> (original author)
- *   Alexander Surkov <surkov.alexander@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHTMLTableAccessible.h"
 
+#include "Accessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsAccTreeWalker.h"
 #include "nsAccUtils.h"
@@ -334,7 +301,7 @@ nsHTMLTableCellAccessible::GetHeaderCells(PRInt32 aRowOrColumnHeaderCell,
                                           nsIArray **aHeaderCells)
 {
   // Get header cells from @header attribute.
-  IDRefsIterator iter(mContent, nsGkAtoms::headers);
+  IDRefsIterator iter(mDoc, mContent, nsGkAtoms::headers);
   nsIContent* headerCellElm = iter.NextElem();
   if (headerCellElm) {
     nsresult rv = NS_OK;
@@ -436,15 +403,25 @@ nsHTMLTableHeaderCellAccessible::NativeRole()
 
 nsHTMLTableAccessible::
   nsHTMLTableAccessible(nsIContent* aContent, nsDocAccessible* aDoc) :
-  nsAccessibleWrap(aContent, aDoc)
+  nsAccessibleWrap(aContent, aDoc), xpcAccessibleTable(this)
 {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsHTMLTableAccessible: nsISupports implementation
 
-NS_IMPL_ISUPPORTS_INHERITED2(nsHTMLTableAccessible, nsAccessible,
-                             nsHTMLTableAccessible, nsIAccessibleTable)
+NS_IMPL_ISUPPORTS_INHERITED1(nsHTMLTableAccessible, nsAccessible,
+                             nsIAccessibleTable)
+
+////////////////////////////////////////////////////////////////////////////////
+//nsAccessNode
+
+void
+nsHTMLTableAccessible::Shutdown()
+{
+  mTable = nsnull;
+  nsAccessibleWrap::Shutdown();
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -511,9 +488,7 @@ nsHTMLTableAccessible::GetAttributesInternal(nsIPersistentProperties *aAttribute
   nsresult rv = nsAccessibleWrap::GetAttributesInternal(aAttributes);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  bool isProbablyForLayout;
-  IsProbablyForLayout(&isProbablyForLayout);
-  if (isProbablyForLayout) {
+  if (IsProbablyLayoutTable()) {
     nsAutoString oldValueUnused;
     aAttributes->SetStringProperty(NS_LITERAL_CSTRING("layout-guess"),
                                    NS_LITERAL_STRING("true"), oldValueUnused);
@@ -538,54 +513,40 @@ nsHTMLTableAccessible::RelationByType(PRUint32 aType)
 ////////////////////////////////////////////////////////////////////////////////
 // nsHTMLTableAccessible: nsIAccessibleTable implementation
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::GetCaption(nsIAccessible **aCaption)
+nsAccessible*
+nsHTMLTableAccessible::Caption()
 {
-  NS_ENSURE_ARG_POINTER(aCaption);
-
-  NS_IF_ADDREF(*aCaption = Caption());
-  return NS_OK;
+  nsAccessible* child = mChildren.SafeElementAt(0, nsnull);
+  return child && child->Role() == roles::CAPTION ? child : nsnull;
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::GetSummary(nsAString &aSummary)
+void
+nsHTMLTableAccessible::Summary(nsString& aSummary)
 {
   nsCOMPtr<nsIDOMHTMLTableElement> table(do_QueryInterface(mContent));
-  NS_ENSURE_TRUE(table, NS_ERROR_FAILURE);
-
-  return table->GetSummary(aSummary);
+  
+  if (table)
+    table->GetSummary(aSummary);
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::GetColumnCount(PRInt32 *acolumnCount)
+PRUint32
+nsHTMLTableAccessible::ColCount()
 {
-  NS_ENSURE_ARG_POINTER(acolumnCount);
-  *acolumnCount = nsnull;
+  nsITableLayout* tableLayout = GetTableLayout();
 
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
-  nsITableLayout *tableLayout = GetTableLayout();
-  NS_ENSURE_STATE(tableLayout);
-
-  PRInt32 rows;
-  return tableLayout->GetTableSize(rows, *acolumnCount);
+  PRInt32 rowCount = 0, colCount = 0;
+  tableLayout->GetTableSize(rowCount, colCount);
+  return colCount;
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::GetRowCount(PRInt32 *arowCount)
+PRUint32
+nsHTMLTableAccessible::RowCount()
 {
-  NS_ENSURE_ARG_POINTER(arowCount);
-  *arowCount = 0;
+  nsITableLayout* tableLayout = GetTableLayout();
 
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
-  nsITableLayout *tableLayout = GetTableLayout();
-  NS_ENSURE_STATE(tableLayout);
-
-  PRInt32 columns;
-  return tableLayout->GetTableSize(*arowCount, columns);
+  PRInt32 rowCount = 0, colCount = 0;
+  tableLayout->GetTableSize(rowCount, colCount);
+  return rowCount;
 }
 
 NS_IMETHODIMP
@@ -905,20 +866,14 @@ nsHTMLTableAccessible::GetCellAt(PRInt32 aRow, PRInt32 aColumn,
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::GetCellIndexAt(PRInt32 aRow, PRInt32 aColumn,
-                                      PRInt32 *aIndex)
+PRInt32
+nsHTMLTableAccessible::CellIndexAt(PRUint32 aRowIdx, PRUint32 aColIdx)
 {
-  NS_ENSURE_ARG_POINTER(aIndex);
+  nsITableLayout* tableLayout = GetTableLayout();
 
-  nsITableLayout *tableLayout = GetTableLayout();
-  NS_ENSURE_STATE(tableLayout);
-
-  nsresult rv = tableLayout->GetIndexByRowAndColumn(aRow, aColumn, aIndex);
-  if (rv == NS_TABLELAYOUT_CELL_NOT_FOUND)
-    return NS_ERROR_INVALID_ARG;
-
-  return NS_OK;
+  PRInt32 index = -1;
+  tableLayout->GetIndexByRowAndColumn(aRowIdx, aColIdx, &index);
+  return index;
 }
 
 NS_IMETHODIMP
@@ -1144,28 +1099,20 @@ nsHTMLTableAccessible::SelectColumn(PRInt32 aColumn)
                                    nsISelectionPrivate::TABLESELECTION_COLUMN);
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::UnselectRow(PRInt32 aRow)
+void
+nsHTMLTableAccessible::UnselectRow(PRUint32 aRowIdx)
 {
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
-  return
-    RemoveRowsOrColumnsFromSelection(aRow,
-                                     nsISelectionPrivate::TABLESELECTION_ROW,
-                                     false);
+  RemoveRowsOrColumnsFromSelection(aRowIdx,
+                                   nsISelectionPrivate::TABLESELECTION_ROW,
+                                   false);
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::UnselectColumn(PRInt32 aColumn)
+void
+nsHTMLTableAccessible::UnselectCol(PRUint32 aColIdx)
 {
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
-  return
-    RemoveRowsOrColumnsFromSelection(aColumn,
-                                     nsISelectionPrivate::TABLESELECTION_COLUMN,
-                                     false);
+  RemoveRowsOrColumnsFromSelection(aColIdx,
+                                   nsISelectionPrivate::TABLESELECTION_COLUMN,
+                                   false);
 }
 
 nsresult
@@ -1307,13 +1254,10 @@ nsHTMLTableAccessible::Description(nsString& aDescription)
 
 #ifdef SHOW_LAYOUT_HEURISTIC
   if (aDescription.IsEmpty()) {
-    bool isProbablyForLayout;
-    IsProbablyForLayout(&isProbablyForLayout);
+    bool isProbablyForLayout = IsProbablyLayoutTable();
     aDescription = mLayoutHeuristic;
   }
-#ifdef DEBUG_A11Y
   printf("\nTABLE: %s\n", NS_ConvertUTF16toUTF8(mLayoutHeuristic).get());
-#endif
 #endif
 }
 
@@ -1357,8 +1301,8 @@ nsHTMLTableAccessible::HasDescendant(const nsAString& aTagName,
   return !!foundItem;
 }
 
-NS_IMETHODIMP
-nsHTMLTableAccessible::IsProbablyForLayout(bool *aIsProbablyForLayout)
+bool
+nsHTMLTableAccessible::IsProbablyLayoutTable()
 {
   // Implement a heuristic to determine if table is most likely used for layout
   // XXX do we want to look for rowspan or colspan, especialy that span all but a couple cells
@@ -1370,17 +1314,15 @@ nsHTMLTableAccessible::IsProbablyForLayout(bool *aIsProbablyForLayout)
   // Change to |#define SHOW_LAYOUT_HEURISTIC DEBUG| before final release
 #ifdef SHOW_LAYOUT_HEURISTIC
 #define RETURN_LAYOUT_ANSWER(isLayout, heuristic) \
-  { *aIsProbablyForLayout = isLayout; \
-    mLayoutHeuristic = isLayout ? NS_LITERAL_STRING("layout table: ") : NS_LITERAL_STRING("data table: "); \
-    mLayoutHeuristic += NS_LITERAL_STRING(heuristic); return NS_OK; }
+  { \
+    mLayoutHeuristic = isLayout ? \
+      NS_LITERAL_STRING("layout table: " heuristic) : \
+      NS_LITERAL_STRING("data table: " heuristic); \
+    return isLayout; \
+  }
 #else
-#define RETURN_LAYOUT_ANSWER(isLayout, heuristic) { *aIsProbablyForLayout = isLayout; return NS_OK; }
+#define RETURN_LAYOUT_ANSWER(isLayout, heuristic) { return isLayout; }
 #endif
-
-  *aIsProbablyForLayout = false;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
 
   nsDocAccessible* docAccessible = Document();
   if (docAccessible) {
@@ -1441,9 +1383,26 @@ nsHTMLTableAccessible::IsProbablyForLayout(bool *aIsProbablyForLayout)
         if (rowElm->IsHTML() && rowElm->Tag() == nsGkAtoms::tr) {
           for (nsIContent* cellElm = rowElm->GetFirstChild(); cellElm;
                cellElm = cellElm->GetNextSibling()) {
-            if (cellElm->IsHTML() && cellElm->Tag() == nsGkAtoms::th) {
-              RETURN_LAYOUT_ANSWER(false,
-                                   "Has th -- legitimate table structures");
+            if (cellElm->IsHTML()) {
+              
+              if (cellElm->NodeInfo()->Equals(nsGkAtoms::th)) {
+                RETURN_LAYOUT_ANSWER(false,
+                                     "Has th -- legitimate table structures");
+              }
+
+              if (cellElm->HasAttr(kNameSpaceID_None, nsGkAtoms::headers) ||
+                  cellElm->HasAttr(kNameSpaceID_None, nsGkAtoms::scope) ||
+                  cellElm->HasAttr(kNameSpaceID_None, nsGkAtoms::abbr)) {
+                RETURN_LAYOUT_ANSWER(false,
+                                     "Has headers, scope, or abbr attribute -- legitimate table structures");
+              }
+
+              nsAccessible* cell = mDoc->GetAccessible(cellElm);
+              if (cell && cell->GetChildCount() == 1 &&
+                  cell->FirstChild()->IsAbbreviation()) {
+                RETURN_LAYOUT_ANSWER(false,
+                                     "has abbr -- legitimate table structures");
+              }
             }
           }
         }
@@ -1497,21 +1456,16 @@ nsHTMLTableAccessible::IsProbablyForLayout(bool *aIsProbablyForLayout)
   // Check for styled background color across rows (alternating background
   // color is a common feature for data tables).
   PRUint32 childCount = GetChildCount();
-  nsAutoString rowColor, prevRowColor;
+  nscolor rowColor, prevRowColor;
   for (PRUint32 childIdx = 0; childIdx < childCount; childIdx++) {
     nsAccessible* child = GetChildAt(childIdx);
     if (child->Role() == roles::ROW) {
-      nsCOMPtr<nsIDOMCSSStyleDeclaration> styleDecl =
-        nsCoreUtils::GetComputedStyleDeclaration(EmptyString(),
-                                                 child->GetContent());
-      if (styleDecl) {
-        prevRowColor = rowColor;
-        styleDecl->GetPropertyValue(NS_LITERAL_STRING("background-color"),
-                                    rowColor);
-        if (childIdx > 0 && !prevRowColor.Equals(rowColor)) {
-          RETURN_LAYOUT_ANSWER(false, "2 styles of row background color, non-bordered");
-        }
-      }
+      prevRowColor = rowColor;
+      nsIFrame* rowFrame = child->GetFrame();
+      rowColor = rowFrame->GetStyleBackground()->mBackgroundColor;
+
+      if (childIdx > 0 && prevRowColor != rowColor)
+        RETURN_LAYOUT_ANSWER(false, "2 styles of row background color, non-bordered");
     }
   }
 

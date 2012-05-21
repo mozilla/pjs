@@ -1,116 +1,24 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Bookmarks Sync.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Dan Mills <thunder@mozilla.com>
- *  Anant Narayanan <anant@kix.in>
- *  Philipp von Weitershausen <philipp@weitershausen.de>
- *  Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const EXPORTED_SYMBOLS = ["Resource", "AsyncResource",
-                          "Auth", "BrokenBasicAuthenticator",
-                          "BasicAuthenticator", "NoOpAuthenticator"];
+const EXPORTED_SYMBOLS = [
+  "AsyncResource",
+  "Resource"
+];
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cr = Components.results;
 const Cu = Components.utils;
 
-Cu.import("resource://services-sync/async.js");
+Cu.import("resource://services-common/async.js");
 Cu.import("resource://services-sync/constants.js");
-Cu.import("resource://services-sync/ext/Observers.js");
-Cu.import("resource://services-sync/ext/Preferences.js");
-Cu.import("resource://services-sync/log4moz.js");
+Cu.import("resource://services-common/observers.js");
+Cu.import("resource://services-common/preferences.js");
+Cu.import("resource://services-sync/identity.js");
+Cu.import("resource://services-common/log4moz.js");
 Cu.import("resource://services-sync/util.js");
-
-XPCOMUtils.defineLazyGetter(this, "Auth", function () {
-  return new AuthMgr();
-});
-
-// XXX: the authenticator api will probably need to be changed to support
-// other methods (digest, oauth, etc)
-
-function NoOpAuthenticator() {}
-NoOpAuthenticator.prototype = {
-  onRequest: function NoOpAuth_onRequest(headers) {
-    return headers;
-  }
-};
-
-// Warning: This will drop the high unicode bytes from passwords.
-// Use BasicAuthenticator to send non-ASCII passwords UTF8-encoded.
-function BrokenBasicAuthenticator(identity) {
-  this._id = identity;
-}
-BrokenBasicAuthenticator.prototype = {
-  onRequest: function BasicAuth_onRequest(headers) {
-    headers['authorization'] = 'Basic ' +
-      btoa(this._id.username + ':' + this._id.password);
-    return headers;
-  }
-};
-
-function BasicAuthenticator(identity) {
-  this._id = identity;
-}
-BasicAuthenticator.prototype = {
-  onRequest: function onRequest(headers) {
-    headers['authorization'] = 'Basic ' +
-      btoa(this._id.username + ':' + this._id.passwordUTF8);
-    return headers;
-  }
-};
-
-function AuthMgr() {
-  this._authenticators = {};
-  this.defaultAuthenticator = new NoOpAuthenticator();
-}
-AuthMgr.prototype = {
-  defaultAuthenticator: null,
-
-  registerAuthenticator: function AuthMgr_register(match, authenticator) {
-    this._authenticators[match] = authenticator;
-  },
-
-  lookupAuthenticator: function AuthMgr_lookup(uri) {
-    for (let match in this._authenticators) {
-      if (uri.match(match))
-        return this._authenticators[match];
-    }
-    return this.defaultAuthenticator;
-  }
-};
-
 
 /*
  * AsyncResource represents a remote network resource, identified by a URI.
@@ -150,6 +58,14 @@ AsyncResource.prototype = {
   // Caches the latest server timestamp (X-Weave-Timestamp header).
   serverTime: null,
 
+  /**
+   * Callback to be invoked at request time to add authentication details.
+   *
+   * By default, a global authenticator is provided. If this is set, it will
+   * be used instead of the global one.
+   */
+  authenticator: null,
+
   // The string to use as the base User-Agent in Sync requests.
   // These strings will look something like
   // 
@@ -167,29 +83,13 @@ AsyncResource.prototype = {
   // Wait 5 minutes before killing a request.
   ABORT_TIMEOUT: 300000,
 
-  // ** {{{ AsyncResource.authenticator }}} **
-  //
-  // Getter and setter for the authenticator module
-  // responsible for this particular resource. The authenticator
-  // module may modify the headers to perform authentication
-  // while performing a request for the resource, for example.
-  get authenticator() {
-    if (this._authenticator)
-      return this._authenticator;
-    else
-      return Auth.lookupAuthenticator(this.spec);
-  },
-  set authenticator(value) {
-    this._authenticator = value;
-  },
-
   // ** {{{ AsyncResource.headers }}} **
   //
   // Headers to be included when making a request for the resource.
   // Note: Header names should be all lower case, there's no explicit
   // check for duplicates due to case!
   get headers() {
-    return this.authenticator.onRequest(this._headers);
+    return this._headers;
   },
   set headers(value) {
     this._headers = value;
@@ -235,7 +135,7 @@ AsyncResource.prototype = {
   // through. It is never called directly, only {{{_doRequest}}} uses it
   // to obtain a request channel.
   //
-  _createRequest: function Res__createRequest() {
+  _createRequest: function Res__createRequest(method) {
     let channel = Services.io.newChannel(this.spec, null, null)
                           .QueryInterface(Ci.nsIRequest)
                           .QueryInterface(Ci.nsIHttpChannel);
@@ -253,9 +153,24 @@ AsyncResource.prototype = {
       channel.setRequestHeader("user-agent", ua, false);
     }
 
-    // Avoid calling the authorizer more than once.
     let headers = this.headers;
-    for (let key in headers) {
+
+    let authenticator = this.authenticator;
+    if (!authenticator) {
+      authenticator = Identity.getResourceAuthenticator();
+    }
+    if (authenticator) {
+      let result = authenticator(this, method);
+      if (result && result.headers) {
+        for (let [k, v] in Iterator(result.headers)) {
+          headers[k.toLowerCase()] = v;
+        }
+      }
+    } else {
+      this._log.debug("No authenticator found.");
+    }
+
+    for (let [key, value] in Iterator(headers)) {
       if (key == 'authorization')
         this._log.trace("HTTP Header " + key + ": ***** (suppressed)");
       else
@@ -270,7 +185,7 @@ AsyncResource.prototype = {
   _doRequest: function _doRequest(action, data, callback) {
     this._log.trace("In _doRequest.");
     this._callback = callback;
-    let channel = this._createRequest();
+    let channel = this._createRequest(action);
 
     if ("undefined" != typeof(data))
       this._data = data;

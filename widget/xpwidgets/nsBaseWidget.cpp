@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dean Tessman <dean_tessman@hotmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -77,6 +44,9 @@ using base::Thread;
 using mozilla::ipc::AsyncChannel;
 
 nsIContent* nsBaseWidget::mLastRollup = nsnull;
+// Global user preference for disabling native theme. Used
+// in NativeWindowTheme.
+bool            gDisableNativeTheme               = false;
 
 // nsBaseWidget
 NS_IMPL_ISUPPORTS1(nsBaseWidget, nsIWidget)
@@ -115,6 +85,7 @@ nsBaseWidget::nsBaseWidget()
 , mBorderStyle(eBorderStyle_none)
 , mOnDestroyCalled(false)
 , mUseAcceleratedRendering(false)
+, mForceLayersAcceleration(false)
 , mTemporarilyUseBasicLayerManager(false)
 , mBounds(0,0,0,0)
 , mOriginalBounds(nsnull)
@@ -131,6 +102,17 @@ nsBaseWidget::nsBaseWidget()
 #ifdef DEBUG
     debug_RegisterPrefCallbacks();
 #endif
+}
+
+
+static void DestroyCompositor(CompositorParent* aCompositorParent,
+                              CompositorChild* aCompositorChild,
+                              Thread* aCompositorThread)
+{
+    aCompositorChild->Destroy();
+    delete aCompositorThread;
+    aCompositorParent->Release();
+    aCompositorChild->Release();
 }
 
 
@@ -152,8 +134,23 @@ nsBaseWidget::~nsBaseWidget()
   }
 
   if (mCompositorChild) {
-    mCompositorChild->Destroy();
-    delete mCompositorThread;
+    mCompositorChild->SendWillStop();
+
+    // The call just made to SendWillStop can result in IPC from the
+    // CompositorParent to the CompositorChild (e.g. caused by the destruction
+    // of shared memory). We need to ensure this gets processed by the
+    // CompositorChild before it gets destroyed. It suffices to ensure that
+    // events already in the MessageLoop get processed before the
+    // CompositorChild is destroyed, so we add a task to the MessageLoop to
+    // handle compositor desctruction.
+    MessageLoop::current()->
+      PostTask(FROM_HERE,
+               NewRunnableFunction(DestroyCompositor, mCompositorParent,
+                                   mCompositorChild, mCompositorThread));
+    // The DestroyCompositor task we just added to the MessageLoop will handle
+    // releasing mCompositorParent and mCompositorChild.
+    mCompositorParent.forget();
+    mCompositorChild.forget();
   }
 
 #ifdef NOISY_WIDGET_LEAKS
@@ -177,6 +174,14 @@ void nsBaseWidget::BaseCreate(nsIWidget *aParent,
                               nsDeviceContext *aContext,
                               nsWidgetInitData *aInitData)
 {
+  static bool gDisableNativeThemeCached = false;
+  if (!gDisableNativeThemeCached) {
+    mozilla::Preferences::AddBoolVarCache(&gDisableNativeTheme,
+                                          "mozilla.widget.disable-native-theme",
+                                          gDisableNativeTheme);
+    gDisableNativeThemeCached = true;
+  }
+
   // save the event callback function
   mEventCallback = aHandleEventFunction;
   
@@ -759,7 +764,7 @@ nsBaseWidget::AutoUseBasicLayerManager::~AutoUseBasicLayerManager()
 bool
 nsBaseWidget::GetShouldAccelerate()
 {
-#if defined(XP_WIN) || defined(ANDROID) || (MOZ_PLATFORM_MAEMO > 5)
+#if defined(XP_WIN) || defined(ANDROID) || (MOZ_PLATFORM_MAEMO > 5) || defined(MOZ_GL_PROVIDER)
   bool accelerateByDefault = true;
 #elif defined(XP_MACOSX)
 /* quickdraw plugins don't work with OpenGL so we need to avoid OpenGL when we want to support
@@ -793,9 +798,9 @@ nsBaseWidget::GetShouldAccelerate()
 #endif
 
   // we should use AddBoolPrefVarCache
-  bool disableAcceleration =
+  bool disableAcceleration = (mWindowType == eWindowType_popup) || 
     Preferences::GetBool("layers.acceleration.disabled", false);
-  bool forceAcceleration =
+  mForceLayersAcceleration =
     Preferences::GetBool("layers.acceleration.force-enabled", false);
 
   const char *acceleratedEnv = PR_GetEnv("MOZ_ACCELERATED");
@@ -828,7 +833,7 @@ nsBaseWidget::GetShouldAccelerate()
   if (disableAcceleration || safeMode)
     return false;
 
-  if (forceAcceleration)
+  if (mForceLayersAcceleration)
     return true;
   
   if (!whitelisted) {
@@ -845,9 +850,17 @@ nsBaseWidget::GetShouldAccelerate()
 
 void nsBaseWidget::CreateCompositor()
 {
-  mCompositorParent = new CompositorParent(this);
   mCompositorThread = new Thread("CompositorThread");
   if (mCompositorThread->Start()) {
+    bool renderToEGLSurface = false;
+#ifdef MOZ_JAVA_COMPOSITOR
+    renderToEGLSurface = true;
+#endif
+    nsIntRect rect;
+    GetBounds(rect);
+    mCompositorParent =
+      new CompositorParent(this, mCompositorThread->message_loop(), mCompositorThread->thread_id(),
+                           renderToEGLSurface, rect.width, rect.height);
     LayerManager* lm = CreateBasicLayerManager();
     MessageLoop *childMessageLoop = mCompositorThread->message_loop();
     mCompositorChild = new CompositorChild(lm);
@@ -906,7 +919,8 @@ LayerManager* nsBaseWidget::GetLayerManager(PLayersChild* aShadowManager,
          * platforms on LayerManagerOGL should ensure their widget is able to
          * deal with it though!
          */
-        if (layerManager->Initialize()) {
+
+        if (layerManager->Initialize(mForceLayersAcceleration)) {
           mLayerManager = layerManager;
         }
       }

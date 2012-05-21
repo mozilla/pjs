@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 #ifndef nsPIDOMWindow_h__
@@ -80,8 +48,8 @@ class nsIArray;
 class nsPIWindowRoot;
 
 #define NS_PIDOMWINDOW_IID \
-{ 0x9aef58e9, 0x5225, 0x4e58, \
-  { 0x9a, 0xfb, 0xe6, 0x63, 0x97, 0x1d, 0x86, 0x88 } }
+{ 0x7a6238d4, 0x7cbc, 0x43b2, \
+  { 0x86, 0x68, 0x92, 0xeb, 0x9e, 0xb0, 0x49, 0xaf } }
 
 class nsPIDOMWindow : public nsIDOMWindowInternal
 {
@@ -486,12 +454,7 @@ public:
   void SetHasMouseEnterLeaveEventListeners()
   {
     mMayHaveMouseEnterLeaveEventListener = true;
-  }  
-
-  /**
-   * Initialize window.java and window.Packages.
-   */
-  virtual void InitJavaProperties() = 0;
+  }
 
   virtual JSObject* GetCachedXBLPrototypeHandler(nsXBLPrototypeHandler* aKey) = 0;
   virtual void CacheXBLPrototypeHandler(nsXBLPrototypeHandler* aKey,
@@ -575,14 +538,14 @@ public:
   virtual nsresult DispatchSyncPopState() = 0;
 
   /**
-   * Tell this window that there is an observer for orientation changes
+   * Tell this window that it should listen for sensor changes of the given type.
    */
-  virtual void SetHasOrientationEventListener() = 0;
+  virtual void EnableDeviceSensor(PRUint32 aType) = 0;
 
   /**
-   * Tell this window that we remove an orientation listener
+   * Tell this window that it should remove itself from sensor change notifications.
    */
-  virtual void RemoveOrientationEventListener() = 0;
+  virtual void DisableDeviceSensor(PRUint32 aType) = 0;
 
   /**
    * Set a arguments for this window. This will be set on the window

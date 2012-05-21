@@ -1,44 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla MathML Project.
- *
- * The Initial Developer of the Original Code is
- * The University Of Queensland.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Roger B. Sidje <rbs@maths.uq.edu.au>
- *   David J. Fiddes <D.J.Fiddes@hw.ac.uk>
- *   Shyjan Mahamud <mahamud@cs.cmu.edu>
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Frederic Wang <fred.wang@free.fr>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCOMPtr.h"
 #include "nsFrame.h"
@@ -140,7 +103,7 @@ nsMathMLmoFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       selectedRect = firstChild->GetRect();
       isSelected = true;
     }
-    rv = mMathMLChar.Display(aBuilder, this, aLists, isSelected ? &selectedRect : nsnull);
+    rv = mMathMLChar.Display(aBuilder, this, aLists, 0, isSelected ? &selectedRect : nsnull);
     NS_ENSURE_SUCCESS(rv, rv);
   
 #if defined(NS_DEBUG) && defined(SHOW_BOUNDING_BOX)
@@ -413,15 +376,24 @@ nsMathMLmoFrame::ProcessOperatorData()
   // If we are an accent without explicit lspace="." or rspace=".",
   // we will ignore our default leading/trailing space
 
-  // lspace = number h-unit | namedspace
+  // lspace
+  //
+  // "Specifies the leading space appearing before the operator"
+  //
+  // values: length
+  // default: set by dictionary (thickmathspace) 
+  //
+  // XXXfredw Should we allow negative values? (bug 411227) They will be made
+  // positive by the rounding below.
+  // XXXfredw Should we allow relative values? They will give a multiple of the
+  // current leading space, which is not necessarily the default one.
+  //
   nscoord leadingSpace = mEmbellishData.leadingSpace;
   GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::lspace_,
                value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
-    if (ParseNumericValue(value, cssValue) ||
-        ParseNamedSpaceValue(mPresentationData.mstyle, value, cssValue))
-    {
+    if (nsMathMLElement::ParseNumericValue(value, cssValue, 0)) {
       if ((eCSSUnit_Number == cssValue.GetUnit()) && !cssValue.GetFloatValue())
         leadingSpace = 0;
       else if (cssValue.IsLengthUnit())
@@ -430,15 +402,24 @@ nsMathMLmoFrame::ProcessOperatorData()
     }
   }
 
-  // rspace = number h-unit | namedspace
+  // rspace
+  //
+  // "Specifies the trailing space appearing after the operator"
+  //
+  // values: length
+  // default: set by dictionary (thickmathspace) 
+  //
+  // XXXfredw Should we allow negative values? (bug 411227) They will be made
+  // positive by the rounding below.
+  // XXXfredw Should we allow relative values? They will give a multiple of the
+  // current trailing space, which is not necessarily the default one.
+  //
   nscoord trailingSpace = mEmbellishData.trailingSpace;
   GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::rspace_,
                value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
-    if (ParseNumericValue(value, cssValue) ||
-        ParseNamedSpaceValue(mPresentationData.mstyle, value, cssValue))
-    {
+    if (nsMathMLElement::ParseNumericValue(value, cssValue, 0)) {
       if ((eCSSUnit_Number == cssValue.GetUnit()) && !cssValue.GetFloatValue())
         trailingSpace = 0;
       else if (cssValue.IsLengthUnit())
@@ -503,15 +484,27 @@ nsMathMLmoFrame::ProcessOperatorData()
   else if (value.EqualsLiteral("true"))
     mFlags |= NS_MATHML_OPERATOR_SYMMETRIC;
 
-  // minsize = number [ v-unit | h-unit ] | namedspace
+
+  // minsize
+  //
+  // "Specifies the minimum size of the operator when stretchy"
+  //
+  // values: length
+  // default: set by dictionary (1em)
+  //
+  // We don't allow negative values.
+  // Note: Contrary to other "length" values, unitless and percentage do not
+  // give a multiple of the defaut value but a multiple of the operator at
+  // normal size.
+  //
   mMinSize = 0.0;
   GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::minsize_,
                value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
-    if (ParseNumericValue(value, cssValue) ||
-        ParseNamedSpaceValue(mPresentationData.mstyle, value, cssValue))
-    {
+    if (nsMathMLElement::ParseNumericValue(value, cssValue,
+                                           nsMathMLElement::
+                                           PARSE_ALLOW_UNITLESS)) {
       nsCSSUnit unit = cssValue.GetUnit();
       if (eCSSUnit_Number == unit)
         mMinSize = cssValue.GetFloatValue();
@@ -521,32 +514,29 @@ nsMathMLmoFrame::ProcessOperatorData()
         mMinSize = float(CalcLength(presContext, mStyleContext, cssValue));
         mFlags |= NS_MATHML_OPERATOR_MINSIZE_ABSOLUTE;
       }
-
-      if ((eCSSUnit_Number == unit) || (eCSSUnit_Percent == unit)) {
-        // see if the multiplicative inheritance should be from <mstyle>
-        GetAttribute(nsnull, mPresentationData.mstyle,
-                     nsGkAtoms::minsize_, value);
-        if (!value.IsEmpty()) {
-          if (ParseNumericValue(value, cssValue)) {
-            if (cssValue.IsLengthUnit()) {
-              mMinSize *= float(CalcLength(presContext, mStyleContext, cssValue));
-              mFlags |= NS_MATHML_OPERATOR_MINSIZE_ABSOLUTE;
-            }
-          }
-        }
-      }
     }
   }
 
-  // maxsize = number [ v-unit | h-unit ] | namedspace | infinity
+  // maxsize
+  //
+  // "Specifies the maximum size of the operator when stretchy"
+  //
+  // values: length | "infinity"
+  // default: set by dictionary (infinity)
+  //
+  // We don't allow negative values.
+  // Note: Contrary to other "length" values, unitless and percentage do not
+  // give a multiple of the defaut value but a multiple of the operator at
+  // normal size.
+  //
   mMaxSize = NS_MATHML_OPERATOR_SIZE_INFINITY;
   GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::maxsize_,
                value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
-    if (ParseNumericValue(value, cssValue) ||
-        ParseNamedSpaceValue(mPresentationData.mstyle, value, cssValue))
-    {
+    if (nsMathMLElement::ParseNumericValue(value, cssValue,
+                                           nsMathMLElement::
+                                           PARSE_ALLOW_UNITLESS)) {
       nsCSSUnit unit = cssValue.GetUnit();
       if (eCSSUnit_Number == unit)
         mMaxSize = cssValue.GetFloatValue();
@@ -555,20 +545,6 @@ nsMathMLmoFrame::ProcessOperatorData()
       else if (eCSSUnit_Null != unit) {
         mMaxSize = float(CalcLength(presContext, mStyleContext, cssValue));
         mFlags |= NS_MATHML_OPERATOR_MAXSIZE_ABSOLUTE;
-      }
-
-      if ((eCSSUnit_Number == unit) || (eCSSUnit_Percent == unit)) {
-        // see if the multiplicative inheritance should be from <mstyle>
-        GetAttribute(nsnull, mPresentationData.mstyle,
-                     nsGkAtoms::maxsize_, value);
-        if (!value.IsEmpty()) {
-          if (ParseNumericValue(value, cssValue)) {
-            if (cssValue.IsLengthUnit()) {
-              mMaxSize *= float(CalcLength(presContext, mStyleContext, cssValue));
-              mFlags |= NS_MATHML_OPERATOR_MAXSIZE_ABSOLUTE;
-            }
-          }
-        }
       }
     }
   }

@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Crossweave.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jonathan Griffin <jgriffin@mozilla.com>
- *   Philipp von Weitershausen <philipp@weitershausen.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
  /* This is a JavaScript module (JSM) to be imported via
   * Components.utils.import() and acts as a singleton. Only the following
@@ -50,7 +17,7 @@ const CU = Components.utils;
 CU.import("resource://tps/logger.jsm");
 CU.import("resource://gre/modules/Services.jsm");
 CU.import("resource://gre/modules/PlacesUtils.jsm");
-
+CU.import("resource://services-common/async.js");
 
 var DumpBookmarks = function TPS_Bookmarks__DumpBookmarks() {
   let writer = {
@@ -801,12 +768,26 @@ Livemark.prototype = {
     let siteURI = null;
     if (this.props.siteUri != null)
       siteURI = Services.io.newURI(this.props.siteUri, null, null);
-    this.props.item_id = PlacesUtils.livemarks.createLivemark(
-        this.props.folder_id,
-        this.props.livemark,
-        siteURI,
-        Services.io.newURI(this.props.feedUri, null, null),
-        -1);
+    let livemarkObj = {parentId: this.props.folder_id,
+                       title: this.props.livemark,
+                       siteURI: siteURI,
+                       feedURI: Services.io.newURI(this.props.feedUri, null, null),
+                       index: PlacesUtils.bookmarks.DEFAULT_INDEX};
+
+    // Until this can handle asynchronous creation, we need to spin.
+    let spinningCb = Async.makeSpinningCallback();
+
+    PlacesUtils.livemarks.addLivemark(livemarkObj,
+      function (aStatus, aLivemark) {
+        spinningCb(null, [aStatus, aLivemark]);
+      });
+
+    let [status, livemark] = spinningCb.wait();
+    if (!Components.isSuccessCode(status)) {
+      throw status;
+    }
+
+    this.props.item_id = livemark.id;
     return this.props.item_id;
   },
 
@@ -828,26 +809,31 @@ Livemark.prototype = {
                               this.props.folder_id,
                               CI.nsINavHistoryResultNode.RESULT_TYPE_FOLDER,
                               this.props.livemark);
-    if (!PlacesUtils.livemarks.isLivemark(this.props.item_id)) {
+    if (!PlacesUtils.annotations
+                    .itemHasAnnotation(this.props.item_id, PlacesUtils.LMANNO_FEEDURI)) {
       Logger.logPotentialError("livemark folder found, but it's just a regular folder, for " +
         this.toString());
       this.props.item_id = -1;
       return -1;
     }
     let feedURI = Services.io.newURI(this.props.feedUri, null, null);
-    let lmFeedURI = PlacesUtils.livemarks.getFeedURI(this.props.item_id);
-    if (feedURI.spec != lmFeedURI.spec) {
+    let lmFeedURISpec =
+      PlacesUtils.annotations.getItemAnnotation(this.props.item_id,
+                                                PlacesUtils.LMANNO_FEEDURI);
+    if (feedURI.spec != lmFeedURISpec) {
       Logger.logPotentialError("livemark feed uri not correct, expected: " +
-        this.props.feedUri + ", actual: " + lmFeedURI.spec +
+        this.props.feedUri + ", actual: " + lmFeedURISpec +
         " for " + this.toString());
       return -1;
     }
     if (this.props.siteUri != null) {
       let siteURI = Services.io.newURI(this.props.siteUri, null, null);
-      let lmSiteURI = PlacesUtils.livemarks.getSiteURI(this.props.item_id);
-      if (siteURI.spec != lmSiteURI.spec) {
+      let lmSiteURISpec =
+        PlacesUtils.annotations.getItemAnnotation(this.props.item_id,
+                                                  PlacesUtils.LMANNO_SITEURI);
+      if (siteURI.spec != lmSiteURISpec) {
         Logger.logPotentialError("livemark site uri not correct, expected: " +
-        this.props.siteUri + ", actual: " + lmSiteURI.spec + " for " +
+        this.props.siteUri + ", actual: " + lmSiteURISpec + " for " +
         this.toString());
         return -1;
       }
@@ -857,36 +843,6 @@ Livemark.prototype = {
                             this.props.last_item_pos))
       return -1;
     return this.props.item_id;
-  },
-
-  /**
-   * SetSiteUri
-   *
-   * Sets the siteURI property for this livemark.
-   *
-   * @param siteUri the URI to set; if null, no changes are made
-   * @return nothing
-   */
-  SetSiteUri: function(siteUri) {
-    if (siteUri) {
-      let siteURI = Services.io.newURI(siteUri, null, null);
-      PlacesUtils.livemarks.setSiteURI(this.props.item_id, siteURI);
-    }
-  },
-
-  /**
-   * SetFeedUri
-   *
-   * Sets the feedURI property for this livemark.
-   *
-   * @param feedUri the URI to set; if null, no changes are made
-   * @return nothing
-   */
-  SetFeedUri: function(feedUri) {
-    if (feedUri) {
-      let feedURI = Services.io.newURI(feedUri, null, null);
-      PlacesUtils.livemarks.setFeedURI(this.props.item_id, feedURI);
-    }
   },
 
   /**
@@ -902,8 +858,6 @@ Livemark.prototype = {
       "Invalid item_id during Update");
     this.SetLocation(this.updateProps.location);
     this.SetPosition(this.updateProps.position);
-    this.SetSiteUri(this.updateProps.siteUri);
-    this.SetFeedUri(this.updateProps.feedUri);
     this.SetTitle(this.updateProps.livemark);
     return true;
   },

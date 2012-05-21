@@ -15,7 +15,6 @@
 @DLL_PREFIX@mozjs@DLL_SUFFIX@
 #endif
 LICENSE
-update.locale
 browserconfig.properties
 chrome/US.jar
 chrome/app-chrome.manifest
@@ -695,6 +694,15 @@ uninstall/UninstallDeerPark.exe
 uninstall/UninstallFirefox.exe
 uninstall/uninst.exe
 uninstall/uninstall.exe
+update.locale
+#ifndef MOZ_UPDATER
+  #ifdef XP_MACOSX
+    updater.app/
+  #else
+    updater@BIN_SUFFIX@
+  #endif
+  updater.ini
+#endif
 xpicleanup@BIN_SUFFIX@
 #ifdef MOZ_OMNIJAR
   omni.jar
@@ -927,8 +935,10 @@ xpicleanup@BIN_SUFFIX@
   components/nsTelephonyWorker.js
   components/Telephony.manifest
   components/Telephony.js
-  components/nsWifiWorker.js
-  components/nsWifiWorker.manifest
+  components/WifiWorker.js
+  components/WifiWorker.manifest
+  components/DOMWifiManager.js
+  components/DOMWifiManager.manifest
 #endif
   components/txEXSLTRegExFunctions.js
   components/Weave.js
@@ -1021,6 +1031,13 @@ xpicleanup@BIN_SUFFIX@
   modules/PropertyPanel.jsm
   modules/reflect.jsm
   modules/Services.jsm
+  modules/services-common/async.js
+  modules/services-common/log4moz.js
+  modules/services-common/observers.js
+  modules/services-common/preferences.js
+  modules/services-common/rest.js
+  modules/services-common/stringbundle.js
+  modules/services-common/utils.js
   modules/services-sync/auth.js
   modules/services-sync/base_records/collection.js
   modules/services-sync/base_records/crypto.js
@@ -1191,6 +1208,7 @@ xpicleanup@BIN_SUFFIX@
   components/fuel.xpt
   components/gfx.xpt
   components/gksvgrenderer.xpt
+  components/html5.xpt
   components/htmlparser.xpt
   components/imgicon.xpt
   components/imglib2.xpt
@@ -1341,29 +1359,29 @@ xpicleanup@BIN_SUFFIX@
   components/jsd3250.dll
   components/nsPostUpdateWin.js
   js3250.dll
-  plugins/npnul32.dll
-  #if _MSC_VER != 1400
+  mozcpp19.dll
+  mozcrt19.dll
+  #if MOZ_MSVC_REDIST != 1400
     Microsoft.VC80.CRT.manifest
     msvcm80.dll
     msvcp80.dll
     msvcr80.dll
   #endif
-  #if _MSC_VER != 1500
+  #if MOZ_MSVC_REDIST != 1500
     Microsoft.VC90.CRT.manifest
     msvcm90.dll
     msvcp90.dll
     msvcr90.dll
   #endif
-  #if _MSC_VER != 1600
+  #if MOZ_MSVC_REDIST != 1600
     msvcp100.dll
     msvcr100.dll
   #endif
-  #if _MSC_VER != 1700
+  #if MOZ_MSVC_REDIST != 1700
     msvcp110.dll
     msvcr110.dll
   #endif
-  mozcrt19.dll
-  mozcpp19.dll
+  plugins/npnul32.dll
 #endif
 @DLL_PREFIX@xpcom_core@DLL_SUFFIX@
 components/@DLL_PREFIX@jar50@DLL_SUFFIX@
@@ -1464,3 +1482,4 @@ components/nsPlacesDBFlush.js
 maintenanceservice.exe
 maintenanceservice_installer.exe
 #endif
+jssubloader/

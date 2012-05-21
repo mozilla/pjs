@@ -10,6 +10,8 @@ const nsIAccessibleCaretMoveEvent =
   Components.interfaces.nsIAccessibleCaretMoveEvent;
 const nsIAccessibleTextChangeEvent =
   Components.interfaces.nsIAccessibleTextChangeEvent;
+const nsIAccessibleVirtualCursorChangeEvent =
+  Components.interfaces.nsIAccessibleVirtualCursorChangeEvent;
 
 const nsIAccessibleStates = Components.interfaces.nsIAccessibleStates;
 const nsIAccessibleRole = Components.interfaces.nsIAccessibleRole;
@@ -111,6 +113,21 @@ function addA11yLoadEvent(aFunc, aWindow)
   }
 
   SimpleTest.waitForFocus(waitForDocLoad, aWindow);
+}
+
+/**
+ * Analogy of SimpleTest.is function used to compare objects.
+ */
+function isObject(aObj, aExpectedObj, aMsg)
+{
+  if (aObj == aExpectedObj) {
+    ok(true, aMsg);
+    return;
+  }
+
+  ok(false,
+     aMsg + " - got '" + prettyName(aObj) +
+            "', expected '" + prettyName(aExpectedObj) + "'");
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -484,6 +501,23 @@ function testDefunctAccessible(aAcc, aNodeOrId)
   ok(success, "parent" + msg);
 }
 
+/**
+ * Ensure that image map accessible tree is created.
+ */
+function ensureImageMapTree(aID)
+{
+  // XXX: We send a useless mouse move to the image to force it to setup its
+  // image map, because flushing layout won't do it. Hopefully bug 135040
+  // will make this not suck.
+  var image = getNode(aID);
+  synthesizeMouse(image, 10, 10, { type: "mousemove" },
+                  image.ownerDocument.defaultView);
+
+  // XXX This may affect a11y more than other code because imagemaps may not
+  // get drawn or have an mouse event over them. Bug 570322 tracks a11y
+  // dealing with this.
+  todo(false, "Need to remove this image map workaround.");
+}
 
 /**
  * Convert role to human readable string.
@@ -613,9 +647,9 @@ function getNodePrettyName(aNode)
 function getObjAddress(aObj)
 {
   var exp = /native\s*@\s*(0x[a-f0-9]+)/g;
-  var match = exp.exec(aObj.valueOf());
+  var match = exp.exec(aObj.toString());
   if (match)
     return match[1];
 
-  return aObj.valueOf();
+  return aObj.toString();
 }

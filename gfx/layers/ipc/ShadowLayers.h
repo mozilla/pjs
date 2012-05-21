@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=8 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at:
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Code.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_layers_ShadowLayers_h
 #define mozilla_layers_ShadowLayers_h 1
@@ -65,9 +32,11 @@ class ShadowColorLayer;
 class ShadowCanvasLayer;
 class SurfaceDescriptor;
 class ThebesBuffer;
+class TiledLayerComposer;
 class Transaction;
 class SharedImage;
 class CanvasSurface;
+class BasicTiledLayerBuffer;
 
 /**
  * We want to share layer trees across thread contexts and address
@@ -171,6 +140,16 @@ public:
                    ShadowableLayer* aChild);
 
   /**
+   * Set aMaskLayer as the mask on aLayer.
+   * Note that only image layers are properly supported
+   * ShadowLayersParent::UpdateMask and accompanying ipdl
+   * will need changing to update properties for other kinds
+   * of mask layer.
+   */
+  void SetMask(ShadowableLayer* aLayer,
+               ShadowableLayer* aMaskLayer);
+
+  /**
    * Notify the shadow manager that the specified layer's back buffer
    * has new pixels and should become the new front buffer, and be
    * re-rendered, in the compositing process.  The former front buffer
@@ -187,6 +166,17 @@ public:
                            const nsIntRect& aBufferRect,
                            const nsIntPoint& aBufferRotation,
                            const SurfaceDescriptor& aNewFrontBuffer);
+
+  /**
+   * Notify the compositor that a tiled layer buffer has changed
+   * that needs to be synced to the shadow retained copy. The tiled
+   * layer buffer will operate directly on the shadow retained buffer
+   * and is free to choose it's own internal representation (double buffering,
+   * copy on write, tiling).
+   */
+  void PaintedTiledLayerBuffer(ShadowableLayer* aThebes,
+                               BasicTiledLayerBuffer* aTiledLayerBuffer);
+
   /**
    * NB: this initial implementation only forwards RGBA data for
    * ImageLayers.  This is slow, and will be optimized.
@@ -302,11 +292,10 @@ public:
     return mParentBackend;
   }
 
-  /*
-   * No need to use double buffer in system memory with GPU rendering,
-   * texture used as front buffer.
+  /**
+   * Flag the next paint as the first for a document.
    */
-  bool ShouldDoubleBuffer() { return GetParentBackendType() == LayerManager::LAYERS_BASIC; }
+  void SetIsFirstPaint() { mIsFirstPaint = true; }
 
 protected:
   ShadowLayerForwarder();
@@ -332,6 +321,8 @@ private:
 
   Transaction* mTxn;
   LayersBackend mParentBackend;
+
+  bool mIsFirstPaint;
 };
 
 
@@ -466,6 +457,8 @@ public:
   const nsIntRect* GetShadowClipRect() { return mUseShadowClipRect ? &mShadowClipRect : nsnull; }
   const nsIntRegion& GetShadowVisibleRegion() { return mShadowVisibleRegion; }
   const gfx3DMatrix& GetShadowTransform() { return mShadowTransform; }
+
+  virtual TiledLayerComposer* AsTiledLayerComposer() { return NULL; }
 
 protected:
   ShadowLayer()

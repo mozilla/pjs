@@ -1,48 +1,12 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsCycleCollectionParticipant_h__
 #define nsCycleCollectionParticipant_h__
 
 #include "nsISupports.h"
-
-// NOTE: If you use header files to define DEBUG_CC, you must do so here
-// *and* in nsCycleCollector.h
-//#define DEBUG_CC
 
 #define NS_CYCLECOLLECTIONPARTICIPANT_IID                                      \
 {                                                                              \
@@ -94,16 +58,18 @@ public:
     NS_IMETHOD_(void) DescribeGCedNode(bool ismarked,
                                        size_t objsz,
                                        const char *objname) = 0;
+
     NS_IMETHOD_(void) NoteXPCOMRoot(nsISupports *root) = 0;
-    NS_IMETHOD_(void) NoteRoot(PRUint32 langID, void *root,
-                               nsCycleCollectionParticipant* helper) = 0;
-    NS_IMETHOD_(void) NoteScriptChild(PRUint32 langID, void *child) = 0;
+    NS_IMETHOD_(void) NoteJSRoot(void *root) = 0;
+    NS_IMETHOD_(void) NoteNativeRoot(void *root, nsCycleCollectionParticipant *participant) = 0;
+
     NS_IMETHOD_(void) NoteXPCOMChild(nsISupports *child) = 0;
+    NS_IMETHOD_(void) NoteJSChild(void *child) = 0;
     NS_IMETHOD_(void) NoteNativeChild(void *child,
                                       nsCycleCollectionParticipant *helper) = 0;
 
     // Give a name to the edge associated with the next call to
-    // NoteScriptChild, NoteXPCOMChild, or NoteNativeChild.
+    // NoteXPCOMChild, NoteJSChild, or NoteNativeChild.
     // Callbacks who care about this should set WANT_DEBUG_INFO in the
     // flags.
     NS_IMETHOD_(void) NoteNextEdgeName(const char* name) = 0;
@@ -196,7 +162,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsCycleCollectionParticipant,
 #define IMETHOD_VISIBILITY NS_COM_GLUE
 
 typedef void
-(* TraceCallback)(PRUint32 langID, void *p, const char *name, void *closure);
+(* TraceCallback)(void *p, const char *name, void *closure);
 
 class NS_NO_VTABLE nsScriptObjectTracer : public nsCycleCollectionParticipant
 {
@@ -226,7 +192,7 @@ public:
 
     NS_IMETHOD_(void) Trace(void *p, TraceCallback cb, void *closure);
 
-    NS_IMETHOD_(void) UnmarkPurple(nsISupports *p);
+    NS_IMETHOD_(void) UnmarkIfPurple(nsISupports *p);
 
     bool CheckForRightISupports(nsISupports *s);
 };
@@ -385,6 +351,7 @@ public:
     tmp->_field.Clear();
 
 #define NS_IMPL_CYCLE_COLLECTION_UNLINK_END                                    \
+    (void)tmp;                                                                 \
     return NS_OK;                                                              \
   }
 
@@ -561,16 +528,9 @@ public:
   {                                                                            \
     _class *tmp = static_cast<_class*>(p);
 
-#define NS_IMPL_CYCLE_COLLECTION_TRACE_CALLBACK(_langID, _object, _name)       \
-  if (_object)                                                                 \
-    aCallback(_langID, _object, _name, aClosure);
-
-#define NS_IMPL_CYCLE_COLLECTION_TRACE_MEMBER_CALLBACK(_langID, _field)        \
-  NS_IMPL_CYCLE_COLLECTION_TRACE_CALLBACK(_langID, tmp->_field, #_field)
-
 #define NS_IMPL_CYCLE_COLLECTION_TRACE_JS_CALLBACK(_object, _name)             \
-  NS_IMPL_CYCLE_COLLECTION_TRACE_CALLBACK(nsIProgrammingLanguage::JAVASCRIPT,  \
-                                          _object, _name)
+  if (_object)                                                                 \
+    aCallback(_object, _name, aClosure);
 
 #define NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(_field)              \
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_CALLBACK(tmp->_field, #_field)
@@ -593,9 +553,9 @@ public:
 public:                                                                        \
   NS_IMETHOD Traverse(void *p,                                                 \
                       nsCycleCollectionTraversalCallback &cb);                 \
-  NS_IMETHOD_(void) UnmarkPurple(nsISupports *s)                               \
+  NS_IMETHOD_(void) UnmarkIfPurple(nsISupports *s)                             \
   {                                                                            \
-    Downcast(s)->UnmarkPurple();                                               \
+    Downcast(s)->UnmarkIfPurple();                                             \
   }                                                                            \
   static _class* Downcast(nsISupports* s)                                      \
   {                                                                            \
@@ -758,13 +718,13 @@ public:                                                                        \
 NS_CYCLE_COLLECTION_PARTICIPANT_INSTANCE
 
 /**
- * This implements a stub UnmarkPurple function for classes that want to be
+ * This implements a stub UnmarkIfPurple function for classes that want to be
  * traversed but whose AddRef/Release functions don't add/remove them to/from
  * the purple buffer. If you're just using NS_DECL_CYCLE_COLLECTING_ISUPPORTS
  * then you don't need this.
  */
 #define NS_DECL_CYCLE_COLLECTION_UNMARK_PURPLE_STUB(_class)                    \
-  NS_IMETHODIMP_(void) UnmarkPurple()                                          \
+  NS_IMETHODIMP_(void) UnmarkIfPurple()                                        \
   {                                                                            \
   }                                                                            \
 

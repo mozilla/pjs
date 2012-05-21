@@ -1,53 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Marco Bonardo <mak77@bonardo.net>
- *
- * Original contributor(s) of code moved from nsNavHistory.cpp:
- *   Brett Wilson <brettw@gmail.com> (original author)
- *   Dietrich Ayala <dietrich@mozilla.com>
- *   Seth Spitzer <sspitzer@mozilla.com>
- *   Asaf Romano <mano@mozilla.com>
- *   Marco Bonardo <mak77@bonardo.net>
- *   Edward Lee <edward.lee@engineering.uiuc.edu>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *   Philipp von Weitershausen <philipp@weitershausen.de>
- *   Paolo Amadini <http://www.amadzone.org/>
- *   Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Database.h"
 
@@ -94,6 +47,10 @@
 
 // Places string bundle, contains internationalized bookmark root names.
 #define PLACES_BUNDLE "chrome://places/locale/places.properties"
+
+// Livemarks annotations.
+#define LMANNO_FEEDURI "livemark/feedURI"
+#define LMANNO_SITEURI "livemark/siteURI"
 
 using namespace mozilla;
 
@@ -749,7 +706,19 @@ Database::InitSchema(bool* aDatabaseMigrated)
         NS_ENSURE_SUCCESS(rv, rv);
       }
 
-      // Firefox 13 uses schema version 18.
+      if (currentSchemaVersion < 19) {
+        rv = MigrateV19Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 13 uses schema version 19.
+
+      if (currentSchemaVersion < 20) {
+        rv = MigrateV20Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 14 uses schema version 20.
 
       // Schema Upgrades must add migration code here.
 
@@ -1290,6 +1259,7 @@ Database::MigrateV7Up()
         "WHERE root_name = :parent_name "
       ")"),
     getter_AddRefs(moveUnfiledBookmarks));
+  NS_ENSURE_SUCCESS(rv, rv);
   rv = moveUnfiledBookmarks->BindUTF8StringByName(
     NS_LITERAL_CSTRING("root_name"), NS_LITERAL_CSTRING("unfiled")
   );
@@ -1690,8 +1660,8 @@ Database::MigrateV17Up()
     "INSERT OR IGNORE INTO moz_hosts (host, frecency) "
         "SELECT fixup_url(get_unreversed_host(h.rev_host)) AS host, "
                "(SELECT MAX(frecency) FROM moz_places "
-                "WHERE rev_host = get_unreversed_host(host || '.') || '.' "
-                   "OR rev_host = get_unreversed_host(host || '.') || '.www.') "
+                "WHERE rev_host = h.rev_host "
+                   "OR rev_host = h.rev_host || 'www.' "
                ") AS frecency "
         "FROM moz_places h "
         "WHERE LENGTH(h.rev_host) > 1 "
@@ -1750,6 +1720,125 @@ Database::MigrateV18Up()
   return NS_OK;
 }
 
+nsresult
+Database::MigrateV19Up()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // Livemarks children are no longer bookmarks.
+
+  // Remove all children of folders annotated as livemarks.
+  nsCOMPtr<mozIStorageStatement> deleteLivemarksChildrenStmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_bookmarks WHERE parent IN("
+      "SELECT b.id FROM moz_bookmarks b "
+      "JOIN moz_items_annos a ON a.item_id = b.id "
+      "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
+      "WHERE b.type = :item_type AND n.name = :anno_name "
+    ")"
+  ), getter_AddRefs(deleteLivemarksChildrenStmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksChildrenStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_name"), NS_LITERAL_CSTRING(LMANNO_FEEDURI)
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksChildrenStmt->BindInt32ByName(
+    NS_LITERAL_CSTRING("item_type"), nsINavBookmarksService::TYPE_FOLDER
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksChildrenStmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Clear obsolete livemark prefs.
+  (void)Preferences::ClearUser("browser.bookmarks.livemark_refresh_seconds");
+  (void)Preferences::ClearUser("browser.bookmarks.livemark_refresh_limit_count");
+  (void)Preferences::ClearUser("browser.bookmarks.livemark_refresh_delay_time");
+
+  // Remove the old status annotations.
+  nsCOMPtr<mozIStorageStatement> deleteLivemarksAnnosStmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_items_annos WHERE anno_attribute_id IN("
+      "SELECT id FROM moz_anno_attributes "
+      "WHERE name IN (:anno_loading, :anno_loadfailed, :anno_expiration) "
+    ")"
+  ), getter_AddRefs(deleteLivemarksAnnosStmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_loading"), NS_LITERAL_CSTRING("livemark/loading")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_loadfailed"), NS_LITERAL_CSTRING("livemark/loadfailed")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_expiration"), NS_LITERAL_CSTRING("livemark/expiration")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Remove orphan annotation names.
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_anno_attributes "
+      "WHERE name IN (:anno_loading, :anno_loadfailed, :anno_expiration) "
+  ), getter_AddRefs(deleteLivemarksAnnosStmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_loading"), NS_LITERAL_CSTRING("livemark/loading")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_loadfailed"), NS_LITERAL_CSTRING("livemark/loadfailed")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_expiration"), NS_LITERAL_CSTRING("livemark/expiration")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteLivemarksAnnosStmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV20Up()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // Remove obsolete bookmark GUID annotations.
+  nsCOMPtr<mozIStorageStatement> deleteOldBookmarkGUIDAnnosStmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_items_annos WHERE anno_attribute_id = ("
+      "SELECT id FROM moz_anno_attributes "
+      "WHERE name = :anno_guid"
+    ")"
+  ), getter_AddRefs(deleteOldBookmarkGUIDAnnosStmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteOldBookmarkGUIDAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_guid"), NS_LITERAL_CSTRING("placesInternal/GUID")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteOldBookmarkGUIDAnnosStmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Remove the orphan annotation name.
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_anno_attributes "
+      "WHERE name = :anno_guid"
+  ), getter_AddRefs(deleteOldBookmarkGUIDAnnosStmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteOldBookmarkGUIDAnnosStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_guid"), NS_LITERAL_CSTRING("placesInternal/GUID")
+  );
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = deleteOldBookmarkGUIDAnnosStmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
 void
 Database::Shutdown()
 {
@@ -1768,8 +1857,7 @@ Database::Shutdown()
   nsRefPtr<BlockingConnectionCloseCallback> closeListener =
     new BlockingConnectionCloseCallback();
   (void)mMainConn->AsyncClose(closeListener);
-  // The spinning is temporarily disabled. See bug 728653.
-  //closeListener->Spin();
+  closeListener->Spin();
 
   // Don't set this earlier, otherwise some internal helper used on shutdown
   // may bail out.

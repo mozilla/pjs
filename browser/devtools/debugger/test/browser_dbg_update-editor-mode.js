@@ -6,8 +6,8 @@
  * and script URIs with extra query parameters also get the right engine.
  */
 
-const TAB_URL = "http://example.com/browser/browser/devtools/debugger/" +
-                "test/browser_dbg_update-editor-mode.html";
+const TAB_URL = EXAMPLE_URL + "browser_dbg_update-editor-mode.html";
+
 let tempScope = {};
 Cu.import("resource:///modules/source-editor.jsm", tempScope);
 let SourceEditor = tempScope.SourceEditor;
@@ -20,44 +20,69 @@ var gScripts = null;
 
 function test()
 {
+  let scriptShown = false;
+  let framesAdded = false;
+  let testStarted = false;
+  let resumed = false;
+
   debug_tab_pane(TAB_URL, function(aTab, aDebuggee, aPane) {
     gTab = aTab;
     gDebuggee = aDebuggee;
     gPane = aPane;
-    gDebugger = gPane.debuggerWindow;
+    gDebugger = gPane.contentWindow;
+    resumed = true;
 
-    testScriptsDisplay();
+    gDebugger.DebuggerController.activeThread.addOneTimeListener("framesadded", function() {
+      framesAdded = true;
+      executeSoon(startTest);
+    });
+
+    executeSoon(function() {
+      gDebuggee.firstCall();
+    });
   });
+
+  function onScriptShown(aEvent) {
+    scriptShown = aEvent.detail.url.indexOf("test-editor-mode") != -1;
+    executeSoon(startTest);
+  }
+
+  window.addEventListener("Debugger:ScriptShown", onScriptShown);
+
+  function startTest()
+  {
+    if (scriptShown && framesAdded && resumed && !testStarted) {
+      window.removeEventListener("Debugger:ScriptShown", onScriptShown);
+      testStarted = true;
+      Services.tm.currentThread.dispatch({ run: testScriptsDisplay }, 0);
+    }
+  }
 }
 
 function testScriptsDisplay() {
-  gPane.activeThread.addOneTimeListener("scriptsadded", function() {
-    Services.tm.currentThread.dispatch({ run: function() {
-      gScripts = gDebugger.DebuggerView.Scripts._scripts;
+  gScripts = gDebugger.DebuggerView.Scripts._scripts;
 
-      is(gDebugger.StackFrames.activeThread.state, "paused",
-        "Should only be getting stack frames while paused.");
+  is(gDebugger.DebuggerController.activeThread.state, "paused",
+    "Should only be getting stack frames while paused.");
 
-      is(gScripts.itemCount, 2, "Found the expected number of scripts.");
+  is(gScripts.itemCount, 2, "Found the expected number of scripts.");
 
-      is(gDebugger.editor.getMode(), SourceEditor.MODES.HTML,
-         "Found the expected editor mode.");
+  is(gDebugger.editor.getMode(), SourceEditor.MODES.HTML,
+     "Found the expected editor mode.");
 
-      ok(gDebugger.editor.getText().search(/debugger/) != -1,
-        "The correct script was loaded initially.");
+  ok(gDebugger.editor.getText().search(/debugger/) != -1,
+    "The correct script was loaded initially.");
 
-      gDebugger.editor.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-                                        function onChange() {
-        gDebugger.editor.removeEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
-                                             onChange);
-        testSwitchPaused();
-      });
-      gScripts.selectedIndex = 0;
-      gDebugger.SourceScripts.onChange({ target: gScripts });
-    }}, 0);
+  window.addEventListener("Debugger:ScriptShown", function _onEvent(aEvent) {
+    let url = aEvent.detail.url;
+    if (url.indexOf("switching-01.js") != -1) {
+      window.removeEventListener(aEvent.type, _onEvent);
+      testSwitchPaused();
+    }
   });
 
-  gDebuggee.firstCall();
+  let url = gDebuggee.document.querySelector("script").src;
+  gDebugger.DebuggerView.Scripts.selectScript(url);
 }
 
 function testSwitchPaused()
@@ -71,8 +96,16 @@ function testSwitchPaused()
   is(gDebugger.editor.getMode(), SourceEditor.MODES.JAVASCRIPT,
      "Found the expected editor mode.");
 
-  gDebugger.StackFrames.activeThread.resume(function() {
-    removeTab(gTab);
-    finish();
+  gDebugger.DebuggerController.activeThread.resume(function() {
+    closeDebuggerAndFinish(gTab);
   });
 }
+
+registerCleanupFunction(function() {
+  removeTab(gTab);
+  gPane = null;
+  gTab = null;
+  gDebuggee = null;
+  gDebugger = null;
+  gScripts = null;
+});

@@ -1,41 +1,8 @@
 /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dave Camp <dcamp@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 Cu.import("resource://gre/modules/NetUtil.jsm");
@@ -43,16 +10,34 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 /**
  * An adapter that handles data transfers between the debugger client and
  * server. It can work with both nsIPipe and nsIServerSocket transports so
- * long as the properly created input and output streams are specified. Data is
- * transferred as a JSON packet serialized into a string, with the string length
- * prepended to the packet, followed by a colon ([length]:[packet]). The
- * contents of the JSON packet are specified in the Remote Debugging Protocol
- * specification.
+ * long as the properly created input and output streams are specified.
  *
  * @param aInput nsIInputStream
  *        The input stream.
  * @param aOutput nsIOutputStream
  *        The output stream.
+ *
+ * Given a DebuggerTransport instance dt:
+ * 1) Set dt.hooks to a packet handler object (described below).
+ * 2) Call dt.ready() to begin watching for input packets.
+ * 3) Send packets as you please, and handle incoming packets passed to 
+ *    hook.onPacket.
+ * 4) Call dt.close() to close the connection, and disengage from the event
+ *    loop.
+ *
+ * A packet handler object is an object with two methods:
+ *
+ * - onPacket(packet) - called when we have received a complete packet.
+ *   |Packet| is the parsed form of the packet --- a JavaScript value, not
+ *   a JSON-syntax string.
+ *
+ * - onClosed(status) - called when the connection is closed. |Status| is
+ *   an nsresult, of the sort passed to nsIRequestObserver.
+ * 
+ * Data is transferred as a JSON packet serialized into a string, with the
+ * string length prepended to the packet, followed by a colon
+ * ([length]:[packet]). The contents of the JSON packet are specified in
+ * the Remote Debugging Protocol specification.
  */
 function DebuggerTransport(aInput, aOutput)
 {
@@ -65,15 +50,18 @@ function DebuggerTransport(aInput, aOutput)
 
   this._outgoing = "";
   this._incoming = "";
+
+  this.hooks = null;
 }
 
 DebuggerTransport.prototype = {
-  _hooks: null,
-  get hooks() { return this._hooks; },
-  set hooks(aHooks) { this._hooks = aHooks; },
-
   /**
-   * Transmit the specified packet.
+   * Transmit a packet.
+   * 
+   * This method returns immediately, without waiting for the entire
+   * packet to be transmitted, registering event handlers as needed to
+   * transmit the entire packet. Packets are transmitted in the order
+   * they are passed to this method.
    */
   send: function DT_send(aPacket) {
     // TODO (bug 709088): remove pretty printing when the protocol is done.
@@ -109,7 +97,9 @@ DebuggerTransport.prototype = {
   },
 
   /**
-   * Initialize the input stream for reading.
+   * Initialize the input stream for reading. Once this method has been
+   * called, we watch for packets on the input stream, and pass them to
+   * this.hook.onPacket.
    */
   ready: function DT_ready() {
     let pump = Cc["@mozilla.org/network/input-stream-pump;1"]

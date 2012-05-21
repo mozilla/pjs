@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 //
 // Eric Vaughan
@@ -97,7 +64,6 @@
 #include "mozilla/Preferences.h"
 
 // Needed for Print Preview
-#include "nsIDocument.h"
 #include "nsIURI.h"
 
 using namespace mozilla;
@@ -200,6 +166,10 @@ nsBoxFrame::Init(nsIContent*      aContent,
 {
   nsresult  rv = nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  if (GetStateBits() & NS_FRAME_FONT_INFLATION_CONTAINER) {
+    AddStateBits(NS_FRAME_FONT_INFLATION_FLOW_ROOT);
+  }
 
   MarkIntrinsicWidthsDirty();
 
@@ -515,13 +485,18 @@ nsBoxFrame::GetInitialDirection(bool& aIsNormal)
   
   // Now see if we have an attribute.  The attribute overrides
   // the style system value.
-  static nsIContent::AttrValuesArray strings[] =
-    {&nsGkAtoms::reverse, &nsGkAtoms::ltr, &nsGkAtoms::rtl, nsnull};
-  PRInt32 index = GetContent()->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::dir,
-      strings, eCaseMatters);
-  if (index >= 0) {
-    bool values[] = {!aIsNormal, true, false};
-    aIsNormal = values[index];
+  if (IsHorizontal()) {
+    static nsIContent::AttrValuesArray strings[] =
+      {&nsGkAtoms::reverse, &nsGkAtoms::ltr, &nsGkAtoms::rtl, nsnull};
+    PRInt32 index = GetContent()->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::dir,
+        strings, eCaseMatters);
+    if (index >= 0) {
+      bool values[] = {!aIsNormal, true, false};
+      aIsNormal = values[index];
+    }
+  } else if (GetContent()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::dir,
+                                       nsGkAtoms::reverse, eCaseMatters)) {
+    aIsNormal = !aIsNormal;
   }
 }
 
@@ -759,6 +734,8 @@ nsBoxFrame::Reflow(nsPresContext*          aPresContext,
   }
 #endif
 
+  ReflowAbsoluteFrames(aPresContext, aDesiredSize, aReflowState, aStatus);
+
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
   return NS_OK;
 }
@@ -935,6 +912,35 @@ nsBoxFrame::DoLayout(nsBoxLayoutState& aState)
 
   aState.SetLayoutFlags(oldFlags);
 
+  if (HasAbsolutelyPositionedChildren()) {
+    // Set up a |reflowState| to pass into ReflowAbsoluteFrames
+    nsHTMLReflowState reflowState(aState.PresContext(), this,
+                                  aState.GetRenderingContext(),
+                                  nsSize(mRect.width, NS_UNCONSTRAINEDSIZE));
+
+    // Set up a |desiredSize| to pass into ReflowAbsoluteFrames
+    nsHTMLReflowMetrics desiredSize;
+    desiredSize.width  = mRect.width;
+    desiredSize.height = mRect.height;
+
+    // get the ascent (cribbed from ::Reflow)
+    nscoord ascent = mRect.height;
+
+    // getting the ascent could be a lot of work. Don't get it if
+    // we are the root. The viewport doesn't care about it.
+    if (!(mState & NS_STATE_IS_ROOT)) {
+      ascent = GetBoxAscent(aState);
+    }
+    desiredSize.ascent = ascent;
+    desiredSize.mOverflowAreas = GetOverflowAreas();
+
+    // Set up a |reflowStatus| to pass into ReflowAbsoluteFrames
+    // (just a dummy value; hopefully that's OK)
+    nsReflowStatus reflowStatus = NS_FRAME_COMPLETE;
+    ReflowAbsoluteFrames(aState.PresContext(), desiredSize,
+                         reflowState, reflowStatus);
+  }
+
   return rv;
 }
 
@@ -946,6 +952,8 @@ nsBoxFrame::DestroyFrom(nsIFrame* aDestructRoot)
 
   // clean up the container box's layout manager and child boxes
   SetLayoutManager(nsnull);
+
+  DestroyAbsoluteFrames(aDestructRoot);
 
   nsContainerFrame::DestroyFrom(aDestructRoot);
 } 
@@ -1306,7 +1314,7 @@ nsBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   if (GetContent()->IsXUL()) {
       const nsStyleDisplay* styles = mStyleContext->GetStyleDisplay();
       if (styles && styles->mAppearance == NS_THEME_WIN_EXCLUDE_GLASS) {
-        nsRect rect = mRect + aBuilder->ToReferenceFrame(GetParent());
+        nsRect rect = nsRect(aBuilder->ToReferenceFrame(this), GetSize());
         aBuilder->AddExcludedGlassRegion(rect);
       }
   }

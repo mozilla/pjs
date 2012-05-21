@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2006-2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   John Daggett <jdaggett@mozilla.com>
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -286,8 +251,9 @@ gfxCoreTextShaper::SetGlyphsFromRun(gfxShapedWord *aShapedWord,
         positions = positionsArray.get();
     }
 
-    // Remember that the glyphToChar indices relate to the CoreText line
-    // not to the beginning of the textRun, the font run, or the stringRange of the glyph run
+    // Remember that the glyphToChar indices relate to the CoreText line,
+    // not to the beginning of the textRun, the font run,
+    // or the stringRange of the glyph run
     glyphToChar = ::CTRunGetStringIndicesPtr(aCTRun);
     if (!glyphToChar) {
         glyphToCharArray = new (std::nothrow) CFIndex[numGlyphs];
@@ -298,7 +264,8 @@ gfxCoreTextShaper::SetGlyphsFromRun(gfxShapedWord *aShapedWord,
         glyphToChar = glyphToCharArray.get();
     }
 
-    double runWidth = ::CTRunGetTypographicBounds(aCTRun, ::CFRangeMake(0, 0), NULL, NULL, NULL);
+    double runWidth = ::CTRunGetTypographicBounds(aCTRun, ::CFRangeMake(0, 0),
+                                                  NULL, NULL, NULL);
 
     nsAutoTArray<gfxTextRun::DetailedGlyph,1> detailedGlyphs;
     gfxTextRun::CompressedGlyph g;
@@ -351,11 +318,14 @@ gfxCoreTextShaper::SetGlyphsFromRun(gfxShapedWord *aShapedWord,
         stringRange.length - 1 : 0; // and this char index (in the stringRange of the glyph run)
 
     while (glyphStart < numGlyphs) { // keep finding groups until all glyphs are accounted for
-
         bool inOrder = true;
         PRInt32 charEnd = glyphToChar[glyphStart] - stringRange.location;
-        NS_ASSERTION(charEnd >= 0 && charEnd < stringRange.length,
-                     "glyph-to-char mapping points outside string range");
+        NS_WARN_IF_FALSE(charEnd >= 0 && charEnd < stringRange.length,
+                         "glyph-to-char mapping points outside string range");
+        // clamp charEnd to the valid range of the string
+        charEnd = NS_MAX(charEnd, 0);
+        charEnd = NS_MIN(charEnd, PRInt32(stringRange.length));
+
         PRInt32 glyphEnd = glyphStart;
         PRInt32 charLimit = isRightToLeft ? -1 : stringRange.length;
         do {
@@ -373,9 +343,19 @@ gfxCoreTextShaper::SetGlyphsFromRun(gfxShapedWord *aShapedWord,
             }
 
             // find the maximum glyph index covered by the clump so far
-            for (PRInt32 i = charStart; i != charEnd; i += direction) {
-                if (charToGlyph[i] != NO_GLYPH) {
-                    glyphEnd = NS_MAX(glyphEnd, charToGlyph[i] + 1); // update extent of glyph range
+            if (isRightToLeft) {
+                for (PRInt32 i = charStart; i > charEnd; --i) {
+                    if (charToGlyph[i] != NO_GLYPH) {
+                        // update extent of glyph range
+                        glyphEnd = NS_MAX(glyphEnd, charToGlyph[i] + 1);
+                    }
+                }
+            } else {
+                for (PRInt32 i = charStart; i < charEnd; ++i) {
+                    if (charToGlyph[i] != NO_GLYPH) {
+                        // update extent of glyph range
+                        glyphEnd = NS_MAX(glyphEnd, charToGlyph[i] + 1);
+                    }
                 }
             }
 
@@ -421,8 +401,21 @@ gfxCoreTextShaper::SetGlyphsFromRun(gfxShapedWord *aShapedWord,
             }
         } while (charEnd != charLimit);
 
-        NS_ASSERTION(glyphStart < glyphEnd, "character/glyph clump contains no glyphs!");
-        NS_ASSERTION(charStart != charEnd, "character/glyph contains no characters!");
+        NS_WARN_IF_FALSE(glyphStart < glyphEnd,
+                         "character/glyph clump contains no glyphs!");
+        if (glyphStart == glyphEnd) {
+            ++glyphStart; // make progress - avoid potential infinite loop
+            charStart = charEnd;
+            continue;
+        }
+
+        NS_WARN_IF_FALSE(charStart != charEnd,
+                         "character/glyph clump contains no characters!");
+        if (charStart == charEnd) {
+            glyphStart = glyphEnd; // this is bad - we'll discard the glyph(s),
+                                   // as there's nowhere to attach them
+            continue;
+        }
 
         // Now charStart..charEnd is a ligature clump, corresponding to glyphStart..glyphEnd;
         // Set baseCharIndex to the char we'll actually attach the glyphs to (1st of ligature),

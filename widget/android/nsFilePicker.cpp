@@ -1,39 +1,7 @@
 /* -*- Mode: c++; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brad Lassey <blassey@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsFilePicker.h"
 #include "AndroidBridge.h"
@@ -51,12 +19,37 @@ NS_IMETHODIMP nsFilePicker::Init(nsIDOMWindow *parent, const nsAString& title,
         : NS_ERROR_NOT_IMPLEMENTED;
 }
 
+NS_IMETHODIMP nsFilePicker::AppendFilters(PRInt32 aFilterMask)
+{
+  if (aFilterMask == (filterAudio | filterAll)) {
+    mMimeTypeFilter.AssignLiteral("audio/*");
+    return NS_OK;
+  }
+
+  if (aFilterMask == (filterImages | filterAll)) {
+    mMimeTypeFilter.AssignLiteral("image/*");
+    return NS_OK;
+  }
+
+  if (aFilterMask == (filterVideo | filterAll)) {
+    mMimeTypeFilter.AssignLiteral("video/*");
+    return NS_OK;
+  }
+
+  if (aFilterMask & filterAll) {
+    mMimeTypeFilter.AssignLiteral("*/*");
+    return NS_OK;
+  }
+
+  return nsBaseFilePicker::AppendFilters(aFilterMask);
+}
+
 NS_IMETHODIMP nsFilePicker::AppendFilter(const nsAString& /*title*/,
                                          const nsAString& filter)
 {
-    if (!mFilters.IsEmpty())
-        mFilters.AppendLiteral(", ");
-    mFilters.Append(filter);
+    if (!mExtensionsFilter.IsEmpty())
+        mExtensionsFilter.AppendLiteral(", ");
+    mExtensionsFilter.Append(filter);
     return NS_OK;
 }
 
@@ -126,7 +119,15 @@ NS_IMETHODIMP nsFilePicker::Show(PRInt16 *_retval NS_OUTPARAM)
         return NS_ERROR_NOT_IMPLEMENTED;
     nsAutoString filePath;
 
-    mozilla::AndroidBridge::Bridge()->ShowFilePicker(filePath, mFilters);
+    if (mExtensionsFilter.IsEmpty() == mMimeTypeFilter.IsEmpty()) {
+      // Both filters or none of them are set. We want to show anything we can.
+      mozilla::AndroidBridge::Bridge()->ShowFilePickerForMimeType(filePath, NS_LITERAL_STRING("*/*"));
+    } else if (!mExtensionsFilter.IsEmpty()) {
+      mozilla::AndroidBridge::Bridge()->ShowFilePickerForExtensions(filePath, mExtensionsFilter);
+    } else {
+      mozilla::AndroidBridge::Bridge()->ShowFilePickerForMimeType(filePath, mMimeTypeFilter);
+    }
+
     *_retval = EmptyString().Equals(filePath) ? 
         nsIFilePicker::returnCancel : nsIFilePicker::returnOK;
     if (*_retval == nsIFilePicker::returnOK)

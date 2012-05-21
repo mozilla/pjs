@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MediaResource.h"
 
@@ -287,7 +255,7 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
   if (mSuspendCount > 0) {
     // Re-suspend the channel if it needs to be suspended
     // No need to call PossiblySuspend here since the channel is
-    // definitely in the right state for us in OneStartRequest.
+    // definitely in the right state for us in OnStartRequest.
     mChannel->Suspend();
     mIgnoreResume = false;
   }
@@ -336,15 +304,12 @@ ChannelMediaResource::OnStopRequest(nsIRequest* aRequest, nsresult aStatus)
     // Move this request back into the foreground.  This is necessary for
     // requests owned by video documents to ensure the load group fires
     // OnStopRequest when restoring from session history.
-    if (mLoadInBackground) {
-      mLoadInBackground = false;
+    nsLoadFlags loadFlags;
+    DebugOnly<nsresult> rv = mChannel->GetLoadFlags(&loadFlags);
+    NS_ASSERTION(NS_SUCCEEDED(rv), "GetLoadFlags() failed!");
 
-      nsLoadFlags loadFlags;
-      DebugOnly<nsresult> rv = mChannel->GetLoadFlags(&loadFlags);
-      NS_ASSERTION(NS_SUCCEEDED(rv), "GetLoadFlags() failed!");
-
-      loadFlags &= ~nsIRequest::LOAD_BACKGROUND;
-      ModifyLoadFlags(loadFlags);
+    if (loadFlags & nsIRequest::LOAD_BACKGROUND) {
+      ModifyLoadFlags(loadFlags & ~nsIRequest::LOAD_BACKGROUND);
     }
   }
 
@@ -533,9 +498,15 @@ already_AddRefed<nsIPrincipal> ChannelMediaResource::GetCurrentPrincipal()
   return principal.forget();
 }
 
+bool ChannelMediaResource::CanClone()
+{
+  return mCacheStream.IsAvailableForSharing();
+}
+
 MediaResource* ChannelMediaResource::CloneData(nsMediaDecoder* aDecoder)
 {
   NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
+  NS_ASSERTION(mCacheStream.IsAvailableForSharing(), "Stream can't be cloned");
 
   ChannelMediaResource* resource = new ChannelMediaResource(aDecoder, nsnull, mURI);
   if (resource) {
@@ -759,6 +730,14 @@ ChannelMediaResource::CacheClientNotifyDataEnded(nsresult aStatus)
   NS_DispatchToMainThread(event, NS_DISPATCH_NORMAL);
 }
 
+void
+ChannelMediaResource::CacheClientNotifyPrincipalChanged()
+{
+  NS_ASSERTION(NS_IsMainThread(), "Don't call on non-main thread");
+
+  mDecoder->NotifyPrincipalChanged();
+}
+
 nsresult
 ChannelMediaResource::CacheClientSeek(PRInt64 aOffset, bool aResume)
 {
@@ -913,6 +892,7 @@ public:
   virtual void     Suspend(bool aCloseImmediately) {}
   virtual void     Resume() {}
   virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal();
+  virtual bool     CanClone();
   virtual MediaResource* CloneData(nsMediaDecoder* aDecoder);
   virtual nsresult ReadFromCache(char* aBuffer, PRInt64 aOffset, PRUint32 aCount);
 
@@ -1090,6 +1070,11 @@ already_AddRefed<nsIPrincipal> FileMediaResource::GetCurrentPrincipal()
   return principal.forget();
 }
 
+bool FileMediaResource::CanClone()
+{
+  return true;
+}
+
 MediaResource* FileMediaResource::CloneData(nsMediaDecoder* aDecoder)
 {
   NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
@@ -1199,7 +1184,6 @@ void MediaResource::MoveLoadsToBackground() {
     return;
   }
 
-  nsresult rv;
   nsHTMLMediaElement* element = mDecoder->GetMediaElement();
   if (!element) {
     NS_WARNING("Null element in MediaResource::MoveLoadsToBackground()");
@@ -1210,7 +1194,7 @@ void MediaResource::MoveLoadsToBackground() {
   if (NS_SUCCEEDED(mChannel->IsPending(&isPending)) &&
       isPending) {
     nsLoadFlags loadFlags;
-    rv = mChannel->GetLoadFlags(&loadFlags);
+    DebugOnly<nsresult> rv = mChannel->GetLoadFlags(&loadFlags);
     NS_ASSERTION(NS_SUCCEEDED(rv), "GetLoadFlags() failed!");
 
     loadFlags |= nsIRequest::LOAD_BACKGROUND;
@@ -1221,7 +1205,7 @@ void MediaResource::MoveLoadsToBackground() {
 void MediaResource::ModifyLoadFlags(nsLoadFlags aFlags)
 {
   nsCOMPtr<nsILoadGroup> loadGroup;
-  nsresult rv = mChannel->GetLoadGroup(getter_AddRefs(loadGroup));
+  DebugOnly<nsresult> rv = mChannel->GetLoadGroup(getter_AddRefs(loadGroup));
   NS_ASSERTION(NS_SUCCEEDED(rv), "GetLoadGroup() failed!");
 
   nsresult status;

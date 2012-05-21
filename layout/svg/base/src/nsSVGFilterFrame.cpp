@@ -1,54 +1,21 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Main header first:
 #include "nsSVGFilterFrame.h"
-#include "nsIDocument.h"
-#include "nsSVGOuterSVGFrame.h"
-#include "nsGkAtoms.h"
-#include "nsSVGEffects.h"
-#include "nsSVGUtils.h"
-#include "nsSVGFilterElement.h"
-#include "nsSVGFilters.h"
+
+// Keep others in (case-insensitive) order:
 #include "gfxASurface.h"
-#include "gfxContext.h"
-#include "gfxImageSurface.h"
-#include "nsSVGFilterPaintCallback.h"
-#include "nsSVGRect.h"
-#include "nsSVGFilterInstance.h"
 #include "gfxUtils.h"
+#include "nsGkAtoms.h"
+#include "nsRenderingContext.h"
+#include "nsSVGEffects.h"
+#include "nsSVGFilterElement.h"
+#include "nsSVGFilterInstance.h"
+#include "nsSVGFilterPaintCallback.h"
+#include "nsSVGUtils.h"
 
 nsIFrame*
 NS_NewSVGFilterFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
@@ -76,6 +43,24 @@ MapDeviceRectToFilterSpace(const gfxMatrix& aMatrix,
   return rect;
 }
 
+class nsSVGFilterFrame::AutoFilterReferencer
+{
+public:
+  AutoFilterReferencer(nsSVGFilterFrame *aFrame)
+    : mFrame(aFrame)
+  {
+    // Reference loops should normally be detected in advance and handled, so
+    // we're not expecting to encounter them here
+    NS_ABORT_IF_FALSE(!mFrame->mLoopFlag, "Undetected reference loop!");
+    mFrame->mLoopFlag = true;
+  }
+  ~AutoFilterReferencer() {
+    mFrame->mLoopFlag = false;
+  }
+private:
+  nsSVGFilterFrame *mFrame;
+};
+
 class NS_STACK_CLASS nsAutoFilterInstance {
 public:
   nsAutoFilterInstance(nsIFrame *aTarget,
@@ -83,8 +68,9 @@ public:
                        nsSVGFilterPaintCallback *aPaint,
                        const nsIntRect *aDirtyOutputRect,
                        const nsIntRect *aDirtyInputRect,
-                       const nsIntRect *aOverrideSourceBBox);
-  ~nsAutoFilterInstance();
+                       const nsIntRect *aOverrideSourceBBox,
+                       const gfxMatrix *aOverrideUserToDeviceSpace = nsnull);
+  ~nsAutoFilterInstance() {}
 
   // If this returns null, then draw nothing. Either the filter draws
   // nothing or it is "in error".
@@ -92,9 +78,6 @@ public:
 
 private:
   nsAutoPtr<nsSVGFilterInstance> mInstance;
-  // Store mTarget separately even though mInstance has it, because if
-  // mInstance creation fails we still need to be able to clean up
-  nsISVGChildFrame*              mTarget;
 };
 
 nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
@@ -102,17 +85,15 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
                                            nsSVGFilterPaintCallback *aPaint,
                                            const nsIntRect *aDirtyOutputRect,
                                            const nsIntRect *aDirtyInputRect,
-                                           const nsIntRect *aOverrideSourceBBox)
+                                           const nsIntRect *aOverrideSourceBBox,
+                                           const gfxMatrix *aOverrideUserToDeviceSpace)
 {
-  mTarget = do_QueryFrame(aTarget);
-
-  nsSVGFilterElement *filter =
-    static_cast<nsSVGFilterElement*>(aFilterFrame->GetContent());
+  const nsSVGFilterElement *filter = aFilterFrame->GetFilterContent();
 
   PRUint16 filterUnits =
-    filter->mEnumAttributes[nsSVGFilterElement::FILTERUNITS].GetAnimValue();
+    aFilterFrame->GetEnumValue(nsSVGFilterElement::FILTERUNITS);
   PRUint16 primitiveUnits =
-    filter->mEnumAttributes[nsSVGFilterElement::PRIMITIVEUNITS].GetAnimValue();
+    aFilterFrame->GetEnumValue(nsSVGFilterElement::PRIMITIVEUNITS);
 
   gfxRect bbox;
   if (aOverrideSourceBBox) {
@@ -134,8 +115,16 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
   // interpreted as a fraction of the bounding box and sometimes as user-space
   // units). So really only percentage values should be used in this case.
   
+  nsSVGLength2 XYWH[4];
+  NS_ABORT_IF_FALSE(sizeof(filter->mLengthAttributes) == sizeof(XYWH),
+                    "XYWH size incorrect");
+  memcpy(XYWH, filter->mLengthAttributes, sizeof(filter->mLengthAttributes));
+  XYWH[0] = *aFilterFrame->GetLengthValue(nsSVGFilterElement::X);
+  XYWH[1] = *aFilterFrame->GetLengthValue(nsSVGFilterElement::Y);
+  XYWH[2] = *aFilterFrame->GetLengthValue(nsSVGFilterElement::WIDTH);
+  XYWH[3] = *aFilterFrame->GetLengthValue(nsSVGFilterElement::HEIGHT);
   gfxRect filterRegion = nsSVGUtils::GetRelativeRect(filterUnits,
-    filter->mLengthAttributes, bbox, aTarget);
+    XYWH, bbox, aTarget);
 
   if (filterRegion.Width() <= 0 || filterRegion.Height() <= 0) {
     // 0 disables rendering, < 0 is error. dispatch error console warning
@@ -143,21 +132,22 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
     return;
   }
 
-  gfxMatrix userToDeviceSpace = nsSVGUtils::GetCanvasTM(aTarget);
-  if (userToDeviceSpace.IsSingular()) {
-    // nothing to draw
-    return;
+  gfxMatrix userToDeviceSpace;
+  if (aOverrideUserToDeviceSpace) {
+    userToDeviceSpace = *aOverrideUserToDeviceSpace;
+  } else {
+    userToDeviceSpace = nsSVGUtils::GetCanvasTM(aTarget);
   }
   
   // Calculate filterRes (the width and height of the pixel buffer of the
   // temporary offscreen surface that we'll paint into):
 
   gfxIntSize filterRes;
-  const nsSVGIntegerPair& filterResAttrs =
-    filter->mIntegerPairAttributes[nsSVGFilterElement::FILTERRES];
-  if (filterResAttrs.IsExplicitlySet()) {
-    PRInt32 filterResX = filterResAttrs.GetAnimValue(nsSVGIntegerPair::eFirst);
-    PRInt32 filterResY = filterResAttrs.GetAnimValue(nsSVGIntegerPair::eSecond);
+  const nsSVGIntegerPair* filterResAttrs =
+    aFilterFrame->GetIntegerPairValue(nsSVGFilterElement::FILTERRES);
+  if (filterResAttrs->IsExplicitlySet()) {
+    PRInt32 filterResX = filterResAttrs->GetAnimValue(nsSVGIntegerPair::eFirst);
+    PRInt32 filterResY = filterResAttrs->GetAnimValue(nsSVGIntegerPair::eSecond);
     if (filterResX <= 0 || filterResY <= 0) {
       // 0 disables rendering, < 0 is error. dispatch error console warning?
       return;
@@ -177,7 +167,12 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
   } else {
     // Match filterRes as closely as possible to the pixel density of the nearest
     // outer 'svg' device space:
-    float scale = nsSVGUtils::MaxExpansion(userToDeviceSpace);
+    gfxMatrix canvasTM = nsSVGUtils::GetCanvasTM(aTarget);
+    if (canvasTM.IsSingular()) {
+      // nothing to draw
+      return;
+    }
+    float scale = nsSVGUtils::MaxExpansion(canvasTM);
 
     filterRegion.Scale(scale);
     filterRegion.RoundOut();
@@ -210,8 +205,20 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
   nsIntRect targetBoundsDeviceSpace;
   nsISVGChildFrame* svgTarget = do_QueryFrame(aTarget);
   if (svgTarget) {
-    targetBoundsDeviceSpace.UnionRect(targetBoundsDeviceSpace,
-      svgTarget->GetCoveredRegion().ToOutsidePixels(aTarget->PresContext()->AppUnitsPerDevPixel()));
+    if (aOverrideUserToDeviceSpace) {
+      // If aOverrideUserToDeviceSpace is specified, it is a simple
+      // CSS-px-to-dev-px transform passed by nsSVGFilterFrame::GetFilterBBox()
+      // when requesting the filter expansion of the overflow rects in frame
+      // space. In this case GetCoveredRegion() is not what we want since it is
+      // in outer-<svg> space, GetFilterBBox passes in the pre-filter bounds of
+      // the frame in frame space for us to use instead.
+      NS_ASSERTION(aDirtyInputRect, "Who passed aOverrideUserToDeviceSpace?");
+      targetBoundsDeviceSpace = *aDirtyInputRect;
+    } else {
+      targetBoundsDeviceSpace =
+        svgTarget->GetCoveredRegion().ToOutsidePixels(aTarget->
+          PresContext()->AppUnitsPerDevPixel());
+    }
   }
   nsIntRect targetBoundsFilterSpace =
     MapDeviceRectToFilterSpace(deviceToFilterSpace, filterRes, &targetBoundsDeviceSpace);
@@ -224,8 +231,131 @@ nsAutoFilterInstance::nsAutoFilterInstance(nsIFrame *aTarget,
                                       primitiveUnits);
 }
 
-nsAutoFilterInstance::~nsAutoFilterInstance()
+PRUint16
+nsSVGFilterFrame::GetEnumValue(PRUint32 aIndex, nsIContent *aDefault)
 {
+  nsSVGEnum& thisEnum =
+    static_cast<nsSVGFilterElement *>(mContent)->mEnumAttributes[aIndex];
+
+  if (thisEnum.IsExplicitlySet())
+    return thisEnum.GetAnimValue();
+
+  AutoFilterReferencer filterRef(this);
+
+  nsSVGFilterFrame *next = GetReferencedFilterIfNotInUse();
+  return next ? next->GetEnumValue(aIndex, aDefault) :
+    static_cast<nsSVGFilterElement *>(aDefault)->
+      mEnumAttributes[aIndex].GetAnimValue();
+}
+
+const nsSVGIntegerPair *
+nsSVGFilterFrame::GetIntegerPairValue(PRUint32 aIndex, nsIContent *aDefault)
+{
+  const nsSVGIntegerPair *thisIntegerPair =
+    &static_cast<nsSVGFilterElement *>(mContent)->mIntegerPairAttributes[aIndex];
+
+  if (thisIntegerPair->IsExplicitlySet())
+    return thisIntegerPair;
+
+  AutoFilterReferencer filterRef(this);
+
+  nsSVGFilterFrame *next = GetReferencedFilterIfNotInUse();
+  return next ? next->GetIntegerPairValue(aIndex, aDefault) :
+    &static_cast<nsSVGFilterElement *>(aDefault)->mIntegerPairAttributes[aIndex];
+}
+
+const nsSVGLength2 *
+nsSVGFilterFrame::GetLengthValue(PRUint32 aIndex, nsIContent *aDefault)
+{
+  const nsSVGLength2 *thisLength =
+    &static_cast<nsSVGFilterElement *>(mContent)->mLengthAttributes[aIndex];
+
+  if (thisLength->IsExplicitlySet())
+    return thisLength;
+
+  AutoFilterReferencer filterRef(this);
+
+  nsSVGFilterFrame *next = GetReferencedFilterIfNotInUse();
+  return next ? next->GetLengthValue(aIndex, aDefault) :
+    &static_cast<nsSVGFilterElement *>(aDefault)->mLengthAttributes[aIndex];
+}
+
+const nsSVGFilterElement *
+nsSVGFilterFrame::GetFilterContent(nsIContent *aDefault)
+{
+  for (nsIContent* child = mContent->GetFirstChild();
+       child;
+       child = child->GetNextSibling()) {
+    nsRefPtr<nsSVGFE> primitive;
+    CallQueryInterface(child, (nsSVGFE**)getter_AddRefs(primitive));
+    if (primitive) {
+      return static_cast<nsSVGFilterElement *>(mContent);
+    }
+  }
+
+  AutoFilterReferencer filterRef(this);
+
+  nsSVGFilterFrame *next = GetReferencedFilterIfNotInUse();
+  return next ? next->GetFilterContent(aDefault) :
+    static_cast<nsSVGFilterElement *>(aDefault);
+}
+
+nsSVGFilterFrame *
+nsSVGFilterFrame::GetReferencedFilter()
+{
+  if (mNoHRefURI)
+    return nsnull;
+
+  nsSVGPaintingProperty *property = static_cast<nsSVGPaintingProperty*>
+    (Properties().Get(nsSVGEffects::HrefProperty()));
+
+  if (!property) {
+    // Fetch our Filter element's xlink:href attribute
+    nsSVGFilterElement *filter = static_cast<nsSVGFilterElement *>(mContent);
+    nsAutoString href;
+    filter->mStringAttributes[nsSVGFilterElement::HREF].GetAnimValue(href, filter);
+    if (href.IsEmpty()) {
+      mNoHRefURI = true;
+      return nsnull; // no URL
+    }
+
+    // Convert href to an nsIURI
+    nsCOMPtr<nsIURI> targetURI;
+    nsCOMPtr<nsIURI> base = mContent->GetBaseURI();
+    nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(targetURI), href,
+                                              mContent->GetCurrentDoc(), base);
+
+    property =
+      nsSVGEffects::GetPaintingProperty(targetURI, this, nsSVGEffects::HrefProperty());
+    if (!property)
+      return nsnull;
+  }
+
+  nsIFrame *result = property->GetReferencedFrame();
+  if (!result)
+    return nsnull;
+
+  nsIAtom* frameType = result->GetType();
+  if (frameType != nsGkAtoms::svgFilterFrame)
+    return nsnull;
+
+  return static_cast<nsSVGFilterFrame*>(result);
+}
+
+nsSVGFilterFrame *
+nsSVGFilterFrame::GetReferencedFilterIfNotInUse()
+{
+  nsSVGFilterFrame *referenced = GetReferencedFilter();
+  if (!referenced)
+    return nsnull;
+
+  if (referenced->mLoopFlag) {
+    // XXXjwatt: we should really send an error to the JavaScript Console here:
+    NS_WARNING("Filter reference loop detected while inheriting attribute!");
+    return nsnull;
+  }
+
+  return referenced;
 }
 
 NS_IMETHODIMP
@@ -233,16 +363,21 @@ nsSVGFilterFrame::AttributeChanged(PRInt32  aNameSpaceID,
                                    nsIAtom* aAttribute,
                                    PRInt32  aModType)
 {
-  if ((aNameSpaceID == kNameSpaceID_None &&
-       (aAttribute == nsGkAtoms::x ||
-        aAttribute == nsGkAtoms::y ||
-        aAttribute == nsGkAtoms::width ||
-        aAttribute == nsGkAtoms::height ||
-        aAttribute == nsGkAtoms::filterRes ||
-        aAttribute == nsGkAtoms::filterUnits ||
-        aAttribute == nsGkAtoms::primitiveUnits)) ||
-       (aNameSpaceID == kNameSpaceID_XLink &&
-        aAttribute == nsGkAtoms::href)) {
+  if (aNameSpaceID == kNameSpaceID_None &&
+      (aAttribute == nsGkAtoms::x ||
+       aAttribute == nsGkAtoms::y ||
+       aAttribute == nsGkAtoms::width ||
+       aAttribute == nsGkAtoms::height ||
+       aAttribute == nsGkAtoms::filterRes ||
+       aAttribute == nsGkAtoms::filterUnits ||
+       aAttribute == nsGkAtoms::primitiveUnits)) {
+    nsSVGEffects::InvalidateRenderingObservers(this);
+  } else if (aNameSpaceID == kNameSpaceID_XLink &&
+             aAttribute == nsGkAtoms::href) {
+    // Blow away our reference, if any
+    Properties().Delete(nsSVGEffects::HrefProperty());
+    mNoHRefURI = false;
+    // And update whoever references us
     nsSVGEffects::InvalidateRenderingObservers(this);
   }
   return nsSVGFilterFrameBase::AttributeChanged(aNameSpaceID,
@@ -250,7 +385,7 @@ nsSVGFilterFrame::AttributeChanged(PRInt32  aNameSpaceID,
 }
 
 nsresult
-nsSVGFilterFrame::FilterPaint(nsSVGRenderState *aContext,
+nsSVGFilterFrame::FilterPaint(nsRenderingContext *aContext,
                               nsIFrame *aTarget,
                               nsSVGFilterPaintCallback *aPaintCallback,
                               const nsIntRect *aDirtyRect)
@@ -263,7 +398,7 @@ nsSVGFilterFrame::FilterPaint(nsSVGRenderState *aContext,
   nsRefPtr<gfxASurface> result;
   nsresult rv = instance.get()->Render(getter_AddRefs(result));
   if (NS_SUCCEEDED(rv) && result) {
-    nsSVGUtils::CompositeSurfaceMatrix(aContext->GetGfxContext(),
+    nsSVGUtils::CompositeSurfaceMatrix(aContext->ThebesContext(),
       result, instance.get()->GetFilterSpaceToDeviceSpaceTransform(), 1.0);
   }
   return rv;
@@ -325,9 +460,27 @@ nsSVGFilterFrame::GetSourceForInvalidArea(nsIFrame *aTarget, const nsIntRect& aR
 }
 
 nsIntRect
-nsSVGFilterFrame::GetFilterBBox(nsIFrame *aTarget, const nsIntRect *aSourceBBox)
+nsSVGFilterFrame::GetFilterBBox(nsIFrame *aTarget,
+                                const nsIntRect *aOverrideBBox,
+                                const nsIntRect *aPreFilterBounds)
 {
-  nsAutoFilterInstance instance(aTarget, this, nsnull, nsnull, nsnull, aSourceBBox);
+  bool overrideCTM = false;
+  gfxMatrix ctm;
+
+  if (aTarget->GetStateBits() & NS_FRAME_SVG_LAYOUT) {
+    // For most filter operations on SVG frames we want information in
+    // outer-<svg> device space, but in this case we want the visual overflow
+    // rect relative to aTarget itself. For that we need to prevent the filter
+    // code using GetCanvasTM().
+    overrideCTM = true;
+    PRInt32 appUnitsPerDevPixel = aTarget->PresContext()->AppUnitsPerDevPixel();
+    float devPxPerCSSPx =
+      1 / nsPresContext::AppUnitsToFloatCSSPixels(appUnitsPerDevPixel);
+    ctm.Scale(devPxPerCSSPx, devPxPerCSSPx);
+  }
+
+  nsAutoFilterInstance instance(aTarget, this, nsnull, nsnull, aPreFilterBounds,
+                                aOverrideBBox, overrideCTM ? &ctm : nsnull);
   if (!instance.get())
     return nsIntRect();
 

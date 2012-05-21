@@ -1,52 +1,22 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2004
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsSVGPathGeometryFrame.h"
-#include "imgIContainer.h"
-#include "nsStubImageDecoderObserver.h"
-#include "nsImageLoadingContent.h"
-#include "nsIDOMSVGImageElement.h"
-#include "nsLayoutUtils.h"
-#include "nsSVGImageElement.h"
-#include "nsSVGUtils.h"
+// Keep in (case-insensitive) order:
 #include "gfxContext.h"
 #include "gfxMatrix.h"
-#include "nsIInterfaceRequestorUtils.h"
 #include "gfxPlatform.h"
+#include "imgIContainer.h"
+#include "nsIDOMSVGImageElement.h"
+#include "nsLayoutUtils.h"
+#include "nsRenderingContext.h"
+#include "nsStubImageDecoderObserver.h"
+#include "nsSVGEffects.h"
+#include "nsSVGImageElement.h"
+#include "nsSVGPathGeometryFrame.h"
 #include "nsSVGSVGElement.h"
+#include "nsSVGUtils.h"
 
 using namespace mozilla;
 
@@ -90,11 +60,11 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsISVGChildFrame interface:
-  NS_IMETHOD PaintSVG(nsSVGRenderState *aContext, const nsIntRect *aDirtyRect);
+  NS_IMETHOD PaintSVG(nsRenderingContext *aContext, const nsIntRect *aDirtyRect);
   NS_IMETHOD_(nsIFrame*) GetFrameForPoint(const nsPoint &aPoint);
+  virtual void UpdateBounds();
 
   // nsSVGPathGeometryFrame methods:
-  NS_IMETHOD UpdateCoveredRegion();
   virtual PRUint16 GetHitTestFlags();
 
   // nsIFrame interface:
@@ -217,14 +187,18 @@ nsSVGImageFrame::AttributeChanged(PRInt32         aNameSpaceID,
                                   nsIAtom*        aAttribute,
                                   PRInt32         aModType)
 {
-  if (aNameSpaceID == kNameSpaceID_None &&
-      (aAttribute == nsGkAtoms::x ||
-       aAttribute == nsGkAtoms::y ||
-       aAttribute == nsGkAtoms::width ||
-       aAttribute == nsGkAtoms::height ||
-       aAttribute == nsGkAtoms::preserveAspectRatio)) {
-    nsSVGUtils::UpdateGraphic(this);
-    return NS_OK;
+  if (aNameSpaceID == kNameSpaceID_None) {
+    if (aAttribute == nsGkAtoms::x ||
+        aAttribute == nsGkAtoms::y ||
+        aAttribute == nsGkAtoms::width ||
+        aAttribute == nsGkAtoms::height) {
+      nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
+      return NS_OK;
+    }
+    else if (aAttribute == nsGkAtoms::preserveAspectRatio) {
+      nsSVGUtils::InvalidateBounds(this);
+      return NS_OK;
+    }
   }
   if (aNameSpaceID == kNameSpaceID_XLink &&
       aAttribute == nsGkAtoms::href) {
@@ -309,7 +283,7 @@ nsSVGImageFrame::TransformContextForPainting(gfxContext* aGfxContext)
 //----------------------------------------------------------------------
 // nsISVGChildFrame methods:
 NS_IMETHODIMP
-nsSVGImageFrame::PaintSVG(nsSVGRenderState *aContext,
+nsSVGImageFrame::PaintSVG(nsRenderingContext *aContext,
                           const nsIntRect *aDirtyRect)
 {
   nsresult rv = NS_OK;
@@ -320,8 +294,8 @@ nsSVGImageFrame::PaintSVG(nsSVGRenderState *aContext,
   float x, y, width, height;
   nsSVGImageElement *imgElem = static_cast<nsSVGImageElement*>(mContent);
   imgElem->GetAnimatedLengthValues(&x, &y, &width, &height, nsnull);
-  if (width <= 0 || height <= 0)
-    return NS_OK;
+  NS_ASSERTION(width > 0 && height > 0,
+               "Should only be painting things with valid width/height");
 
   if (!mImageContainer) {
     nsCOMPtr<imgIRequest> currentRequest;
@@ -335,7 +309,7 @@ nsSVGImageFrame::PaintSVG(nsSVGRenderState *aContext,
   }
 
   if (mImageContainer) {
-    gfxContext* ctx = aContext->GetGfxContext();
+    gfxContext* ctx = aContext->ThebesContext();
     gfxContextAutoSaveRestore autoRestorer(ctx);
 
     if (GetStyleDisplay()->IsScrollableOverflow()) {
@@ -404,7 +378,7 @@ nsSVGImageFrame::PaintSVG(nsSVGRenderState *aContext,
       // That method needs our image to have a fixed native width & height,
       // and that's not always true for TYPE_VECTOR images.
       nsLayoutUtils::DrawSingleImage(
-        aContext->GetRenderingContext(this),
+        aContext,
         mImageContainer,
         nsLayoutUtils::GetGraphicsFilterForFrame(this),
         destRect,
@@ -414,7 +388,7 @@ nsSVGImageFrame::PaintSVG(nsSVGRenderState *aContext,
       rootSVGElem->ClearImageOverridePreserveAspectRatio();
     } else { // mImageContainer->GetType() == TYPE_RASTER
       nsLayoutUtils::DrawSingleUnscaledImage(
-        aContext->GetRenderingContext(this),
+        aContext,
         mImageContainer,
         nsLayoutUtils::GetGraphicsFilterForFrame(this),
         nsPoint(0, 0),
@@ -478,10 +452,18 @@ nsSVGImageFrame::GetType() const
 
 // Lie about our fill/stroke so that covered region and hit detection work properly
 
-NS_IMETHODIMP
-nsSVGImageFrame::UpdateCoveredRegion()
+void
+nsSVGImageFrame::UpdateBounds()
 {
-  mRect.SetEmpty();
+  NS_ASSERTION(nsSVGUtils::OuterSVGIsCallingUpdateBounds(this),
+               "This call is probaby a wasteful mistake");
+
+  NS_ABORT_IF_FALSE(!(GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD),
+                    "UpdateBounds mechanism not designed for this");
+
+  if (!nsSVGUtils::NeedsUpdatedBounds(this)) {
+    return;
+  }
 
   gfxContext context(gfxPlatform::GetPlatform()->ScreenReferenceSurface());
 
@@ -493,13 +475,35 @@ nsSVGImageFrame::UpdateCoveredRegion()
   if (!extent.IsEmpty()) {
     mRect = nsLayoutUtils::RoundGfxRectToAppRect(extent, 
               PresContext()->AppUnitsPerCSSPixel());
+  } else {
+    mRect.SetEmpty();
   }
 
   // See bug 614732 comment 32.
   mCoveredRegion = nsSVGUtils::TransformFrameRectToOuterSVG(
     mRect, GetCanvasTM(), PresContext());
 
-  return NS_OK;
+  if (mState & NS_FRAME_FIRST_REFLOW) {
+    // Make sure we have our filter property (if any) before calling
+    // FinishAndStoreOverflow (subsequent filter changes are handled off
+    // nsChangeHint_UpdateEffects):
+    nsSVGEffects::UpdateEffects(this);
+  }
+
+  nsRect overflow = nsRect(nsPoint(0,0), mRect.Size());
+  nsOverflowAreas overflowAreas(overflow, overflow);
+  FinishAndStoreOverflow(overflowAreas, mRect.Size());
+
+  mState &= ~(NS_FRAME_FIRST_REFLOW | NS_FRAME_IS_DIRTY |
+              NS_FRAME_HAS_DIRTY_CHILDREN);
+
+  if (!(GetParent()->GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
+    // We only invalidate if our outer-<svg> has already had its
+    // initial reflow (since if it hasn't, its entire area will be
+    // invalidated when it gets that initial reflow):
+    // XXXSDL Let FinishAndStoreOverflow do this.
+    nsSVGUtils::InvalidateBounds(this, true);
+  }
 }
 
 PRUint16
@@ -559,7 +563,7 @@ NS_IMETHODIMP nsSVGImageListener::OnStopDecode(imgIRequest *aRequest,
   if (!mFrame)
     return NS_ERROR_FAILURE;
 
-  nsSVGUtils::UpdateGraphic(mFrame);
+  nsSVGUtils::InvalidateAndScheduleBoundsUpdate(mFrame);
   return NS_OK;
 }
 
@@ -570,18 +574,23 @@ NS_IMETHODIMP nsSVGImageListener::FrameChanged(imgIRequest *aRequest,
   if (!mFrame)
     return NS_ERROR_FAILURE;
 
-  nsSVGUtils::UpdateGraphic(mFrame);
+  // No new dimensions, so we don't need to call
+  // nsSVGUtils::InvalidateAndScheduleBoundsUpdate.
+  nsSVGEffects::InvalidateRenderingObservers(mFrame);
+  nsSVGUtils::InvalidateBounds(mFrame);
   return NS_OK;
 }
 
 NS_IMETHODIMP nsSVGImageListener::OnStartContainer(imgIRequest *aRequest,
                                                    imgIContainer *aContainer)
 {
+  // Called once the resource's dimensions have been obtained.
+
   if (!mFrame)
     return NS_ERROR_FAILURE;
 
   mFrame->mImageContainer = aContainer;
-  nsSVGUtils::UpdateGraphic(mFrame);
+  nsSVGUtils::InvalidateAndScheduleBoundsUpdate(mFrame);
 
   return NS_OK;
 }

@@ -1,42 +1,11 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:cindent:ts=2:et:sw=2:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Assertions.h"
+#include "mozilla/HashFunctions.h"
 
 #include "nsAtomTable.h"
 #include "nsStaticAtom.h"
@@ -50,9 +19,12 @@
 #include "nsDataHashtable.h"
 #include "nsHashKeys.h"
 #include "nsAutoPtr.h"
+#include "nsUnicharUtils.h"
 
 #define PL_ARENA_CONST_ALIGN_MASK 3
 #include "plarena.h"
+
+using namespace mozilla;
 
 /**
  * The shared hash table for atom lookups.
@@ -85,11 +57,11 @@ static bool gStaticAtomTableSealed = false;
 
 class AtomImpl : public nsIAtom {
 public:
-  AtomImpl(const nsAString& aString);
+  AtomImpl(const nsAString& aString, PLDHashNumber aKeyHash);
 
   // This is currently only used during startup when creating a permanent atom
   // from NS_RegisterStaticAtoms
-  AtomImpl(nsStringBuffer* aData, PRUint32 aLength);
+  AtomImpl(nsStringBuffer* aData, PRUint32 aLength, PLDHashNumber aKeyHash);
 
 protected:
   // This is only intended to be used when a normal atom is turned into a
@@ -132,11 +104,12 @@ public:
 
 class PermanentAtomImpl : public AtomImpl {
 public:
-  PermanentAtomImpl(const nsAString& aString)
-    : AtomImpl(aString)
+  PermanentAtomImpl(const nsAString& aString, PLDHashNumber aKeyHash)
+    : AtomImpl(aString, aKeyHash)
   {}
-  PermanentAtomImpl(nsStringBuffer* aData, PRUint32 aLength)
-    : AtomImpl(aData, aLength)
+  PermanentAtomImpl(nsStringBuffer* aData, PRUint32 aLength,
+                    PLDHashNumber aKeyHash)
+    : AtomImpl(aData, aLength, aKeyHash)
   {}
   PermanentAtomImpl()
   {}
@@ -191,7 +164,7 @@ AtomTableGetHash(PLDHashTable *table, const void *key)
 
   if (k->mUTF8String) {
     bool err;
-    PRUint32 hash = nsCRT::HashCodeAsUTF16(k->mUTF8String, k->mLength, &err);
+    PRUint32 hash = HashUTF8AsUTF16(k->mUTF8String, k->mLength, &err);
     if (err) {
       AtomTableKey* mutableKey = const_cast<AtomTableKey*>(k);
       mutableKey->mUTF8String = nsnull;
@@ -201,7 +174,7 @@ AtomTableGetHash(PLDHashTable *table, const void *key)
     return hash;
   }
 
-  return nsCRT::HashCode(k->mUTF16String, k->mLength);
+  return HashString(k->mUTF16String, k->mLength);
 }
 
 static bool
@@ -322,7 +295,7 @@ NS_PurgeAtomTable()
   }
 }
 
-AtomImpl::AtomImpl(const nsAString& aString)
+AtomImpl::AtomImpl(const nsAString& aString, PLDHashNumber aKeyHash)
 {
   mLength = aString.Length();
   nsStringBuffer* buf = nsStringBuffer::FromString(aString);
@@ -337,19 +310,28 @@ AtomImpl::AtomImpl(const nsAString& aString)
     mString[mLength] = PRUnichar(0);
   }
 
+  // The low bit of aKeyHash is generally useless, so shift it out
+  MOZ_ASSERT(sizeof(mHash) == sizeof(PLDHashNumber));
+  mHash = aKeyHash >> 1;
+
   NS_ASSERTION(mString[mLength] == PRUnichar(0), "null terminated");
   NS_ASSERTION(buf && buf->StorageSize() >= (mLength+1) * sizeof(PRUnichar),
                "enough storage");
   NS_ASSERTION(Equals(aString), "correct data");
 }
 
-AtomImpl::AtomImpl(nsStringBuffer* aStringBuffer, PRUint32 aLength)
+AtomImpl::AtomImpl(nsStringBuffer* aStringBuffer, PRUint32 aLength,
+                   PLDHashNumber aKeyHash)
 {
   mLength = aLength;
   mString = static_cast<PRUnichar*>(aStringBuffer->Data());
   // Technically we could currently avoid doing this addref by instead making
   // the static atom buffers have an initial refcount of 2.
   aStringBuffer->AddRef();
+
+  // The low bit of aKeyHash is generally useless, so shift it out
+  MOZ_ASSERT(sizeof(mHash) == sizeof(PLDHashNumber));
+  mHash = aKeyHash >> 1;
 
   NS_ASSERTION(mString[mLength] == PRUnichar(0), "null terminated");
   NS_ASSERTION(aStringBuffer &&
@@ -537,7 +519,7 @@ class CheckStaticAtomSizes
 };
 
 nsresult
-NS_RegisterStaticAtoms(const nsStaticAtom* aAtoms, PRUint32 aAtomCount)
+RegisterStaticAtoms(const nsStaticAtom* aAtoms, PRUint32 aAtomCount)
 {
   // this does three things:
   // 1) wraps each static atom in a wrapper, if necessary
@@ -546,11 +528,12 @@ NS_RegisterStaticAtoms(const nsStaticAtom* aAtoms, PRUint32 aAtomCount)
   
   if (!gStaticAtomTable && !gStaticAtomTableSealed) {
     gStaticAtomTable = new nsDataHashtable<nsStringHashKey, nsIAtom*>();
-    if (!gStaticAtomTable || !gStaticAtomTable->Init()) {
+    if (!gStaticAtomTable) {
       delete gStaticAtomTable;
       gStaticAtomTable = nsnull;
       return NS_ERROR_OUT_OF_MEMORY;
     }
+    gStaticAtomTable->Init();
   }
   
   for (PRUint32 i=0; i<aAtomCount; i++) {
@@ -579,7 +562,8 @@ NS_RegisterStaticAtoms(const nsStaticAtom* aAtoms, PRUint32 aAtomCount)
     }
     else {
       AtomImpl* atom = new PermanentAtomImpl(aAtoms[i].mStringBuffer,
-                                             stringLen);
+                                             stringLen,
+                                             he->keyHash);
       he->mAtom = atom;
       *aAtoms[i].mAtom = atom;
 
@@ -628,9 +612,10 @@ NS_NewAtom(const nsACString& aUTF8String)
 
   // This results in an extra addref/release of the nsStringBuffer.
   // Unfortunately there doesn't seem to be any APIs to avoid that.
+  // Actually, now there is, sort of: ForgetSharedBuffer.
   nsString str;
   CopyUTF8toUTF16(aUTF8String, str);
-  AtomImpl* atom = new AtomImpl(str);
+  AtomImpl* atom = new AtomImpl(str, he->keyHash);
 
   he->mAtom = atom;
   NS_ADDREF(atom);
@@ -657,7 +642,7 @@ NS_NewAtom(const nsAString& aUTF16String)
     return atom;
   }
 
-  AtomImpl* atom = new AtomImpl(aUTF16String);
+  AtomImpl* atom = new AtomImpl(aUTF16String, he->keyHash);
   he->mAtom = atom;
   NS_ADDREF(atom);
 
@@ -677,7 +662,7 @@ NS_NewPermanentAtom(const nsAString& aUTF16String)
     }
   }
   else {
-    atom = new PermanentAtomImpl(aUTF16String);
+    atom = new PermanentAtomImpl(aUTF16String, he->keyHash);
     he->mAtom = atom;
   }
 

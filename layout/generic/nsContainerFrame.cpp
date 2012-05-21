@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Elika J. Etemad ("fantasai") <fantasai@inkedblade.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* base class #1 for rendering objects that have child lists */
 
@@ -69,7 +35,6 @@
 #include "nsIBaseWindow.h"
 #include "nsThemeConstants.h"
 #include "nsCSSFrameConstructor.h"
-#include "nsThemeConstants.h"
 #include "mozilla/dom/Element.h"
 
 #ifdef NS_DEBUG
@@ -274,7 +239,7 @@ nsContainerFrame::DestroyFrom(nsIFrame* aDestructRoot)
 /////////////////////////////////////////////////////////////////////////////
 // Child frame enumeration
 
-nsFrameList
+const nsFrameList&
 nsContainerFrame::GetChildList(ChildListID aListID) const
 {
   // We only know about the principal child list and the overflow lists.
@@ -1717,14 +1682,16 @@ nsOverflowContinuationTracker::Finish(nsIFrame* aChild)
 {
   NS_PRECONDITION(aChild, "null ptr");
   NS_PRECONDITION(aChild->GetNextInFlow(),
-                "supposed to call Finish *before* deleting next-in-flow!");
+                  "supposed to call Finish *before* deleting next-in-flow!");
 
-  for (nsIFrame* f = aChild; f; f = f->GetNextInFlow()) {
-    // Make sure we drop all references if the only frame
-    // in the overflow containers list is about to be destroyed
+  for (nsIFrame* f = aChild; f; ) {
+    // Make sure we drop all references if all the frames in the
+    // overflow containers list are about to be destroyed.
+    nsIFrame* nif = f->GetNextInFlow();
     if (mOverflowContList &&
-        mOverflowContList->FirstChild() == f->GetNextInFlow() &&
-        !f->GetNextInFlow()->GetNextSibling()) {
+        mOverflowContList->FirstChild() == nif &&
+        (!nif->GetNextSibling() ||
+         nif->GetNextSibling() == nif->GetNextInFlow())) {
       mOverflowContList = nsnull;
       mPrevOverflowCont = nsnull;
       mSentry = nsnull;
@@ -1735,12 +1702,13 @@ nsOverflowContinuationTracker::Finish(nsIFrame* aChild)
       // Step past aChild
       nsIFrame* prevOverflowCont = mPrevOverflowCont;
       StepForward();
-      if (mPrevOverflowCont == f->GetNextInFlow()) {
+      if (mPrevOverflowCont == nif) {
         // Pull mPrevOverflowChild back to aChild's prevSibling:
         // aChild will be removed from our list by our caller
         mPrevOverflowCont = prevOverflowCont;
       }
     }
+    f = nif;
   }
 }
 

@@ -1,65 +1,27 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:expandtab:shiftwidth=4:tabstop=4:
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is Christopher Blizzard
- * <blizzard@mozilla.org>.  Portions created by the Initial Developer
- * are Copyright (C) 2001 the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   Romashin Oleg <romaxa@gmail.com>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Jeremias Bosch <jeremias.bosch@gmail.com>
- *   Steffen Imhof <steffen.imhof@gmail.com>
- *   Tatiana Meshkova <tanya.meshkova@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
-#include <QtGui/QApplication>
-#include <QtGui/QDesktopWidget>
+#include <QApplication>
+#include <QDesktopWidget>
 #include <QtGui/QCursor>
-#include <QtGui/QIcon>
-#include <QtGui/QX11Info>
-#include <QtGui/QGraphicsScene>
-#include <QtGui/QGraphicsView>
-#include <QtGui/QGraphicsSceneContextMenuEvent>
-#include <QtGui/QGraphicsSceneDragDropEvent>
-#include <QtGui/QGraphicsSceneMouseEvent>
-#include <QtGui/QGraphicsSceneHoverEvent>
-#include <QtGui/QGraphicsSceneWheelEvent>
-#include <QtGui/QGraphicsSceneResizeEvent>
-#include <QtGui/QStyleOptionGraphicsItem>
+#include <QIcon>
+#include <QGraphicsScene>
+#include <QGraphicsView>
+#include <QGraphicsSceneContextMenuEvent>
+#include <QGraphicsSceneDragDropEvent>
+#include <QGraphicsSceneMouseEvent>
+#include <QGraphicsSceneHoverEvent>
+#include <QGraphicsSceneWheelEvent>
+#include <QGraphicsSceneResizeEvent>
+#include <QStyleOptionGraphicsItem>
 #include <QPaintEngine>
+#include <QMimeData>
 
 #include <QtCore/QDebug>
 #include <QtCore/QEvent>
@@ -80,7 +42,6 @@ using namespace QtMobility;
 #endif // QT version check 4.6
 
 #ifdef MOZ_X11
-#include <QX11Info>
 #include <X11/Xlib.h>
 #endif //MOZ_X11
 
@@ -157,9 +118,6 @@ extern "C" {
 using namespace mozilla;
 using namespace mozilla::widget;
 
-// imported in nsWidgetFactory.cpp
-bool gDisableNativeTheme = false;
-
 // Cached offscreen surface
 static nsRefPtr<gfxASurface> gBufferSurface;
 #ifdef MOZ_HAVE_SHMIMAGE
@@ -214,15 +172,19 @@ isContextMenuKeyEvent(const QKeyEvent *qe)
 static void
 InitKeyEvent(nsKeyEvent &aEvent, QKeyEvent *aQEvent)
 {
-    aEvent.isShift   = (aQEvent->modifiers() & Qt::ShiftModifier) ? true : false;
-    aEvent.isControl = (aQEvent->modifiers() & Qt::ControlModifier) ? true : false;
-    aEvent.isAlt     = (aQEvent->modifiers() & Qt::AltModifier) ? true : false;
-    aEvent.isMeta    = (aQEvent->modifiers() & Qt::MetaModifier) ? true : false;
+    aEvent.InitBasicModifiers(aQEvent->modifiers() & Qt::ControlModifier,
+                              aQEvent->modifiers() & Qt::AltModifier,
+                              aQEvent->modifiers() & Qt::ShiftModifier,
+                              aQEvent->modifiers() & Qt::MetaModifier);
+
+    // TODO: Needs to set .location for desktop Qt build.
+#ifdef MOZ_PLATFORM_MAEMO
+    aEvent.location  = nsIDOMKeyEvent::DOM_KEY_LOCATION_MOBILE;
+#endif
     aEvent.time      = 0;
 
     if (sAltGrModifier) {
-        aEvent.isControl = true;
-        aEvent.isAlt = true;
+        aEvent.modifiers |= (widget::MODIFIER_CONTROL | widget::MODIFIER_ALT);
     }
 
     // The transformations above and in qt for the keyval are not invertible
@@ -258,12 +220,13 @@ nsWindow::nsWindow()
     mMoveEvent.needDispatch = false;
     
     if (!gGlobalsInitialized) {
+        gfxPlatform::GetPlatform();
         gGlobalsInitialized = true;
 
 #if defined(MOZ_X11) && (MOZ_PLATFORM_MAEMO == 6)
         // This cannot be called on non-main thread
         if (QThread::currentThread() == qApp->thread()) {
-            sPluginIMEAtom = XInternAtom(QX11Info::display(), PLUGIN_VKB_REQUEST_PROP, False);
+            sPluginIMEAtom = XInternAtom(mozilla::DefaultXDisplay(), PLUGIN_VKB_REQUEST_PROP, False);
         }
 #endif
         // It's OK if either of these fail, but it may not be one day.
@@ -344,8 +307,9 @@ UpdateOffScreenBuffers(int aDepth, QSize aSize, QWidget* aWidget = nsnull)
     if (aWidget) {
         if (gfxPlatform::GetPlatform()->ScreenReferenceSurface()->GetType() ==
             gfxASurface::SurfaceTypeImage) {
+            Display* dpy = mozilla::DefaultXDisplay();
             gShmImage = nsShmImage::Create(gBufferMaxSize,
-                                           (Visual*)aWidget->x11Info().visual(),
+                                           DefaultVisualOfScreen(gfxQtPlatform::GetXScreen(aWidget)),
                                            aDepth);
             gBufferSurface = gShmImage->AsSurface();
             return true;
@@ -800,8 +764,7 @@ nsWindow::GetNativeData(PRUint32 aDataType)
     case NS_NATIVE_DISPLAY:
         {
 #ifdef MOZ_X11
-            QWidget *widget = GetViewWidget();
-            return widget ? widget->x11Info().display() : nsnull;
+            return gfxQtPlatform::GetXDisplay(GetViewWidget());
 #else
             return nsnull;
 #endif
@@ -1018,15 +981,23 @@ static already_AddRefed<gfxASurface>
 GetSurfaceForQWidget(QWidget* aDrawable)
 {
     gfxASurface* result =
-        new gfxXlibSurface(aDrawable->x11Info().display(),
-                           aDrawable->handle(),
-                           (Visual*)aDrawable->x11Info().visual(),
+        new gfxXlibSurface(gfxQtPlatform::GetXDisplay(aDrawable),
+                           aDrawable->winId(),
+                           DefaultVisualOfScreen(gfxQtPlatform::GetXScreen(aDrawable)),
                            gfxIntSize(aDrawable->size().width(),
                            aDrawable->size().height()));
     NS_IF_ADDREF(result);
     return result;
 }
 #endif
+
+static void
+DispatchDidPaint(nsIWidget* aWidget)
+{
+    nsEventStatus status;
+    nsPaintEvent didPaintEvent(true, NS_DID_PAINT, aWidget);
+    aWidget->DispatchEvent(&didPaintEvent, status);
+}
 
 nsEventStatus
 nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, QWidget* aWidget)
@@ -1035,6 +1006,15 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
         LOG(("Expose event on destroyed window [%p] window %p\n",
              (void *)this, mWidget));
         return nsEventStatus_eIgnore;
+    }
+
+    // Dispatch WILL_PAINT to allow scripts etc. to run before we
+    // dispatch PAINT
+    {
+        nsEventStatus status;
+        nsPaintEvent willPaintEvent(true, NS_WILL_PAINT, this);
+        willPaintEvent.willSendDidPaint = true;
+        DispatchEvent(&willPaintEvent, status);
     }
 
     if (!mWidget)
@@ -1061,7 +1041,9 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
     }
 
     if (GetLayerManager(nsnull)->GetBackendType() == LayerManager::LAYERS_OPENGL) {
+        aPainter->beginNativePainting();
         nsPaintEvent event(true, NS_PAINT, this);
+        event.willSendDidPaint = true;
         event.refPoint.x = r.x();
         event.refPoint.y = r.y();
         event.region = nsIntRegion(rect);
@@ -1078,7 +1060,10 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
             SetWorldTransform(matr);
 #endif //MOZ_ENABLE_QTMOBILITY
 
-        return DispatchEvent(&event);
+        status = DispatchEvent(&event);
+        aPainter->endNativePainting();
+        DispatchDidPaint(this);
+        return status;
     }
 
     gfxQtPlatform::RenderMode renderMode = gfxQtPlatform::GetPlatform()->GetRenderMode();
@@ -1128,6 +1113,7 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
     }
 
     nsPaintEvent event(true, NS_PAINT, this);
+    event.willSendDidPaint = true;
     event.refPoint.x = rect.x;
     event.refPoint.y = rect.y;
     event.region = nsIntRegion(rect);
@@ -1149,7 +1135,7 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
 
     // Handle buffered painting mode
     if (renderMode == gfxQtPlatform::RENDER_BUFFERED) {
-#ifdef MOZ_X11
+#if defined(MOZ_X11) && defined(Q_WS_X11)
         if (gBufferSurface->GetType() == gfxASurface::SurfaceTypeXlib) {
             // Paint offscreen pixmap to QPainter
             static QPixmap gBufferPixmap;
@@ -1206,6 +1192,7 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
 
     ctx = nsnull;
     targetSurface = nsnull;
+    DispatchDidPaint(this);
 
     // check the return value!
     return status;
@@ -1330,10 +1317,10 @@ nsWindow::InitButtonEvent(nsMouseEvent &aMoveEvent,
     aMoveEvent.refPoint.x = nscoord(aEvent->pos().x());
     aMoveEvent.refPoint.y = nscoord(aEvent->pos().y());
 
-    aMoveEvent.isShift         = ((aEvent->modifiers() & Qt::ShiftModifier) != 0);
-    aMoveEvent.isControl       = ((aEvent->modifiers() & Qt::ControlModifier) != 0);
-    aMoveEvent.isAlt           = ((aEvent->modifiers() & Qt::AltModifier) != 0);
-    aMoveEvent.isMeta          = ((aEvent->modifiers() & Qt::MetaModifier) != 0);
+    aMoveEvent.InitBasicModifiers(aEvent->modifiers() & Qt::ControlModifier,
+                                  aEvent->modifiers() & Qt::AltModifier,
+                                  aEvent->modifiers() & Qt::ShiftModifier,
+                                  aEvent->modifiers() & Qt::MetaModifier);
     aMoveEvent.clickCount      = aClickCount;
 }
 
@@ -1550,7 +1537,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
     PRUint32 domKeyCode = QtKeyCodeToDOMKeyCode(aEvent->key());
 
     // get keymap and modifier map from the Xserver
-    Display *display = QX11Info::display();
+    Display *display = mozilla::DefaultXDisplay();
     int x_min_keycode = 0, x_max_keycode = 0, xkeysyms_per_keycode;
     XDisplayKeycodes(display, &x_min_keycode, &x_max_keycode);
     XModifierKeymap *xmodmap = XGetModifierMapping(display);
@@ -1734,9 +1721,9 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
              // At that time, we need to reset the modifiers
              // because nsEditor will not accept a key event
              // for text input if one or more modifiers are set.
-        event.isControl = false;
-        event.isAlt = false;
-        event.isMeta = false;
+        event.modifiers &= ~(widget::MODIFIER_CONTROL |
+                             widget::MODIFIER_ALT |
+                             widget::MODIFIER_META);
     }
 
     KeySym keysym = NoSymbol;
@@ -1908,7 +1895,7 @@ nsWindow::OnKeyReleaseEvent(QKeyEvent *aEvent)
 #ifdef MOZ_X11
     if (!domKeyCode) {
         // get keymap from the Xserver
-        Display *display = QX11Info::display();
+        Display *display = mozilla::DefaultXDisplay();
         int x_min_keycode = 0, x_max_keycode = 0, xkeysyms_per_keycode;
         XDisplayKeycodes(display, &x_min_keycode, &x_max_keycode);
         KeySym *xkeymap = XGetKeyboardMapping(display, x_min_keycode, x_max_keycode - x_min_keycode,
@@ -1970,10 +1957,10 @@ nsWindow::OnScrollEvent(QGraphicsSceneWheelEvent *aEvent)
     event.refPoint.x = nscoord(aEvent->scenePos().x());
     event.refPoint.y = nscoord(aEvent->scenePos().y());
 
-    event.isShift         = aEvent->modifiers() & Qt::ShiftModifier;
-    event.isControl       = aEvent->modifiers() & Qt::ControlModifier;
-    event.isAlt           = aEvent->modifiers() & Qt::AltModifier;
-    event.isMeta          = aEvent->modifiers() & Qt::MetaModifier;
+    event.InitBasicModifiers(aEvent->modifiers() & Qt::ControlModifier,
+                             aEvent->modifiers() & Qt::AltModifier,
+                             aEvent->modifiers() & Qt::ShiftModifier,
+                             aEvent->modifiers() & Qt::MetaModifier);
     event.time            = 0;
 
     return DispatchEvent(&event);
@@ -2118,10 +2105,10 @@ nsWindow::DispatchGestureEvent(PRUint32 aMsg, PRUint32 aDirection,
 
     Qt::KeyboardModifiers modifiers = QApplication::keyboardModifiers();
 
-    mozGesture.isShift   = (modifiers & Qt::ShiftModifier) ? true : false;
-    mozGesture.isControl = (modifiers & Qt::ControlModifier) ? true : false;
-    mozGesture.isMeta    = false;
-    mozGesture.isAlt     = (modifiers & Qt::AltModifier) ? true : false;
+    mozGesture.InitBasicModifiers(modifiers & Qt::ControlModifier,
+                                  modifiers & Qt::AltModifier,
+                                  modifiers & Qt::ShiftModifier,
+                                  false);
     mozGesture.button    = 0;
     mozGesture.time      = 0;
 
@@ -2346,9 +2333,9 @@ nsWindow::SetWindowClass(const nsAString &xulWinType)
 
     QWidget *widget = GetViewWidget();
     // If widget not show, handle might be null
-    if (widget && widget->handle())
-        XSetClassHint(widget->x11Info().display(),
-                      widget->handle(),
+    if (widget && widget->winId())
+        XSetClassHint(gfxQtPlatform::GetXDisplay(widget),
+                      widget->winId(),
                       class_hint);
 
     nsMemory::Free(class_hint->res_class);
@@ -2546,7 +2533,7 @@ nsWindow::HideWindowChrome(bool aShouldHide)
     QWidget *widget = GetViewWidget();
     NS_ENSURE_TRUE(widget, NS_ERROR_FAILURE);
 #ifdef MOZ_X11
-    XSync(widget->x11Info().display(), False);
+    XSync(gfxQtPlatform::GetXDisplay(widget), False);
 #endif
 
     return NS_OK;
@@ -2569,20 +2556,18 @@ nsresult
 initialize_prefs(void)
 {
     // check to see if we should set our raise pref
-    gDisableNativeTheme =
-        Preferences::GetBool("mozilla.widget.disable-native-theme",
-                             gDisableNativeTheme);
-
     return NS_OK;
 }
 
 inline bool
 is_context_menu_key(const nsKeyEvent& aKeyEvent)
 {
-    return ((aKeyEvent.keyCode == NS_VK_F10 && aKeyEvent.isShift &&
-             !aKeyEvent.isControl && !aKeyEvent.isMeta && !aKeyEvent.isAlt) ||
-            (aKeyEvent.keyCode == NS_VK_CONTEXT_MENU && !aKeyEvent.isShift &&
-             !aKeyEvent.isControl && !aKeyEvent.isMeta && !aKeyEvent.isAlt));
+    return ((aKeyEvent.keyCode == NS_VK_F10 && aKeyEvent.IsShift() &&
+             !aKeyEvent.IsControl() && !aKeyEvent.IsMeta() &&
+             !aKeyEvent.IsAlt()) ||
+            (aKeyEvent.keyCode == NS_VK_CONTEXT_MENU && !aKeyEvent.IsShift() &&
+             !aKeyEvent.IsControl() && !aKeyEvent.IsMeta() &&
+             !aKeyEvent.IsAlt()));
 }
 
 void
@@ -2590,10 +2575,7 @@ key_event_to_context_menu_event(nsMouseEvent &aEvent,
                                 QKeyEvent *aGdkEvent)
 {
     aEvent.refPoint = nsIntPoint(0, 0);
-    aEvent.isShift = false;
-    aEvent.isControl = false;
-    aEvent.isAlt = false;
-    aEvent.isMeta = false;
+    aEvent.modifiers = 0;
     aEvent.time = 0;
     aEvent.clickCount = 1;
 }
@@ -2617,6 +2599,13 @@ nsPopupWindow::nsPopupWindow()
 
 nsPopupWindow::~nsPopupWindow()
 {
+}
+
+NS_IMETHODIMP_(bool)
+nsWindow::HasGLContext()
+{
+    QGraphicsView *view = qobject_cast<QGraphicsView*>(GetViewWidget());
+    return view && qobject_cast<QGLWidget*>(view->viewport());
 }
 
 MozQWidget*
@@ -2684,19 +2673,21 @@ nsWindow::createQWidget(MozQWidget *parent,
             newView->setWindowModality(Qt::WindowModal);
         }
 
-#ifdef MOZ_PLATFORM_MAEMO
+#if defined(MOZ_PLATFORM_MAEMO) || defined(MOZ_GL_PROVIDER)
         if (GetShouldAccelerate()) {
             // Only create new OGL widget if it is not yet installed
-            QGLWidget *glWidget = qobject_cast<QGLWidget*>(newView->viewport());
-            if (!glWidget) {
-                newView->setViewport(new QGLWidget());
+            if (!HasGLContext()) {
+                MozQGraphicsView *qview = qobject_cast<MozQGraphicsView*>(newView);
+                if (qview) {
+                    qview->setGLWidgetEnabled(true);
+                }
             }
         }
 #endif
 
         if (gfxQtPlatform::GetPlatform()->GetRenderMode() == gfxQtPlatform::RENDER_DIRECT) {
             // Disable double buffer and system background rendering
-#ifdef MOZ_X11
+#if defined(MOZ_X11) && (QT_VERSION < QT_VERSION_CHECK(5,0,0))
             newView->viewport()->setAttribute(Qt::WA_PaintOnScreen, true);
 #endif
             newView->viewport()->setAttribute(Qt::WA_NoSystemBackground, true);
@@ -2725,7 +2716,7 @@ nsWindow::createQWidget(MozQWidget *parent,
 
 #ifdef MOZ_X11
         if (newView->effectiveWinId()) {
-            XSetWindowBackgroundPixmap(QX11Info::display(),
+            XSetWindowBackgroundPixmap(mozilla::DefaultXDisplay(),
                                        newView->effectiveWinId(), None);
         }
 #endif
@@ -3146,7 +3137,7 @@ GetPluginVKBState(Window aWinId)
 {
     // Set default value as unexpected error
     PluginVKBState imeState = VKBUndefined;
-    Display *display = QX11Info::display();
+    Display *display = mozilla::DefaultXDisplay();
 
     Atom actualType;
     int actualFormat;
@@ -3176,7 +3167,7 @@ GetPluginVKBState(Window aWinId)
 static void
 SetVKBState(Window aWinId, PluginVKBState aState)
 {
-    Display *display = QX11Info::display();
+    Display *display = mozilla::DefaultXDisplay();
     if (aState != VKBUndefined) {
         unsigned long isOpen = aState == VKBOpen ? 1 : 0;
         XChangeProperty(display, aWinId, sPluginIMEAtom, XA_CARDINAL, 32,

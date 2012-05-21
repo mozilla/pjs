@@ -1,51 +1,13 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Oracle Corporation code.
- *
- * The Initial Developer of the Original Code is
- *  Oracle Corporation
- * Portions created by the Initial Developer are Copyright (C) 2004
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir.vukicevic@oracle.com>
- *   Brett Wilson <brettw@gmail.com>
- *   Shawn Wilsher <me@shawnwilsher.com>
- *   Lev Serebryakov <lev@serebryakov.spb.ru>
- *   Drew Willcoxon <adw@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdio.h>
 
 #include "nsError.h"
 #include "nsIMutableArray.h"
-#include "nsHashSets.h"
 #include "nsAutoPtr.h"
 #include "nsIMemoryReporter.h"
 #include "nsThreadUtils.h"
@@ -678,7 +640,7 @@ Connection::initialize(nsIFile *aDatabaseFile,
                                "PRAGMA cache_size = ");
   cacheSizeQuery.AppendInt(NS_MIN(DEFAULT_CACHE_SIZE_PAGES,
                                   PRInt32(MAX_CACHE_SIZE_BYTES / pageSize)));
-  srv = ::sqlite3_exec(mDBConn, cacheSizeQuery.get(), NULL, NULL, NULL);
+  srv = executeSql(cacheSizeQuery.get());
   if (srv != SQLITE_OK) {
     ::sqlite3_close(mDBConn);
     mDBConn = nsnull;
@@ -814,6 +776,13 @@ Connection::setClosedState()
   return NS_OK;
 }
 
+bool
+Connection::isAsyncClosing() {
+  MutexAutoLock lockedScope(sharedAsyncExecutionMutex);
+  return mAsyncExecutionThreadShuttingDown && !!mAsyncExecutionThread &&
+    ConnectionReady();
+}
+
 nsresult
 Connection::internalClose()
 {
@@ -878,6 +847,16 @@ Connection::stepStatement(sqlite3_stmt *aStatement)
   bool checkedMainThread = false;
   TimeStamp startTime = TimeStamp::Now();
 
+  // mDBConn may be null if the executing statement has been created and cached
+  // after a call to asyncClose() but before the connection has been nullified
+  // by internalClose().  In such a case closing the connection fails due to
+  // the existence of prepared statements, but mDBConn is set to null
+  // regardless. This usually happens when other tasks using cached statements
+  // are asynchronously scheduled for execution and any of them ends up after
+  // asyncClose. See bug 728653 for details.
+  if (!mDBConn)
+    return SQLITE_MISUSE;
+
   (void)::sqlite3_extended_result_codes(mDBConn, 1);
 
   int srv;
@@ -901,9 +880,16 @@ Connection::stepStatement(sqlite3_stmt *aStatement)
   // Report very slow SQL statements to Telemetry
   TimeDuration duration = TimeStamp::Now() - startTime;
   if (duration.ToMilliseconds() >= Telemetry::kSlowStatementThreshold) {
-    nsDependentCString statementString(::sqlite3_sql(aStatement));
-    Telemetry::RecordSlowSQLStatement(statementString, getFilename(),
-                                      duration.ToMilliseconds());
+    const char *sql = ::sqlite3_sql(aStatement);
+    // FIXME: Try runs have found hard to reproduce crashes where sql is NULL.
+    // It is not clear how can we get a NULL sql statement in here.
+    // sqlite3_prepare_v2 always copies the incoming argument and fails
+    // if it runs out of memory.
+    if (sql) {
+      nsDependentCString statementString(sql);
+      Telemetry::RecordSlowSQLStatement(statementString, getFilename(),
+                                        duration.ToMilliseconds(), false);
+    }
   }
 
   (void)::sqlite3_extended_result_codes(mDBConn, 0);
@@ -954,6 +940,27 @@ Connection::prepareStatement(const nsCString &aSQL,
   (void)::sqlite3_extended_result_codes(mDBConn, 0);
   // Drop off the extended result bits of the result code.
   return srv & 0xFF;
+}
+
+
+int
+Connection::executeSql(const char *aSqlString)
+{
+  if (!mDBConn)
+    return SQLITE_MISUSE;
+
+  TimeStamp startTime = TimeStamp::Now();
+  int srv = ::sqlite3_exec(mDBConn, aSqlString, NULL, NULL, NULL);
+
+  // Report very slow SQL statements to Telemetry
+  TimeDuration duration = TimeStamp::Now() - startTime;
+  if (duration.ToMilliseconds() >= Telemetry::kSlowStatementThreshold) {
+    nsDependentCString statementString(aSqlString);
+    Telemetry::RecordSlowSQLStatement(statementString, getFilename(),
+                                      duration.ToMilliseconds(), true);
+  }
+
+  return srv;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1089,7 +1096,7 @@ Connection::Clone(bool aReadOnly,
 NS_IMETHODIMP
 Connection::GetConnectionReady(bool *_ready)
 {
-  *_ready = (mDBConn != nsnull);
+  *_ready = ConnectionReady();
   return NS_OK;
 }
 
@@ -1217,8 +1224,7 @@ Connection::ExecuteSimpleSQL(const nsACString &aSQLStatement)
 {
   if (!mDBConn) return NS_ERROR_NOT_INITIALIZED;
 
-  int srv = ::sqlite3_exec(mDBConn, PromiseFlatCString(aSQLStatement).get(),
-                           NULL, NULL, NULL);
+  int srv = executeSql(PromiseFlatCString(aSQLStatement).get());
   return convertResultCode(srv);
 }
 
@@ -1348,7 +1354,7 @@ Connection::CreateTable(const char *aTableName,
   if (!buf)
     return NS_ERROR_OUT_OF_MEMORY;
 
-  int srv = ::sqlite3_exec(mDBConn, buf, NULL, NULL, NULL);
+  int srv = executeSql(buf);
   ::PR_smprintf_free(buf);
 
   return convertResultCode(srv);
@@ -1380,8 +1386,7 @@ Connection::CreateFunction(const nsACString &aFunctionName,
   FunctionInfo info = { aFunction,
                         Connection::FunctionInfo::SIMPLE,
                         aNumArguments };
-  NS_ENSURE_TRUE(mFunctions.Put(aFunctionName, info),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mFunctions.Put(aFunctionName, info);
 
   return NS_OK;
 }
@@ -1416,8 +1421,7 @@ Connection::CreateAggregateFunction(const nsACString &aFunctionName,
   FunctionInfo info = { aFunction,
                         Connection::FunctionInfo::AGGREGATE,
                         aNumArguments };
-  NS_ENSURE_TRUE(mFunctions.Put(aFunctionName, info),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mFunctions.Put(aFunctionName, info);
 
   return NS_OK;
 }

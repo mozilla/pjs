@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 40; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <windows.h>
 #include <winternl.h>
@@ -55,6 +23,8 @@
 #include "prlog.h"
 
 #include "nsWindowsDllInterceptor.h"
+
+using namespace mozilla;
 
 #if defined(MOZ_CRASHREPORTER) && !defined(NO_BLOCKLIST_CRASHREPORTER)
 #include "nsExceptionHandler.h"
@@ -174,7 +144,8 @@ struct RVAMap {
     mRealView = ::MapViewOfFile(map, FILE_MAP_READ, 0, alignedOffset,
                                 sizeof(T) + (offset - alignedOffset));
 
-    mMappedView = reinterpret_cast<T*>((char*)mRealView + (offset - alignedOffset));
+    mMappedView = mRealView ? reinterpret_cast<T*>((char*)mRealView + (offset - alignedOffset)) :
+                              nsnull;
   }
   ~RVAMap() {
     if (mRealView) {
@@ -187,6 +158,18 @@ private:
   const T* mMappedView;
   void* mRealView;
 };
+
+bool
+IsVistaOrLater()
+{
+  OSVERSIONINFO info;
+
+  ZeroMemory(&info, sizeof(OSVERSIONINFO));
+  info.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+  GetVersionEx(&info);
+
+  return info.dwMajorVersion >= 6;
+}
 
 bool
 CheckASLR(const wchar_t* path)
@@ -278,6 +261,32 @@ private:
 CRITICAL_SECTION ReentrancySentinel::sLock;
 std::map<DWORD, const char*>* ReentrancySentinel::sThreadMap;
 
+static
+wchar_t* getFullPath (PWCHAR filePath, wchar_t* fname)
+{
+  // In Windows 8, the first parameter seems to be used for more than just the
+  // path name.  For example, its numerical value can be 1.  Passing a non-valid
+  // pointer to SearchPathW will cause a crash, so we need to check to see if we
+  // are handed a valid pointer, and otherwise just pass NULL to SearchPathW.
+  PWCHAR sanitizedFilePath = (intptr_t(filePath) < 1024) ? NULL : filePath;
+
+  // figure out the length of the string that we need
+  DWORD pathlen = SearchPathW(sanitizedFilePath, fname, L".dll", 0, NULL, NULL);
+  if (pathlen == 0) {
+    return nsnull;
+  }
+
+  wchar_t* full_fname = new wchar_t[pathlen+1];
+  if (!full_fname) {
+    // couldn't allocate memory?
+    return nsnull;
+  }
+
+  // now actually grab it
+  SearchPathW(sanitizedFilePath, fname, L".dll", pathlen+1, full_fname, NULL);
+  return full_fname;
+}
+
 static NTSTATUS NTAPI
 patched_LdrLoadDll (PWCHAR filePath, PULONG flags, PUNICODE_STRING moduleFileName, PHANDLE handle)
 {
@@ -289,29 +298,7 @@ patched_LdrLoadDll (PWCHAR filePath, PULONG flags, PUNICODE_STRING moduleFileNam
 
   int len = moduleFileName->Length / 2;
   wchar_t *fname = moduleFileName->Buffer;
-
-  // In Windows 8, the first parameter seems to be used for more than just the
-  // path name.  For example, its numerical value can be 1.  Passing a non-valid
-  // pointer to SearchPathW will cause a crash, so we need to check to see if we
-  // are handed a valid pointer, and otherwise just pass NULL to SearchPathW.
-  PWCHAR sanitizedFilePath = (intptr_t(filePath) < 1024) ? NULL : filePath;
-
-  // figure out the length of the string that we need
-  DWORD pathlen = SearchPathW(sanitizedFilePath, fname, L".dll", 0, NULL, NULL);
-  if (pathlen == 0) {
-    // uh, we couldn't find the DLL at all, so...
-    printf_stderr("LdrLoadDll: Blocking load of '%s' (SearchPathW didn't find it?)\n", dllName);
-    return STATUS_DLL_NOT_FOUND;
-  }
-
-  nsAutoArrayPtr<wchar_t> full_fname(new wchar_t[pathlen+1]);
-  if (!full_fname) {
-    // couldn't allocate memory?
-    return STATUS_DLL_NOT_FOUND;
-  }
-
-  // now actually grab it
-  SearchPathW(sanitizedFilePath, fname, L".dll", pathlen+1, full_fname, NULL);
+  nsAutoArrayPtr<wchar_t> full_fname;
 
   // The filename isn't guaranteed to be null terminated, but in practice
   // it always will be; ensure that this is so, and bail if not.
@@ -393,6 +380,13 @@ patched_LdrLoadDll (PWCHAR filePath, PULONG flags, PUNICODE_STRING moduleFileNam
         goto continue_loading;
       }
 
+      full_fname = getFullPath(filePath, fname);
+      if (!full_fname) {
+        // uh, we couldn't find the DLL at all, so...
+        printf_stderr("LdrLoadDll: Blocking load of '%s' (SearchPathW didn't find it?)\n", dllName);
+        return STATUS_DLL_NOT_FOUND;
+      }
+
       DWORD zero;
       DWORD infoSize = GetFileVersionInfoSizeW(full_fname, &zero);
 
@@ -433,7 +427,14 @@ continue_loading:
 
   if (gInXPCOMLoadOnMainThread && NS_IsMainThread()) {
     // Check to ensure that the DLL has ASLR.
-    if (!CheckASLR(full_fname)) {
+    full_fname = getFullPath(filePath, fname);
+    if (!full_fname) {
+      // uh, we couldn't find the DLL at all, so...
+      printf_stderr("LdrLoadDll: Blocking load of '%s' (SearchPathW didn't find it?)\n", dllName);
+      return STATUS_DLL_NOT_FOUND;
+    }
+
+    if (IsVistaOrLater() && !CheckASLR(full_fname)) {
       printf_stderr("LdrLoadDll: Blocking load of '%s'.  XPCOM components must support ASLR.\n", dllName);
       return STATUS_DLL_NOT_FOUND;
     }

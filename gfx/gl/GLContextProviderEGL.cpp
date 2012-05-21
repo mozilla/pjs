@@ -1,45 +1,10 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Mark Steele <mwsteele@gmail.com>
- *   Bas Schouten <bschouten@mozilla.com>
- *   Frederic Plourde <frederic.plourde@collabora.co.uk>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
+// please add new includes below Qt, otherwise it break Qt build due malloc wrapper conflicts
 
 #if defined(XP_UNIX)
 
@@ -71,34 +36,20 @@
 #include <android/log.h>
 #endif
 
-#define EGL_LIB "libEGL.so"
 #define GLES2_LIB "libGLESv2.so"
-#define EGL_LIB1 "libEGL.so.1"
 #define GLES2_LIB2 "libGLESv2.so.2"
-
-typedef void *EGLNativeDisplayType;
-typedef void *EGLNativePixmapType;
-typedef void *EGLNativeWindowType;
 
 #elif defined(XP_WIN)
 
-#include "mozilla/Preferences.h"
 #include "nsILocalFile.h"
+
+#define GLES2_LIB "libGLESv2.dll"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
 #endif
 
 #include <windows.h>
-
-typedef HDC EGLNativeDisplayType;
-typedef HBITMAP EGLNativePixmapType;
-typedef HWND EGLNativeWindowType;
-
-#define GET_NATIVE_WINDOW(aWidget) ((EGLNativeWindowType)aWidget->GetNativeData(NS_NATIVE_WINDOW))
-
-#define EGL_LIB "libEGL.dll"
-#define GLES2_LIB "libGLESv2.dll"
 
 // a little helper
 class AutoDestroyHWND {
@@ -141,15 +92,16 @@ public:
 
 #endif
 
+#include "mozilla/Preferences.h"
 #include "gfxUtils.h"
 #include "gfxFailure.h"
 #include "gfxASurface.h"
 #include "gfxImageSurface.h"
 #include "gfxPlatform.h"
 #include "GLContextProvider.h"
+#include "GLLibraryEGL.h"
 #include "nsDebug.h"
 #include "nsThreadUtils.h"
-#include "EGLUtils.h"
 
 #include "nsIWidget.h"
 
@@ -168,28 +120,7 @@ extern nsIntRect gScreenBounds;
 namespace mozilla {
 namespace gl {
 
-typedef int EGLint;
-typedef unsigned int EGLBoolean;
-typedef unsigned int EGLenum;
-typedef void *EGLConfig;
-typedef void *EGLContext;
-typedef void *EGLDisplay;
-typedef void *EGLSurface;
-typedef void *EGLClientBuffer;
-typedef void *EGLCastToRelevantPtr;
-typedef void *EGLImageKHR;
-typedef void *GLeglImageOES;
-
-#ifdef MOZ_WIDGET_QT
-#define EGL_DEFAULT_DISPLAY  ((EGLNativeDisplayType)QX11Info::display())
-#else
-#define EGL_DEFAULT_DISPLAY  ((EGLNativeDisplayType)0)
-#endif
-#define EGL_NO_CONTEXT       ((EGLContext)0)
-#define EGL_NO_DISPLAY       ((EGLDisplay)0)
-#define EGL_NO_SURFACE       ((EGLSurface)0)
-
-#define EGL_DISPLAY()        sEGLLibrary.Display()
+static GLLibraryEGL sEGLLibrary;
 
 #define ADD_ATTR_2(_array, _k, _v) do {         \
     (_array).AppendElement(_k);                 \
@@ -212,7 +143,7 @@ CreateBasicEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig);
 #endif
 
 static EGLConfig
-CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig = nsnull, EGLenum aDepth = 0);
+CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig = nsnull);
 #endif
 
 static EGLint gContextAttribs[] = {
@@ -251,688 +182,6 @@ is_power_of_two(int v)
 
     return (v & (v-1)) == 0;
 }
-
-#ifdef DEBUG
-#undef BEFORE_GL_CALL
-#undef AFTER_GL_CALL
-
-#define BEFORE_GL_CALL do {          \
-    BeforeGLCall(MOZ_FUNCTION_NAME); \
-} while (0)
-
-#define AFTER_GL_CALL do {           \
-    AfterGLCall(MOZ_FUNCTION_NAME);  \
-} while (0)
-
-static void BeforeGLCall(const char* glFunction)
-{
-    if (GLContext::DebugMode()) {
-        // since the static member variable sCurrentGLContext is not thread-local as it should,
-        // we have to assert that we're in the main thread. Note that sCurrentGLContext is only used
-        // for the OpenGL debug mode.
-        if (!NS_IsMainThread()) {
-            NS_ERROR("OpenGL call from non-main thread. While this is fine in itself, "
-                     "the OpenGL debug mode, which is currently enabled, doesn't support this. "
-                     "It needs to be patched by making GLContext::sCurrentGLContext be thread-local.\n");
-            NS_ABORT();
-        }
-        if (GLContext::DebugMode() & GLContext::DebugTrace)
-            printf_stderr("[egl] > %s\n", glFunction);
-    }
-}
-
-static void AfterGLCall(const char* glFunction)
-{
-    if (GLContext::DebugMode() & GLContext::DebugTrace) {
-        printf_stderr("[egl] < %s\n", glFunction);
-    }
-}
-
-// We rely on the fact that GLContext.h #defines BEFORE_GL_CALL and
-// AFTER_GL_CALL to nothing if !defined(DEBUG).
-#endif
-
-static class EGLLibrary
-{
-public:
-    EGLLibrary() 
-        : mInitialized(false),
-          mEGLLibrary(nsnull),
-          mHasRobustness(false)
-    {
-        mIsANGLE = false;
-        mHave_EGL_KHR_image_base = false;
-        mHave_EGL_KHR_image_pixmap = false;
-        mHave_EGL_KHR_gl_texture_2D_image = false;
-        mHave_EGL_KHR_lock_surface = false;
-        mHave_EGL_ANGLE_surface_d3d_texture_2d_share_handle = false;
-    }
-
-    struct {
-        typedef EGLDisplay (GLAPIENTRY * pfnGetDisplay)(void *display_id);
-        pfnGetDisplay fGetDisplay;
-        typedef EGLSurface (GLAPIENTRY * pfnGetCurrentSurface)(EGLint);
-        pfnGetCurrentSurface fGetCurrentSurface;
-        typedef EGLContext (GLAPIENTRY * pfnGetCurrentContext)(void);
-        pfnGetCurrentContext fGetCurrentContext;
-        typedef EGLBoolean (GLAPIENTRY * pfnMakeCurrent)(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
-        pfnMakeCurrent fMakeCurrent;
-        typedef EGLBoolean (GLAPIENTRY * pfnDestroyContext)(EGLDisplay dpy, EGLContext ctx);
-        pfnDestroyContext fDestroyContext;
-        typedef EGLContext (GLAPIENTRY * pfnCreateContext)(EGLDisplay dpy, EGLConfig config, EGLContext share_context, const EGLint *attrib_list);
-        pfnCreateContext fCreateContext;
-        typedef EGLBoolean (GLAPIENTRY * pfnDestroySurface)(EGLDisplay dpy, EGLSurface surface);
-        pfnDestroySurface fDestroySurface;
-        typedef EGLSurface (GLAPIENTRY * pfnCreateWindowSurface)(EGLDisplay dpy, EGLConfig config, EGLNativeWindowType win, const EGLint *attrib_list);
-        pfnCreateWindowSurface fCreateWindowSurface;
-        typedef EGLSurface (GLAPIENTRY * pfnCreatePbufferSurface)(EGLDisplay dpy, EGLConfig config, const EGLint *attrib_list);
-        pfnCreatePbufferSurface fCreatePbufferSurface;
-        typedef EGLSurface (GLAPIENTRY * pfnCreatePixmapSurface)(EGLDisplay dpy, EGLConfig config, EGLNativePixmapType pixmap, const EGLint *attrib_list);
-        pfnCreatePixmapSurface fCreatePixmapSurface;
-        typedef EGLBoolean (GLAPIENTRY * pfnBindAPI)(EGLenum api);
-        pfnBindAPI fBindAPI;
-        typedef EGLBoolean (GLAPIENTRY * pfnInitialize)(EGLDisplay dpy, EGLint *major, EGLint *minor);
-        pfnInitialize fInitialize;
-        typedef EGLBoolean (GLAPIENTRY * pfnChooseConfig)(EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, EGLint config_size, EGLint *num_config);
-        pfnChooseConfig fChooseConfig;
-        typedef EGLint (GLAPIENTRY * pfnGetError)(void);
-        pfnGetError fGetError;
-        typedef EGLBoolean (GLAPIENTRY * pfnGetConfigAttrib)(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value);
-        pfnGetConfigAttrib fGetConfigAttrib;
-        typedef EGLBoolean (GLAPIENTRY * pfnGetConfigs)(EGLDisplay dpy, EGLConfig *configs, EGLint config_size, EGLint *num_config);
-        pfnGetConfigs fGetConfigs;
-        typedef EGLBoolean (GLAPIENTRY * pfnWaitNative)(EGLint engine);
-        pfnWaitNative fWaitNative;
-        typedef EGLCastToRelevantPtr (GLAPIENTRY * pfnGetProcAddress)(const char *procname);
-        pfnGetProcAddress fGetProcAddress;
-        typedef EGLBoolean (GLAPIENTRY * pfnSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
-        pfnSwapBuffers fSwapBuffers;
-        typedef EGLBoolean (GLAPIENTRY * pfnCopyBuffers)(EGLDisplay dpy, EGLSurface surface,
-                                                         EGLNativePixmapType target);
-        pfnCopyBuffers fCopyBuffers;
-        typedef const GLubyte* (GLAPIENTRY * pfnQueryString)(EGLDisplay, EGLint name);
-        pfnQueryString fQueryString;
-        typedef EGLBoolean (GLAPIENTRY * pfnQueryContext)(EGLDisplay dpy, EGLContext ctx,
-                                                          EGLint attribute, EGLint *value);
-        pfnQueryContext fQueryContext;
-        typedef EGLBoolean (GLAPIENTRY * pfnBindTexImage)(EGLDisplay, EGLSurface surface, EGLint buffer);
-        pfnBindTexImage fBindTexImage;
-        typedef EGLBoolean (GLAPIENTRY * pfnReleaseTexImage)(EGLDisplay, EGLSurface surface, EGLint buffer);
-        pfnReleaseTexImage fReleaseTexImage;
-        typedef EGLImageKHR (GLAPIENTRY * pfnCreateImageKHR)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list);
-        pfnCreateImageKHR fCreateImageKHR;
-        typedef EGLBoolean (GLAPIENTRY * pfnDestroyImageKHR)(EGLDisplay dpy, EGLImageKHR image);
-        pfnDestroyImageKHR fDestroyImageKHR;
-#ifdef MOZ_WIDGET_GONK
-        typedef EGLBoolean (GLAPIENTRY * pfnSetSwapRectangleANDROID)(EGLDisplay dpy, EGLSurface surface, EGLint left, EGLint top, EGLint width, EGLint height);
-        pfnSetSwapRectangleANDROID fSetSwapRectangleANDROID;
-#endif
-
-        // New extension which allow us to lock texture and get raw image pointer
-        typedef EGLBoolean (GLAPIENTRY * pfnLockSurfaceKHR)(EGLDisplay dpy, EGLSurface surface, const EGLint *attrib_list);
-        pfnLockSurfaceKHR fLockSurfaceKHR;
-        typedef EGLBoolean (GLAPIENTRY * pfnUnlockSurfaceKHR)(EGLDisplay dpy, EGLSurface surface);
-        pfnUnlockSurfaceKHR fUnlockSurfaceKHR;
-        typedef EGLBoolean (GLAPIENTRY * pfnQuerySurface)(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *value);
-        pfnQuerySurface fQuerySurface;
-
-        typedef EGLBoolean (GLAPIENTRY * pfnQuerySurfacePointerANGLE)(EGLDisplay dpy, EGLSurface surface, EGLint attribute, void **value);
-        pfnQuerySurfacePointerANGLE fQuerySurfacePointerANGLE;
-
-        // This is EGL specific GL ext symbol "glEGLImageTargetTexture2DOES"
-        // Lets keep it here for now.
-        typedef void (GLAPIENTRY * pfnImageTargetTexture2DOES)(GLenum target, GLeglImageOES image);
-        pfnImageTargetTexture2DOES fImageTargetTexture2DOES;
-    } mSymbols;
-
-    EGLDisplay fGetDisplay(void* display_id)
-    {
-        BEFORE_GL_CALL;
-        EGLDisplay disp = mSymbols.fGetDisplay(display_id);
-        AFTER_GL_CALL;
-        return disp;
-    }
-    EGLSurface fGetCurrentSurface(EGLint id)
-    {
-        BEFORE_GL_CALL;
-        EGLSurface surf = mSymbols.fGetCurrentSurface(id);
-        AFTER_GL_CALL;
-        return surf;
-    }
-    EGLContext fGetCurrentContext()
-    {
-        BEFORE_GL_CALL;
-        EGLContext context = mSymbols.fGetCurrentContext();
-        AFTER_GL_CALL;
-        return context;
-    }
-    EGLBoolean fMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fMakeCurrent(dpy, draw, read, ctx);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fDestroyContext(EGLDisplay dpy, EGLContext ctx)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fDestroyContext(dpy, ctx);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLContext fCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share_context, const EGLint *attrib_list)
-    {
-        BEFORE_GL_CALL;
-        EGLContext ctx = mSymbols.fCreateContext(dpy, config, share_context, attrib_list);
-        AFTER_GL_CALL;
-        return ctx;
-    }
-    EGLBoolean fDestroySurface(EGLDisplay dpy, EGLSurface surface)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fDestroySurface(dpy, surface);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLSurface fCreateWindowSurface(EGLDisplay dpy, EGLConfig config, EGLNativeWindowType win, const EGLint *attrib_list)
-    {
-        BEFORE_GL_CALL;
-        EGLSurface surf = mSymbols.fCreateWindowSurface(dpy, config, win, attrib_list);
-        AFTER_GL_CALL;
-        return surf;
-    }
-    EGLSurface fCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint *attrib_list)
-    {
-        BEFORE_GL_CALL;
-        EGLSurface surf = mSymbols.fCreatePbufferSurface(dpy, config, attrib_list);
-        AFTER_GL_CALL;
-        return surf;
-    }
-    EGLSurface fCreatePixmapSurface(EGLDisplay dpy, EGLConfig config, EGLNativePixmapType pixmap, const EGLint *attrib_list)
-    {
-        BEFORE_GL_CALL;
-        EGLSurface surf = mSymbols.fCreatePixmapSurface(dpy, config, pixmap, attrib_list);
-        AFTER_GL_CALL;
-        return surf;
-    }
-    EGLBoolean fBindAPI(EGLenum api)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fBindAPI(api);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fInitialize(EGLDisplay dpy, EGLint* major, EGLint* minor)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fInitialize(dpy, major, minor);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fChooseConfig(EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, EGLint config_size, EGLint *num_config)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fChooseConfig(dpy, attrib_list, configs, config_size, num_config);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLint fGetError()
-    {
-        BEFORE_GL_CALL;
-        EGLint i = mSymbols.fGetError();
-        AFTER_GL_CALL;
-        return i;
-    }
-    EGLBoolean fGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fGetConfigAttrib(dpy, config, attribute, value);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fGetConfigs(EGLDisplay dpy, EGLConfig *configs, EGLint config_size, EGLint *num_config)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fGetConfigs(dpy, configs, config_size, num_config);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fWaitNative(EGLint engine)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fWaitNative(engine);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLCastToRelevantPtr fGetProcAddress(const char *procname)
-    {
-        BEFORE_GL_CALL;
-        EGLCastToRelevantPtr p = mSymbols.fGetProcAddress(procname);
-        AFTER_GL_CALL;
-        return p;
-    }
-    EGLBoolean fSwapBuffers(EGLDisplay dpy, EGLSurface surface)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fSwapBuffers(dpy, surface);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fCopyBuffers(EGLDisplay dpy, EGLSurface surface, EGLNativePixmapType target)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fCopyBuffers(dpy, surface, target);
-        AFTER_GL_CALL;
-        return b;
-    }
-    const GLubyte* fQueryString(EGLDisplay dpy, EGLint name)
-    {
-        BEFORE_GL_CALL;
-        const GLubyte* b = mSymbols.fQueryString(dpy, name);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fQueryContext(EGLDisplay dpy, EGLContext ctx, EGLint attribute, EGLint *value)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fQueryContext(dpy, ctx, attribute, value);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fBindTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fBindTexImage(dpy, surface, buffer);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fReleaseTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fReleaseTexImage(dpy, surface, buffer);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLImageKHR fCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list)
-    {
-         BEFORE_GL_CALL;
-         EGLImageKHR i = mSymbols.fCreateImageKHR(dpy, ctx, target, buffer, attrib_list);
-         AFTER_GL_CALL;
-         return i;
-    }
-    EGLBoolean fDestroyImageKHR(EGLDisplay dpy, EGLImageKHR image)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fDestroyImageKHR(dpy, image);
-        AFTER_GL_CALL;
-        return b;
-    }
-#ifdef MOZ_WIDGET_GONK
-    EGLBoolean fSetSwapRectangleANDROID(EGLDisplay dpy, EGLSurface surface, EGLint left, EGLint top, EGLint width, EGLint height)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fSetSwapRectangleANDROID(dpy, surface, left, top, width, height);
-        AFTER_GL_CALL;
-        return b;
-    }
-#endif
-
-    // New extension which allow us to lock texture and get raw image pointer
-    EGLBoolean fLockSurfaceKHR(EGLDisplay dpy, EGLSurface surface, const EGLint *attrib_list)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fLockSurfaceKHR(dpy, surface, attrib_list);
-        AFTER_GL_CALL;
-        return b;
-    }
-
-    EGLBoolean fUnlockSurfaceKHR(EGLDisplay dpy, EGLSurface surface)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fUnlockSurfaceKHR(dpy, surface);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fQuerySurface(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *value)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fQuerySurface(dpy, surface, attribute, value);
-        AFTER_GL_CALL;
-        return b;
-    }
-    EGLBoolean fQuerySurfacePointerANGLE(EGLDisplay dpy, EGLSurface surface, EGLint attribute, void **value)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fQuerySurfacePointerANGLE(dpy, surface, attribute, value);
-        AFTER_GL_CALL;
-        return b;
-    }
-
-    // This is EGL specific GL ext symbol "glEGLImageTargetTexture2DOES"
-    // Lets keep it here for now.
-    void fImageTargetTexture2DOES(GLenum target, GLeglImageOES image)
-    {
-        BEFORE_GL_CALL;
-        mSymbols.fImageTargetTexture2DOES(target, image);
-        AFTER_GL_CALL;
-    }
-
-    bool EnsureInitialized()
-    {
-        if (mInitialized) {
-            return true;
-        }
-
-        mozilla::ScopedGfxFeatureReporter reporter("EGL");
-
-#ifdef XP_WIN
-        // Allow for explicitly specifying the location of libEGL.dll and
-        // libGLESv2.dll.
-        do {
-            nsCOMPtr<nsILocalFile> eglFile, glesv2File;
-            nsresult rv = Preferences::GetComplex("gfx.angle.egl.path",
-                                                  NS_GET_IID(nsILocalFile),
-                                                  getter_AddRefs(eglFile));
-            if (NS_FAILED(rv) || !eglFile)
-                break;
-
-            nsCAutoString s;
-
-            // note that we have to load the libs in this order, because libEGL.dll
-            // depends on libGLESv2.dll, but is not/may not be in our search path.
-            nsCOMPtr<nsIFile> f;
-            eglFile->Clone(getter_AddRefs(f));
-            glesv2File = do_QueryInterface(f);
-            if (!glesv2File)
-                break;
-
-            glesv2File->Append(NS_LITERAL_STRING("libGLESv2.dll"));
-
-            PRLibrary *glesv2lib = nsnull; // this will be leaked on purpose
-            glesv2File->Load(&glesv2lib);
-            if (!glesv2lib)
-                break;
-
-            eglFile->Append(NS_LITERAL_STRING("libEGL.dll"));
-            eglFile->Load(&mEGLLibrary);
-        } while (false);
-#endif
-
-        if (!mEGLLibrary) {
-            mEGLLibrary = PR_LoadLibrary(EGL_LIB);
-#if defined(XP_UNIX)
-            if (!mEGLLibrary) {
-                mEGLLibrary = PR_LoadLibrary(EGL_LIB1);
-            }
-#endif
-        }
-
-        if (!mEGLLibrary) {
-            NS_WARNING("Couldn't load EGL LIB.");
-            return false;
-        }
-
-#define SYMBOL(name) \
-    { (PRFuncPtr*) &mSymbols.f##name, { "egl" #name, NULL } }
-
-        LibrarySymbolLoader::SymLoadStruct earlySymbols[] = {
-            SYMBOL(GetDisplay),
-            SYMBOL(GetCurrentSurface),
-            SYMBOL(GetCurrentContext),
-            SYMBOL(MakeCurrent),
-            SYMBOL(DestroyContext),
-            SYMBOL(CreateContext),
-            SYMBOL(DestroySurface),
-            SYMBOL(CreateWindowSurface),
-            SYMBOL(CreatePbufferSurface),
-            SYMBOL(CreatePixmapSurface),
-            SYMBOL(BindAPI),
-            SYMBOL(Initialize),
-            SYMBOL(ChooseConfig),
-            SYMBOL(GetError),
-            SYMBOL(GetConfigs),
-            SYMBOL(GetConfigAttrib),
-            SYMBOL(WaitNative),
-            SYMBOL(GetProcAddress),
-            SYMBOL(SwapBuffers),
-            SYMBOL(CopyBuffers),
-            SYMBOL(QueryString),
-            SYMBOL(QueryContext),
-            SYMBOL(BindTexImage),
-            SYMBOL(ReleaseTexImage),
-            SYMBOL(QuerySurface),
-#ifdef MOZ_WIDGET_GONK
-            SYMBOL(SetSwapRectangleANDROID),
-#endif
-            { NULL, { NULL } }
-        };
-
-        if (!LibrarySymbolLoader::LoadSymbols(mEGLLibrary, &earlySymbols[0])) {
-            NS_WARNING("Couldn't find required entry points in EGL library (early init)");
-            return false;
-        }
-
-#if defined(MOZ_X11) && defined(MOZ_EGL_XRENDER_COMPOSITE)
-        mEGLDisplay = fGetDisplay((EGLNativeDisplayType) gdk_x11_get_default_xdisplay());
-#else
-        mEGLDisplay = fGetDisplay(EGL_DEFAULT_DISPLAY);
-#endif
-        if (!fInitialize(mEGLDisplay, NULL, NULL))
-            return false;
-
-        const char *vendor = (const char*) fQueryString(mEGLDisplay, LOCAL_EGL_VENDOR);
-        if (vendor && (strstr(vendor, "TransGaming") != 0 || strstr(vendor, "Google Inc.") != 0)) {
-            mIsANGLE = true;
-        }
-        
-        const char *extensions = (const char*) fQueryString(mEGLDisplay, LOCAL_EGL_EXTENSIONS);
-        if (!extensions)
-            extensions = "";
-
-        printf_stderr("Extensions: %s 0x%02x\n", extensions, extensions[0]);
-        printf_stderr("Extensions length: %d\n", strlen(extensions));
-
-        // note the extra space -- this ugliness tries to match
-        // EGL_KHR_image in the middle of the string, or right at the
-        // end.  It's a prefix for other extensions, so we have to do
-        // this...
-        bool hasKHRImage = false;
-        if (strstr(extensions, "EGL_KHR_image ") ||
-            (strlen(extensions) >= strlen("EGL_KHR_image") &&
-             strcmp(extensions+(strlen(extensions)-strlen("EGL_KHR_image")), "EGL_KHR_image")))
-        {
-            hasKHRImage = true;
-        }
-
-        if (strstr(extensions, "EGL_KHR_image_base")) {
-            mHave_EGL_KHR_image_base = true;
-        }
-            
-        if (strstr(extensions, "EGL_KHR_image_pixmap")) {
-            mHave_EGL_KHR_image_pixmap = true;
-            
-        }
-
-        if (strstr(extensions, "EGL_KHR_gl_texture_2D_image")) {
-            mHave_EGL_KHR_gl_texture_2D_image = true;
-        }
-
-        if (strstr(extensions, "EGL_KHR_lock_surface")) {
-            mHave_EGL_KHR_lock_surface = true;
-        }
-
-        if (hasKHRImage) {
-            LibrarySymbolLoader::SymLoadStruct khrSymbols[] = {
-                { (PRFuncPtr*) &mSymbols.fCreateImageKHR, { "eglCreateImageKHR", NULL } },
-                { (PRFuncPtr*) &mSymbols.fDestroyImageKHR, { "eglDestroyImageKHR", NULL } },
-                { (PRFuncPtr*) &mSymbols.fImageTargetTexture2DOES, { "glEGLImageTargetTexture2DOES", NULL } },
-                { NULL, { NULL } }
-            };
-
-            LibrarySymbolLoader::LoadSymbols(mEGLLibrary, &khrSymbols[0],
-                                             (LibrarySymbolLoader::PlatformLookupFunction)mSymbols.fGetProcAddress);
-        }
-
-        if (mHave_EGL_KHR_lock_surface) {
-            LibrarySymbolLoader::SymLoadStruct lockSymbols[] = {
-                { (PRFuncPtr*) &mSymbols.fLockSurfaceKHR, { "eglLockSurfaceKHR", NULL } },
-                { (PRFuncPtr*) &mSymbols.fUnlockSurfaceKHR, { "eglUnlockSurfaceKHR", NULL } },
-                { NULL, { NULL } }
-            };
-
-            LibrarySymbolLoader::LoadSymbols(mEGLLibrary, &lockSymbols[0],
-                                             (LibrarySymbolLoader::PlatformLookupFunction)mSymbols.fGetProcAddress);
-            if (!mSymbols.fLockSurfaceKHR) {
-                mHave_EGL_KHR_lock_surface = false;
-            }
-        }
-
-        if (!mSymbols.fCreateImageKHR) {
-            mHave_EGL_KHR_image_base = false;
-            mHave_EGL_KHR_image_pixmap = false;
-            mHave_EGL_KHR_gl_texture_2D_image = false;
-        }
-
-        if (!mSymbols.fImageTargetTexture2DOES) {
-            mHave_EGL_KHR_gl_texture_2D_image = false;
-        }
-
-        if (strstr(extensions, "EGL_ANGLE_surface_d3d_texture_2d_share_handle")) {
-            LibrarySymbolLoader::SymLoadStruct d3dSymbols[] = {
-                { (PRFuncPtr*) &mSymbols.fQuerySurfacePointerANGLE, { "eglQuerySurfacePointerANGLE", NULL } },
-                { NULL, { NULL } }
-            };
-
-            LibrarySymbolLoader::LoadSymbols(mEGLLibrary, &d3dSymbols[0],
-                                             (LibrarySymbolLoader::PlatformLookupFunction)mSymbols.fGetProcAddress);
-            if (mSymbols.fQuerySurfacePointerANGLE) {
-                mHave_EGL_ANGLE_surface_d3d_texture_2d_share_handle = true;
-            }
-        }
-
-        if (strstr(extensions, "EGL_EXT_create_context_robustness")) {
-            mHasRobustness = true;
-        }
-
-        mInitialized = true;
-        reporter.SetSuccessful();
-        return true;
-    }
-
-    EGLDisplay Display() {
-        return mEGLDisplay;
-    }
-
-    bool IsANGLE() {
-        return mIsANGLE;
-    }
-
-    bool HasKHRImageBase() {
-        return mHave_EGL_KHR_image_base;
-    }
-
-    bool HasKHRImagePixmap() {
-        return mHave_EGL_KHR_image_pixmap;
-    }
-
-    bool HasKHRImageTexture2D() {
-        return mHave_EGL_KHR_gl_texture_2D_image;
-    }
-
-    bool HasKHRLockSurface() {
-        return mHave_EGL_KHR_lock_surface;
-    }
-
-    bool HasANGLESurfaceD3DTexture2DShareHandle() {
-        return mHave_EGL_ANGLE_surface_d3d_texture_2d_share_handle;
-    }
-
-    bool HasRobustness() {
-        return mHasRobustness;
-    }
-
-    void
-    DumpEGLConfig(EGLConfig cfg)
-    {
-        int attrval;
-        int err;
-
-#define ATTR(_x) do {                                                   \
-            fGetConfigAttrib(mEGLDisplay, cfg, LOCAL_EGL_##_x, &attrval);  \
-            if ((err = fGetError()) != 0x3000) {                        \
-                printf_stderr("  %s: ERROR (0x%04x)\n", #_x, err);        \
-            } else {                                                    \
-                printf_stderr("  %s: %d (0x%04x)\n", #_x, attrval, attrval); \
-            }                                                           \
-        } while(0)
-
-        printf_stderr("EGL Config: %d [%p]\n", (int)(intptr_t)cfg, cfg);
-
-        ATTR(BUFFER_SIZE);
-        ATTR(ALPHA_SIZE);
-        ATTR(BLUE_SIZE);
-        ATTR(GREEN_SIZE);
-        ATTR(RED_SIZE);
-        ATTR(DEPTH_SIZE);
-        ATTR(STENCIL_SIZE);
-        ATTR(CONFIG_CAVEAT);
-        ATTR(CONFIG_ID);
-        ATTR(LEVEL);
-        ATTR(MAX_PBUFFER_HEIGHT);
-        ATTR(MAX_PBUFFER_PIXELS);
-        ATTR(MAX_PBUFFER_WIDTH);
-        ATTR(NATIVE_RENDERABLE);
-        ATTR(NATIVE_VISUAL_ID);
-        ATTR(NATIVE_VISUAL_TYPE);
-        ATTR(PRESERVED_RESOURCES);
-        ATTR(SAMPLES);
-        ATTR(SAMPLE_BUFFERS);
-        ATTR(SURFACE_TYPE);
-        ATTR(TRANSPARENT_TYPE);
-        ATTR(TRANSPARENT_RED_VALUE);
-        ATTR(TRANSPARENT_GREEN_VALUE);
-        ATTR(TRANSPARENT_BLUE_VALUE);
-        ATTR(BIND_TO_TEXTURE_RGB);
-        ATTR(BIND_TO_TEXTURE_RGBA);
-        ATTR(MIN_SWAP_INTERVAL);
-        ATTR(MAX_SWAP_INTERVAL);
-        ATTR(LUMINANCE_SIZE);
-        ATTR(ALPHA_MASK_SIZE);
-        ATTR(COLOR_BUFFER_TYPE);
-        ATTR(RENDERABLE_TYPE);
-        ATTR(CONFORMANT);
-
-#undef ATTR
-    }
-
-    void DumpEGLConfigs() {
-        int nc = 0;
-        fGetConfigs(mEGLDisplay, NULL, 0, &nc);
-        EGLConfig *ec = new EGLConfig[nc];
-        fGetConfigs(mEGLDisplay, ec, nc, &nc);
-
-        for (int i = 0; i < nc; ++i) {
-            printf_stderr ("========= EGL Config %d ========\n", i);
-            DumpEGLConfig(ec[i]);
-        }
-
-        delete [] ec;
-    }
-
-private:
-    bool mInitialized;
-    PRLibrary *mEGLLibrary;
-    EGLDisplay mEGLDisplay;
-
-    bool mIsANGLE;
-    bool mHasRobustness;
-
-    bool mHave_EGL_KHR_image_base;
-    bool mHave_EGL_KHR_image_pixmap;
-    bool mHave_EGL_KHR_gl_texture_2D_image;
-    bool mHave_EGL_KHR_lock_surface;
-    bool mHave_EGL_ANGLE_surface_d3d_texture_2d_share_handle;
-} sEGLLibrary;
 
 class GLContextEGL : public GLContext
 {
@@ -992,7 +241,7 @@ public:
         , mBound(false)
         , mIsPBuffer(false)
         , mIsDoubleBuffered(false)
-        , mPBufferCanBindToTexture(false)
+        , mCanBindToTexture(false)
     {
         // any EGL contexts will always be GLESv2
         SetIsGLES2(true);
@@ -1028,14 +277,19 @@ public:
 
     bool Init()
     {
-        if (!OpenLibrary(GLES2_LIB)) {
-#if defined(XP_UNIX)
-            if (!OpenLibrary(GLES2_LIB2)) {
-                NS_WARNING("Couldn't load EGL LIB.");
-            }
+#if defined(ANDROID)
+        // We can't use LoadApitraceLibrary here because the GLContext
+        // expects its own handle to the GL library
+        if (!OpenLibrary(APITRACE_LIB))
 #endif
-            return false;
-        }
+            if (!OpenLibrary(GLES2_LIB)) {
+#if defined(XP_UNIX)
+                if (!OpenLibrary(GLES2_LIB2)) {
+                    NS_WARNING("Couldn't load GLES2 LIB.");
+                    return false;
+                }
+#endif
+            }
 
         bool current = MakeCurrent();
         if (!current) {
@@ -1056,6 +310,9 @@ public:
                 mIsDoubleBuffered = true;
         }
 #endif
+
+        if (ok)
+            InitFramebuffers();
 
         return ok;
     }
@@ -1133,8 +390,8 @@ public:
         // still expensive.
 #ifndef MOZ_WIDGET_QT
         if (!mSurface) {
-            // We need to be able to bind the surface when we don't
-            // have access to a surface. We wont be drawing to the screen
+            // We need to be able to bind NO_SURFACE when we don't
+            // have access to a surface. We won't be drawing to the screen
             // but we will be able to do things like resource releases.
             succeeded = sEGLLibrary.fMakeCurrent(EGL_DISPLAY(),
                                                  EGL_NO_SURFACE, EGL_NO_SURFACE,
@@ -1148,6 +405,15 @@ public:
         }
 #endif
         if (aForce || sEGLLibrary.fGetCurrentContext() != mContext) {
+#ifdef MOZ_WIDGET_QT
+            // Shared Qt GL context need to be informed about context switch
+            if (mSharedContext) {
+                QGLContext* qglCtx = static_cast<QGLContext*>(static_cast<GLContextEGL*>(mSharedContext.get())->mPlatformContext);
+                if (qglCtx) {
+                    qglCtx->doneCurrent();
+                }
+            }
+#endif
             succeeded = sEGLLibrary.fMakeCurrent(EGL_DISPLAY(),
                                                  mSurface, mSurface,
                                                  mContext);
@@ -1211,7 +477,6 @@ public:
     bool SwapBuffers()
     {
         if (mSurface && !mPlatformContext) {
-            //sEGLLibrary.fSetSwapRectangleANDROID(EGL_DISPLAY(), mSurface, 0, 0, gScreenBounds.width, gScreenBounds.height);
             return sEGLLibrary.fSwapBuffers(EGL_DISPLAY(), mSurface);
         } else {
             return false;
@@ -1222,13 +487,13 @@ public:
     CreateTextureImage(const nsIntSize& aSize,
                        TextureImage::ContentType aContentType,
                        GLenum aWrapMode,
-                       bool aUseNearestFilter=false);
+                       TextureImage::Flags aFlags = TextureImage::NoFlags);
 
     // a function to generate Tiles for Tiled Texture Image
     virtual already_AddRefed<TextureImage>
     TileGenFunc(const nsIntSize& aSize,
                 TextureImage::ContentType aContentType,
-                bool aUseNearestFilter = false);
+                TextureImage::Flags aFlags = TextureImage::NoFlags);
     // hold a reference to the given surface
     // for the lifetime of this context.
     void HoldSurface(gfxASurface *aSurf) {
@@ -1274,9 +539,6 @@ public:
     }
 
     void *GetD3DShareHandle() {
-        if (!mPBufferCanBindToTexture)
-            return nsnull;
-
         if (!sEGLLibrary.HasANGLESurfaceD3DTexture2DShareHandle()) {
             return nsnull;
         }
@@ -1296,6 +558,10 @@ public:
         return h;
     }
 
+    virtual bool HasLockSurface() {
+        return sEGLLibrary.HasKHRLockSurface();
+    }
+
 protected:
     friend class GLContextProviderEGL;
 
@@ -1308,7 +574,7 @@ protected:
 
     bool mIsPBuffer;
     bool mIsDoubleBuffered;
-    bool mPBufferCanBindToTexture;
+    bool mCanBindToTexture;
 
     static EGLSurface CreatePBufferSurfaceTryingPowerOfTwo(EGLConfig config,
                                                            EGLenum bindToTextureFormat,
@@ -1364,7 +630,7 @@ GLContextEGL::BindTex2DOffscreen(GLContext *aOffscreen)
 
     GLContextEGL *offs = static_cast<GLContextEGL*>(aOffscreen);
 
-    if (offs->mIsPBuffer && offs->mPBufferCanBindToTexture) {
+    if (offs->mCanBindToTexture) {
         bool ok = sEGLLibrary.fBindTexImage(EGL_DISPLAY(),
                                               offs->mSurface,
                                               LOCAL_EGL_BACK_BUFFER);
@@ -1394,7 +660,7 @@ GLContextEGL::UnbindTex2DOffscreen(GLContext *aOffscreen)
 
     GLContextEGL *offs = static_cast<GLContextEGL*>(aOffscreen);
 
-    if (offs->mIsPBuffer && offs->mPBufferCanBindToTexture) {
+    if (offs->mCanBindToTexture) {
         sEGLLibrary.fReleaseTexImage(EGL_DISPLAY(),
                                      offs->mSurface,
                                      LOCAL_EGL_BACK_BUFFER);
@@ -1412,7 +678,7 @@ GLContextEGL::ResizeOffscreen(const gfxIntSize& aNewSize)
 
         EGLSurface surface =
             CreatePBufferSurfaceTryingPowerOfTwo(mConfig,
-                                                 mPBufferCanBindToTexture
+                                                 mCanBindToTexture
                                                  ? (mCreationFormat.minAlpha
                                                     ? LOCAL_EGL_TEXTURE_RGBA
                                                     : LOCAL_EGL_TEXTURE_RGB)
@@ -1423,7 +689,7 @@ GLContextEGL::ResizeOffscreen(const gfxIntSize& aNewSize)
             return false;
         }
 
-        if (!ResizeOffscreenFBO(pbsize, false))
+        if (!ResizeOffscreenFBOs(pbsize, false))
             return false;
 
         SetOffscreenSize(aNewSize, pbsize);
@@ -1440,53 +706,14 @@ GLContextEGL::ResizeOffscreen(const gfxIntSize& aNewSize)
         return true;
     }
 
-#ifdef MOZ_X11
-    if (gUseBackingSurface && mThebesSurface) {
-        if (aNewSize == mThebesSurface->GetSize()) {
-            return true;
-        }
-
-        EGLNativePixmapType pixmap = 0;
-        nsRefPtr<gfxXlibSurface> xsurface =
-            gfxXlibSurface::Create(DefaultScreenOfDisplay(DefaultXDisplay()),
-                                   gfxXlibSurface::FindRenderFormat(DefaultXDisplay(),
-                                                                    gfxASurface::ImageFormatRGB24),
-                                   aNewSize);
-        // Make sure that pixmap created and ready for GL rendering
-        XSync(DefaultXDisplay(), False);
-
-        if (xsurface->CairoStatus() != 0) {
-            return false;
-        }
-        pixmap = (EGLNativePixmapType)xsurface->XDrawable();
-        if (!pixmap) {
-            return false;
-        }
-
-        EGLSurface surface;
-        EGLConfig config = 0;
-        int depth = gfxUtils::ImageFormatToDepth(gfxPlatform::GetPlatform()->GetOffscreenFormat());
-        surface = CreateEGLSurfaceForXSurface(xsurface, &config, depth);
-        if (!config) {
-            return false;
-        }
-        if (!ResizeOffscreenFBO(aNewSize, true))
-            return false;
-
-        mThebesSurface = xsurface;
-
-        return true;
-    }
-#endif
-
 #if defined(MOZ_X11) && defined(MOZ_EGL_XRENDER_COMPOSITE)
     if (ResizeOffscreenPixmapSurface(aNewSize)) {
-        if (ResizeOffscreenFBO(aNewSize, true))
+        if (ResizeOffscreenFBOs(aNewSize, true))
             return true;
     }
 #endif
 
-    return ResizeOffscreenFBO(aNewSize, true);
+    return ResizeOffscreenFBOs(aNewSize, true);
 }
 
 
@@ -1501,11 +728,8 @@ GLFormatForImage(gfxASurface::gfxImageFormat aFormat)
 {
     switch (aFormat) {
     case gfxASurface::ImageFormatARGB32:
-        return LOCAL_GL_RGBA;
     case gfxASurface::ImageFormatRGB24:
-        // this often isn't correct, because we can't guarantee that
-        // the alpha byte will be 0xff coming from the image surface
-        NS_WARNING("Using GL_RGBA for ImageFormatRGB24, are you sure you know what you're doing?");
+        // Thebes only supports RGBX, not packed RGB.
         return LOCAL_GL_RGBA;
     case gfxASurface::ImageFormatRGB16_565:
         return LOCAL_GL_RGB;
@@ -1538,8 +762,9 @@ public:
                     const nsIntSize& aSize,
                     GLenum aWrapMode,
                     ContentType aContentType,
-                    GLContext* aContext)
-        : TextureImage(aSize, aWrapMode, aContentType)
+                    GLContext* aContext,
+                    TextureImage::Flags aFlags = TextureImage::NoFlags)
+        : TextureImage(aSize, aWrapMode, aContentType, aFlags)
         , mGLContext(aContext)
         , mUpdateFormat(gfxASurface::ImageFormatUnknown)
         , mSurface(nsnull)
@@ -1553,38 +778,30 @@ public:
         mUpdateFormat = gfxASurface::FormatFromContent(GetContentType());
 
         if (gUseBackingSurface) {
-            if (mUpdateFormat == gfxASurface::ImageFormatRGB24) {
-#ifdef MOZ_GFX_OPTIMIZE_MOBILE
-                mUpdateFormat = gfxASurface::ImageFormatRGB16_565;
+            if (mUpdateFormat != gfxASurface::ImageFormatARGB32) {
                 mShaderType = RGBXLayerProgramType;
-#else
-                mUpdateFormat = gfxASurface::ImageFormatARGB32;
-                mShaderType = RGBALayerProgramType;
-#endif
             } else {
                 mShaderType = RGBALayerProgramType;
             }
             Resize(aSize);
         } else {
-            // Convert RGB24 to either ARGB32 on mobile.  We can't
-            // generate GL_RGB data, so we'll always have an alpha byte
-            // for RGB24.  No easy way to upload that to GL.
-            // 
-            // Note that if we start using RGB565 here, we'll need to
-            // watch for a) setting the correct format; and b) getting
-            // the stride right.
-            if (mUpdateFormat == gfxASurface::ImageFormatRGB24) {
-                mUpdateFormat = gfxASurface::ImageFormatARGB32;
+            if (mUpdateFormat == gfxASurface::ImageFormatRGB16_565) {
+                mShaderType = RGBXLayerProgramType;
+            } else if (mUpdateFormat == gfxASurface::ImageFormatRGB24) {
+                // RGB24 means really RGBX for Thebes, which means we have to
+                // use the right shader and ignore the uninitialized alpha
+                // value.
+                mShaderType = BGRXLayerProgramType;
+            } else {
+                mShaderType = BGRALayerProgramType;
             }
-            // We currently always use BGRA type textures
-            mShaderType = BGRALayerProgramType;
         }
     }
 
     virtual ~TextureImageEGL()
     {
         GLContext *ctx = mGLContext;
-        if (ctx->IsDestroyed() || !NS_IsMainThread()) {
+        if (ctx->IsDestroyed() || !ctx->IsOwningThreadCurrent()) {
             ctx = ctx->GetSharedContext();
         }
 
@@ -2040,16 +1257,16 @@ already_AddRefed<TextureImage>
 GLContextEGL::CreateTextureImage(const nsIntSize& aSize,
                                  TextureImage::ContentType aContentType,
                                  GLenum aWrapMode,
-                                 bool aUseNearestFilter)
+                                 TextureImage::Flags aFlags)
 {
-    nsRefPtr<TextureImage> t = new gl::TiledTextureImage(this, aSize, aContentType, aUseNearestFilter);
+    nsRefPtr<TextureImage> t = new gl::TiledTextureImage(this, aSize, aContentType, aFlags);
     return t.forget();
-};
+}
 
 already_AddRefed<TextureImage>
 GLContextEGL::TileGenFunc(const nsIntSize& aSize,
                                  TextureImage::ContentType aContentType,
-                                 bool aUseNearestFilter)
+                                 TextureImage::Flags aFlags)
 {
   MakeCurrent();
 
@@ -2060,9 +1277,9 @@ GLContextEGL::TileGenFunc(const nsIntSize& aSize,
   fBindTexture(LOCAL_GL_TEXTURE_2D, texture);
 
   nsRefPtr<TextureImageEGL> teximage =
-      new TextureImageEGL(texture, aSize, LOCAL_GL_CLAMP_TO_EDGE, aContentType, this);
+      new TextureImageEGL(texture, aSize, LOCAL_GL_CLAMP_TO_EDGE, aContentType, this, aFlags);
 
-  GLint texfilter = aUseNearestFilter ? LOCAL_GL_NEAREST : LOCAL_GL_LINEAR;
+  GLint texfilter = aFlags & TextureImage::UseNearestFilter ? LOCAL_GL_NEAREST : LOCAL_GL_LINEAR;
   fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MIN_FILTER, texfilter);
   fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MAG_FILTER, texfilter);
   fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
@@ -2087,47 +1304,7 @@ DepthToGLFormat(int aDepth)
     return ContextFormat::BasicRGBA32;
 }
 
-
-#ifdef MOZ_WIDGET_QT
-already_AddRefed<GLContext>
-GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
-{
-    if (!sEGLLibrary.EnsureInitialized()) {
-        return nsnull;
-    }
-
-    QGLContext* context = const_cast<QGLContext*>(QGLContext::currentContext());
-    if (context && context->device()) {
-        // Qt widget viewport already have GL context created by Qt
-        // Create dummy GLContextEGL class
-        nsRefPtr<GLContextEGL> glContext =
-            new GLContextEGL(ContextFormat(DepthToGLFormat(context->device()->depth())),
-                             NULL,
-                             NULL,
-                             sEGLLibrary.fGetCurrentSurface(LOCAL_EGL_DRAW), // just use same surface for read and draw
-                             sEGLLibrary.fGetCurrentContext(),
-                             false);
-
-        if (!glContext->Init())
-            return nsnull;
-
-        glContext->SetIsDoubleBuffered(context->format().doubleBuffer());
-
-        glContext->SetPlatformContext(context);
-
-        return glContext.forget();
-    }
-
-    // All Qt nsIWidget's have the same X-Window surface
-    // And EGL not allowing to create multiple GL context for the same window
-    // we should be able to create GL context for QGV viewport once, and reuse it for all child widgets
-    NS_ERROR("Failed to get QGLContext");
-
-    // Switch to software rendering here
-    return nsnull;
-}
-
-#else
+static nsRefPtr<GLContext> gGlobalContext;
 
 static const EGLint kEGLConfigAttribsRGB16[] = {
     LOCAL_EGL_SURFACE_TYPE,    LOCAL_EGL_WINDOW_BIT,
@@ -2150,12 +1327,41 @@ static const EGLint kEGLConfigAttribsRGBA32[] = {
     LOCAL_EGL_NONE
 };
 
-// This struct is used only by CreateConfig below, but ISO C++98 forbids
-// instantiating a template dependent on a locally-defined type.  Boo-urns!
-struct EGLAttribs {
-    gfxASurface::gfxImageFormat mFormat;
-    const EGLint* mAttribs;
-};
+static bool
+CreateConfig(EGLConfig* aConfig, PRInt32 depth)
+{
+    EGLConfig configs[64];
+    const EGLint* attribs = depth == 16 ? kEGLConfigAttribsRGB16 :
+                                          kEGLConfigAttribsRGBA32;
+    EGLint ncfg = ArrayLength(configs);
+
+    if (!sEGLLibrary.fChooseConfig(EGL_DISPLAY(), attribs,
+                                   configs, ncfg, &ncfg) ||
+        ncfg < 1) {
+        return false;
+    }
+
+    for (int j = 0; j < ncfg; ++j) {
+        EGLConfig config = configs[j];
+        EGLint r, g, b, a;
+
+        if (sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
+                                         LOCAL_EGL_RED_SIZE, &r) &&
+            sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
+                                         LOCAL_EGL_GREEN_SIZE, &g) &&
+            sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
+                                         LOCAL_EGL_BLUE_SIZE, &b) &&
+            sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
+                                         LOCAL_EGL_ALPHA_SIZE, &a) &&
+            ((depth == 16 && r == 5 && g == 6 && b == 5) ||
+             (depth == 24 && r == 8 && g == 8 && b == 8 && a == 8)))
+        {
+            *aConfig = config;
+            return true;
+        }
+    }
+    return false;
+}
 
 // Return true if a suitable EGLConfig was found and pass it out
 // through aConfig.  Return false otherwise.
@@ -2165,50 +1371,19 @@ struct EGLAttribs {
 static bool
 CreateConfig(EGLConfig* aConfig)
 {
-    EGLAttribs attribsToTry[] = {
-#ifdef MOZ_GFX_OPTIMIZE_MOBILE
-        // Prefer r5g6b5 for potential savings in memory bandwidth.
-        // This needs to be reevaluated for newer devices.
-        { gfxASurface::ImageFormatRGB16_565, kEGLConfigAttribsRGB16 },
+    PRInt32 depth = gfxPlatform::GetPlatform()->GetScreenDepth();
+    if (!CreateConfig(aConfig, depth)) {
+#ifdef MOZ_WIDGET_ANDROID
+        // Bug 736005
+        // Android doesn't always support 16 bit so also try 24 bit
+        if (depth == 16) {
+            return CreateConfig(aConfig, 24);
+        }
 #endif
-        { gfxASurface::ImageFormatARGB32, kEGLConfigAttribsRGBA32 },
-    };
-
-    EGLConfig configs[64];
-    for (unsigned i = 0; i < ArrayLength(attribsToTry); ++i) {
-        const EGLAttribs& attribs = attribsToTry[i];
-        EGLint ncfg = ArrayLength(configs);
-
-        if (!sEGLLibrary.fChooseConfig(EGL_DISPLAY(), attribs.mAttribs,
-                                       configs, ncfg, &ncfg) ||
-            ncfg < 1)
-        {
-            continue;
-        }
-
-        for (int j = 0; j < ncfg; ++j) {
-            EGLConfig config = configs[j];
-            EGLint r, g, b, a;
-
-            if (sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
-                                             LOCAL_EGL_RED_SIZE, &r) &&
-                sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
-                                             LOCAL_EGL_GREEN_SIZE, &g) &&
-                sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
-                                             LOCAL_EGL_BLUE_SIZE, &b) &&
-                sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
-                                             LOCAL_EGL_ALPHA_SIZE, &a) &&
-                ((gfxASurface::ImageFormatRGB16_565 == attribs.mFormat &&
-                  r == 5 && g == 6 && b == 5) ||
-                 (gfxASurface::ImageFormatARGB32 == attribs.mFormat &&
-                  r == 8 && g == 8 && b == 8 && a == 8)))
-            {
-                *aConfig = config;
-                return true;
-            }
-        }
+        return false;
+    } else {
+        return true;
     }
-    return false;
 }
 
 static EGLSurface
@@ -2216,22 +1391,27 @@ CreateSurfaceForWindow(nsIWidget *aWidget, EGLConfig config)
 {
     EGLSurface surface;
 
-
 #ifdef DEBUG
     sEGLLibrary.DumpEGLConfig(config);
 #endif
 
-#ifdef MOZ_WIDGET_ANDROID
+#ifdef MOZ_JAVA_COMPOSITOR
+    surface = mozilla::AndroidBridge::Bridge()->ProvideEGLSurface();
+#elif defined(MOZ_WIDGET_ANDROID)
+
     // On Android, we have to ask Java to make the eglCreateWindowSurface
     // call for us.  See GLHelpers.java for a description of why.
     //
     // We also only have one true "window", so we just use it directly and ignore
     // what was passed in.
-    printf_stderr("... requesting window surface from bridge\n");
+    AndroidGeckoSurfaceView& sview = mozilla::AndroidBridge::Bridge()->SurfaceView();
+    if (sview.isNull()) {
+        printf_stderr("got null surface\n");
+        return NULL;
+    }
+
     surface = mozilla::AndroidBridge::Bridge()->
-        CallEglCreateWindowSurface(EGL_DISPLAY(), config,
-                                   mozilla::AndroidBridge::Bridge()->SurfaceView());
-    printf_stderr("got surface %p\n", surface);
+        CallEglCreateWindowSurface(EGL_DISPLAY(), config, sview);
 #else
     surface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config, GET_NATIVE_WINDOW(aWidget), 0);
 #endif
@@ -2246,16 +1426,6 @@ CreateSurfaceForWindow(nsIWidget *aWidget, EGLConfig config)
     return surface;
 }
 
-const char*
-GetVendor()
-{
-    if (!sEGLLibrary.EnsureInitialized()) {
-        return nsnull;
-    }
-
-    return reinterpret_cast<const char*>(sEGLLibrary.fQueryString(EGL_DISPLAY(), LOCAL_EGL_VENDOR));
-}
-
 already_AddRefed<GLContext>
 GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
 {
@@ -2265,12 +1435,55 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
         return nsnull;
     }
 
+#if defined(XP_WIN) || defined(ANDROID) || defined(MOZ_PLATFORM_MAEMO)
+    bool doubleBuffered = true;
+#else
+    bool doubleBuffered = false;
+#endif
+
+    void* currentContext = sEGLLibrary.fGetCurrentContext();
+    if (aWidget->HasGLContext() && currentContext) {
+        PRInt32 depth = gfxPlatform::GetPlatform()->GetScreenDepth();
+        void* platformContext = currentContext;
+#ifdef MOZ_WIDGET_QT
+        QGLContext* context = const_cast<QGLContext*>(QGLContext::currentContext());
+        if (context && context->device()) {
+            depth = context->device()->depth();
+        }
+        doubleBuffered = context->format().doubleBuffer();
+        platformContext = context;
+#endif
+        nsRefPtr<GLContextEGL> glContext =
+            new GLContextEGL(ContextFormat(DepthToGLFormat(depth)),
+                             gGlobalContext,
+                             NULL,
+                             sEGLLibrary.fGetCurrentSurface(LOCAL_EGL_DRAW), // just use same surface for read and draw
+                             currentContext,
+                             false);
+
+        if (!glContext->Init())
+            return nsnull;
+
+        glContext->SetIsDoubleBuffered(doubleBuffered);
+
+        glContext->SetPlatformContext(platformContext);
+        if (!gGlobalContext) {
+            gGlobalContext = glContext;
+        }
+
+        return glContext.forget();
+    }
+
     if (!CreateConfig(&config)) {
         printf_stderr("Failed to create EGL config!\n");
         return nsnull;
     }
 
-    EGLSurface surface = CreateSurfaceForWindow(aWidget, config);
+#ifdef MOZ_JAVA_COMPOSITOR
+    mozilla::AndroidBridge::Bridge()->RegisterCompositor();
+#endif
+
+   EGLSurface surface = CreateSurfaceForWindow(aWidget, config);
 
     if (!surface) {
         return nsnull;
@@ -2294,13 +1507,27 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
         return nsnull;
     }
 
-#if defined(XP_WIN) || defined(ANDROID) || defined(MOZ_PLATFORM_MAEMO)
-    glContext->SetIsDoubleBuffered(true);
-#endif
+    glContext->SetIsDoubleBuffered(doubleBuffered);
 
     return glContext.forget();
 }
-#endif
+
+static void
+FillPBufferAttribs_Minimal(nsTArray<EGLint>& aAttrs)
+{
+    aAttrs.Clear();
+
+#define A1(_x)      do { aAttrs.AppendElement(_x); } while (0)
+#define A2(_x,_y)   do { A1(_x); A1(_y); } while (0)
+
+    A2(LOCAL_EGL_RENDERABLE_TYPE, LOCAL_EGL_OPENGL_ES2_BIT);
+
+    A2(LOCAL_EGL_SURFACE_TYPE, LOCAL_EGL_PBUFFER_BIT);
+
+    A1(LOCAL_EGL_NONE);
+#undef A1
+#undef A2
+}
 
 static void
 FillPBufferAttribs(nsTArray<EGLint>& aAttrs,
@@ -2315,6 +1542,8 @@ FillPBufferAttribs(nsTArray<EGLint>& aAttrs,
 #define A2(_x,_y)   do { A1(_x); A1(_y); } while (0)
 
     A2(LOCAL_EGL_RENDERABLE_TYPE, LOCAL_EGL_OPENGL_ES2_BIT);
+
+    A2(LOCAL_EGL_SURFACE_TYPE, LOCAL_EGL_PBUFFER_BIT);
 
     if (aColorBitsOverride == -1) {
         A2(LOCAL_EGL_RED_SIZE, aFormat.red);
@@ -2363,7 +1592,7 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(const gfxIntSize& aSize,
 
     // if we're running under ANGLE, we can't set BIND_TO_TEXTURE --
     // it's not supported, and we have dx interop pbuffers anyway
-    if (sEGLLibrary.IsANGLE())
+    if (sEGLLibrary.IsANGLE() || bufferUnused)
         configCanBindToTexture = false;
 
     nsTArray<EGLint> attribs(32);
@@ -2372,16 +1601,20 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(const gfxIntSize& aSize,
     int tryDepthSize = (aFormat.depth > 0) ? 24 : 0;
 
 TRY_ATTRIBS_AGAIN:
-    switch (attribAttempt) {
-    case 0:
-        FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, 8, tryDepthSize);
-        break;
-    case 1:
-        FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, -1, tryDepthSize);
-        break;
-    case 2:
-        FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, -1, -1);
-        break;
+    if (bufferUnused) {
+        FillPBufferAttribs_Minimal(attribs);
+    } else {
+        switch (attribAttempt) {
+        case 0:
+            FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, 8, tryDepthSize);
+            break;
+        case 1:
+            FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, -1, tryDepthSize);
+            break;
+        case 2:
+            FillPBufferAttribs(attribs, aFormat, configCanBindToTexture, -1, -1);
+            break;
+        }
     }
 
     if (!sEGLLibrary.fChooseConfig(EGL_DISPLAY(),
@@ -2390,6 +1623,11 @@ TRY_ATTRIBS_AGAIN:
                                    &foundConfigs)
         || foundConfigs == 0)
     {
+        if (bufferUnused) {
+            NS_WARNING("No EGL Config for minimal PBuffer!");
+            return nsnull;
+        }
+
         if (attribAttempt < 3) {
             attribAttempt++;
             goto TRY_ATTRIBS_AGAIN;
@@ -2403,6 +1641,7 @@ TRY_ATTRIBS_AGAIN:
         }
 
         // no configs? no pbuffers!
+        NS_WARNING("Failed to select acceptable config for PBuffer creation!");
         return nsnull;
     }
 
@@ -2421,8 +1660,10 @@ TRY_ATTRIBS_AGAIN:
                                                                     : LOCAL_EGL_TEXTURE_RGB)
                                                                  : LOCAL_EGL_NONE,
                                                                  pbsize);
-    if (!surface)
+    if (!surface) {
+        NS_WARNING("Failed to create PBuffer for context!");
         return nsnull;
+    }
 
     sEGLLibrary.fBindAPI(LOCAL_EGL_OPENGL_ES_API);
 
@@ -2434,7 +1675,7 @@ TRY_ATTRIBS_AGAIN:
                                          sEGLLibrary.HasRobustness() ? gContextAttribsRobustness
                                                                      : gContextAttribs);
     if (!context) { 
-        NS_WARNING("Failed to create context");
+        NS_WARNING("Failed to create GLContext from PBuffer");
         sEGLLibrary.fDestroySurface(EGL_DISPLAY(), surface);
         return nsnull;
     }
@@ -2444,13 +1685,15 @@ TRY_ATTRIBS_AGAIN:
                                                         true);
 
     if (!glContext->Init()) {
+        NS_WARNING("Failed to initialize GLContext!");
         return nsnull;
     }
 
-    if (!bufferUnused) {
+    glContext->mCanBindToTexture = configCanBindToTexture;
+
+    if (!bufferUnused) {  // We *are* using the buffer
       glContext->SetOffscreenSize(aSize, pbsize);
       glContext->mIsPBuffer = true;
-      glContext->mPBufferCanBindToTexture = configCanBindToTexture;
     }
 
     return glContext.forget();
@@ -2458,7 +1701,7 @@ TRY_ATTRIBS_AGAIN:
 
 #ifdef MOZ_X11
 EGLSurface
-CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig, EGLenum aDepth)
+CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig)
 {
     gfxXlibSurface* xsurface = static_cast<gfxXlibSurface*>(aSurface);
     bool opaque =
@@ -2497,7 +1740,7 @@ CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig, EGLenum a
     static EGLint pixmap_config[] = {
         LOCAL_EGL_SURFACE_TYPE,         LOCAL_EGL_PIXMAP_BIT,
         LOCAL_EGL_RENDERABLE_TYPE,      LOCAL_EGL_OPENGL_ES2_BIT,
-        LOCAL_EGL_DEPTH_SIZE,           aDepth,
+        LOCAL_EGL_DEPTH_SIZE,           0,
         LOCAL_EGL_BIND_TO_TEXTURE_RGB,  LOCAL_EGL_TRUE,
         LOCAL_EGL_NONE
     };
@@ -2505,7 +1748,7 @@ CreateEGLSurfaceForXSurface(gfxASurface* aSurface, EGLConfig* aConfig, EGLenum a
     static EGLint pixmap_lock_config[] = {
         LOCAL_EGL_SURFACE_TYPE,         LOCAL_EGL_PIXMAP_BIT | LOCAL_EGL_LOCK_SURFACE_BIT_KHR,
         LOCAL_EGL_RENDERABLE_TYPE,      LOCAL_EGL_OPENGL_ES2_BIT,
-        LOCAL_EGL_DEPTH_SIZE,           aDepth,
+        LOCAL_EGL_DEPTH_SIZE,           0,
         LOCAL_EGL_BIND_TO_TEXTURE_RGB,  LOCAL_EGL_TRUE,
         LOCAL_EGL_NONE
     };
@@ -2558,7 +1801,7 @@ GLContextEGL::CreateEGLPixmapOffscreenContext(const gfxIntSize& aSize,
         gfxXlibSurface::Create(DefaultScreenOfDisplay(DefaultXDisplay()),
                                gfxXlibSurface::FindRenderFormat(DefaultXDisplay(),
                                                                 gfxASurface::ImageFormatRGB24),
-                               gUseBackingSurface ? aSize : gfxIntSize(16, 16));
+                               aSize);
 
     // XSync required after gfxXlibSurface::Create, otherwise EGL will fail with BadDrawable error
     XSync(DefaultXDisplay(), False);
@@ -2577,8 +1820,7 @@ GLContextEGL::CreateEGLPixmapOffscreenContext(const gfxIntSize& aSize,
     EGLConfig config = 0;
 
 #ifdef MOZ_X11
-    int depth = gfxUtils::ImageFormatToDepth(gfxPlatform::GetPlatform()->GetOffscreenFormat());
-    surface = CreateEGLSurfaceForXSurface(thebesSurface, &config, gUseBackingSurface ? depth : 0);
+    surface = CreateEGLSurfaceForXSurface(thebesSurface, &config);
 #endif
     if (!config) {
         return nsnull;
@@ -2604,20 +1846,28 @@ GLContextEGL::CreateEGLPixmapOffscreenContext(const gfxIntSize& aSize,
 // often without the ability to texture from them directly.
 already_AddRefed<GLContext>
 GLContextProviderEGL::CreateOffscreen(const gfxIntSize& aSize,
-                                      const ContextFormat& aFormat)
+                                      const ContextFormat& aFormat,
+                                      const ContextFlags aFlags)
 {
     if (!sEGLLibrary.EnsureInitialized()) {
         return nsnull;
     }
 
-#if defined(ANDROID) || defined(XP_WIN)
+#if !defined(MOZ_X11)
+    bool usePBuffers = false; // Generally, prefer FBOs to PBuffers
+
+    if (sEGLLibrary.IsANGLE())
+      usePBuffers = true; // For d3d share handle, we need an EGL surface
+
+    gfxIntSize pbufferSize = usePBuffers ? aSize : gfxIntSize(16, 16);
     nsRefPtr<GLContextEGL> glContext =
-        GLContextEGL::CreateEGLPBufferOffscreenContext(gfxIntSize(16, 16), aFormat, true);
+        GLContextEGL::CreateEGLPBufferOffscreenContext(pbufferSize, aFormat, !usePBuffers);
 
     if (!glContext)
         return nsnull;
 
-    if (!glContext->ResizeOffscreenFBO(aSize, true))
+    gfxIntSize fboSize = usePBuffers ? glContext->OffscreenActualSize() : aSize;
+    if (!(aFlags & GLContext::ContextFlagsGlobal) && !glContext->ResizeOffscreenFBOs(fboSize, !usePBuffers))
         return nsnull;
 
     return glContext.forget();
@@ -2628,23 +1878,19 @@ GLContextProviderEGL::CreateOffscreen(const gfxIntSize& aSize,
     if (!glContext)
         return nsnull;
 
-    if (!glContext->ResizeOffscreenFBO(glContext->OffscreenActualSize(), true))
+    if (!(aFlags & GLContext::ContextFlagsGlobal) && !glContext->ResizeOffscreenFBOs(glContext->OffscreenActualSize(), true))
         return nsnull;
 
     return glContext.forget();
 #elif defined(MOZ_X11)
     nsRefPtr<GLContextEGL> glContext =
-        GLContextEGL::CreateEGLPixmapOffscreenContext(aSize, aFormat, true);
+        GLContextEGL::CreateEGLPixmapOffscreenContext(gfxIntSize(16, 16), aFormat, true);
 
     if (!glContext) {
         return nsnull;
     }
-    if (!glContext->GetSharedContext()) {
-        // no point in returning anything if sharing failed, we can't
-        // render from this
-        return nsnull;
-    }
-    if (!gUseBackingSurface && !glContext->ResizeOffscreenFBO(glContext->OffscreenActualSize(), true)) {
+
+    if (!(aFlags & GLContext::ContextFlagsGlobal) && !glContext->ResizeOffscreenFBOs(aSize, true)) {
         // we weren't able to create the initial
         // offscreen FBO, so this is dead
         return nsnull;
@@ -2691,8 +1937,6 @@ GLContextProviderEGL::CreateForNativePixmapSurface(gfxASurface* aSurface)
 #endif
 }
 
-static nsRefPtr<GLContext> gGlobalContext;
-
 GLContext *
 GLContextProviderEGL::GetGlobalContext()
 {
@@ -2703,7 +1947,8 @@ GLContextProviderEGL::GetGlobalContext()
         // CreateOffscreen can call us re-entrantly.
         nsRefPtr<GLContext> ctx =
             GLContextProviderEGL::CreateOffscreen(gfxIntSize(16, 16),
-                                                  ContextFormat(ContextFormat::BasicRGB24));
+                                                  ContextFormat(ContextFormat::BasicRGB24),
+                                                  GLContext::ContextFlagsGlobal);
         gGlobalContext = ctx;
         if (gGlobalContext)
             gGlobalContext->SetIsGlobalSharedContext(true);

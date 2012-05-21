@@ -20,7 +20,7 @@ Tests:
   <title>Test for Bug 700764</title>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
 </head>
-<body onload="start();">
+<body>
 
 <div id="fse">
   <div id="fse-inner">
@@ -54,13 +54,14 @@ function e(id) {
   return document.getElementById(id);
 }
 
-function start() {
-  SimpleTest.waitForFocus(
-    function() {
-      addListener("change", change1);
-      e("fse").mozRequestFullScreen();
-    }
-  );
+function requestFullscreen(element) {
+  element.focus();
+  element.mozRequestFullScreen();
+}
+
+function begin() {
+  addListener("change", change1);
+  e("fse").mozRequestFullScreen();
 }
 
 function change1() {
@@ -69,7 +70,7 @@ function change1() {
   is(document.mozFullScreenElement, e("fse"), "Body should be FSE");
   
   // Request full-screen from element not descendent from current FSE.
-  e("non-fse").mozRequestFullScreen();
+  requestFullscreen(e("non-fse"));
 }
 
 function error1() {
@@ -77,7 +78,7 @@ function error1() {
   addListener("change", change2);
   is(document.mozFullScreenElement, e("fse"), "FSE should not change");
   var iframe = e("subdoc");
-  iframe.contentDocument.body.mozRequestFullScreen();
+  requestFullscreen(iframe.contentDocument.body);
 }
 
 function change2() {
@@ -100,14 +101,14 @@ function change4() {
   removeListener("change", change4);
   is(document.mozFullScreenElement, null, "Should have left full-screen entirely");
   addListener("change", change5);
-  e("fse").mozRequestFullScreen();
+  requestFullscreen(e("fse"));
 }
 
 function change5() {
   removeListener("change", change5);
   addListener("change", change6);
   is(document.mozFullScreenElement, e("fse"), "FSE should be e('fse')");
-  e("fse-inner").mozRequestFullScreen();
+  requestFullscreen(e("fse-inner"));
 }
 
 function change6() {

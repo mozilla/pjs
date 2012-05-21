@@ -1,43 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Nick Fitzgerald <nfitzgerald@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * JS lexical scanner.
@@ -64,9 +30,9 @@
 #include "jsopcode.h"
 #include "jsscript.h"
 
-#include "frontend/BytecodeEmitter.h"
 #include "frontend/Parser.h"
 #include "frontend/TokenStream.h"
+#include "frontend/TreeContext.h"
 #include "vm/RegExpObject.h"
 
 #include "jsscriptinlines.h"
@@ -154,11 +120,14 @@ js::IsIdentifier(JSLinearString *str)
 
 /* Initialize members that aren't initialized in |init|. */
 TokenStream::TokenStream(JSContext *cx, JSPrincipals *prin, JSPrincipals *originPrin)
-  : tokens(), cursor(), lookahead(), flags(), listenerTSData(), tokenbuf(cx),
+  : tokens(), tokensRoot(cx, &tokens),
+    cursor(), lookahead(), flags(),
+    linebaseRoot(cx, &linebase), prevLinebaseRoot(cx, &prevLinebase), userbufRoot(cx, &userbuf),
+    listenerTSData(), tokenbuf(cx),
     cx(cx), originPrincipals(JSScript::normalizeOriginPrincipals(prin, originPrin))
 {
     if (originPrincipals)
-        JSPRINCIPALS_HOLD(cx, originPrincipals);
+        JS_HoldPrincipals(originPrincipals);
 }
 
 #ifdef _MSC_VER
@@ -166,7 +135,7 @@ TokenStream::TokenStream(JSContext *cx, JSPrincipals *prin, JSPrincipals *origin
 #endif
 
 bool
-TokenStream::init(const jschar *base, size_t length, const char *fn, uintN ln, JSVersion v)
+TokenStream::init(const jschar *base, size_t length, const char *fn, unsigned ln, JSVersion v)
 {
     filename = fn;
     lineno = ln;
@@ -178,8 +147,8 @@ TokenStream::init(const jschar *base, size_t length, const char *fn, uintN ln, J
     prevLinebase = NULL;
     sourceMap = NULL;
 
-    JSSourceHandler listener = cx->debugHooks->sourceHandler;
-    void *listenerData = cx->debugHooks->sourceHandlerData;
+    JSSourceHandler listener = cx->runtime->debugHooks.sourceHandler;
+    void *listenerData = cx->runtime->debugHooks.sourceHandlerData;
 
     if (listener)
         listener(fn, ln, base, length, &listenerTSData, listenerData);
@@ -248,7 +217,7 @@ TokenStream::~TokenStream()
     if (sourceMap)
         cx->free_(sourceMap);
     if (originPrincipals)
-        JSPRINCIPALS_DROP(cx, originPrincipals);
+        JS_DropPrincipals(cx->runtime, originPrincipals);
 }
 
 /* Use the fastest available getc. */
@@ -380,9 +349,9 @@ TokenStream::ungetCharIgnoreEOL(int32_t c)
  * characters had appropriate values.
  */
 bool
-TokenStream::peekChars(intN n, jschar *cp)
+TokenStream::peekChars(int n, jschar *cp)
 {
-    intN i, j;
+    int i, j;
     int32_t c;
 
     for (i = 0; i < n; i++) {
@@ -424,7 +393,7 @@ TokenStream::TokenBuf::findEOL()
 }
 
 bool
-TokenStream::reportCompileErrorNumberVA(ParseNode *pn, uintN flags, uintN errorNumber, va_list ap)
+TokenStream::reportCompileErrorNumberVA(ParseNode *pn, unsigned flags, unsigned errorNumber, va_list ap)
 {
     JSErrorReport report;
     char *message;
@@ -433,7 +402,7 @@ TokenStream::reportCompileErrorNumberVA(ParseNode *pn, uintN flags, uintN errorN
     bool warning;
     JSBool ok;
     const TokenPos *tp;
-    uintN i;
+    unsigned i;
 
     if (JSREPORT_IS_STRICT(flags) && !cx->hasStrictOption())
         return true;
@@ -521,8 +490,8 @@ TokenStream::reportCompileErrorNumberVA(ParseNode *pn, uintN flags, uintN errorN
          * sending the error on to the regular error reporter.
          */
         bool reportError = true;
-        if (JSDebugErrorHook hook = cx->debugHooks->debugErrorHook)
-            reportError = hook(cx, message, &report, cx->debugHooks->debugErrorHookData);
+        if (JSDebugErrorHook hook = cx->runtime->debugHooks.debugErrorHook)
+            reportError = hook(cx, message, &report, cx->runtime->debugHooks.debugErrorHookData);
 
         /* Report the error */
         if (reportError && cx->errorReporter)
@@ -552,15 +521,15 @@ TokenStream::reportCompileErrorNumberVA(ParseNode *pn, uintN flags, uintN errorN
 }
 
 bool
-js::ReportStrictModeError(JSContext *cx, TokenStream *ts, TreeContext *tc, ParseNode *pn,
-                          uintN errorNumber, ...)
+js::ReportStrictModeError(JSContext *cx, TokenStream *ts, SharedContext *sc, ParseNode *pn,
+                          unsigned errorNumber, ...)
 {
-    JS_ASSERT(ts || tc);
+    JS_ASSERT(ts || sc);
     JS_ASSERT(cx == ts->getContext());
 
     /* In strict mode code, this is an error, not merely a warning. */
-    uintN flags;
-    if ((ts && ts->isStrictMode()) || (tc && (tc->flags & TCF_STRICT_MODE_CODE))) {
+    unsigned flags;
+    if ((ts && ts->isStrictMode()) || (sc && sc->inStrictMode())) {
         flags = JSREPORT_ERROR;
     } else {
         if (!cx->hasStrictOption())
@@ -577,8 +546,8 @@ js::ReportStrictModeError(JSContext *cx, TokenStream *ts, TreeContext *tc, Parse
 }
 
 bool
-js::ReportCompileErrorNumber(JSContext *cx, TokenStream *ts, ParseNode *pn, uintN flags,
-                             uintN errorNumber, ...)
+js::ReportCompileErrorNumber(JSContext *cx, TokenStream *ts, ParseNode *pn, unsigned flags,
+                             unsigned errorNumber, ...)
 {
     va_list ap;
 
@@ -1129,7 +1098,7 @@ TokenStream::getAtLine()
 {
     int c;
     jschar cp[5];
-    uintN i, line, temp;
+    unsigned i, line, temp;
     char filenameBuf[1024];
 
     /*
@@ -1732,7 +1701,7 @@ TokenStream::getTokenInternal()
          * chars, so we don't need to use tokenbuf.  Instead we can just
          * convert the jschars in userbuf directly to the numeric value.
          */
-        jsdouble dval;
+        double dval;
         const jschar *dummy;
         if (!hasFracOrExp) {
             if (!GetPrefixInteger(cx, numStart, userbuf.addressOfNextRawChar(), 10, &dummy, &dval))
@@ -1823,7 +1792,7 @@ TokenStream::getTokenInternal()
             goto error;
         }
 
-        jsdouble dval;
+        double dval;
         const jschar *dummy;
         if (!GetPrefixInteger(cx, numStart, userbuf.addressOfNextRawChar(), radix, &dummy, &dval))
             goto error;
@@ -1987,7 +1956,7 @@ TokenStream::getTokenInternal()
          * Look for a multi-line comment.
          */
         if (matchChar('*')) {
-            uintN linenoBefore = lineno;
+            unsigned linenoBefore = lineno;
             while ((c = getChar()) != EOF &&
                    !(c == '*' && matchChar('/'))) {
                 /* Ignore all characters until comment close. */
@@ -2035,7 +2004,7 @@ TokenStream::getTokenInternal()
             }
 
             RegExpFlag reflags = NoFlags;
-            uintN length = tokenbuf.length() + 1;
+            unsigned length = tokenbuf.length() + 1;
             while (true) {
                 c = peekChar();
                 if (c == 'g' && !(reflags & GlobalFlag))

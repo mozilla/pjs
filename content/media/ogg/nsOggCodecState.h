@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: ML 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *  Chris Pearce <chris@pearce.org.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #if !defined(nsOggCodecState_h_)
 #define nsOggCodecState_h_
 
@@ -46,12 +13,15 @@
 #else
 #include <vorbis/codec.h>
 #endif
+#ifdef MOZ_OPUS
+#include <opus/opus.h>
+#endif
 #include <nsDeque.h>
 #include <nsTArray.h>
 #include <nsClassHashtable.h>
 #include "VideoUtils.h"
 
-#include "mozilla/StdInt.h"
+#include "mozilla/StandardInteger.h"
 
 // Uncomment the following to validate that we're predicting the number
 // of Vorbis samples in each packet correctly.
@@ -101,8 +71,9 @@ public:
   enum CodecType {
     TYPE_VORBIS=0,
     TYPE_THEORA=1,
-    TYPE_SKELETON=2,
-    TYPE_UNKNOWN=3
+    TYPE_OPUS=2,
+    TYPE_SKELETON=3,
+    TYPE_UNKNOWN=4
   };
 
   virtual ~nsOggCodecState();
@@ -317,6 +288,42 @@ private:
   // of all frames in the array. This enables us to determine their timestamps.
   void ReconstructTheoraGranulepos();
 
+};
+
+class nsOpusState : public nsOggCodecState {
+#ifdef MOZ_OPUS
+public:
+  nsOpusState(ogg_page* aBosPage);
+  virtual ~nsOpusState();
+
+  CodecType GetType() { return TYPE_OPUS; }
+  bool DecodeHeader(ogg_packet* aPacket);
+  PRInt64 Time(PRInt64 granulepos);
+  bool Init();
+  nsresult Reset();
+  bool IsHeader(ogg_packet* aPacket);
+  nsresult PageIn(ogg_page* aPage);
+
+  // Various fields from the Ogg Opus header.
+  int mRate;        // Sample rate the decoder uses (always 48 kHz).
+  int mNominalRate; // Original sample rate of the data (informational).
+  int mChannels;    // Number of channels the stream encodes.
+  int mPreSkip;     // Number of samples to strip after decoder reset.
+  float mGain;      // Gain (dB) to apply to decoder output.
+  int mChannelMapping; // Channel mapping family.
+  int mStreams;     // Number of packed streams in each packet.
+
+  OpusDecoder *mDecoder;
+
+private:
+
+  // Reconstructs the granulepos of Opus packets stored in the
+  // mUnstamped array. mUnstamped must be filled with consecutive packets from
+  // the stream, with the last packet having a known granulepos. Using this
+  // known granulepos, and the known frame numbers, we recover the granulepos
+  // of all frames in the array. This enables us to determine their timestamps.
+  void ReconstructGranulepos();
+#endif /* MOZ_OPUS */
 };
 
 // Constructs a 32bit version number out of two 16 bit major,minor

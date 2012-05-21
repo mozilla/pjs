@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is MathML DOM code.
- *
- * The Initial Developer of the Original Code is
- * mozilla.org.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *    Vlad Sukhoy <vladimir.sukhoy@gmail.com> (original developer)
- *    Daniel Kraft <d@domob.eu> (nsMathMLElement patch, attachment 262925)
- *    Frederic Wang <fred.wang@free.fr>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -146,6 +111,11 @@ nsMathMLElement::ParseAttribute(PRInt32 aNamespaceID,
                                              aValue, aResult);
 }
 
+static nsGenericElement::MappedAttributeEntry sMtableStyles[] = {
+  { &nsGkAtoms::width },
+  { nsnull }
+};
+
 static nsGenericElement::MappedAttributeEntry sTokenStyles[] = {
   { &nsGkAtoms::mathsize_ },
   { &nsGkAtoms::fontsize_ },
@@ -171,6 +141,10 @@ static nsGenericElement::MappedAttributeEntry sCommonPresStyles[] = {
 bool
 nsMathMLElement::IsAttributeMapped(const nsIAtom* aAttribute) const
 {
+  static const MappedAttributeEntry* const mtableMap[] = {
+    sMtableStyles,
+    sCommonPresStyles
+  };
   static const MappedAttributeEntry* const tokenMap[] = {
     sTokenStyles,
     sCommonPresStyles
@@ -194,6 +168,9 @@ nsMathMLElement::IsAttributeMapped(const nsIAtom* aAttribute) const
       tag == nsGkAtoms::math)
     return FindAttributeDependence(aAttribute, mstyleMap);
 
+  if (tag == nsGkAtoms::mtable_)
+    return FindAttributeDependence(aAttribute, mtableMap);
+
   if (tag == nsGkAtoms::maction_ ||
       tag == nsGkAtoms::maligngroup_ ||
       tag == nsGkAtoms::malignmark_ ||
@@ -211,7 +188,6 @@ nsMathMLElement::IsAttributeMapped(const nsIAtom* aAttribute) const
       tag == nsGkAtoms::msub_ ||
       tag == nsGkAtoms::msubsup_ ||
       tag == nsGkAtoms::msup_ ||
-      tag == nsGkAtoms::mtable_ ||
       tag == nsGkAtoms::mtd_ ||
       tag == nsGkAtoms::mtr_ ||
       tag == nsGkAtoms::munder_ ||
@@ -232,32 +208,88 @@ nsMathMLElement::GetAttributeMappingFunction() const
   return &MapMathMLAttributesInto;
 }
 
-// ================
-// Utilities for parsing and retrieving numeric values
-
-/*
-The REC says:
-  An explicit plus sign ('+') is not allowed as part of a numeric value
-  except when it is specifically listed in the syntax (as a quoted '+'
-  or "+"),
-
-  Units allowed
-  ID  Description
-  em  ems (font-relative unit traditionally used for horizontal lengths)
-  ex  exs (font-relative unit traditionally used for vertical lengths)
-  px  pixels, or pixel size of a "typical computer display"
-  in  inches (1 inch = 2.54 centimeters)
-  cm  centimeters
-  mm  millimeters
-  pt  points (1 point = 1/72 inch)
-  pc  picas (1 pica = 12 points)
-  %   percentage of default value
-
-Implementation here:
-  The numeric value is valid only if it is of the form [-] nnn.nnn
-  [h/v-unit]
-*/
-
+/* static */ bool
+nsMathMLElement::ParseNamedSpaceValue(const nsString& aString,
+                                      nsCSSValue&     aCSSValue,
+                                      PRUint32        aFlags)
+{
+   PRInt32 i = 0;
+   // See if it is one of the 'namedspace' (ranging -7/18em, -6/18, ... 7/18em)
+   if (aString.EqualsLiteral("veryverythinmathspace")) {
+     i = 1;
+   } else if (aString.EqualsLiteral("verythinmathspace")) {
+     i = 2;
+   } else if (aString.EqualsLiteral("thinmathspace")) {
+     i = 3;
+   } else if (aString.EqualsLiteral("mediummathspace")) {
+     i = 4;
+   } else if (aString.EqualsLiteral("thickmathspace")) {
+     i = 5;
+   } else if (aString.EqualsLiteral("verythickmathspace")) {
+     i = 6;
+   } else if (aString.EqualsLiteral("veryverythickmathspace")) {
+     i = 7;
+   } else if (aFlags & PARSE_ALLOW_NEGATIVE) {
+     if (aString.EqualsLiteral("negativeveryverythinmathspace")) {
+       i = -1;
+     } else if (aString.EqualsLiteral("negativeverythinmathspace")) {
+       i = -2;
+     } else if (aString.EqualsLiteral("negativethinmathspace")) {
+       i = -3;
+     } else if (aString.EqualsLiteral("negativemediummathspace")) {
+       i = -4;
+     } else if (aString.EqualsLiteral("negativethickmathspace")) {
+       i = -5;
+     } else if (aString.EqualsLiteral("negativeverythickmathspace")) {
+       i = -6;
+     } else if (aString.EqualsLiteral("negativeveryverythickmathspace")) {
+       i = -7;
+     }
+   }
+   if (0 != i) { 
+     aCSSValue.SetFloatValue(float(i)/float(18), eCSSUnit_EM);
+     return true;
+   }
+   
+   return false;
+}
+ 
+// The REC says:
+//
+// "Most presentation elements have attributes that accept values representing
+// lengths to be used for size, spacing or similar properties. The syntax of a
+// length is specified as
+//
+// number | number unit | namedspace
+//
+// There should be no space between the number and the unit of a length."
+// 
+// "A trailing '%' represents a percent of the default value. The default
+// value, or how it is obtained, is listed in the table of attributes for each
+// element. [...] A number without a unit is intepreted as a multiple of the
+// default value."
+//
+// "The possible units in MathML are:
+//  
+// Unit Description
+// em   an em (font-relative unit traditionally used for horizontal lengths)
+// ex   an ex (font-relative unit traditionally used for vertical lengths)
+// px   pixels, or size of a pixel in the current display
+// in   inches (1 inch = 2.54 centimeters)
+// cm   centimeters
+// mm   millimeters
+// pt   points (1 point = 1/72 inch)
+// pc   picas (1 pica = 12 points)
+// %    percentage of default value"
+//
+// The numbers are defined that way:
+// - unsigned-number: "a string of decimal digits with up to one decimal point
+//   (U+002E), representing a non-negative terminating decimal number (a type of
+//   rational number)"
+// - number: "an optional prefix of '-' (U+002D), followed by an unsigned
+//   number, representing a terminating decimal number (a type of rational
+//   number)"
+//
 /* static */ bool
 nsMathMLElement::ParseNumericValue(const nsString& aString,
                                    nsCSSValue&     aCSSValue,
@@ -270,6 +302,10 @@ nsMathMLElement::ParseNumericValue(const nsString& aString,
   if (!stringLength)
     return false;
 
+  if (ParseNamedSpaceValue(aString, aCSSValue, aFlags)) {
+    return true;
+  }
+
   nsAutoString number, unit;
 
   // see if the negative sign is there
@@ -278,10 +314,6 @@ nsMathMLElement::ParseNumericValue(const nsString& aString,
   if (c == '-') {
     number.Append(c);
     i++;
-
-    // skip any space after the negative sign
-    if (i < stringLength && nsCRT::IsAsciiSpace(str[i]))
-      i++;
   }
 
   // Gather up characters that make up the number
@@ -347,6 +379,14 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
                                          nsRuleData* aData)
 {
   if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Font)) {
+    // scriptsizemultiplier
+    //
+    // "Specifies the multiplier to be used to adjust font size due to changes
+    // in scriptlevel.
+    //
+    // values: number
+    // default: 0.71
+    //
     const nsAttrValue* value =
       aAttributes->GetAttr(nsGkAtoms::scriptsizemultiplier_);
     nsCSSValue* scriptSizeMultiplier =
@@ -366,6 +406,18 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
       }
     }
 
+    // scriptminsize
+    //
+    // "Specifies the minimum font size allowed due to changes in scriptlevel.
+    // Note that this does not limit the font size due to changes to mathsize."
+    //
+    // values: length
+    // default: 8pt
+    //
+    // We don't allow negative values.
+    // XXXfredw Should we allow unitless values? (bug 411227)
+    // XXXfredw Does a relative unit give a multiple of the default value?
+    //
     value = aAttributes->GetAttr(nsGkAtoms::scriptminsize_);
     nsCSSValue* scriptMinSize = aData->ValueForScriptMinSize();
     if (value && value->Type() == nsAttrValue::eString &&
@@ -373,6 +425,17 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
       ParseNumericValue(value->GetStringValue(), *scriptMinSize, 0);
     }
 
+    // scriptlevel
+    // 
+    // "Changes the scriptlevel in effect for the children. When the value is
+    // given without a sign, it sets scriptlevel to the specified value; when a
+    // sign is given, it increments ("+") or decrements ("-") the current
+    // value. (Note that large decrements can result in negative values of
+    // scriptlevel, but these values are considered legal.)"
+    //
+    // values: ( "+" | "-" )? unsigned-integer
+    // default: inherited
+    //
     value = aAttributes->GetAttr(nsGkAtoms::scriptlevel_);
     nsCSSValue* scriptLevel = aData->ValueForScriptLevel();
     if (value && value->Type() == nsAttrValue::eString &&
@@ -397,6 +460,28 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
       }
     }
 
+    // mathsize
+    //
+    // "Specifies the size to display the token content. The values 'small' and
+    // 'big' choose a size smaller or larger than the current font size, but
+    // leave the exact proportions unspecified; 'normal' is allowed for
+    // completeness, but since it is equivalent to '100%' or '1em', it has no
+    // effect."
+    //
+    // values: "small" | "normal" | "big" | length
+    // default: inherited
+    //
+    // fontsize
+    //
+    // "Specified the size for the token. Deprecated in favor of mathsize."
+    //
+    // values: length
+    // default: inherited
+    //
+    // In both cases, we don't allow negative values.
+    // XXXfredw Should we allow unitless values? (bug 411227)
+    // XXXfredw Does a relative unit give a multiple of the default value?
+    //  
     bool parseSizeKeywords = true;
     value = aAttributes->GetAttr(nsGkAtoms::mathsize_);
     if (!value) {
@@ -424,6 +509,14 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
       }
     }
 
+    // fontfamily
+    //
+    // "Should be the name of a font that may be available to a MathML renderer,
+    // or a CSS font specification; See Section 6.5 Using CSS with MathML and
+    // CSS for more information. Deprecated in favor of mathvariant."
+    //
+    // values: string
+    // 
     value = aAttributes->GetAttr(nsGkAtoms::fontfamily_);
     nsCSSValue* fontFamily = aData->ValueForFontFamily();
     if (value && value->Type() == nsAttrValue::eString &&
@@ -432,6 +525,24 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
     }
   }
 
+  // mathbackground
+  // 
+  // "Specifies the background color to be used to fill in the bounding box of
+  // the element and its children. The default, 'transparent', lets the
+  // background color, if any, used in the current rendering context to show
+  // through."
+  // 
+  // values: color | "transparent" 
+  // default: "transparent"
+  //
+  // background
+  //
+  // "Specified the background color to be used to fill in the bounding box of
+  // the element and its children. Deprecated in favor of mathbackground."
+  //
+  // values: color | "transparent"
+  // default: "transparent"
+  //
   if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Background)) {
     const nsAttrValue* value =
       aAttributes->GetAttr(nsGkAtoms::mathbackground_);
@@ -447,6 +558,23 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
     }
   }
 
+  // mathcolor
+  //
+  // "Specifies the foreground color to use when drawing the components of this
+  // element, such as the content for token elements or any lines, surds, or
+  // other decorations. It also establishes the default mathcolor used for
+  // child elements when used on a layout element."
+  //
+  // values: color
+  // default: inherited
+  //
+  // color
+  // 
+  // "Specified the color for the token. Deprecated in favor of mathcolor." 
+  //
+  // values: color
+  // default: inherited
+  //
   if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Color)) {
     const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::mathcolor_);
     if (!value) {
@@ -459,6 +587,19 @@ nsMathMLElement::MapMathMLAttributesInto(const nsMappedAttributes* aAttributes,
       colorValue->SetColorValue(color);
     }
   }
+
+  if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Position)) {
+    // width: value
+    nsCSSValue* width = aData->ValueForWidth();
+    if (width->GetUnit() == eCSSUnit_Null) {
+      const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::width);
+      // This does not handle auto and unitless values
+      if (value && value->Type() == nsAttrValue::eString) {
+        ParseNumericValue(value->GetStringValue(), *width, 0);
+      }
+    }
+  }
+
 }
 
 nsresult

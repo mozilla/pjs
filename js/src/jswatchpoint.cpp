@@ -1,45 +1,14 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is an implementation of watchpoints for SpiderMonkey.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jason Orendorff <jorendorff@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jswatchpoint.h"
 #include "jsatom.h"
-#include "jsgcmark.h"
+#include "jswatchpoint.h"
+
+#include "gc/Marking.h"
+
 #include "jsobjinlines.h"
 
 using namespace js;
@@ -56,18 +25,19 @@ class AutoEntryHolder {
     Map &map;
     Map::Ptr p;
     uint32_t gen;
-    WatchKey key;
+    RootedVarObject obj;
+    RootedVarId id;
 
   public:
-    AutoEntryHolder(Map &map, Map::Ptr p)
-        : map(map), p(p), gen(map.generation()), key(p->key) {
+    AutoEntryHolder(JSContext *cx, Map &map, Map::Ptr p)
+        : map(map), p(p), gen(map.generation()), obj(cx, p->key.object), id(cx, p->key.id) {
         JS_ASSERT(!p->value.held);
         p->value.held = true;
     }
 
     ~AutoEntryHolder() {
         if (gen != map.generation())
-            p = map.lookup(key);
+            p = map.lookup(WatchKey(obj, id));
         if (p)
             p->value.held = false;
     }
@@ -80,10 +50,9 @@ WatchpointMap::init()
 }
 
 bool
-WatchpointMap::watch(JSContext *cx, JSObject *obj, jsid id,
-                     JSWatchPointHandler handler, JSObject *closure)
+WatchpointMap::watch(JSContext *cx, HandleObject obj, HandleId id,
+                     JSWatchPointHandler handler, HandleObject closure)
 {
-    JS_ASSERT(id == js_CheckForStringIndex(id));
     JS_ASSERT(JSID_IS_STRING(id) || JSID_IS_INT(id));
 
     if (!obj->setWatched(cx))
@@ -104,7 +73,6 @@ void
 WatchpointMap::unwatch(JSObject *obj, jsid id,
                        JSWatchPointHandler *handlerp, JSObject **closurep)
 {
-    JS_ASSERT(id == js_CheckForStringIndex(id));
     if (Map::Ptr p = map.lookup(WatchKey(obj, id))) {
         if (handlerp)
             *handlerp = p->value.handler;
@@ -131,44 +99,25 @@ WatchpointMap::clear()
 }
 
 bool
-WatchpointMap::triggerWatchpoint(JSContext *cx, JSObject *obj, jsid id, Value *vp)
+WatchpointMap::triggerWatchpoint(JSContext *cx, HandleObject obj, HandleId id, Value *vp)
 {
-    JS_ASSERT(id == js_CheckForStringIndex(id));
     Map::Ptr p = map.lookup(WatchKey(obj, id));
     if (!p || p->value.held)
         return true;
 
-    AutoEntryHolder holder(map, p);
+    AutoEntryHolder holder(cx, map, p);
 
     /* Copy the entry, since GC would invalidate p. */
     JSWatchPointHandler handler = p->value.handler;
-    JSObject *closure = p->value.closure;
+    RootedVarObject closure(cx, p->value.closure);
 
     /* Determine the property's old value. */
     Value old;
     old.setUndefined();
     if (obj->isNative()) {
         if (const Shape *shape = obj->nativeLookup(cx, id)) {
-            if (shape->hasSlot()) {
-                if (shape->isMethod()) {
-                    /*
-                     * The existing watched property is a method. Trip
-                     * the method read barrier in order to avoid
-                     * passing an uncloned function object to the
-                     * handler.
-                     */
-                    old = UndefinedValue();
-                    Value method = ObjectValue(*obj->nativeGetMethod(shape));
-                    if (!obj->methodReadBarrier(cx, *shape, &method))
-                        return false;
-                    shape = obj->nativeLookup(cx, id);
-                    JS_ASSERT(shape->isDataDescriptor());
-                    JS_ASSERT(!shape->isMethod());
-                    old = method;
-                } else {
-                    old = obj->nativeGetSlot(shape->slot());
-                }
-            }
+            if (shape->hasSlot())
+                old = obj->nativeGetSlot(shape->slot());
         }
     }
 
@@ -180,13 +129,8 @@ bool
 WatchpointMap::markAllIteratively(JSTracer *trc)
 {
     JSRuntime *rt = trc->runtime;
-    if (rt->gcCurrentCompartment) {
-        WatchpointMap *wpmap = rt->gcCurrentCompartment->watchpointMap;
-        return wpmap && wpmap->markIteratively(trc);
-    }
-
     bool mutated = false;
-    for (CompartmentsIter c(rt); !c.done(); c.next()) {
+    for (GCCompartmentsIter c(rt); !c.done(); c.next()) {
         if (c->watchpointMap)
             mutated |= c->watchpointMap->markIteratively(trc);
     }
@@ -245,14 +189,9 @@ WatchpointMap::markAll(JSTracer *trc)
 void
 WatchpointMap::sweepAll(JSRuntime *rt)
 {
-    if (rt->gcCurrentCompartment) {
-        if (WatchpointMap *wpmap = rt->gcCurrentCompartment->watchpointMap)
+    for (GCCompartmentsIter c(rt); !c.done(); c.next()) {
+        if (WatchpointMap *wpmap = c->watchpointMap)
             wpmap->sweep();
-    } else {
-        for (CompartmentsIter c(rt); !c.done(); c.next()) {
-            if (WatchpointMap *wpmap = c->watchpointMap)
-                wpmap->sweep();
-        }
     }
 }
 

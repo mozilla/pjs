@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is an implementation of CSS3 text-overflow.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com> (original author)
- *   Michael Ventnor <m.ventnor@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "TextOverflow.h"
 
@@ -179,9 +146,10 @@ class nsDisplayTextOverflowMarker : public nsDisplayItem
 public:
   nsDisplayTextOverflowMarker(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                               const nsRect& aRect, nscoord aAscent,
-                              const nsString& aString)
+                              const nsString& aString,
+                              PRUint32 aIndex)
     : nsDisplayItem(aBuilder, aFrame), mRect(aRect), mString(aString),
-      mAscent(aAscent) {
+      mAscent(aAscent), mIndex(aIndex) {
     MOZ_COUNT_CTOR(nsDisplayTextOverflowMarker);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -189,13 +157,18 @@ public:
     MOZ_COUNT_DTOR(nsDisplayTextOverflowMarker);
   }
 #endif
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder) {
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+    *aSnap = false;
     nsRect shadowRect =
       nsLayoutUtils::GetTextShadowRectsUnion(mRect, mFrame);
     return mRect.Union(shadowRect);
   }
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx);
+
+  virtual PRUint32 GetPerFrameKey() { 
+    return (mIndex << nsDisplayItem::TYPE_BITS) | nsDisplayItem::GetPerFrameKey(); 
+  }
   void PaintTextToContext(nsRenderingContext* aCtx,
                           nsPoint aOffsetFromRect);
   NS_DISPLAY_DECL_NAME("TextOverflow", TYPE_TEXT_OVERFLOW)
@@ -203,6 +176,7 @@ private:
   nsRect          mRect;   // in reference frame coordinates
   const nsString  mString; // the marker text
   nscoord         mAscent; // baseline for the marker text in mRect
+  PRUint32        mIndex;
 };
 
 static void
@@ -580,9 +554,7 @@ TextOverflow::ProcessLine(const nsDisplayListSet& aLists,
   mRight.mActive = mRight.mStyle->mType != NS_STYLE_TEXT_OVERFLOW_CLIP;
   
   FrameHashtable framesToHide;
-  if (!framesToHide.Init(100)) {
-    return;
-  }
+  framesToHide.Init(100);
   AlignmentEdges alignmentEdges;
   ExamineLineFrames(aLine, &framesToHide, &alignmentEdges);
   bool needLeft = mLeft.IsNeeded();
@@ -720,7 +692,7 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
     markerRect += mBuilder->ToReferenceFrame(mBlock);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetAscent(), mLeft.mMarkerString);
+                                  aLine->GetAscent(), mLeft.mMarkerString, 0);
     if (marker) {
       marker = ClipMarker(mBuilder, mBlock, marker,
                           mContentArea + mBuilder->ToReferenceFrame(mBlock),
@@ -736,7 +708,7 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
     markerRect += mBuilder->ToReferenceFrame(mBlock);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetAscent(), mRight.mMarkerString);
+                                  aLine->GetAscent(), mRight.mMarkerString, 1);
     if (marker) {
       marker = ClipMarker(mBuilder, mBlock, marker,
                           mContentArea + mBuilder->ToReferenceFrame(mBlock),

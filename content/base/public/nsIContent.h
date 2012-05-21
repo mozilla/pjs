@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef nsIContent_h___
 #define nsIContent_h___
 
@@ -43,7 +11,6 @@
 #include "nsChangeHint.h"
 #include "nsINode.h"
 #include "nsIDocument.h" // for IsInHTMLDocument
-#include "nsDOMMemoryReporter.h"
 
 // Forward declarations
 class nsIAtom;
@@ -78,8 +45,8 @@ enum nsLinkState {
 
 // IID for the nsIContent interface
 #define NS_ICONTENT_IID \
-{ 0x94671671, 0x9e1b, 0x447a, \
-  { 0xad, 0xb7, 0xc3, 0x2e, 0x05, 0x6a, 0x96, 0xc9 } }
+{ 0xa887c108, 0xc25e, 0x42ab, \
+  { 0x87, 0xef, 0xad, 0x4b, 0xee, 0x50, 0x28, 0x28 } }
 
 /**
  * A node of content in a document's content model. This interface
@@ -94,8 +61,7 @@ public:
   // nsIContent is that it exists with an IID
 
   nsIContent(already_AddRefed<nsINodeInfo> aNodeInfo)
-    : nsINode(aNodeInfo),
-      mPrimaryFrame(nsnull)
+    : nsINode(aNodeInfo)
   {
     NS_ASSERTION(mNodeInfo,
                  "No nsINodeInfo passed to nsIContent, PREPARE TO CRASH!!!");
@@ -103,8 +69,6 @@ public:
 #endif // MOZILLA_INTERNAL_API
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICONTENT_IID)
-
-  NS_DECL_AND_IMPL_DOM_MEMORY_REPORTER_SIZEOF(nsIContent, nsINode);
 
   /**
    * Bind this content node to a tree.  If this method throws, the caller must
@@ -118,8 +82,9 @@ public:
    * @param aParent The new parent for the content node.  May be null if the
    *                node is being bound as a direct child of the document.
    * @param aBindingParent The new binding parent for the content node.
-   *                       This is allowed to be null.  In that case, the
-   *                       binding parent of aParent, if any, will be used.
+   *                       This is must either be non-null if a particular
+   *                       binding parent is desired or match aParent's binding
+   *                       parent.
    * @param aCompileEventHandlers whether to initialize the event handlers in
    *        the document (used by nsXULElement)
    * @note either aDocument or aParent must be non-null.  If both are null,
@@ -530,7 +495,7 @@ public:
    * Get the length of the text content.
    * NOTE: This should not be called on elements.
    */
-  virtual PRUint32 TextLength() = 0;
+  virtual PRUint32 TextLength() const = 0;
 
   /**
    * Set the text to the given value. If aNotify is true then
@@ -797,17 +762,6 @@ public:
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) = 0;
 
   /**
-   * Get the inline style rule, if any, for this content node
-   */
-  virtual mozilla::css::StyleRule* GetInlineStyleRule() = 0;
-
-  /**
-   * Set the inline style rule for this node.  This will send an
-   * appropriate AttributeChanged notification if aNotify is true.
-   */
-  NS_IMETHOD SetInlineStyleRule(mozilla::css::StyleRule* aStyleRule, bool aNotify) = 0;
-
-  /**
    * Is the attribute named stored in the mapped attributes?
    *
    * // XXXbz we use this method in HasAttributeDependentStyle, so svg
@@ -862,45 +816,16 @@ public:
    * In the case of absolutely positioned elements and floated elements, this
    * frame is the out of flow frame, not the placeholder.
    */
-  nsIFrame* GetPrimaryFrame() const { return mPrimaryFrame; }
+  nsIFrame* GetPrimaryFrame() const
+  {
+    return IsInDoc() ? mPrimaryFrame : nsnull;
+  }
   void SetPrimaryFrame(nsIFrame* aFrame) {
+    NS_ASSERTION(IsInDoc(), "This will end badly!");
     NS_PRECONDITION(!aFrame || !mPrimaryFrame || aFrame == mPrimaryFrame,
                     "Losing track of existing primary frame");
     mPrimaryFrame = aFrame;
   }
-
-  /*
-   * Returns a new nsISMILAttr that allows the caller to animate the given
-   * attribute on this element.
-   *
-   * The CALLER OWNS the result and is responsible for deleting it.
-   */
-  virtual nsISMILAttr* GetAnimatedAttr(PRInt32 aNamespaceID, nsIAtom* aName) = 0;
-
-  /**
-   * Get the SMIL override style for this content node.  This is a style
-   * declaration that is applied *after* the inline style, and it can be used
-   * e.g. to store animated style values.
-   *
-   * Note: This method is analogous to the 'GetStyle' method in
-   * nsGenericHTMLElement and nsStyledElement.
-   */
-  virtual nsIDOMCSSStyleDeclaration* GetSMILOverrideStyle() = 0;
-
-  /**
-   * Get the SMIL override style rule for this content node.  If the rule
-   * hasn't been created (or if this nsIContent object doesn't support SMIL
-   * override style), this method simply returns null.
-   */
-  virtual mozilla::css::StyleRule* GetSMILOverrideStyleRule() = 0;
-
-  /**
-   * Set the SMIL override style rule for this node.  If aNotify is true, this
-   * method will notify the document's pres context, so that the style changes
-   * will be noticed.
-   */
-  virtual nsresult SetSMILOverrideStyleRule(mozilla::css::StyleRule* aStyleRule,
-                                            bool aNotify) = 0;
 
   nsresult LookupNamespaceURIInternal(const nsAString& aNamespacePrefix,
                                       nsAString& aNamespaceURI) const;
@@ -916,7 +841,7 @@ public:
    * host content.  When the content is in designMode, this returns its body
    * element.  Also, when the content isn't editable, this returns null.
    */
-  nsIContent* GetEditingHost();
+  mozilla::dom::Element* GetEditingHost();
 
   /**
    * Determing language. Look at the nearest ancestor element that has a lang
@@ -965,11 +890,6 @@ private:
    */
   virtual const nsAttrValue* DoGetClasses() const = 0;
 
-  /**
-   * Pointer to our primary frame.  Might be null.
-   */
-  nsIFrame* mPrimaryFrame;
-
 public:
 #ifdef DEBUG
   /**
@@ -999,7 +919,6 @@ public:
   // accessibility.tabfocus_applies_to_xul pref - if it is set to true,
   // the tabfocus bit field applies to xul elements.
   static bool sTabFocusModelAppliesToXUL;
-
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIContent, NS_ICONTENT_IID)

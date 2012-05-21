@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=2 ts=8 et tw=80 : */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Patrick McManus <mcmanus@ducksong.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHttp.h"
 #include "SpdySession.h"
@@ -93,7 +60,8 @@ SpdySession::SpdySession(nsAHttpTransaction *aHttpTransaction,
     mOutputQueueSent(0),
     mLastReadEpoch(PR_IntervalNow()),
     mPingSentEpoch(0),
-    mNextPingID(1)
+    mNextPingID(1),
+    mPingThresholdExperiment(false)
 {
   NS_ABORT_IF_FALSE(PR_GetCurrentThread() == gSocketThread, "wrong thread");
 
@@ -111,6 +79,41 @@ SpdySession::SpdySession(nsAHttpTransaction *aHttpTransaction,
   mSendingChunkSize = gHttpHandler->SpdySendingChunkSize();
   AddStream(aHttpTransaction, firstPriority);
   mLastDataReadEpoch = mLastReadEpoch;
+  
+  DeterminePingThreshold();
+}
+
+void
+SpdySession::DeterminePingThreshold()
+{
+  mPingThreshold = gHttpHandler->SpdyPingThreshold();
+
+  if (!mPingThreshold || !gHttpHandler->AllowExperiments())
+    return;
+
+  PRUint32 randomVal = gHttpHandler->Get32BitsOfPseudoRandom();
+  
+  // Use the lower 10 bits to select 1 in 1024 sessions for the
+  // ping threshold experiment. Somewhat less than that will actually be
+  // used because random values greater than the total http idle timeout
+  // for the session are discarded.
+  if ((randomVal & 0x3ff) != 1)  // lottery
+    return;
+  
+  randomVal = randomVal >> 10; // those bits are used up
+
+  // This session has been selected - use a random ping threshold of 10 +
+  // a random number from 0 to 255, based on the next 8 bits of the
+  // random buffer
+  PRIntervalTime randomThreshold =
+    PR_SecondsToInterval((randomVal & 0xff) + 10);
+  if (randomThreshold > gHttpHandler->IdleTimeout())
+    return;
+  
+  mPingThreshold = randomThreshold;
+  mPingThresholdExperiment = true;
+  LOG3(("SpdySession %p Ping Threshold Experimental Selection : %dsec\n",
+        this, PR_IntervalToSeconds(mPingThreshold)));
 }
 
 PLDHashOperator
@@ -228,16 +231,16 @@ SpdySession::ReadTimeoutTick(PRIntervalTime now)
     NS_ABORT_IF_FALSE(PR_GetCurrentThread() == gSocketThread, "wrong thread");
     NS_ABORT_IF_FALSE(mNextPingID & 1, "Ping Counter Not Odd");
 
-    PRIntervalTime threshold = gHttpHandler->SpdyPingThreshold();
-    if (!threshold)
+    if (!mPingThreshold)
       return;
 
     LOG(("SpdySession::ReadTimeoutTick %p delta since last read %ds\n",
          this, PR_IntervalToSeconds(now - mLastReadEpoch)));
 
-    if ((now - mLastReadEpoch) < threshold) {
+    if ((now - mLastReadEpoch) < mPingThreshold) {
       // recent activity means ping is not an issue
-      mPingSentEpoch = 0;
+      if (mPingSentEpoch)
+        ClearPing(true);
       return;
     }
 
@@ -246,6 +249,7 @@ SpdySession::ReadTimeoutTick(PRIntervalTime now)
       if ((now - mPingSentEpoch) >= gHttpHandler->SpdyPingTimeout()) {
         LOG(("SpdySession::ReadTimeoutTick %p Ping Timer Exhaustion\n",
              this));
+        ClearPing(false);
         Close(NS_ERROR_NET_TIMEOUT);
       }
       return;
@@ -271,6 +275,27 @@ SpdySession::ReadTimeoutTick(PRIntervalTime now)
            "ping ids exhausted marking goaway\n", this));
       mShouldGoAway = true;
     }
+}
+
+void
+SpdySession::ClearPing(bool pingOK)
+{
+  mPingSentEpoch = 0;
+
+  if (mPingThresholdExperiment) {
+    LOG3(("SpdySession::ClearPing %p mPingThresholdExperiment %dsec %s\n",
+          this, PR_IntervalToSeconds(mPingThreshold),
+          pingOK ? "pass" :"fail"));
+
+    if (pingOK)
+      Telemetry::Accumulate(Telemetry::SPDY_PING_EXPERIMENT_PASS,
+                            PR_IntervalToSeconds(mPingThreshold));
+    else
+      Telemetry::Accumulate(Telemetry::SPDY_PING_EXPERIMENT_FAIL,
+                            PR_IntervalToSeconds(mPingThreshold));
+    mPingThreshold = gHttpHandler->SpdyPingThreshold();
+    mPingThresholdExperiment = false;
+  }
 }
 
 PRUint32
@@ -349,8 +374,12 @@ SpdySession::ActivateStream(SpdyStream *stream)
   SetWriteCallbacks();
 
   // Kick off the SYN transmit without waiting for the poll loop
-  PRUint32 countRead;
-  ReadSegments(nsnull, kDefaultBufferSize, &countRead);
+  // This won't work for stream id=1 because there is no segment reader
+  // yet.
+  if (mSegmentReader) {
+    PRUint32 countRead;
+    ReadSegments(nsnull, kDefaultBufferSize, &countRead);
+  }
 }
 
 void
@@ -1187,7 +1216,7 @@ SpdySession::HandlePing(SpdySession *self)
 
   if (pingID & 0x01) {
     // presumably a reply to our timeout ping
-    self->mPingSentEpoch = 0;
+    self->ClearPing(true);
   }
   else {
     // Servers initiate even numbered pings, go ahead and echo it back
@@ -1331,6 +1360,12 @@ SpdySession::ReadSegments(nsAHttpSegmentReader *reader,
 {
   NS_ABORT_IF_FALSE(PR_GetCurrentThread() == gSocketThread, "wrong thread");
   
+  NS_ABORT_IF_FALSE(!mSegmentReader || !reader || (mSegmentReader == reader),
+                    "Inconsistent Write Function Callback");
+
+  if (reader)
+    mSegmentReader = reader;
+
   nsresult rv;
   *countRead = 0;
 
@@ -1357,11 +1392,6 @@ SpdySession::ReadSegments(nsAHttpSegmentReader *reader,
   
   LOG3(("SpdySession %p will write from SpdyStream %p", this, stream));
 
-  NS_ABORT_IF_FALSE(!mSegmentReader || !reader || (mSegmentReader == reader),
-                    "Inconsistent Write Function Callback");
-
-  if (reader)
-    mSegmentReader = reader;
   rv = stream->ReadSegments(this, count, countRead);
 
   // Not every permutation of stream->ReadSegents produces data (and therefore
@@ -1391,6 +1421,8 @@ SpdySession::ReadSegments(nsAHttpSegmentReader *reader,
   if (NS_FAILED(rv)) {
     LOG3(("SpdySession::ReadSegments %p returning FAIL code %X",
           this, rv));
+    if (rv != NS_BASE_STREAM_WOULD_BLOCK)
+      CleanupStream(stream, rv, RST_CANCEL);
     return rv;
   }
   
@@ -1976,6 +2008,30 @@ SpdySession::Transport()
   return mConnection->Transport();
 }
 
+PRUint32
+SpdySession::CancelPipeline(nsresult reason)
+{
+  // we don't pipeline inside spdy, so this isn't an issue
+  return 0;
+}
+
+nsAHttpTransaction::Classifier
+SpdySession::Classification()
+{
+  if (!mConnection)
+    return nsAHttpTransaction::CLASS_GENERAL;
+  return mConnection->Classification();
+}
+
+void
+SpdySession::Classify(nsAHttpTransaction::Classifier newclass)
+{
+  if (!mConnection)
+    return;
+  
+  mConnection->Classify(newclass);
+}
+
 //-----------------------------------------------------------------------------
 // unused methods of nsAHttpTransaction
 // We can be sure of this because SpdySession is only constructed in
@@ -2006,8 +2062,7 @@ SpdySession::SetSSLConnectFailed()
 bool
 SpdySession::IsDone()
 {
-  NS_ABORT_IF_FALSE(false, "SpdySession::IsDone()");
-  return false;
+  return !mStreamTransactionHash.Count();
 }
 
 nsresult
@@ -2015,6 +2070,13 @@ SpdySession::Status()
 {
   NS_ABORT_IF_FALSE(false, "SpdySession::Status()");
   return NS_ERROR_UNEXPECTED;
+}
+
+PRUint8
+SpdySession::Caps()
+{
+  NS_ABORT_IF_FALSE(false, "SpdySession::Caps()");
+  return 0;
 }
 
 PRUint32
@@ -2074,6 +2136,42 @@ SpdySession::TakeSubTransactions(
   return NS_OK;
 }
 
+nsresult
+SpdySession::AddTransaction(nsAHttpTransaction *)
+{
+  // This API is meant for pipelining, SpdySession's should be
+  // extended with AddStream()
+
+  NS_ABORT_IF_FALSE(false,
+                    "SpdySession::AddTransaction() should not be called");
+
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+PRUint32
+SpdySession::PipelineDepth()
+{
+  return IsDone() ? 0 : 1;
+}
+
+nsresult
+SpdySession::SetPipelinePosition(PRInt32 position)
+{
+  // This API is meant for pipelining, SpdySession's should be
+  // extended with AddStream()
+
+  NS_ABORT_IF_FALSE(false,
+                    "SpdySession::SetPipelinePosition() should not be called");
+
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+PRInt32
+SpdySession::PipelinePosition()
+{
+    return 0;
+}
+
 //-----------------------------------------------------------------------------
 // Pass through methods of nsAHttpConnection
 //-----------------------------------------------------------------------------
@@ -2119,6 +2217,13 @@ nsresult
 SpdySession::PushBack(const char *buf, PRUint32 len)
 {
   return mConnection->PushBack(buf, len);
+}
+
+bool
+SpdySession::IsProxyConnectInProgress()
+{
+    NS_ABORT_IF_FALSE(mConnection, "no connection");
+    return mConnection->IsProxyConnectInProgress();
 }
 
 bool

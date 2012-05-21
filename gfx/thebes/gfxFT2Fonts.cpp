@@ -1,38 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if defined(MOZ_WIDGET_GTK2)
 #include "gfxPlatformGtk.h"
@@ -59,7 +28,7 @@
 #ifdef MOZ_GRAPHITE
 #include "gfxGraphiteShaper.h"
 #endif
-#include "gfxAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsTArray.h"
 #include "nsUnicodeRange.h"
 #include "nsCRT.h"
@@ -144,6 +113,7 @@ gfxFT2FontGroup::gfxFT2FontGroup(const nsAString& families,
             familyArray.AppendElement(nsDependentString(logFont.lfFaceName));
 #elif defined(ANDROID)
         familyArray.AppendElement(NS_LITERAL_STRING("Droid Sans"));
+        familyArray.AppendElement(NS_LITERAL_STRING("Roboto"));
 #else
 #error "Platform not supported"
 #endif
@@ -302,35 +272,35 @@ void gfxFT2FontGroup::GetCJKPrefFonts(nsTArray<nsRefPtr<gfxFontEntry> >& aFontEn
         // Add the system locale
 #ifdef XP_WIN
         switch (::GetACP()) {
-            case 932: GetPrefFonts(gfxAtoms::ja, aFontEntryList); break;
-            case 936: GetPrefFonts(gfxAtoms::zh_cn, aFontEntryList); break;
-            case 949: GetPrefFonts(gfxAtoms::ko, aFontEntryList); break;
-            // XXX Don't we need to append gfxAtoms::zh_hk if the codepage is 950?
-            case 950: GetPrefFonts(gfxAtoms::zh_tw, aFontEntryList); break;
+            case 932: GetPrefFonts(nsGkAtoms::Japanese, aFontEntryList); break;
+            case 936: GetPrefFonts(nsGkAtoms::zh_cn, aFontEntryList); break;
+            case 949: GetPrefFonts(nsGkAtoms::ko, aFontEntryList); break;
+            // XXX Don't we need to append nsGkAtoms::zh_hk if the codepage is 950?
+            case 950: GetPrefFonts(nsGkAtoms::zh_tw, aFontEntryList); break;
         }
 #else
         const char *ctype = setlocale(LC_CTYPE, NULL);
         if (ctype) {
             if (!PL_strncasecmp(ctype, "ja", 2)) {
-                GetPrefFonts(gfxAtoms::ja, aFontEntryList);
+                GetPrefFonts(nsGkAtoms::Japanese, aFontEntryList);
             } else if (!PL_strncasecmp(ctype, "zh_cn", 5)) {
-                GetPrefFonts(gfxAtoms::zh_cn, aFontEntryList);
+                GetPrefFonts(nsGkAtoms::zh_cn, aFontEntryList);
             } else if (!PL_strncasecmp(ctype, "zh_hk", 5)) {
-                GetPrefFonts(gfxAtoms::zh_hk, aFontEntryList);
+                GetPrefFonts(nsGkAtoms::zh_hk, aFontEntryList);
             } else if (!PL_strncasecmp(ctype, "zh_tw", 5)) {
-                GetPrefFonts(gfxAtoms::zh_tw, aFontEntryList);
+                GetPrefFonts(nsGkAtoms::zh_tw, aFontEntryList);
             } else if (!PL_strncasecmp(ctype, "ko", 2)) {
-                GetPrefFonts(gfxAtoms::ko, aFontEntryList);
+                GetPrefFonts(nsGkAtoms::ko, aFontEntryList);
             }
         }
 #endif
 
         // last resort...
-        GetPrefFonts(gfxAtoms::ja, aFontEntryList);
-        GetPrefFonts(gfxAtoms::ko, aFontEntryList);
-        GetPrefFonts(gfxAtoms::zh_cn, aFontEntryList);
-        GetPrefFonts(gfxAtoms::zh_hk, aFontEntryList);
-        GetPrefFonts(gfxAtoms::zh_tw, aFontEntryList);
+        GetPrefFonts(nsGkAtoms::Japanese, aFontEntryList);
+        GetPrefFonts(nsGkAtoms::ko, aFontEntryList);
+        GetPrefFonts(nsGkAtoms::zh_cn, aFontEntryList);
+        GetPrefFonts(nsGkAtoms::zh_hk, aFontEntryList);
+        GetPrefFonts(nsGkAtoms::zh_tw, aFontEntryList);
 
         platform->SetPrefFontEntries(key, aFontEntryList);
     }
@@ -397,11 +367,12 @@ gfxFT2FontGroup::WhichPrefFontSupportsChar(PRUint32 aCh)
 }
 
 already_AddRefed<gfxFont>
-gfxFT2FontGroup::WhichSystemFontSupportsChar(PRUint32 aCh)
+gfxFT2FontGroup::WhichSystemFontSupportsChar(PRUint32 aCh, PRInt32 aRunScript)
 {
 #if defined(XP_WIN) || defined(ANDROID)
     FontEntry *fe = static_cast<FontEntry*>
-        (gfxPlatformFontList::PlatformFontList()->FindFontForChar(aCh, GetFontAt(0)));
+        (gfxPlatformFontList::PlatformFontList()->
+            SystemFindFontForChar(aCh, aRunScript, &mStyle));
     if (fe) {
         nsRefPtr<gfxFT2Font> f = gfxFT2Font::GetOrMakeFont(fe, &mStyle);
         nsRefPtr<gfxFont> font = f.get();
@@ -658,4 +629,21 @@ gfxFT2Font::FillGlyphDataForChar(PRUint32 ch, CachedGlyphData *gd)
     gd->lsbDelta = face->glyph->lsb_delta;
     gd->rsbDelta = face->glyph->rsb_delta;
     gd->xAdvance = face->glyph->advance.x;
+}
+
+void
+gfxFT2Font::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                FontCacheSizes*   aSizes) const
+{
+    gfxFont::SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    aSizes->mFontInstances +=
+        mCharGlyphCache.SizeOfExcludingThis(nsnull, aMallocSizeOf);
+}
+
+void
+gfxFT2Font::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                FontCacheSizes*   aSizes) const
+{
+    aSizes->mFontInstances += aMallocSizeOf(this);
+    SizeOfExcludingThis(aMallocSizeOf, aSizes);
 }

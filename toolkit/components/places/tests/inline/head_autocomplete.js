@@ -144,9 +144,8 @@ function ensure_results(aSearchString, aExpectedValue) {
 }
 
 function run_test() {
-  Services.prefs.setBoolPref("browser.urlbar.autoFill", true);
-  Services.prefs.setBoolPref("browser.urlbar.autoFill.typed", false);
   do_register_cleanup(function () {
+    Services.prefs.clearUserPref("browser.urlbar.autocomplete.enabled");
     Services.prefs.clearUserPref("browser.urlbar.autoFill");
     Services.prefs.clearUserPref("browser.urlbar.autoFill.typed");
   });
@@ -155,6 +154,10 @@ function run_test() {
     let [description, searchString, expectedValue, setupFunc] = testData;
     add_test(function () {
       do_log_info(description);
+      Services.prefs.setBoolPref("browser.urlbar.autocomplete.enabled", true);
+      Services.prefs.setBoolPref("browser.urlbar.autoFill", true);
+      Services.prefs.setBoolPref("browser.urlbar.autoFill.typed", false);
+
       if (setupFunc) {
         setupFunc();
       }
@@ -192,27 +195,4 @@ function addBookmark(aBookmarkObj) {
   if (aBookmarkObj.keyword) {
     PlacesUtils.bookmarks.setKeywordForBookmark(itemId, aBookmarkObj.keyword);
   }
-}
-
-function VisitInfo(aTransitionType, aVisitTime)
-{
-  this.transitionType =
-    aTransitionType === undefined ? TRANSITION_LINK : aTransitionType;
-  this.visitDate = aVisitTime || Date.now() * 1000;
-}
-
-function addVisits(aUrls)
-{
-  let places = [];
-  aUrls.forEach(function(url) {
-    places.push({
-                  uri: url.url,
-                  title: "test for " + url.url,
-                  visits: [
-                    new VisitInfo(url.transition),
-                  ],
-    });
-  });
-
-  gHistory.updatePlaces(places);
 }

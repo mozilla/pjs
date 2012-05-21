@@ -1,39 +1,7 @@
 #filter substitution
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Firefox Mobile Test Framework.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2012
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- * Joel Maher <joel.maher@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 package @ANDROID_PACKAGE_NAME@;
 
@@ -63,7 +31,12 @@ public class FennecMochitestAssert implements Assert {
 
     /** Write information to a logfile and logcat */
     public void dumpLog(String message) {
-        FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_INFO, message);
+        FennecNativeDriver.log(FennecNativeDriver.LogLevel.INFO, message);
+    }
+
+    /** Write information to a logfile and logcat */
+    public void dumpLog(String message, Throwable t) {
+        FennecNativeDriver.log(FennecNativeDriver.LogLevel.INFO, message, t);
     }
 
     /** Set the filename used for dumpLog. */
@@ -166,21 +139,13 @@ public class FennecMochitestAssert implements Assert {
     }
 
     public void is(Object a, Object b, String name) {
-        boolean pass = a.equals(b);
-        String diag = "got " + a.toString() + ", expected " + b.toString();
-        if (pass) {
-            diag = a.toString() + " should equal " + b.toString();
-        }
-        ok(pass, name, diag);
+        boolean pass = checkObjectsEqual(a,b);
+        ok(pass, name, getEqualString(a,b, pass));
     }
     
     public void isnot(Object a, Object b, String name) {
-        boolean pass = !a.equals(b);
-        String diag = "didn't expect " + a.toString() + ", but got it";
-        if (pass) {
-            diag = a.toString() + " should not equal " + b.toString();
-        }
-        ok(pass, name, diag);
+        boolean pass = checkObjectsNotEqual(a,b);
+        ok(pass, name, getNotEqualString(a,b,pass));
     }
 
     public void ispixel(int actual, int r, int g, int b, String name) {
@@ -188,15 +153,17 @@ public class FennecMochitestAssert implements Assert {
         // are usually off by a little bit. For example a CSS-color pixel of color #64FFF5
         // was turned into #63FFF7 when it came out of glReadPixels. So in order to compare
         // against the expected value, we use a little fuzz factor. For the alpha we just
-        // make sure it is always 0xFF.
+        // make sure it is always 0xFF. There is also bug 691354 which crops up every so
+        // often just to make our lives difficult. However the individual color components
+        // should never be off by more than 8.
         int aAlpha = ((actual >> 24) & 0xFF);
         int aR = ((actual >> 16) & 0xFF);
         int aG = ((actual >> 8) & 0xFF);
         int aB = (actual & 0xFF);
         boolean pass = (aAlpha == 0xFF) /* alpha */
-                                && (Math.abs(aR - r) < 8) /* red */
-                                && (Math.abs(aG - g) < 8) /* green */
-                                && (Math.abs(aB - b) < 8); /* blue */
+                                && (Math.abs(aR - r) <= 8) /* red */
+                                && (Math.abs(aG - g) <= 8) /* green */
+                                && (Math.abs(aB - b) <= 8); /* blue */
         ok(pass, name, "Color rgba(" + aR + "," + aG + "," + aB + "," + aAlpha + ")" + (pass ? " " : " not") + " close enough to expected rgb(" + r + "," + g + "," + b + ")");
     }
 
@@ -207,21 +174,50 @@ public class FennecMochitestAssert implements Assert {
     }
 
     public void todo_is(Object a, Object b, String name) {
-        boolean pass = a.equals(b);
-        String diag = "got " + a.toString() + ", expected " + b.toString();
-        if (pass) {
-            diag = a.toString() + " should equal " + b.toString();
-        }
-        todo(pass, name, diag);
+        boolean pass = checkObjectsEqual(a,b);
+        todo(pass, name, getEqualString(a,b,pass));
     }
-    
+
     public void todo_isnot(Object a, Object b, String name) {
-        boolean pass = !a.equals(b);
-        String diag = "didn't expect " + a.toString() + ", but got it";
-        if (pass) {
-            diag = a.toString() + " should not equal " + b.toString();
+        boolean pass = checkObjectsNotEqual(a,b);
+        todo(pass, name, getNotEqualString(a,b,pass));
+    }
+
+    private boolean checkObjectsEqual(Object a, Object b) {
+        if (a == null || b == null) {
+            if (a == null && b == null) {
+                return true;
+            }
+            return false;
+        } else {
+            return a.equals(b);
         }
-        todo(pass, name, diag);
+    }
+
+    private String getEqualString(Object a, Object b, boolean pass) {
+        if (pass) {
+            return a + " should equal " + b;
+        }
+        return "got " + a + ", expected " + b;
+    }
+
+    private boolean checkObjectsNotEqual(Object a, Object b) {
+        if (a == null || b == null) {
+            if ((a == null && b != null) || (a != null && b == null)) {
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            return !a.equals(b);
+        }
+    }
+
+    private String getNotEqualString(Object a, Object b, boolean pass) {
+        if(pass) {
+            return a + " should not equal " + b;
+        }
+        return "didn't expect " + a + ", but got it";
     }
 
     public void info(String name, String message) {

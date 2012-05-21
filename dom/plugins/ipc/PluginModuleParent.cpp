@@ -1,48 +1,14 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Plugin App.
- *
- * The Initial Developer of the Original Code is
- *   Chris Jones <jones.chris.g@gmail.com>
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_WIDGET_GTK2
 #include <glib.h>
 #elif XP_MACOSX
 #include "PluginInterposeOSX.h"
 #include "PluginUtilsOSX.h"
-#include "nsIPrefService.h"
-#include "nsIPrefBranch.h"
 #endif
 #ifdef MOZ_WIDGET_QT
 #include <QtCore/QCoreApplication>
@@ -139,9 +105,7 @@ PluginModuleParent::PluginModuleParent(const char* aFilePath)
 {
     NS_ASSERTION(mSubprocess, "Out of memory!");
 
-    if (!mIdentifiers.Init()) {
-        NS_ERROR("Out of memory");
-    }
+    mIdentifiers.Init();
 
     Preferences::RegisterCallback(TimeoutChanged, kChildTimeoutPref, this);
     Preferences::RegisterCallback(TimeoutChanged, kParentTimeoutPref, this);
@@ -560,9 +524,11 @@ PluginModuleParent::RecvBackUpXResources(const FileDescriptor& aXSocketFd)
 #ifndef MOZ_X11
     NS_RUNTIMEABORT("This message only makes sense on X11 platforms");
 #else
-    NS_ABORT_IF_FALSE(0 > mPluginXSocketFdDup.mFd,
+    NS_ABORT_IF_FALSE(0 > mPluginXSocketFdDup.get(),
                       "Already backed up X resources??");
-    mPluginXSocketFdDup.mFd = aXSocketFd.fd;
+    int fd = aXSocketFd.fd; // Copy to discard |const| qualifier
+    mPluginXSocketFdDup.forget();
+    mPluginXSocketFdDup.reset(fd);
 #endif
     return true;
 }
@@ -749,7 +715,9 @@ PluginModuleParent::NP_Initialize(NPNetscapeFuncs* bFuncs, NPPluginFuncs* pFuncs
         return NS_ERROR_FAILURE;
     }
 
-    if (!CallNP_Initialize(error)) {
+    uint32_t flags = 0;
+
+    if (!CallNP_Initialize(flags, error)) {
         return NS_ERROR_FAILURE;
     }
     else if (*error != NPERR_NO_ERROR) {
@@ -773,7 +741,12 @@ PluginModuleParent::NP_Initialize(NPNetscapeFuncs* bFuncs, NPError* error)
         return NS_ERROR_FAILURE;
     }
 
-    if (!CallNP_Initialize(error))
+    uint32_t flags = 0;
+#ifdef XP_WIN
+    flags |= kAllowAsyncDrawing;
+#endif
+
+    if (!CallNP_Initialize(flags, error))
         return NS_ERROR_FAILURE;
 
 #if defined XP_WIN
@@ -785,7 +758,7 @@ PluginModuleParent::NP_Initialize(NPNetscapeFuncs* bFuncs, NPError* error)
 
     if (NS_SUCCEEDED(mozilla::widget::GetAudioSessionData(id, sessionName,
                                                           iconPath)))
-        SendSetAudioSessionData(id, sessionName, iconPath);
+        unused << SendSetAudioSessionData(id, sessionName, iconPath);
 #endif
 
     return NS_OK;
@@ -1036,7 +1009,7 @@ void
 PluginModuleParent::ProcessRemoteNativeEventsInRPCCall()
 {
 #if defined(OS_WIN)
-    SendProcessNativeEventsInRPCCall();
+    unused << SendProcessNativeEventsInRPCCall();
     return;
 #endif
     NS_NOTREACHED(
@@ -1153,15 +1126,8 @@ PluginModuleParent::RecvGetNativeCursorsSupported(bool* supported)
 {
     PLUGIN_LOG_DEBUG(("%s", FULLFUNCTION));
 #if defined(XP_MACOSX)
-    bool nativeCursorsSupported = false;
-    nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
-    if (prefs) {
-      if (NS_FAILED(prefs->GetBoolPref("dom.ipc.plugins.nativeCursorSupport",
-          &nativeCursorsSupported))) {
-        nativeCursorsSupported = false;
-      }
-    }
-    *supported = nativeCursorsSupported;
+    *supported =
+      Preferences::GetBool("dom.ipc.plugins.nativeCursorSupport", false);
     return true;
 #else
     NS_NOTREACHED(

@@ -1,3 +1,7 @@
+; This Source Code Form is subject to the terms of the Mozilla Public
+; License, v. 2.0. If a copy of the MPL was not distributed with this
+; file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 ; Package file for the Fennec build. 
 ;
 ; File format:
@@ -144,6 +148,7 @@
 @BINPATH@/components/content_canvas.xpt
 @BINPATH@/components/content_htmldoc.xpt
 @BINPATH@/components/content_html.xpt
+@BINPATH@/components/content_media.xpt
 @BINPATH@/components/content_xslt.xpt
 @BINPATH@/components/content_xtf.xpt
 @BINPATH@/components/cookie.xpt
@@ -154,7 +159,7 @@
 #ifdef MOZ_B2G_RIL
 @BINPATH@/components/dom_telephony.xpt
 @BINPATH@/components/dom_wifi.xpt
-@BINPATH@/components/dom_system_b2g.xpt
+@BINPATH@/components/dom_system_gonk.xpt
 #endif
 @BINPATH@/components/dom_battery.xpt
 #ifdef MOZ_B2G_BT
@@ -197,6 +202,7 @@
 @BINPATH@/components/find.xpt
 @BINPATH@/components/fuel.xpt
 @BINPATH@/components/gfx.xpt
+@BINPATH@/components/html5.xpt
 @BINPATH@/components/htmlparser.xpt
 @BINPATH@/components/imglib2.xpt
 @BINPATH@/components/imgicon.xpt
@@ -294,6 +300,8 @@
 ; JavaScript components
 @BINPATH@/components/ConsoleAPI.manifest
 @BINPATH@/components/ConsoleAPI.js
+@BINPATH@/components/BrowserElementParent.manifest
+@BINPATH@/components/BrowserElementParent.js
 @BINPATH@/components/FeedProcessor.manifest
 @BINPATH@/components/FeedProcessor.js
 @BINPATH@/components/BrowserFeeds.manifest
@@ -402,8 +410,10 @@
 @BINPATH@/components/nsTelephonyWorker.js
 @BINPATH@/components/Telephony.manifest
 @BINPATH@/components/Telephony.js
-@BINPATH@/components/nsWifiWorker.js
-@BINPATH@/components/nsWifiWorker.manifest
+@BINPATH@/components/WifiWorker.js
+@BINPATH@/components/WifiWorker.manifest
+@BINPATH@/components/DOMWifiManager.js
+@BINPATH@/components/DOMWifiManager.manifest
 #endif
 #ifdef XP_MACOSX
 @BINPATH@/components/libalerts.dylib

@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DeviceManagerD3D9.h"
 #include "LayerManagerD3D9Shaders.h"
@@ -400,6 +368,68 @@ DeviceManagerD3D9::Init()
     return false;
   }
 
+  hr = mDevice->CreateVertexShader((DWORD*)LayerQuadVSMask,
+                                   getter_AddRefs(mLayerVSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+  hr = mDevice->CreateVertexShader((DWORD*)LayerQuadVSMask3D,
+                                   getter_AddRefs(mLayerVSMask3D));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)RGBShaderPSMask,
+                                  getter_AddRefs(mRGBPSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)RGBAShaderPSMask,
+                                  getter_AddRefs(mRGBAPSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)RGBAShaderPSMask3D,
+                                  getter_AddRefs(mRGBAPSMask3D));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)ComponentPass1ShaderPSMask,
+                                  getter_AddRefs(mComponentPass1PSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)ComponentPass2ShaderPSMask,
+                                  getter_AddRefs(mComponentPass2PSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)YCbCrShaderPSMask,
+                                  getter_AddRefs(mYCbCrPSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = mDevice->CreatePixelShader((DWORD*)SolidColorShaderPSMask,
+                                  getter_AddRefs(mSolidColorPSMask));
+
+  if (FAILED(hr)) {
+    return false;
+  }
+
   if (!CreateVertexBuffer()) {
     return false;
   }
@@ -494,34 +524,118 @@ DeviceManagerD3D9::CreateSwapChain(HWND hWnd)
   return swapChain.forget();
 }
 
-void
-DeviceManagerD3D9::SetShaderMode(ShaderMode aMode)
+/*
+  * Finds a texture for the mask layer and sets it as an
+  * input to the shaders.
+  * Returns true if a texture is loaded, false if 
+  * a texture for the mask layer could not be loaded.
+  */
+bool
+LoadMaskTexture(Layer* aMask, IDirect3DDevice9* aDevice,
+                PRUint32 aMaskQuadTexture, PRUint32 aMaskTexRegister)
 {
-  switch (aMode) {
-    case RGBLAYER:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mRGBPS);
-      break;
-    case RGBALAYER:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mRGBAPS);
-      break;
-    case COMPONENTLAYERPASS1:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mComponentPass1PS);
-      break;
-    case COMPONENTLAYERPASS2:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mComponentPass2PS);
-      break;
-    case YCBCRLAYER:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mYCbCrPS);
-      break;
-    case SOLIDCOLORLAYER:
-      mDevice->SetVertexShader(mLayerVS);
-      mDevice->SetPixelShader(mSolidColorPS);
-      break;
+  gfxIntSize size;
+  nsRefPtr<IDirect3DTexture9> texture =
+    static_cast<LayerD3D9*>(aMask->ImplData())->GetAsTexture(&size);
+  
+  if (!texture) {
+    return false;
+  }
+  
+  gfxMatrix maskTransform;
+  bool maskIs2D = aMask->GetEffectiveTransform().CanDraw2D(&maskTransform);
+  NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
+  gfxRect bounds = gfxRect(gfxPoint(), size);
+  bounds = maskTransform.TransformBounds(bounds);
+
+  aDevice->SetVertexShaderConstantF(aMaskQuadTexture, 
+                                    ShaderConstantRect((float)bounds.x,
+                                                       (float)bounds.y,
+                                                       (float)bounds.width,
+                                                       (float)bounds.height),
+                                    1);
+
+  aDevice->SetTexture(aMaskTexRegister, texture);
+  return true;
+}
+
+void
+DeviceManagerD3D9::SetShaderMode(ShaderMode aMode, Layer* aMask, bool aIs2D)
+{
+  if (aMask) {
+    // register allocations are taken from LayerManagerD3D9Shaders.h after
+    // the shaders are compiled (genshaders.sh)
+    const PRUint32 maskQuadRegister = 11;
+    PRUint32 maskTexRegister;
+    switch (aMode) {
+      case RGBLAYER:
+        mDevice->SetVertexShader(mLayerVSMask);
+        mDevice->SetPixelShader(mRGBPSMask);
+        maskTexRegister = 1;
+        break;
+      case RGBALAYER:
+        if (aIs2D) {
+          mDevice->SetVertexShader(mLayerVSMask);
+          mDevice->SetPixelShader(mRGBAPSMask);
+        } else {
+          mDevice->SetVertexShader(mLayerVSMask3D);
+          mDevice->SetPixelShader(mRGBAPSMask3D);
+        }
+        maskTexRegister = 1;
+        break;
+      case COMPONENTLAYERPASS1:
+        mDevice->SetVertexShader(mLayerVSMask);
+        mDevice->SetPixelShader(mComponentPass1PSMask);
+        maskTexRegister = 2;
+        break;
+      case COMPONENTLAYERPASS2:
+        mDevice->SetVertexShader(mLayerVSMask);
+        mDevice->SetPixelShader(mComponentPass2PSMask);
+        maskTexRegister = 2;
+        break;
+      case YCBCRLAYER:
+        mDevice->SetVertexShader(mLayerVSMask);
+        mDevice->SetPixelShader(mYCbCrPSMask);
+        maskTexRegister = 3;
+        break;
+      case SOLIDCOLORLAYER:
+        mDevice->SetVertexShader(mLayerVSMask);
+        mDevice->SetPixelShader(mSolidColorPSMask);
+        maskTexRegister = 0;
+        break;
+    }
+    if (!LoadMaskTexture(aMask, mDevice, maskQuadRegister, maskTexRegister)) {
+      // if we can't load the mask, fall back to unmasked rendering
+      NS_WARNING("Could not load texture for mask layer.");
+      SetShaderMode(aMode, nsnull, true);
+    }
+  } else {
+    switch (aMode) {
+      case RGBLAYER:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mRGBPS);
+        break;
+      case RGBALAYER:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mRGBAPS);
+        break;
+      case COMPONENTLAYERPASS1:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mComponentPass1PS);
+        break;
+      case COMPONENTLAYERPASS2:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mComponentPass2PS);
+        break;
+      case YCBCRLAYER:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mYCbCrPS);
+        break;
+      case SOLIDCOLORLAYER:
+        mDevice->SetVertexShader(mLayerVS);
+        mDevice->SetPixelShader(mSolidColorPS);
+        break;
+    }
   }
 }
 

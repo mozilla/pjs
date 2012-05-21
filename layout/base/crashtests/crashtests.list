@@ -39,10 +39,10 @@ load 263359-1.html
 load 265027-1.html
 load 265736-1.html
 load 265736-2.html
-asserts(2) load 265899-1.html # bug 575011
+load 265899-1.html
 load 265973-1.html
 asserts(6-12) load 265986-1.html # Bug 512405
-asserts(2-6) load 265999-1.html # bug 575011
+load 265999-1.html
 load 266222-1.html
 asserts(3-7) load 266360-1.html # bug 575011 / bug 576358
 asserts(4) load 266445-1.html # Bug 575011
@@ -299,6 +299,7 @@ load 536720.xul
 load 537059-1.xhtml
 load 537141-1.xhtml
 load 537562-1.xhtml
+load 537624-1.html
 load 537631-1.html
 load 538082-1.xul
 load 538207-1.xhtml
@@ -350,3 +351,8 @@ needs-focus pref(accessibility.browsewithcaret,true) load 699353-1.html
 load 707098.html
 load 722137.html
 load 725535.html
+load 727601.html
+asserts(0-2) pref(dom.disable_open_during_load,false) load 735943.html # the assertion is bug 735966
+asserts(0-2) load 736389-1.xhtml # sometimes the above assertions are delayed and is reported on this test instead
+asserts-if(winWidget,0-2) load 736924-1.html # bug 738803
+load 749816-1.html

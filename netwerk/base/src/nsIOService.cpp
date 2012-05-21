@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:set ts=4 sw=4 cindent et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *      Prasad Sunkari <prasad@medhas.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIOService.h"
 #include "nsIProtocolHandler.h"
@@ -176,7 +143,7 @@ PRUint32   nsIOService::gDefaultSegmentCount = 24;
 nsIOService::nsIOService()
     : mOffline(true)
     , mOfflineForProfileChange(false)
-    , mManageOfflineStatus(true)
+    , mManageOfflineStatus(false)
     , mSettingOffline(false)
     , mSetOfflineValue(false)
     , mShutdown(false)
@@ -341,10 +308,11 @@ nsIOService::GetInstance() {
     return gIOService;
 }
 
-NS_IMPL_THREADSAFE_ISUPPORTS5(nsIOService,
+NS_IMPL_THREADSAFE_ISUPPORTS6(nsIOService,
                               nsIIOService,
                               nsIIOService2,
                               nsINetUtil,
+                              nsISpeculativeConnect,
                               nsIObserver,
                               nsISupportsWeakReference)
 
@@ -608,10 +576,45 @@ nsIOService::NewChannelFromURI(nsIURI *aURI, nsIChannel **result)
     return NewChannelFromURIWithProxyFlags(aURI, nsnull, 0, result);
 }
 
+void
+nsIOService::LookupProxyInfo(nsIURI *aURI,
+                             nsIURI *aProxyURI,
+                             PRUint32 aProxyFlags,
+                             nsCString *aScheme,
+                             nsIProxyInfo **outPI)
+{
+    nsresult rv;
+    nsCOMPtr<nsIProxyInfo> pi;
+
+    if (!mProxyService) {
+        mProxyService = do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+        if (!mProxyService)
+            NS_WARNING("failed to get protocol proxy service");
+    }
+    if (mProxyService) {
+        PRUint32 flags = 0;
+        if (aScheme->EqualsLiteral("http") || aScheme->EqualsLiteral("https"))
+            flags = nsIProtocolProxyService::RESOLVE_NON_BLOCKING;
+        rv = mProxyService->Resolve(aProxyURI ? aProxyURI : aURI, aProxyFlags,
+                                    getter_AddRefs(pi));
+        if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+            // Use an UNKNOWN proxy to defer resolution and avoid blocking.
+            rv = mProxyService->NewProxyInfo(NS_LITERAL_CSTRING("unknown"),
+                                             NS_LITERAL_CSTRING(""),
+                                             -1, 0, 0, nsnull,
+                                             getter_AddRefs(pi));
+        }
+        if (NS_FAILED(rv))
+            pi = nsnull;
+    }
+    pi.forget(outPI);
+}
+
+
 NS_IMETHODIMP
 nsIOService::NewChannelFromURIWithProxyFlags(nsIURI *aURI,
                                              nsIURI *aProxyURI,
-                                             PRUint32 proxyFlags,
+                                             PRUint32 aProxyFlags,
                                              nsIChannel **result)
 {
     nsresult rv;
@@ -636,27 +639,7 @@ nsIOService::NewChannelFromURIWithProxyFlags(nsIURI *aURI,
     // skip this step.  This allows us to lazily load the PPS at startup.
     if (protoFlags & nsIProtocolHandler::ALLOWS_PROXY) {
         nsCOMPtr<nsIProxyInfo> pi;
-        if (!mProxyService) {
-            mProxyService = do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
-            if (!mProxyService)
-                NS_WARNING("failed to get protocol proxy service");
-        }
-        if (mProxyService) {
-            PRUint32 flags = 0;
-            if (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https"))
-                flags = nsIProtocolProxyService::RESOLVE_NON_BLOCKING;
-            rv = mProxyService->Resolve(aProxyURI ? aProxyURI : aURI, proxyFlags,
-                                        getter_AddRefs(pi));
-            if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
-                // Use an UNKNOWN proxy to defer resolution and avoid blocking.
-                rv = mProxyService->NewProxyInfo(NS_LITERAL_CSTRING("unknown"),
-                                                 NS_LITERAL_CSTRING(""),
-                                                 -1, 0, 0, nsnull,
-                                                 getter_AddRefs(pi));
-            }
-            if (NS_FAILED(rv))
-                pi = nsnull;
-        }
+        LookupProxyInfo(aURI, aProxyURI, aProxyFlags, &scheme, getter_AddRefs(pi));
         if (pi) {
             nsCAutoString type;
             if (NS_SUCCEEDED(pi->GetType(type)) && type.EqualsLiteral("http")) {
@@ -1119,9 +1102,18 @@ NS_IMETHODIMP
 nsIOService::SetManageOfflineStatus(bool aManage) {
     nsresult rv = NS_OK;
 
-    InitializeNetworkLinkService();
+    // SetManageOfflineStatus must throw when we fail to go from non-managed
+    // to managed.  Usually because there is no link monitoring service 
+    // available.  Failure to do this switch is detected by a failure of 
+    // TrackNetworkLinkStatusForOffline().  When there is no network link 
+    // available during call to InitializeNetworkLinkService(), application is
+    // put to offline mode.  And when we change mMangeOfflineStatus to false 
+    // on the next line we get stuck on being offline even though the link 
+    // becomes later available.
     bool wasManaged = mManageOfflineStatus;
     mManageOfflineStatus = aManage;
+
+    InitializeNetworkLinkService();
 
     if (mManageOfflineStatus && !wasManaged) {
         rv = TrackNetworkLinkStatusForOffline();
@@ -1179,7 +1171,7 @@ nsIOService::EscapeString(const nsACString& aString,
                           PRUint32 aEscapeType,
                           nsACString& aResult)
 {
-  NS_ENSURE_ARG_RANGE(aEscapeType, 0, 4);
+  NS_ENSURE_ARG_MAX(aEscapeType, 4);
 
   nsCAutoString stringCopy(aString);
   nsCString result;
@@ -1226,4 +1218,38 @@ nsIOService::ExtractCharsetFromContentType(const nsACString &aTypeHeader,
         *aHadCharset = false;
     }
     return NS_OK;
+}
+
+// nsISpeculativeConnect
+NS_IMETHODIMP
+nsIOService::SpeculativeConnect(nsIURI *aURI,
+                                nsIInterfaceRequestor *aCallbacks,
+                                nsIEventTarget *aTarget)
+{
+    nsCAutoString scheme;
+    nsresult rv = aURI->GetScheme(scheme);
+    if (NS_FAILED(rv))
+        return rv;
+
+    // Check for proxy information. If there is a proxy configured then a
+    // speculative connect should not be performed because the potential
+    // reward is slim with tcp peers closely located to the browser.
+    nsCOMPtr<nsIProxyInfo> pi;
+    LookupProxyInfo(aURI, nsnull, 0, &scheme, getter_AddRefs(pi));
+    if (pi) 
+        return NS_OK;
+
+    nsCOMPtr<nsIProtocolHandler> handler;
+    rv = GetProtocolHandler(scheme.get(), getter_AddRefs(handler));
+    if (NS_FAILED(rv))
+        return rv;
+
+    nsCOMPtr<nsISpeculativeConnect> speculativeHandler =
+        do_QueryInterface(handler);
+    if (!speculativeHandler)
+        return NS_OK;
+
+    return speculativeHandler->SpeculativeConnect(aURI,
+                                                  aCallbacks,
+                                                  aTarget);
 }

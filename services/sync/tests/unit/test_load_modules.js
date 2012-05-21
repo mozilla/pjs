@@ -1,5 +1,7 @@
 const modules = [
+                 "addonsreconciler.js",
                  "constants.js",
+                 "engines/addons.js",
                  "engines/bookmarks.js",
                  "engines/clients.js",
                  "engines/forms.js",
@@ -8,15 +10,17 @@ const modules = [
                  "engines/prefs.js",
                  "engines/tabs.js",
                  "engines.js",
-                 "ext/Observers.js",
-                 "ext/Preferences.js",
                  "identity.js",
-                 "log4moz.js",
+                 "jpakeclient.js",
+                 "keys.js",
                  "main.js",
                  "notifications.js",
+                 "policies.js",
                  "record.js",
                  "resource.js",
+                 "rest.js",
                  "service.js",
+                 "status.js",
                  "util.js",
 ];
 

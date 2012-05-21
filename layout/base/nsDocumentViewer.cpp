@@ -1,43 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dan Rosen <dr@netscape.com>
- *   Roland Mainz <roland.mainz@informatik.med.uni-giessen.de>
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* container for a document and its presentation */
 
@@ -97,7 +62,7 @@
 #include "nsIDocShell.h"
 #include "nsIBaseWindow.h"
 #include "nsILayoutHistoryState.h"
-#include "nsIParser.h"
+#include "nsCharsetSource.h"
 #include "nsGUIEvent.h"
 #include "nsHTMLReflowState.h"
 #include "nsIDOMHTMLAnchorElement.h"
@@ -166,13 +131,9 @@ static const char sPrintOptionsContractID[]         = "@mozilla.org/gfx/printset
 #include "nsIWindowWatcher.h"
 
 // Printing 
-#include "nsPrintEngine.h"
 #include "nsPagePrintTimer.h"
 
 #endif // NS_PRINTING
-
-// FrameSet
-#include "nsIDocument.h"
 
 //focus
 #include "nsIDOMEventTarget.h"
@@ -190,9 +151,6 @@ static const char sPrintOptionsContractID[]         = "@mozilla.org/gfx/printset
 //paint forcing
 #include "prenv.h"
 #include <stdio.h>
-
-//switch to page layout
-#include "nsGfxCIID.h"
 
 #include "nsObserverService.h"
 
@@ -511,6 +469,18 @@ public:
   }
 
   nsCOMPtr<nsIDocument> mTop;
+};
+
+class nsBeforeFirstPaintDispatcher : public nsRunnable
+{
+public:
+  nsBeforeFirstPaintDispatcher(nsIDocument* aDocument)
+  : mDocument(aDocument) {}
+
+  NS_IMETHOD Run();
+
+private:
+  nsCOMPtr<nsIDocument> mDocument;
 };
 
 class nsDocumentShownDispatcher : public nsRunnable
@@ -1204,6 +1174,7 @@ DocumentViewerImpl::PermitUnload(bool aCallerClosesWindow, bool *aPermitUnload)
                              (nsIPrompt::BUTTON_TITLE_IS_STRING * nsIPrompt::BUTTON_POS_0) |
                              (nsIPrompt::BUTTON_TITLE_IS_STRING * nsIPrompt::BUTTON_POS_1));
 
+      nsAutoSyncOperation sync(mDocument);
       rv = prompt->ConfirmEx(title, message, buttonFlags,
                              leaveLabel, stayLabel, nsnull, nsnull,
                              &dummy, &buttonPressed);
@@ -1289,7 +1260,7 @@ DocumentViewerImpl::PageHide(bool aIsUnload)
 
   if (aIsUnload) {
     // Poke the GC. The window might be collectable garbage now.
-    nsJSContext::PokeGC(js::gcreason::PAGE_HIDE);
+    nsJSContext::PokeGC(js::gcreason::PAGE_HIDE, NS_GC_DELAY * 2);
 
     // if Destroy() was called during OnPageHide(), mDocument is nsnull.
     NS_ENSURE_STATE(mDocument);
@@ -2054,8 +2025,13 @@ DocumentViewerImpl::Show(void)
     }
   }
 
-  // Notify observers that a new page has been shown. (But not right now;
-  // running JS at this time is not safe.)
+  // Notify observers that a new page is about to be drawn. Execute this
+  // as soon as it is safe to run JS, which is guaranteed to be before we
+  // go back to the event loop and actually draw the page.
+  nsContentUtils::AddScriptRunner(new nsBeforeFirstPaintDispatcher(mDocument));
+
+  // Notify observers that a new page has been shown. This will get run
+  // from the event loop after we actually draw the page.
   NS_DispatchToMainThread(new nsDocumentShownDispatcher(mDocument));
 
   return NS_OK;
@@ -2695,24 +2671,27 @@ DocumentViewerImpl::GetPrintable(bool *aPrintable)
 
 NS_IMETHODIMP DocumentViewerImpl::ScrollToNode(nsIDOMNode* aNode)
 {
-   NS_ENSURE_ARG(aNode);
-   NS_ENSURE_TRUE(mDocument, NS_ERROR_NOT_AVAILABLE);
-   nsCOMPtr<nsIPresShell> presShell;
-   NS_ENSURE_SUCCESS(GetPresShell(getter_AddRefs(presShell)), NS_ERROR_FAILURE);
+  NS_ENSURE_ARG(aNode);
+  NS_ENSURE_TRUE(mDocument, NS_ERROR_NOT_AVAILABLE);
+  nsCOMPtr<nsIPresShell> presShell;
+  NS_ENSURE_SUCCESS(GetPresShell(getter_AddRefs(presShell)), NS_ERROR_FAILURE);
 
-   // Get the nsIContent interface, because that's what we need to
-   // get the primary frame
+  // Get the nsIContent interface, because that's what we need to
+  // get the primary frame
 
-   nsCOMPtr<nsIContent> content(do_QueryInterface(aNode));
-   NS_ENSURE_TRUE(content, NS_ERROR_FAILURE);
+  nsCOMPtr<nsIContent> content(do_QueryInterface(aNode));
+  NS_ENSURE_TRUE(content, NS_ERROR_FAILURE);
 
-   // Tell the PresShell to scroll to the primary frame of the content.
-   NS_ENSURE_SUCCESS(presShell->ScrollContentIntoView(content,
-                                                      NS_PRESSHELL_SCROLL_TOP,
-                                                      NS_PRESSHELL_SCROLL_ANYWHERE,
-                                                      nsIPresShell::SCROLL_OVERFLOW_HIDDEN),
-                     NS_ERROR_FAILURE);
-   return NS_OK;
+  // Tell the PresShell to scroll to the primary frame of the content.
+  NS_ENSURE_SUCCESS(
+    presShell->ScrollContentIntoView(content,
+                                     nsIPresShell::ScrollAxis(
+                                       nsIPresShell::SCROLL_TOP,
+                                       nsIPresShell::SCROLL_ALWAYS),
+                                     nsIPresShell::ScrollAxis(),
+                                     nsIPresShell::SCROLL_OVERFLOW_HIDDEN),
+    NS_ERROR_FAILURE);
+  return NS_OK;
 }
 
 void
@@ -3236,6 +3215,21 @@ NS_IMETHODIMP DocumentViewerImpl::GetBidiOptions(PRUint32* aBidiOptions)
     else
       *aBidiOptions = IBMBIDI_DEFAULT_BIDI_OPTIONS;
   }
+  return NS_OK;
+}
+
+static void
+AppendChildSubtree(nsIMarkupDocumentViewer* aChild, void* aClosure)
+{
+  nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> >& array =
+    *static_cast<nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> >*>(aClosure);
+  aChild->AppendSubtree(array);
+}
+
+NS_IMETHODIMP DocumentViewerImpl::AppendSubtree(nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> >& aArray)
+{
+  aArray.AppendElement(this);
+  CallChildren(AppendChildSubtree, &aArray);
   return NS_OK;
 }
 
@@ -4377,8 +4371,20 @@ DocumentViewerImpl::SetPrintPreviewPresentation(nsIViewManager* aViewManager,
   mPresShell = aPresShell;
 }
 
-// Fires the "document-shown" event so that interested parties (right now, the
+// Fires the "before-first-paint" event so that interested parties (right now, the
 // mobile browser) are aware of it.
+NS_IMETHODIMP
+nsBeforeFirstPaintDispatcher::Run()
+{
+  nsCOMPtr<nsIObserverService> observerService =
+    mozilla::services::GetObserverService();
+  if (observerService) {
+    observerService->NotifyObservers(mDocument, "before-first-paint", NULL);
+  }
+  return NS_OK;
+}
+
+// Fires the "document-shown" event so that interested parties are aware of it.
 NS_IMETHODIMP
 nsDocumentShownDispatcher::Run()
 {

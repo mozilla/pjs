@@ -42,7 +42,6 @@
 #include "nsScriptLoader.h"
 #include "nsNetUtil.h"
 #include "nsIStyleSheetLinkingElement.h"
-#include "nsICharsetAlias.h"
 #include "nsIWebShellServices.h"
 #include "nsIDocShell.h"
 #include "nsEncoderDecoderUtils.h"
@@ -246,12 +245,12 @@ nsHtml5Parser::Parse(const nsAString& aSourceBuffer,
                      bool aLastCall,
                      nsDTDMode aMode) // ignored
 {
-  if (mExecutor->IsBroken()) {
-    return NS_ERROR_OUT_OF_MEMORY;
+  nsresult rv;
+  if (NS_FAILED(rv = mExecutor->IsBroken())) {
+    return rv;
   }
   if (aSourceBuffer.Length() > PR_INT32_MAX) {
-    mExecutor->MarkAsBroken();
-    return NS_ERROR_OUT_OF_MEMORY;
+    return mExecutor->MarkAsBroken(NS_ERROR_OUT_OF_MEMORY);
   }
 
   // Maintain a reference to ourselves so we don't go away
@@ -385,22 +384,14 @@ nsHtml5Parser::Parse(const nsAString& aSourceBuffer,
     // prevSearchBuf is the previous buffer before the keyholder or null if
     // there isn't one.
   } else {
-    // We have a first-level write in the document.open() case. We insert
-    // before mLastBuffer. We need to put a marker there, because otherwise
-    // additional document.writes from nested event loops would insert in the
-    // wrong place. Sigh.
-    firstLevelMarker = new nsHtml5OwningUTF16Buffer((void*)nsnull);
-    if (mFirstBuffer == mLastBuffer) {
-      firstLevelMarker->next = mLastBuffer;
-      mFirstBuffer = firstLevelMarker;
-    } else {
-      prevSearchBuf = mFirstBuffer;
-      while (prevSearchBuf->next != mLastBuffer) {
-        prevSearchBuf = prevSearchBuf->next;
-      }
-      firstLevelMarker->next = mLastBuffer;
-      prevSearchBuf->next = firstLevelMarker;
-    }
+    // We have a first-level write in the document.open() case. We insert before
+    // mLastBuffer, effectively, by making mLastBuffer be a new sentinel object
+    // and redesignating the previous mLastBuffer as our firstLevelMarker.  We
+    // need to put a marker there, because otherwise additional document.writes
+    // from nested event loops would insert in the wrong place. Sigh.
+    mLastBuffer->next = new nsHtml5OwningUTF16Buffer((void*)nsnull);
+    firstLevelMarker = mLastBuffer;
+    mLastBuffer = mLastBuffer->next;
   }
 
   nsHtml5DependentUTF16Buffer stackBuffer(aSourceBuffer);
@@ -447,8 +438,7 @@ nsHtml5Parser::Parse(const nsAString& aSourceBuffer,
     heapBuffer = stackBuffer.FalliblyCopyAsOwningBuffer();
     if (!heapBuffer) {
       // Allocation failed. The parser is now broken.
-      mExecutor->MarkAsBroken();
-      return NS_ERROR_OUT_OF_MEMORY;
+      return mExecutor->MarkAsBroken(NS_ERROR_OUT_OF_MEMORY);
     }
   }
 

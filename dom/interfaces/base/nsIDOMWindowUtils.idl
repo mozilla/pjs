@@ -1,39 +1,7 @@
 /* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla.org
- * Portions created by the Initial Developer are Copyright (C) 2004
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
@@ -70,7 +38,7 @@ interface nsIDOMFile;
 interface nsIFile;
 interface nsIDOMTouch;
 
-[scriptable, uuid(73b48170-55d5-11e1-b86c-0800200c9a66)]
+[scriptable, uuid(2e5a1f37-786b-4a52-b0e3-f711ee2268a8)]
 interface nsIDOMWindowUtils : nsISupports {
 
   /**
@@ -189,6 +157,33 @@ interface nsIDOMWindowUtils : nsISupports {
    */
   void setResolution(in float aXResolution, in float aYResolution);
 
+  /**
+   * Whether the next paint should be flagged as the first paint for a document.
+   * This gives a way to track the next paint that occurs after the flag is
+   * set. The flag gets cleared after the next paint.
+   *
+   * Can only be accessed with UniversalXPConnect privileges.
+   */
+  attribute boolean isFirstPaint;
+
+  /**
+   * Following modifiers are for sent*Event() except sendNative*Event().
+   * NOTE: MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_SHIFT and MODIFIER_META
+   *       are must be same values as nsIDOMNSEvent::*_MASK for backward
+   *       compatibility.
+   */
+  const long MODIFIER_ALT        = 0x0001;
+  const long MODIFIER_CONTROL    = 0x0002;
+  const long MODIFIER_SHIFT      = 0x0004;
+  const long MODIFIER_META       = 0x0008;
+  const long MODIFIER_ALTGRAPH   = 0x0010;
+  const long MODIFIER_CAPSLOCK   = 0x0020;
+  const long MODIFIER_FN         = 0x0040;
+  const long MODIFIER_NUMLOCK    = 0x0080;
+  const long MODIFIER_SCROLL     = 0x0100;
+  const long MODIFIER_SYMBOLLOCK = 0x0200;
+  const long MODIFIER_WIN        = 0x0400;
+
   /** Synthesize a mouse event. The event types supported are:
    *    mousedown, mouseup, mousemove, mouseover, mouseout, contextmenu
    *
@@ -216,7 +211,7 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aY y offset in CSS pixels
    * @param aButton button to synthesize
    * @param aClickCount number of clicks that have been performed
-   * @param aModifiers modifiers pressed, using constants defined in nsIDOMNSEvent
+   * @param aModifiers modifiers pressed, using constants defined as MODIFIER_*
    * @param aIgnoreRootScrollFrame whether the event should ignore viewport bounds
    *                           during dispatch
    */
@@ -249,7 +244,7 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param rotationAngles array of angles in degrees for each touch to be sent
    * @param forces array of forces (floats from 0 to 1) for each touch to be sent
    * @param count number of touches in this set
-   * @param aModifiers modifiers pressed, using constants defined in nsIDOMNSEvent
+   * @param aModifiers modifiers pressed, using constants defined as MODIFIER_*
    * @param aIgnoreRootScrollFrame whether the event should ignore viewport bounds
    *                           during dispatch
    *
@@ -296,7 +291,7 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aScrollFlags flag bits --- see nsMouseScrollFlags in nsGUIEvent.h
    * @param aDelta the direction and amount to scroll (in lines or pixels,
    * depending on the event type)
-   * @param aModifiers modifiers pressed, using constants defined in nsIDOMNSEvent
+   * @param aModifiers modifiers pressed, using constants defined as MODIFIER_*
    */
   void sendMouseScrollEvent(in AString aType,
                             in float aX,
@@ -319,18 +314,31 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aType event type
    * @param aKeyCode key code
    * @param aCharCode character code
-   * @param aModifiers modifiers pressed, using constants defined in nsIDOMNSEvent
-   * @param aPreventDefault if true, preventDefault() the event before dispatch
+   * @param aModifiers modifiers pressed, using constants defined as MODIFIER_*
+   * @param aAdditionalFlags special flags for the key event, see KEY_FLAG_*.
    *
    * @return false if the event had preventDefault() called on it,
    *               true otherwise.  In other words, true if and only if the
    *               default action was taken.
    */
+
+  // If this is set, preventDefault() the event before dispatch.
+  const unsigned long KEY_FLAG_PREVENT_DEFAULT   = 0x0001;
+
+  // if one of these flags is set, the KeyboardEvent.location will be the value.
+  // Otherwise, it will be computed from aKeyCode.
+  const unsigned long KEY_FLAG_LOCATION_STANDARD = 0x0010;
+  const unsigned long KEY_FLAG_LOCATION_LEFT     = 0x0020;
+  const unsigned long KEY_FLAG_LOCATION_RIGHT    = 0x0040;
+  const unsigned long KEY_FLAG_LOCATION_NUMPAD   = 0x0080;
+  const unsigned long KEY_FLAG_LOCATION_MOBILE   = 0x0100;
+  const unsigned long KEY_FLAG_LOCATION_JOYSTICK = 0x0200;
+
   boolean sendKeyEvent(in AString aType,
                        in long aKeyCode,
                        in long aCharCode,
                        in long aModifiers,
-                       [optional] in boolean aPreventDefault);
+                       [optional] in unsigned long aAdditionalFlags);
 
   /**
    * See nsIWidget::SynthesizeNativeKeyEvent
@@ -358,6 +366,52 @@ interface nsIDOMWindowUtils : nsISupports {
                             in long aNativeMessage,
                             in long aModifierFlags,
                             in nsIDOMElement aElement);
+
+  /**
+   * See nsIWidget::SynthesizeNativeMouseScrollEvent
+   *
+   * Will be called on the widget that contains aElement.
+   * Cannot be accessed from unprivileged context (not content-accessible)
+   * Will throw a DOM security error if called without UniversalXPConnect
+   * privileges.
+   *
+   * NOTE: The synthesized native event may be fired asynchronously.
+   *
+   * @param aNativeMessage
+   *   On Windows:  WM_MOUSEWHEEL (0x020A), WM_MOUSEHWHEEL(0x020E),
+   *                WM_VSCROLL (0x0115) or WM_HSCROLL (0x114).
+   */
+  void sendNativeMouseScrollEvent(in long aScreenX,
+                                  in long aScreenY,
+                                  in unsigned long aNativeMessage,
+                                  in double aDeltaX,
+                                  in double aDeltaY,
+                                  in double aDeltaZ,
+                                  in unsigned long aModifierFlags,
+                                  in unsigned long aAdditionalFlags,
+                                  in nsIDOMElement aElement);
+
+  /**
+   * The values of aAdditionalFlags.
+   */
+
+  /**
+   * If MOUSESCROLL_PREFER_WIDGET_AT_POINT is set, widget will dispatch
+   * the event to a widget which is under the cursor.  Otherwise, dispatch to
+   * a default target on the platform.  E.g., on Windows, it's focused window.
+   */
+  const unsigned long MOUSESCROLL_PREFER_WIDGET_AT_POINT = 0x00000001;
+
+  /**
+   * The platform specific values of aAdditionalFlags.  Must be over 0x00010000.
+   */
+
+  /**
+   * If MOUSESCROLL_WIN_SCROLL_LPARAM_NOT_NULL is set and aNativeMessage is
+   * WM_VSCROLL or WM_HSCROLL, widget will set the window handle to the lParam
+   * instead of NULL.
+   */
+  const unsigned long MOUSESCROLL_WIN_SCROLL_LPARAM_NOT_NULL = 0x00010000;
 
   /**
    * See nsIWidget::ActivateNativeMenuItemAt
@@ -1044,4 +1098,41 @@ interface nsIDOMWindowUtils : nsISupports {
    * otherwise.
    */
   readonly attribute boolean paintingSuppressed;
+
+  /**
+   * Returns an array of plugins on the page for opt-in activation.
+   *
+   * Cannot be accessed from unprivileged context (not content-accessible).
+   * Will throw a DOM security error if called without UniversalXPConnect
+   * privileges.
+   *
+   */
+  [implicit_jscontext]
+  readonly attribute jsval plugins;
+
+  /**
+   * Set the scrollport size for the purposes of clamping scroll positions for
+   * the root scroll frame of this document to be (aWidth,aHeight) in CSS pixels.
+   *
+   * The caller of this method must have UniversalXPConnect privileges.
+   */
+  void setScrollPositionClampingScrollPortSize(in float aWidth, in float aHeight);
+
+  /**
+   * Mark if the window is an application window or not.
+   * This should only be set for top-level mozApp or mozBrowser frames.
+   * It should not be set for other frames unless you want a frame (and its
+   * children) to have a different value for IsPartOfApp than the frame's
+   * parent.
+   */
+  void setIsApp(in boolean value);
+
+  /**
+   * Associate the window with an application by passing the URL of the
+   * application's manifest.
+   *
+   * This method will throw an exception if the manifest URL isn't a valid URL
+   * or isn't the manifest URL of an installed application.
+   */
+  void setApp(in DOMString manifestURL);
 };

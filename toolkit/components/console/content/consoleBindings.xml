@@ -1,4 +1,8 @@
 <?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
 
 <!DOCTYPE bindings SYSTEM "chrome://global/locale/console.dtd">
 
@@ -80,7 +84,12 @@
           
           this.mConsoleListener = {
             console: this, 
-            observe : function(aObject) { this.console.appendItem(aObject); }
+            observe : function(aObject) {
+              // The message can arrive a little bit after the xbl binding has been
+              // unbind. So node.appendItem will not be available anymore.
+              if ('appendItem' in this.console)
+                this.console.appendItem(aObject);
+            }
           };
           
           this.mConsoleRowBox = document.getAnonymousElementByAttribute(this, "role", "console-rows");

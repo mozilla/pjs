@@ -1,37 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Content Security Policy Data Structures testing code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation
- *
- * Contributor(s):
- *   Sid Stamm <sid@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 //load('CSPUtils.jsm');
 Components.utils.import('resource://gre/modules/CSPUtils.jsm');
@@ -46,6 +15,14 @@ const POLICY_FROM_URI = "allow 'self'; img-src *";
 const POLICY_PORT = 9000;
 const POLICY_URI = "http://localhost:" + POLICY_PORT + "/policy";
 const POLICY_URI_RELATIVE = "/policy";
+
+//converts string to nsIURI
+function URI(uriString) {
+  var ioService = Components.classes["@mozilla.org/network/io-service;1"]
+                .getService(Components.interfaces.nsIIOService);
+  return ioService.newURI(uriString, null, null);
+}
+
 
 // helper to assert that an array has the given value somewhere.
 function do_check_in_array(arr, val, stack) {
@@ -271,8 +248,8 @@ test(
 test(
     function test_CSPSourceList_fromString_twohost() {
       var str = "foo.bar:21 https://ras.bar";
-      var parsed = "foo.bar:21 https://ras.bar";
-      var sd = CSPSourceList.fromString(str, "http://self.com:80");
+      var parsed = "http://foo.bar:21 https://ras.bar:443";
+      var sd = CSPSourceList.fromString(str, URI("http://self.com:80"));
       //"two-host list should parse"
       do_check_neq(null,sd);
       //"two-host list should parse to two hosts"
@@ -284,9 +261,9 @@ test(
 test(
     function test_CSPSourceList_permits() {
       var nullSourceList = CSPSourceList.fromString("'none'");
-      var simpleSourceList = CSPSourceList.fromString("a.com", "http://self.com");
+      var simpleSourceList = CSPSourceList.fromString("a.com", URI("http://self.com"));
       var doubleSourceList = CSPSourceList.fromString("https://foo.com http://bar.com:88",
-                                                      "http://self.com:88");
+                                                      URI("http://self.com:88"));
       var allSourceList = CSPSourceList.fromString("*");
 
       //'none' should permit none."
@@ -362,7 +339,7 @@ test(
       var SD = CSPRep.SRC_DIRECTIVES;
 
       // check default policy "allow *"
-      cspr = CSPRep.fromString("allow *", "http://self.com:80");
+      cspr = CSPRep.fromString("allow *", URI("http://self.com:80"));
       // "DEFAULT_SRC directive is missing when specified in fromString"
       do_check_has_key(cspr._directives, SD.DEFAULT_SRC);
 
@@ -384,7 +361,7 @@ test(
       var SD = CSPRep.SRC_DIRECTIVES;
 
       // apply policy of "default-src *" (e.g. "allow *")
-      cspr = CSPRep.fromString("default-src *", "http://self.com:80");
+      cspr = CSPRep.fromString("default-src *", URI("http://self.com:80"));
       // "DEFAULT_SRC directive is missing when specified in fromString"
       do_check_has_key(cspr._directives, SD.DEFAULT_SRC);
 
@@ -399,8 +376,8 @@ test(
 
       // check that |allow *| and |default-src *| are parsed equivalently and
       // result in the same set of explicit policy directives
-      cspr = CSPRep.fromString("default-src *", "http://self.com:80");
-      cspr_allow = CSPRep.fromString("allow *", "http://self.com:80");
+      cspr = CSPRep.fromString("default-src *", URI("http://self.com:80"));
+      cspr_allow = CSPRep.fromString("allow *", URI("http://self.com:80"));
 
       for (var d in SD) {
         do_check_equivalent(cspr._directives[SD[d]],
@@ -418,7 +395,7 @@ test(
 
       // check one-directive policies
       cspr = CSPRep.fromString("allow bar.com; script-src https://foo.com", 
-                               "http://self.com");
+                               URI("http://self.com"));
 
       for(var x in DEFAULTS) {
         //DEFAULTS[x] + " does not use default rule."
@@ -446,7 +423,7 @@ test(
       var polstr = "allow allow.com; "
                   + "script-src https://foo.com; "
                   + "img-src bar.com:*";
-      cspr = CSPRep.fromString(polstr, "http://self.com");
+      cspr = CSPRep.fromString(polstr, URI("http://self.com"));
 
       for(var x in DEFAULTS) {
         do_check_true(cspr.permits("http://allow.com", DEFAULTS[x]));
@@ -478,11 +455,10 @@ test(function test_CSPRep_fromString_withself() {
 
       // check one-directive policies
       cspr = CSPRep.fromString("allow 'self'; script-src 'self' https://*:*",
-                              self);
+                              URI(self));
       //"img-src does not enforce default rule, 'self'.
       do_check_false(cspr.permits("https://foo.com:400", SD.IMG_SRC));
       //"img-src does not allow self
-      CSPdebug(cspr);
       do_check_true(cspr.permits(self, SD.IMG_SRC));
       //"script-src is too relaxed
       do_check_false(cspr.permits("http://evil.com", SD.SCRIPT_SRC));
@@ -499,7 +475,7 @@ test(function test_FrameAncestor_defaults() {
       var SD = CSPRep.SRC_DIRECTIVES;
       var self = "http://self.com:34";
 
-      cspr = CSPRep.fromString("allow 'none'", self);
+      cspr = CSPRep.fromString("allow 'none'", URI(self));
 
       //"frame-ancestors should default to * not 'allow' value"
       do_check_true(cspr.permits("https://foo.com:400", SD.FRAME_ANCESTORS));
@@ -508,7 +484,7 @@ test(function test_FrameAncestor_defaults() {
       do_check_true(cspr.permits("http://self.com", SD.FRAME_ANCESTORS));
       do_check_true(cspr.permits("http://subd.self.com:34", SD.FRAME_ANCESTORS));
 
-      cspr = CSPRep.fromString("allow 'none'; frame-ancestors 'self'", self);
+      cspr = CSPRep.fromString("allow 'none'; frame-ancestors 'self'", URI(self));
 
       //"frame-ancestors should only allow self"
       do_check_true(cspr.permits("http://self.com:34", SD.FRAME_ANCESTORS));
@@ -532,27 +508,27 @@ test(function test_CSP_ReportURI_parsing() {
       var uri_valid_relative2_expanded = self + "/" + uri_valid_relative2;
       var uri_invalid_relative = "javascript:alert(1)";
 
-      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_absolute, self);
+      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_absolute, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, uri_valid_absolute);
       do_check_eq(parsedURIs.length, 1);
 
-      cspr = CSPRep.fromString("allow *; report-uri " + uri_invalid_host_absolute, self);
+      cspr = CSPRep.fromString("allow *; report-uri " + uri_invalid_host_absolute, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, "");
       do_check_eq(parsedURIs.length, 1); // the empty string is in there.
 
-      cspr = CSPRep.fromString("allow *; report-uri " + uri_invalid_relative, self);
+      cspr = CSPRep.fromString("allow *; report-uri " + uri_invalid_relative, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, "");
       do_check_eq(parsedURIs.length, 1);
 
-      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_relative, self);
+      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_relative, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, uri_valid_relative_expanded);
       do_check_eq(parsedURIs.length, 1);
 
-      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_relative2, self);
+      cspr = CSPRep.fromString("allow *; report-uri " + uri_valid_relative2, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       dump(parsedURIs.length);
       do_check_in_array(parsedURIs, uri_valid_relative2_expanded);
@@ -561,7 +537,7 @@ test(function test_CSP_ReportURI_parsing() {
       // combination!
       cspr = CSPRep.fromString("allow *; report-uri " +
                                uri_valid_relative2 + " " +
-                               uri_valid_absolute, self);
+                               uri_valid_absolute, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, uri_valid_relative2_expanded);
       do_check_in_array(parsedURIs, uri_valid_absolute);
@@ -570,11 +546,57 @@ test(function test_CSP_ReportURI_parsing() {
       cspr = CSPRep.fromString("allow *; report-uri " +
                                uri_valid_relative2 + " " +
                                uri_invalid_host_absolute + " " +
-                               uri_valid_absolute, self);
+                               uri_valid_absolute, URI(self));
       parsedURIs = cspr.getReportURIs().split(/\s+/);
       do_check_in_array(parsedURIs, uri_valid_relative2_expanded);
       do_check_in_array(parsedURIs, uri_valid_absolute);
       do_check_eq(parsedURIs.length, 2);
+    });
+
+test(
+    function test_bug672961_withNonstandardSelfPort() {
+      /**
+       * When a protected document has a non-standard port, other host names
+       * listed as sources should inherit the scheme of the protected document
+       * but NOT the port.  Other hosts should use the default port for the
+       * inherited scheme.  For example, since 443 is default for HTTPS:
+       *
+       *   Document with CSP: https://foobar.com:4443
+       *   Transmitted policy:
+       *       "allow 'self' a.com"
+       *   Explicit policy:
+       *       "allow https://foobar.com:4443 https://a.com:443"
+       *
+       * This test examines scheme and nonstandard port inheritance.
+       */
+
+      var src;
+      src = CSPSource.create("a.com", "https://foobar.com:4443");
+      //"src should inherit and require https scheme
+      do_check_false(src.permits("http://a.com"));
+      //"src should inherit scheme 'https'"
+      do_check_true(src.permits("https://a.com"));
+      //"src should get default port 
+      do_check_true(src.permits("https://a.com:443"));
+      
+      src = CSPSource.create("http://a.com", "https://foobar.com:4443");
+      //"src should require http scheme"
+      do_check_false(src.permits("https://a.com"));
+      //"src should keep scheme 'http'"
+      do_check_true(src.permits("http://a.com"));
+      //"src should inherit default port for 'http'"
+      do_check_true(src.permits("http://a.com:80"));
+      
+      src = CSPSource.create("'self'", "https://foobar.com:4443");
+      //"src should inherit nonstandard port from self
+      do_check_true(src.permits("https://foobar.com:4443"));
+      do_check_false(src.permits("https://foobar.com"));
+      do_check_false(src.permits("https://foobar.com:443"));
+
+      //"src should inherit and require https scheme from self
+      do_check_false(src.permits("http://foobar.com:4443"));
+      do_check_false(src.permits("http://foobar.com"));
+
     });
 
 /*
@@ -586,11 +608,11 @@ test(function test_CSPRep_fromPolicyURI_failswhenmixed() {
         var my_uri_policy = "policy-uri " + POLICY_URI;
 
         //print(" --- Ignore the following two errors if they print ---");
-        cspr = CSPRep.fromString("allow *; " + my_uri_policy, self);
+        cspr = CSPRep.fromString("allow *; " + my_uri_policy, URI(self));
 
         //"Parsing should fail when 'policy-uri' is mixed with allow directive"
         do_check_equivalent(cspr, closed_policy);
-        cspr = CSPRep.fromString("img-src 'self'; " + my_uri_policy, self);
+        cspr = CSPRep.fromString("img-src 'self'; " + my_uri_policy, URI(self));
 
         //"Parsing should fail when 'policy-uri' is mixed with other directives"
         do_check_equivalent(cspr, closed_policy);

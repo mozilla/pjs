@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is C++ array template.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Darin Fisher <darin@meer.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsTArray_h__
 #define nsTArray_h__
@@ -274,7 +242,7 @@ protected:
   // zero-length array is inserted into our array. But then n should
   // always be 0.
   void IncrementLength(PRUint32 n) {
-    NS_ASSERTION(mHdr != EmptyHdr() || n == 0, "bad data pointer");
+    MOZ_ASSERT(mHdr != EmptyHdr() || n == 0, "bad data pointer");
     mHdr->mLength += n;
   }
 
@@ -316,11 +284,11 @@ protected:
 
   // Returns a Header for the built-in buffer of this nsAutoTArray.
   Header* GetAutoArrayBuffer(size_t elemAlign) {
-    NS_ASSERTION(IsAutoArray(), "Should be an auto array to call this");
+    MOZ_ASSERT(IsAutoArray(), "Should be an auto array to call this");
     return GetAutoArrayBufferUnsafe(elemAlign);
   }
   const Header* GetAutoArrayBuffer(size_t elemAlign) const {
-    NS_ASSERTION(IsAutoArray(), "Should be an auto array to call this");
+    MOZ_ASSERT(IsAutoArray(), "Should be an auto array to call this");
     return GetAutoArrayBufferUnsafe(elemAlign);
   }
 
@@ -378,24 +346,6 @@ public:
   // Invoke the destructor in place.
   static inline void Destruct(E *e) {
     e->~E();
-  }
-};
-
-// This class exists because VC6 cannot handle static template functions.
-// Otherwise, the Compare method would be defined directly on nsTArray.
-template <class E, class Comparator>
-class nsQuickSortComparator
-{
-public:
-  typedef E elem_type;
-  // This function is meant to be used with the NS_QuickSort function.  It
-  // maps the callback API expected by NS_QuickSort to the Comparator API
-  // used by nsTArray.  See nsTArray::Sort.
-  static int Compare(const void* e1, const void* e2, void *data) {
-    const Comparator* c = reinterpret_cast<const Comparator*>(data);
-    const elem_type* a = static_cast<const elem_type*>(e1);
-    const elem_type* b = static_cast<const elem_type*>(e2);
-    return c->LessThan(*a, *b) ? -1 : (c->Equals(*a, *b) ? 0 : 1);
   }
 };
 
@@ -573,7 +523,7 @@ public:
   // @param i  The index of an element in the array.
   // @return   A reference to the i'th element of the array.
   elem_type& ElementAt(index_type i) {
-    NS_ASSERTION(i < Length(), "invalid array index");
+    MOZ_ASSERT(i < Length(), "invalid array index");
     return Elements()[i];
   }
 
@@ -582,7 +532,7 @@ public:
   // @param i  The index of an element in the array.
   // @return   A const reference to the i'th element of the array.
   const elem_type& ElementAt(index_type i) const {
-    NS_ASSERTION(i < Length(), "invalid array index");
+    MOZ_ASSERT(i < Length(), "invalid array index");
     return Elements()[i];
   }
 
@@ -612,6 +562,26 @@ public:
   // Shorthand for ElementAt(i)
   const elem_type& operator[](index_type i) const {
     return ElementAt(i);
+  }
+
+  // Shorthand for ElementAt(length - 1)
+  elem_type& LastElement() {
+    return ElementAt(Length() - 1);
+  }
+
+  // Shorthand for ElementAt(length - 1)
+  const elem_type& LastElement() const {
+    return ElementAt(Length() - 1);
+  }
+
+  // Shorthand for SafeElementAt(length - 1, def)
+  elem_type& SafeLastElement(elem_type& def) {
+    return SafeElementAt(Length() - 1, def);
+  }
+
+  // Shorthand for SafeElementAt(length - 1, def)
+  const elem_type& SafeLastElement(const elem_type& def) const {
+    return SafeElementAt(Length() - 1, def);
   }
 
   //
@@ -772,7 +742,7 @@ public:
   // A variation on the ReplaceElementsAt method defined above.
   template<class Item>
   elem_type *ReplaceElementAt(index_type index, const Item& item) {
-    return ReplaceElementsAt(index, 1, item, 1);
+    return ReplaceElementsAt(index, 1, &item, 1);
   }
 
   // A variation on the ReplaceElementsAt method defined above.
@@ -941,7 +911,7 @@ public:
   // @return A pointer to the newly appended elements, or null on OOM.
   template<class Item, class Allocator>
   elem_type *MoveElementsFrom(nsTArray<Item, Allocator>& array) {
-    NS_PRECONDITION(&array != this, "argument must be different array");
+    MOZ_ASSERT(&array != this, "argument must be different array");
     index_type len = Length();
     index_type otherLen = array.Length();
     if (!this->EnsureCapacity(len + otherLen, sizeof(elem_type)))
@@ -956,8 +926,8 @@ public:
   // @param start  The starting index of the elements to remove.
   // @param count  The number of elements to remove.
   void RemoveElementsAt(index_type start, size_type count) {
-    NS_ASSERTION(count == 0 || start < Length(), "Invalid start index");
-    NS_ASSERTION(start + count <= Length(), "Invalid length");
+    MOZ_ASSERT(count == 0 || start < Length(), "Invalid start index");
+    MOZ_ASSERT(start + count <= Length(), "Invalid length");
     DestructRange(start, count);
     this->ShiftData(start, count, 0, sizeof(elem_type), MOZ_ALIGNOF(elem_type));
   }
@@ -1131,6 +1101,17 @@ public:
   //
   // Sorting
   //
+ 
+  // This function is meant to be used with the NS_QuickSort function.  It
+  // maps the callback API expected by NS_QuickSort to the Comparator API
+  // used by nsTArray.  See nsTArray::Sort.
+  template<class Comparator>
+  static int Compare(const void* e1, const void* e2, void *data) {
+    const Comparator* c = reinterpret_cast<const Comparator*>(data);
+    const elem_type* a = static_cast<const elem_type*>(e1);
+    const elem_type* b = static_cast<const elem_type*>(e2);
+    return c->LessThan(*a, *b) ? -1 : (c->Equals(*a, *b) ? 0 : 1);
+  }
 
   // This method sorts the elements of the array.  It uses the LessThan
   // method defined on the given Comparator object to collate elements.
@@ -1138,8 +1119,7 @@ public:
   template<class Comparator>
   void Sort(const Comparator& comp) {
     NS_QuickSort(Elements(), Length(), sizeof(elem_type),
-                 nsQuickSortComparator<elem_type, Comparator>::Compare,
-                 const_cast<Comparator*>(&comp));
+                 Compare<Comparator>, const_cast<Comparator*>(&comp));
   }
 
   // A variation on the Sort method defined above that assumes that
@@ -1343,9 +1323,9 @@ private:
     base_type::Hdr()->mCapacity = N;
     base_type::Hdr()->mIsAutoArray = 1;
 
-    NS_ASSERTION(base_type::GetAutoArrayBuffer(MOZ_ALIGNOF(elem_type)) ==
-                 reinterpret_cast<Header*>(&mAutoBuf),
-                 "GetAutoArrayBuffer needs to be fixed");
+    MOZ_ASSERT(base_type::GetAutoArrayBuffer(MOZ_ALIGNOF(elem_type)) ==
+               reinterpret_cast<Header*>(&mAutoBuf),
+               "GetAutoArrayBuffer needs to be fixed");
   }
 
   // Declare mAutoBuf aligned to the maximum of the header's alignment and

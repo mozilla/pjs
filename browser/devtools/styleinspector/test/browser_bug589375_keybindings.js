@@ -14,19 +14,12 @@ function createDocument()
     '<span class="matches">Some styled text</span>' +
     '</div>';
   doc.title = "Style Inspector key binding test";
-  stylePanel = new StyleInspector(window);
-  Services.obs.addObserver(runStyleInspectorTests, "StyleInspector-opened", false);
-  stylePanel.createPanel(false, function() {
-    stylePanel.open(doc.body);
-  });
+  stylePanel = new ComputedViewPanel(window);
+  stylePanel.createPanel(doc.body, runStyleInspectorTests);
 }
 
 function runStyleInspectorTests()
 {
-  Services.obs.removeObserver(runStyleInspectorTests, "StyleInspector-opened", false);
-
-  ok(stylePanel.isOpen(), "style inspector is open");
-
   Services.obs.addObserver(SI_test, "StyleInspector-populated", false);
   SI_inspectNode();
 }
@@ -55,26 +48,26 @@ function SI_test()
   let searchbar = stylePanel.cssHtmlTree.searchField;
   let propView = getFirstVisiblePropertyView();
   let rulesTable = propView.matchedSelectorsContainer;
-  let nameNode = propView.nameNode;
+  let matchedExpander = propView.matchedExpander;
 
-  info("Adding focus event handler to property name node");
-  nameNode.addEventListener("focus", function nameFocused() {
-    this.removeEventListener("focus", nameFocused);
-    info("property name is focused");
+  info("Adding focus event handler to property expander");
+  matchedExpander.addEventListener("focus", function expanderFocused() {
+    this.removeEventListener("focus", expanderFocused);
+    info("property expander is focused");
     info("checking expand / collapse");
     testKey(iframe.contentWindow, "VK_SPACE", rulesTable);
     testKey(iframe.contentWindow, "VK_RETURN", rulesTable);
 
     checkHelpLinkKeybinding();
-    Services.obs.addObserver(finishUp, "StyleInspector-closed", false);
-    stylePanel.close();
+    stylePanel.destroy();
+    finishUp();
   });
 
   info("Adding focus event handler to search filter");
   searchbar.addEventListener("focus", function searchbarFocused() {
     this.removeEventListener("focus", searchbarFocused);
     info("search filter is focused");
-    info("tabbing to property name node");
+    info("tabbing to property expander node");
     EventUtils.synthesizeKey("VK_TAB", {}, iframe.contentWindow);
   });
 
@@ -94,6 +87,7 @@ function getFirstVisiblePropertyView()
       propView = aPropView;
       return true;
     }
+    return false;
   });
 
   return propView;
@@ -127,8 +121,6 @@ function checkHelpLinkKeybinding()
 
 function finishUp()
 {
-  Services.obs.removeObserver(finishUp, "StyleInspector-closed", false);
-  ok(!stylePanel.isOpen(), "style inspector is closed");
   doc = stylePanel = null;
   gBrowser.removeCurrentTab();
   finish();

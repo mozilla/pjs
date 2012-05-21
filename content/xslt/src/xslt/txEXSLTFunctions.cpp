@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Peter Van der Beken.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Peter Van der Beken <peterv@propagandism.org>
- *
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/FloatingPoint.h"
 #include "mozilla/Util.h"
 
 #include "nsIAtom.h"
@@ -406,9 +373,7 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
             NS_ENSURE_SUCCESS(rv, rv);
 
             nsTHashtable<nsStringHashKey> hash;
-            if (!hash.Init()) {
-                return NS_ERROR_OUT_OF_MEMORY;
-            }
+            hash.Init();
 
             PRInt32 i, len = nodes->size();
             for (i = 0; i < len; ++i) {
@@ -416,9 +381,7 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
                 const txXPathNode& node = nodes->get(i);
                 txXPathNodeUtils::appendNodeValue(node, str);
                 if (!hash.GetEntry(str)) {
-                    if (!hash.PutEntry(str)) {
-                        return NS_ERROR_OUT_OF_MEMORY;
-                    }
+                    hash.PutEntry(str);
                     rv = resultSet->append(node);
                     NS_ENSURE_SUCCESS(rv, rv);
                 }
@@ -611,20 +574,20 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
 
             if (nodes->isEmpty()) {
                 return aContext->recycler()->
-                    getNumberResult(txDouble::NaN, aResult);
+                    getNumberResult(MOZ_DOUBLE_NaN(), aResult);
             }
 
             bool findMax = mType == MAX;
 
-            double res = findMax ? txDouble::NEGATIVE_INFINITY :
-                                   txDouble::POSITIVE_INFINITY;
+            double res = findMax ? MOZ_DOUBLE_NEGATIVE_INFINITY() :
+                                   MOZ_DOUBLE_POSITIVE_INFINITY();
             PRInt32 i, len = nodes->size();
             for (i = 0; i < len; ++i) {
                 nsAutoString str;
                 txXPathNodeUtils::appendNodeValue(nodes->get(i), str);
                 double val = txDouble::toDouble(str);
-                if (txDouble::isNaN(val)) {
-                    res = txDouble::NaN;
+                if (MOZ_DOUBLE_IS_NaN(val)) {
+                    res = MOZ_DOUBLE_NaN();
                     break;
                 }
 
@@ -654,15 +617,15 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
             NS_ENSURE_SUCCESS(rv, rv);
 
             bool findMax = mType == HIGHEST;
-            double res = findMax ? txDouble::NEGATIVE_INFINITY :
-                                   txDouble::POSITIVE_INFINITY;
+            double res = findMax ? MOZ_DOUBLE_NEGATIVE_INFINITY() :
+                                   MOZ_DOUBLE_POSITIVE_INFINITY();
             PRInt32 i, len = nodes->size();
             for (i = 0; i < len; ++i) {
                 nsAutoString str;
                 const txXPathNode& node = nodes->get(i);
                 txXPathNodeUtils::appendNodeValue(node, str);
                 double val = txDouble::toDouble(str);
-                if (txDouble::isNaN(val)) {
+                if (MOZ_DOUBLE_IS_NaN(val)) {
                     resultSet->clear();
                     break;
                 }
@@ -686,7 +649,6 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
             // http://exslt.org/date/functions/date-time/
             // format: YYYY-MM-DDTTHH:MM:SS.sss+00:00
             char formatstr[] = "%04hd-%02ld-%02ldT%02ld:%02ld:%02ld.%03ld%c%02ld:%02ld";
-            const size_t max = sizeof("YYYY-MM-DDTHH:MM:SS.sss+00:00");
             
             PRExplodedTime prtime;
             PR_ExplodeTime(PR_Now(), PR_LocalTimeParameters, &prtime);
@@ -701,7 +663,7 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
             rv = aContext->recycler()->getStringResult(&strRes);
             NS_ENSURE_SUCCESS(rv, rv);
             
-            CopyASCIItoUTF16(nsPrintfCString(max, formatstr,
+            CopyASCIItoUTF16(nsPrintfCString(formatstr,
               prtime.tm_year, prtime.tm_month + 1, prtime.tm_mday,
               prtime.tm_hour, prtime.tm_min, prtime.tm_sec,
               prtime.tm_usec / 10000,

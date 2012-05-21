@@ -1,46 +1,13 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.org>
- *   Frederic Plourde <frederic.plourde@collabora.co.uk>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_LAYERMANAGEROGL_H
 #define GFX_LAYERMANAGEROGL_H
 
 #include "Layers.h"
+#include "LayerManagerOGLProgram.h"
 
 #include "mozilla/layers/ShadowLayers.h"
 
@@ -67,8 +34,6 @@ typedef int GLsizei;
 #include "nsIWidget.h"
 #include "GLContext.h"
 
-#include "LayerManagerOGLProgram.h"
-
 namespace mozilla {
 namespace layers {
 
@@ -80,8 +45,8 @@ class ShadowCanvasLayer;
 class ShadowColorLayer;
 
 /**
- * This is the LayerManager used for OpenGL 2.1. For now this will render on
- * the main thread.
+ * This is the LayerManager used for OpenGL 2.1 and OpenGL ES 2.0.
+ * This can be used either on the main thread or the compositor.
  */
 class THEBES_API LayerManagerOGL :
     public ShadowLayerManager
@@ -90,7 +55,8 @@ class THEBES_API LayerManagerOGL :
   typedef mozilla::gl::ShaderProgramType ProgramType;
 
 public:
-  LayerManagerOGL(nsIWidget *aWidget);
+  LayerManagerOGL(nsIWidget *aWidget, int aSurfaceWidth = -1, int aSurfaceHeight = -1,
+                  bool aIsRenderingToEGLSurface = false);
   virtual ~LayerManagerOGL();
 
   void CleanupResources();
@@ -106,11 +72,11 @@ public:
    *
    * \return True is initialization was succesful, false when it was not.
    */
-  bool Initialize() {
-    return Initialize(CreateContext());
+  bool Initialize(bool force = false) {
+    return Initialize(CreateContext(), force);
   }
 
-  bool Initialize(nsRefPtr<GLContext> aContext);
+  bool Initialize(nsRefPtr<GLContext> aContext, bool force = false);
 
   /**
    * Sets the clipping region for this layer manager. This is important on 
@@ -182,82 +148,55 @@ public:
     mGLContext->MakeCurrent(aForce);
   }
 
-  ColorTextureLayerProgram *GetColorTextureLayerProgram(ProgramType type){
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[type]);
-  }
-
-  ColorTextureLayerProgram *GetRGBALayerProgram() {
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::RGBALayerProgramType]);
-  }
-  ColorTextureLayerProgram *GetBGRALayerProgram() {
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::BGRALayerProgramType]);
-  }
-  ColorTextureLayerProgram *GetRGBXLayerProgram() {
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::RGBXLayerProgramType]);
-  }
-  ColorTextureLayerProgram *GetBGRXLayerProgram() {
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::BGRXLayerProgramType]);
-  }
-  ColorTextureLayerProgram *GetBasicLayerProgram(bool aOpaque, bool aIsRGB)
+  ShaderProgramOGL* GetBasicLayerProgram(bool aOpaque, bool aIsRGB,
+                                         MaskType aMask = MaskNone)
   {
+    gl::ShaderProgramType format = gl::BGRALayerProgramType;
     if (aIsRGB) {
-      return aOpaque
-        ? GetRGBXLayerProgram()
-        : GetRGBALayerProgram();
+      if (aOpaque) {
+        format = gl::RGBXLayerProgramType;
+      } else {
+        format = gl::RGBALayerProgramType;
+      }
     } else {
-      return aOpaque
-        ? GetBGRXLayerProgram()
-        : GetBGRALayerProgram();
+      if (aOpaque) {
+        format = gl::BGRXLayerProgramType;
+      }
     }
+    return GetProgram(format, aMask);
   }
 
-  ColorTextureLayerProgram *GetRGBARectLayerProgram() {
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::RGBARectLayerProgramType]);
-  }
-  SolidColorLayerProgram *GetColorLayerProgram() {
-    return static_cast<SolidColorLayerProgram*>(mPrograms[gl::ColorLayerProgramType]);
-  }
-  YCbCrTextureLayerProgram *GetYCbCrLayerProgram() {
-    return static_cast<YCbCrTextureLayerProgram*>(mPrograms[gl::YCbCrLayerProgramType]);
-  }
-  ComponentAlphaTextureLayerProgram *GetComponentAlphaPass1LayerProgram() {
-    return static_cast<ComponentAlphaTextureLayerProgram*>
-             (mPrograms[gl::ComponentAlphaPass1ProgramType]);
-  }
-  ComponentAlphaTextureLayerProgram *GetComponentAlphaPass2LayerProgram() {
-    return static_cast<ComponentAlphaTextureLayerProgram*>
-             (mPrograms[gl::ComponentAlphaPass2ProgramType]);
-  }
-  CopyProgram *GetCopy2DProgram() {
-    return static_cast<CopyProgram*>(mPrograms[gl::Copy2DProgramType]);
-  }
-  CopyProgram *GetCopy2DRectProgram() {
-    return static_cast<CopyProgram*>(mPrograms[gl::Copy2DRectProgramType]);
+  ShaderProgramOGL* GetProgram(gl::ShaderProgramType aType,
+                               Layer* aMaskLayer) {
+    if (aMaskLayer)
+      return GetProgram(aType, Mask2d);
+    return GetProgram(aType, MaskNone);
   }
 
-  ColorTextureLayerProgram *GetFBOLayerProgram() {
+  ShaderProgramOGL* GetProgram(gl::ShaderProgramType aType,
+                               MaskType aMask = MaskNone) {
+    NS_ASSERTION(ProgramProfileOGL::ProgramExists(aType, aMask),
+                 "Invalid program type.");
+    return mPrograms[aType].mVariations[aMask];
+  }
+
+  ShaderProgramOGL* GetFBOLayerProgram(MaskType aMask = MaskNone) {
+    return GetProgram(GetFBOLayerProgramType(), aMask);
+  }
+
+  gl::ShaderProgramType GetFBOLayerProgramType() {
     if (mFBOTextureTarget == LOCAL_GL_TEXTURE_RECTANGLE_ARB)
-      return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::RGBARectLayerProgramType]);
-    return static_cast<ColorTextureLayerProgram*>(mPrograms[gl::RGBALayerProgramType]);
+      return gl::RGBARectLayerProgramType;
+    return gl::RGBALayerProgramType;
   }
 
-  GLContext *gl() const { return mGLContext; }
+  GLContext* gl() const { return mGLContext; }
 
   DrawThebesLayerCallback GetThebesLayerCallback() const
   { return mThebesLayerCallback; }
 
   void* GetThebesLayerCallbackData() const
   { return mThebesLayerCallbackData; }
-
-  // This is a GLContext that can be used for resource
-  // management (creation, destruction).  It is guaranteed
-  // to be either the same as the gl() context, or a context
-  // that is in the same share pool.
-  GLContext *glForResources() const {
-    if (mGLContext->GetSharedContext())
-      return mGLContext->GetSharedContext();
-    return mGLContext;
-  }
 
   /*
    * Helper functions for our layers
@@ -355,25 +294,29 @@ public:
     }
   }
 
-  void BindAndDrawQuad(LayerProgram *aProg,
+  void BindAndDrawQuad(ShaderProgramOGL *aProg,
                        bool aFlipped = false)
   {
-    BindAndDrawQuad(aProg->AttribLocation(LayerProgram::VertexAttrib),
-                    aProg->AttribLocation(LayerProgram::TexCoordAttrib),
+    NS_ASSERTION(aProg->HasInitialized(), "Shader program not correctly initialized");
+    BindAndDrawQuad(aProg->AttribLocation(ShaderProgramOGL::VertexCoordAttrib),
+                    aProg->AttribLocation(ShaderProgramOGL::TexCoordAttrib),
                     aFlipped);
   }
 
-  void BindAndDrawQuadWithTextureRect(LayerProgram *aProg,
+  void BindAndDrawQuadWithTextureRect(ShaderProgramOGL *aProg,
                                       const nsIntRect& aTexCoordRect,
                                       const nsIntSize& aTexSize,
-                                      GLenum aWrapMode = LOCAL_GL_REPEAT);
-                                      
+                                      GLenum aWrapMode = LOCAL_GL_REPEAT,
+                                      bool aFlipped = false);
+
+  virtual gfxASurface::gfxImageFormat MaskImageFormat() 
+  { return gfxASurface::ImageFormatARGB32; }
 
 #ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const { return "OGL"; }
 #endif // MOZ_LAYERS_HAVE_LOG
 
-  const nsIntSize& GetWigetSize() {
+  const nsIntSize& GetWidgetSize() {
     return mWidgetSize;
   }
 
@@ -387,7 +330,7 @@ public:
    * to a window of the given dimensions.
    */
   void SetupPipeline(int aWidth, int aHeight, WorldTransforPolicy aTransformPolicy);
-  
+
   /**
    * Setup World transform matrix.
    * Transform will be ignored if it is not PreservesAxisAlignedRectangles
@@ -397,10 +340,18 @@ public:
   gfxMatrix& GetWorldTransform(void);
   void WorldTransformRect(nsIntRect& aRect);
 
+  /**
+   * Set the size of the surface we're rendering to.
+   */
+  void SetSurfaceSize(int width, int height);
+
 private:
   /** Widget associated with this layer manager */
   nsIWidget *mWidget;
   nsIntSize mWidgetSize;
+
+  /** The size of the surface we are rendering to */
+  nsIntSize mSurfaceSize;
 
   /** 
    * Context target, NULL when drawing directly to our swap chain.
@@ -411,15 +362,16 @@ private:
 
   already_AddRefed<mozilla::gl::GLContext> CreateContext();
 
-  static ProgramType sLayerProgramTypes[];
-
   /** Backbuffer */
   GLuint mBackBufferFBO;
   GLuint mBackBufferTexture;
   nsIntSize mBackBufferSize;
 
   /** Shader Programs */
-  nsTArray<LayerManagerOGLProgram*> mPrograms;
+  struct ShaderProgramVariations {
+    ShaderProgramOGL* mVariations[NumMaskTypes];
+  };
+  nsTArray<ShaderProgramVariations> mPrograms;
 
   /** Texture target to use for FBOs */
   GLenum mFBOTextureTarget;
@@ -434,6 +386,13 @@ private:
 
   /** Misc */
   bool mHasBGRA;
+
+  /**
+   * When rendering to an EGL surface (e.g. on Android), we rely on being told
+   * about size changes (via SetSurfaceSize) rather than pulling this information
+   * from the widget, since the widget's information can lag behind.
+   */
+  bool mIsRenderingToEGLSurface;
 
   /** Current root layer. */
   LayerOGL *RootLayer() const;
@@ -451,19 +410,18 @@ private:
   /**
    * Copies the content of our backbuffer to the set transaction target.
    */
-  void CopyToTarget();
+  void CopyToTarget(gfxContext *aTarget);
 
   /**
    * Updates all layer programs with a new projection matrix.
-   *
-   * XXX we need a way to be able to delay setting this until
-   * the program is actually used.  Maybe a DelayedSetUniform
-   * on Program, that will delay the set until the next Activate?
-   *
-   * XXX this is only called once per frame, so it's not awful.
-   * If we have any more similar updates, then we should delay.
    */
   void SetLayerProgramProjectionMatrix(const gfx3DMatrix& aMatrix);
+
+  /**
+   * Helper method for Initialize, creates all valid variations of a program
+   * and adds them to mPrograms
+   */
+  void AddPrograms(gl::ShaderProgramType aType);
 
   /* Thebes layer callbacks; valid at the end of a transaciton,
    * while rendering */
@@ -487,7 +445,7 @@ private:
       {
         last = TimeStamp::Now();
       }
-      void DrawFPS(GLContext*, CopyProgram*);
+      void DrawFPS(GLContext*, ShaderProgramOGL*);
   } mFPS;
 
   static bool sDrawFPS;
@@ -524,6 +482,22 @@ public:
   LayerManagerOGL* OGLManager() const { return mOGLManager; }
   GLContext *gl() const { return mOGLManager->gl(); }
   virtual void CleanupResources() = 0;
+
+  /*
+   * Loads the result of rendering the layer as an OpenGL texture in aTextureUnit.
+   * Will try to use an existing texture if possible, or a temporary
+   * one if not. It is the callee's responsibility to release the texture.
+   * Will return true if a texture could be constructed and loaded, false otherwise.
+   * The texture will not be transformed, i.e., it will be in the same coord
+   * space as this.
+   * Any layer that can be used as a mask layer should override this method.
+   * aSize will contain the size of the image.
+   */
+  virtual bool LoadAsTexture(GLuint aTextureUnit, gfxIntSize* aSize)
+  {
+    NS_WARNING("LoadAsTexture called without being overriden");
+    return false;
+  }
 
 protected:
   LayerManagerOGL *mOGLManager;

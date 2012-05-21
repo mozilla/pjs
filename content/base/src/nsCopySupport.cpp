@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Kathleen Brade <brade@netscape.com>
- *   David Gardiner <david.gardiner@unisa.edu.au>
- *   Mats Palmgren <matpal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCopySupport.h"
 #include "nsIDocumentEncoder.h"
@@ -160,25 +125,35 @@ SelectionCopyHelper(nsISelection *aSel, nsIDocument *aDoc,
   if (NS_FAILED(rv)) 
     return rv;
 
-  nsCOMPtr<nsIFormatConverter> htmlConverter;
-
-  // sometimes we also need the HTML version
+  // If the selection was in a text input, in textarea or in pre, the encoder
+  // already produced plain text. Otherwise,the encoder produced HTML. In that
+  // case, we need to create an additional plain text serialization and an
+  // addition HTML serialization that encodes context.
   if (bIsHTMLCopy) {
 
-    // this string may still contain HTML formatting, so we need to remove that too.
-    htmlConverter = do_CreateInstance(kHTMLConverterCID);
-    NS_ENSURE_TRUE(htmlConverter, NS_ERROR_FAILURE);
+    // First, create the plain text serialization
+    mimeType.AssignLiteral("text/plain");
 
-    nsCOMPtr<nsISupportsString> plainHTML = do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID);
-    NS_ENSURE_TRUE(plainHTML, NS_ERROR_FAILURE);
-    plainHTML->SetData(textBuffer);
+    flags =
+      nsIDocumentEncoder::OutputSelectionOnly |
+      nsIDocumentEncoder::OutputAbsoluteLinks |
+      nsIDocumentEncoder::SkipInvisibleContent |
+      nsIDocumentEncoder::OutputDropInvisibleBreak |
+      (aFlags & nsIDocumentEncoder::OutputNoScriptContent);
 
-    nsCOMPtr<nsISupportsString> ConvertedData;
-    PRUint32 ConvertedLen;
-    rv = htmlConverter->Convert(kHTMLMime, plainHTML, textBuffer.Length() * 2, kUnicodeMime, getter_AddRefs(ConvertedData), &ConvertedLen);
-    NS_ENSURE_SUCCESS(rv, rv);
+    rv = docEncoder->Init(domDoc, mimeType, flags);
+    if (NS_FAILED(rv))
+      return rv;
 
-    ConvertedData->GetData(plaintextBuffer);
+    rv = docEncoder->SetSelection(aSel);
+    if (NS_FAILED(rv))
+      return rv;
+
+    rv = docEncoder->EncodeToString(plaintextBuffer);
+    if (NS_FAILED(rv))
+      return rv;
+
+    // Now create the version that shows HTML context
 
     mimeType.AssignLiteral(kHTMLMime);
 
@@ -208,7 +183,10 @@ SelectionCopyHelper(nsISelection *aSel, nsIDocument *aDoc,
     nsCOMPtr<nsITransferable> trans = do_CreateInstance(kCTransferableCID);
     if (trans) {
       if (bIsHTMLCopy) {
-        // set up the data converter
+        // Set up a format converter so that clipboard flavor queries work.
+        // This converter isn't really used for conversions.
+        nsCOMPtr<nsIFormatConverter> htmlConverter =
+          do_CreateInstance(kHTMLConverterCID);
         trans->SetConverter(htmlConverter);
 
         if (!buffer.IsEmpty()) {

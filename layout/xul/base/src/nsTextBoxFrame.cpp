@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Eric Vaughan, Netscape Communications
- *   Peter Annema <disttsc@bart.nl>
- *   Dean Tessman <dean_tessman@hotmail.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTextBoxFrame.h"
 
@@ -325,7 +289,7 @@ public:
 
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx);
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder);
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap);
   NS_DISPLAY_DECL_NAME("XULTextBox", TYPE_XUL_TEXT_BOX)
 
   virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder);
@@ -378,7 +342,8 @@ nsDisplayXULTextBox::PaintTextToContext(nsRenderingContext* aCtx,
 }
 
 nsRect
-nsDisplayXULTextBox::GetBounds(nsDisplayListBuilder* aBuilder) {
+nsDisplayXULTextBox::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  *aSnap = false;
   return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
@@ -929,16 +894,35 @@ nsTextBoxFrame::DoLayout(nsBoxLayoutState& aBoxLayoutState)
     CalcDrawRect(*aBoxLayoutState.GetRenderingContext());
 
     const nsStyleText* textStyle = GetStyleText();
+    
+    nsRect scrollBounds(nsPoint(0, 0), GetSize());
+    nsRect textRect = mTextDrawRect;
+    
+    nsRefPtr<nsFontMetrics> fontMet;
+    nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet));
+    nsBoundingMetrics metrics = 
+      fontMet->GetInkBoundsForVisualOverflow(mCroppedTitle.get(),
+                                             mCroppedTitle.Length(),
+                                             aBoxLayoutState.GetRenderingContext());
+
+    textRect.x -= metrics.leftBearing;
+    textRect.width = metrics.width;
+    // In DrawText() we always draw with the baseline at MaxAscent() (relative to mTextDrawRect), 
+    textRect.y += fontMet->MaxAscent() - metrics.ascent;
+    textRect.height = metrics.ascent + metrics.descent;
+
+    // Our scrollable overflow is our bounds; our visual overflow may
+    // extend beyond that.
+    nsRect visualBounds;
+    visualBounds.UnionRect(scrollBounds, textRect);
+    nsOverflowAreas overflow(visualBounds, scrollBounds);
+
     if (textStyle->mTextShadow) {
-      nsRect bounds(nsPoint(0, 0), GetSize());
-      nsOverflowAreas overflow(bounds, bounds);
-      // Our scrollable overflow is our bounds; our visual overflow may
-      // extend beyond that.
-      nsPoint origin(0,0);
+      // text-shadow extends our visual but not scrollable bounds
       nsRect &vis = overflow.VisualOverflow();
       vis.UnionRect(vis, nsLayoutUtils::GetTextShadowRectsUnion(mTextDrawRect, this));
-      FinishAndStoreOverflow(overflow, GetSize());
     }
+    FinishAndStoreOverflow(overflow, GetSize());
 
     return rv;
 }
@@ -946,8 +930,7 @@ nsTextBoxFrame::DoLayout(nsBoxLayoutState& aBoxLayoutState)
 nsRect
 nsTextBoxFrame::GetComponentAlphaBounds()
 {
-  return nsLayoutUtils::GetTextShadowRectsUnion(mTextDrawRect, this,
-                                                nsLayoutUtils::EXCLUDE_BLUR_SHADOWS);
+  return GetVisualOverflowRectRelativeToSelf();
 }
 
 bool

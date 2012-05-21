@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for replaced elements with bitmap image data */
 
@@ -62,7 +29,6 @@
 #include "nsILinkHandler.h"
 #include "nsIURL.h"
 #include "nsIIOService.h"
-#include "nsIURL.h"
 #include "nsILoadGroup.h"
 #include "nsISupportsPriority.h"
 #include "nsIServiceManager.h"
@@ -80,7 +46,6 @@
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
 #endif
-#include "nsIServiceManager.h"
 #include "nsIDOMNode.h"
 #include "nsGUIEvent.h"
 #include "nsLayoutUtils.h"
@@ -196,8 +161,14 @@ nsImageFrame::CreateAccessible()
 {
   nsAccessibilityService* accService = nsIPresShell::AccService();
   if (accService) {
-    return accService->CreateHTMLImageAccessible(mContent,
-                                                 PresContext()->PresShell());
+    // Don't use GetImageMap() to avoid reentrancy into accessibility.
+    if (HasImageMap()) {
+      return accService->CreateHTMLImageMapAccessible(mContent,
+                                                      PresContext()->PresShell());
+    } else {
+      return accService->CreateHTMLImageAccessible(mContent,
+                                                   PresContext()->PresShell());
+    }
   }
 
   return nsnull;
@@ -210,6 +181,13 @@ nsImageFrame::DisconnectMap()
   if (mImageMap) {
     mImageMap->Destroy();
     NS_RELEASE(mImageMap);
+
+#ifdef ACCESSIBILITY
+  nsAccessibilityService* accService = GetAccService();
+  if (accService) {
+    accService->RecreateAccessible(PresContext()->PresShell(), mContent);
+  }
+#endif
   }
 }
 
@@ -631,10 +609,6 @@ nsImageFrame::OnStopDecode(imgIRequest *aRequest,
                            nsresult aStatus,
                            const PRUnichar *aStatusArg)
 {
-  nsPresContext *presContext = PresContext();
-  nsIPresShell *presShell = presContext->GetPresShell();
-  NS_ASSERTION(presShell, "No PresShell.");
-
   // Check what request type we're dealing with
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
   NS_ASSERTION(imageLoader, "Who's notifying us??");
@@ -645,40 +619,51 @@ nsImageFrame::OnStopDecode(imgIRequest *aRequest,
     return NS_ERROR_FAILURE;
   }
 
-  if (loadType == nsIImageLoadingContent::PENDING_REQUEST) {
-    // May have to switch sizes here!
-    bool intrinsicSizeChanged = true;
-    if (NS_SUCCEEDED(aStatus)) {
-      nsCOMPtr<imgIContainer> imageContainer;
-      aRequest->GetImage(getter_AddRefs(imageContainer));
-      NS_ASSERTION(imageContainer, "Successful load with no container?");
-      intrinsicSizeChanged = UpdateIntrinsicSize(imageContainer);
-      intrinsicSizeChanged = UpdateIntrinsicRatio(imageContainer) ||
-        intrinsicSizeChanged;
-    }
-    else {
-      // Have to size to 0,0 so that GetDesiredSize recalculates the size
-      mIntrinsicSize.width.SetCoordValue(0);
-      mIntrinsicSize.height.SetCoordValue(0);
-      mIntrinsicRatio.SizeTo(0, 0);
-    }
+  bool multipart = false;
+  aRequest->GetMultipart(&multipart);
 
-    if (mState & IMAGE_GOTINITIALREFLOW) { // do nothing if we haven't gotten the initial reflow yet
-      if (!(mState & IMAGE_SIZECONSTRAINED) && intrinsicSizeChanged) {
-        if (presShell) { 
-          presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
-                                      NS_FRAME_IS_DIRTY);
-        }
-      } else {
-        nsSize s = GetSize();
-        nsRect r(0, 0, s.width, s.height);
-        // Update border+content to account for image change
-        Invalidate(r);
-      }
-    }
+  if (loadType == nsIImageLoadingContent::PENDING_REQUEST || multipart) {
+    NotifyNewCurrentRequest(aRequest, aStatus);
   }
 
   return NS_OK;
+}
+
+void
+nsImageFrame::NotifyNewCurrentRequest(imgIRequest *aRequest,
+                                      nsresult aStatus)
+{
+  // May have to switch sizes here!
+  bool intrinsicSizeChanged = true;
+  if (NS_SUCCEEDED(aStatus)) {
+    nsCOMPtr<imgIContainer> imageContainer;
+    aRequest->GetImage(getter_AddRefs(imageContainer));
+    NS_ASSERTION(imageContainer, "Successful load with no container?");
+    intrinsicSizeChanged = UpdateIntrinsicSize(imageContainer);
+    intrinsicSizeChanged = UpdateIntrinsicRatio(imageContainer) ||
+      intrinsicSizeChanged;
+  }
+  else {
+    // Have to size to 0,0 so that GetDesiredSize recalculates the size
+    mIntrinsicSize.width.SetCoordValue(0);
+    mIntrinsicSize.height.SetCoordValue(0);
+    mIntrinsicRatio.SizeTo(0, 0);
+  }
+
+  if (mState & IMAGE_GOTINITIALREFLOW) { // do nothing if we haven't gotten the initial reflow yet
+    if (!(mState & IMAGE_SIZECONSTRAINED) && intrinsicSizeChanged) {
+      nsIPresShell *presShell = PresContext()->GetPresShell();
+      if (presShell) { 
+        presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
+                                    NS_FRAME_IS_DIRTY);
+      }
+    } else {
+      nsSize s = GetSize();
+      nsRect r(0, 0, s.width, s.height);
+      // Update border+content to account for image change
+      Invalidate(r);
+    }
+  }
 }
 
 nsresult
@@ -754,7 +739,7 @@ nsImageFrame::EnsureIntrinsicSizeAndRatio(nsPresContext* aPresContext)
 nsImageFrame::ComputeSize(nsRenderingContext *aRenderingContext,
                           nsSize aCBSize, nscoord aAvailableWidth,
                           nsSize aMargin, nsSize aBorder, nsSize aPadding,
-                          bool aShrinkWrap)
+                          PRUint32 aFlags)
 {
   nsPresContext *presContext = PresContext();
   EnsureIntrinsicSizeAndRatio(presContext);
@@ -1219,11 +1204,9 @@ nsDisplayImage::GetContainer()
   return container.forget();
 }
 
-void
-nsDisplayImage::ConfigureLayer(ImageLayer* aLayer)
+gfxRect
+nsDisplayImage::GetDestRect()
 {
-  aLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(mFrame));
-  
   PRInt32 factor = mFrame->PresContext()->AppUnitsPerDevPixel();
   nsImageFrame* imageFrame = static_cast<nsImageFrame*>(mFrame);
 
@@ -1231,10 +1214,76 @@ nsDisplayImage::ConfigureLayer(ImageLayer* aLayer)
   gfxRect destRect(dest.x, dest.y, dest.width, dest.height);
   destRect.ScaleInverse(factor); 
 
+  return destRect;
+}
+
+LayerState
+nsDisplayImage::GetLayerState(nsDisplayListBuilder* aBuilder,
+                              LayerManager* aManager,
+                              const FrameLayerBuilder::ContainerParameters& aParameters)
+{
+  if (mImage->GetType() != imgIContainer::TYPE_RASTER ||
+      !aManager->IsCompositingCheap() ||
+      !nsLayoutUtils::GPUImageScalingEnabled()) {
+    return LAYER_NONE;
+  }
+
   PRInt32 imageWidth;
   PRInt32 imageHeight;
   mImage->GetWidth(&imageWidth);
   mImage->GetHeight(&imageHeight);
+
+  NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
+
+  gfxRect destRect = GetDestRect();
+
+  destRect.width *= aParameters.mXScale;
+  destRect.height *= aParameters.mYScale;
+
+  // Calculate the scaling factor for the frame.
+  gfxSize scale = gfxSize(destRect.width / imageWidth, destRect.height / imageHeight);
+
+  // If we are not scaling at all, no point in separating this into a layer.
+  if (scale.width == 1.0f && scale.height == 1.0f) {
+    return LAYER_INACTIVE;
+  }
+
+  // If the target size is pretty small, no point in using a layer.
+  if (destRect.width * destRect.height < 64 * 64) {
+    return LAYER_INACTIVE;
+  }
+
+  return LAYER_ACTIVE;
+}
+
+already_AddRefed<Layer>
+nsDisplayImage::BuildLayer(nsDisplayListBuilder* aBuilder,
+                           LayerManager* aManager,
+                           const ContainerParameters& aParameters)
+{
+  nsRefPtr<ImageContainer> container;
+  nsresult rv = mImage->GetImageContainer(getter_AddRefs(container));
+  NS_ENSURE_SUCCESS(rv, nsnull);
+
+  nsRefPtr<ImageLayer> layer = aManager->CreateImageLayer();
+  layer->SetContainer(container);
+  ConfigureLayer(layer);
+  return layer.forget();
+}
+
+void
+nsDisplayImage::ConfigureLayer(ImageLayer *aLayer)
+{
+  aLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(mFrame));
+
+  PRInt32 imageWidth;
+  PRInt32 imageHeight;
+  mImage->GetWidth(&imageWidth);
+  mImage->GetHeight(&imageHeight);
+
+  NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
+
+  const gfxRect destRect = GetDestRect();
 
   gfxMatrix transform;
   transform.Translate(destRect.TopLeft());
@@ -1424,15 +1473,7 @@ nsImageMap*
 nsImageFrame::GetImageMap()
 {
   if (!mImageMap) {
-    nsIDocument* doc = mContent->GetDocument();
-    if (!doc) {
-      return nsnull;
-    }
-
-    nsAutoString usemap;
-    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::usemap, usemap);
-
-    nsCOMPtr<nsIContent> map = doc->FindImageMap(usemap);
+    nsIContent* map = GetMapElement();
     if (map) {
       mImageMap = new nsImageMap();
       NS_ADDREF(mImageMap);

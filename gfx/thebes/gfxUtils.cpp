@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxUtils.h"
 #include "gfxContext.h"
@@ -42,6 +10,7 @@
 #include "nsRegion.h"
 #include "yuv_convert.h"
 #include "ycbcr_to_rgb565.h"
+#include "sampler.h"
 
 #ifdef XP_WIN
 #include "gfxWindowsPlatform.h"
@@ -210,6 +179,51 @@ gfxUtils::UnpremultiplyImageSurface(gfxImageSurface *aSourceSurface,
     }
 }
 
+void
+gfxUtils::ConvertBGRAtoRGBA(gfxImageSurface *aSourceSurface,
+                            gfxImageSurface *aDestSurface) {
+    if (!aDestSurface)
+        aDestSurface = aSourceSurface;
+
+    NS_ABORT_IF_FALSE(aSourceSurface->Format() == aDestSurface->Format() &&
+                      aSourceSurface->Width() == aDestSurface->Width() &&
+                      aSourceSurface->Height() == aDestSurface->Height() &&
+                      aSourceSurface->Stride() == aDestSurface->Stride(),
+                      "Source and destination surfaces don't have identical characteristics");
+
+    NS_ABORT_IF_FALSE(aSourceSurface->Stride() == aSourceSurface->Width() * 4,
+                      "Source surface stride isn't tightly packed");
+
+    NS_ABORT_IF_FALSE(aSourceSurface->Format() == gfxASurface::ImageFormatARGB32,
+                      "Surfaces must be ARGB32");
+
+    PRUint8 *src = aSourceSurface->Data();
+    PRUint8 *dst = aDestSurface->Data();
+
+    PRUint32 dim = aSourceSurface->Width() * aSourceSurface->Height();
+    PRUint8 *srcEnd = src + 4*dim;
+
+    if (src == dst) {
+        PRUint8 buffer[4];
+        for (; src != srcEnd; src += 4) {
+            buffer[0] = src[2];
+            buffer[1] = src[1];
+            buffer[2] = src[0];
+
+            src[0] = buffer[0];
+            src[1] = buffer[1];
+            src[2] = buffer[2];
+        }
+    } else {
+        for (; src != srcEnd; src += 4, dst += 4) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = src[3];
+        }
+    }
+}
+
 static bool
 IsSafeImageTransformComponent(gfxFloat aValue)
 {
@@ -247,6 +261,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
                                  const gfxRect& aSubimage,
                                  const gfxImageSurface::gfxImageFormat aFormat)
 {
+    SAMPLE_LABEL("gfxUtils", "CreateSamplingRestricedDrawable");
     gfxRect userSpaceClipExtents = aContext->GetClipExtents();
     // This isn't optimal --- if aContext has a rotation then GetClipExtents
     // will have to do a bounding-box computation, and TransformBounds might
@@ -367,6 +382,73 @@ DeviceToImageTransform(gfxContext* aContext,
     return gfxMatrix(deviceToUser).Multiply(aUserSpaceToImageSpace);
 }
 
+/* These heuristics are based on Source/WebCore/platform/graphics/skia/ImageSkia.cpp:computeResamplingMode() */
+#ifdef MOZ_GFX_OPTIMIZE_MOBILE
+static gfxPattern::GraphicsFilter ReduceResamplingFilter(gfxPattern::GraphicsFilter aFilter,
+                                                         int aImgWidth, int aImgHeight,
+                                                         float aSourceWidth, float aSourceHeight)
+{
+    // Images smaller than this in either direction are considered "small" and
+    // are not resampled ever (see below).
+    const int kSmallImageSizeThreshold = 8;
+
+    // The amount an image can be stretched in a single direction before we
+    // say that it is being stretched so much that it must be a line or
+    // background that doesn't need resampling.
+    const float kLargeStretch = 3.0f;
+
+    if (aImgWidth <= kSmallImageSizeThreshold
+        || aImgHeight <= kSmallImageSizeThreshold) {
+        // Never resample small images. These are often used for borders and
+        // rules (think 1x1 images used to make lines).
+        return gfxPattern::FILTER_NEAREST;
+    }
+
+    if (aImgHeight * kLargeStretch <= aSourceHeight || aImgWidth * kLargeStretch <= aSourceWidth) {
+        // Large image tiling detected.
+
+        // Don't resample if it is being tiled a lot in only one direction.
+        // This is trying to catch cases where somebody has created a border
+        // (which might be large) and then is stretching it to fill some part
+        // of the page.
+        if (fabs(aSourceWidth - aImgWidth)/aImgWidth < 0.5 || fabs(aSourceHeight - aImgHeight)/aImgHeight < 0.5)
+            return gfxPattern::FILTER_NEAREST;
+
+        // The image is growing a lot and in more than one direction. Resampling
+        // is slow and doesn't give us very much when growing a lot.
+        return aFilter;
+    }
+
+    /* Some notes on other heuristics:
+       The Skia backend also uses nearest for backgrounds that are stretched by
+       a large amount. I'm not sure this is common enough for us to worry about
+       now. It also uses nearest for backgrounds/avoids high quality for images
+       that are very slightly scaled.  I'm also not sure that very slightly
+       scaled backgrounds are common enough us to worry about.
+
+       We don't currently have much support for doing high quality interpolation.
+       The only place this currently happens is on Quartz and we don't have as
+       much control over it as would be needed. Webkit avoids using high quality
+       resampling during load. It also avoids high quality if the transformation
+       is not just a scale and translation
+
+       WebKit bug #40045 added code to avoid resampling different parts
+       of an image with different methods by using a resampling hint size.
+       It currently looks unused in WebKit but it's something to watch out for.
+    */
+
+    return aFilter;
+}
+#else
+static gfxPattern::GraphicsFilter ReduceResamplingFilter(gfxPattern::GraphicsFilter aFilter,
+                                                          int aImgWidth, int aImgHeight,
+                                                          int aSourceWidth, int aSourceHeight)
+{
+    // Just pass the filter through unchanged
+    return aFilter;
+}
+#endif
+
 /* static */ void
 gfxUtils::DrawPixelSnapped(gfxContext*      aContext,
                            gfxDrawable*     aDrawable,
@@ -376,9 +458,12 @@ gfxUtils::DrawPixelSnapped(gfxContext*      aContext,
                            const gfxRect&   aImageRect,
                            const gfxRect&   aFill,
                            const gfxImageSurface::gfxImageFormat aFormat,
-                           const gfxPattern::GraphicsFilter& aFilter)
+                           gfxPattern::GraphicsFilter aFilter,
+                           PRUint32         aImageFlags)
 {
-    bool doTile = !aImageRect.Contains(aSourceRect);
+    SAMPLE_LABEL("gfxUtils", "DrawPixelSnapped");
+    bool doTile = !aImageRect.Contains(aSourceRect) &&
+                  !(aImageFlags & imgIContainer::FLAG_CLAMP);
 
     nsRefPtr<gfxASurface> currentTarget = aContext->CurrentSurface();
     gfxMatrix deviceSpaceToImageSpace =
@@ -391,6 +476,12 @@ gfxUtils::DrawPixelSnapped(gfxContext*      aContext,
 
     nsRefPtr<gfxDrawable> drawable = aDrawable;
 
+    aFilter = ReduceResamplingFilter(aFilter, aImageRect.Width(), aImageRect.Height(), aSourceRect.Width(), aSourceRect.Height());
+
+    // On Mobile, we don't ever want to do this; it has the potential for
+    // allocating very large temporary surfaces, especially since we'll
+    // do full-page snapshots often (see bug 749426).
+#ifndef MOZ_GFX_OPTIMIZE_MOBILE
     // OK now, the hard part left is to account for the subimage sampling
     // restriction. If all the transforms involved are just integer
     // translations, then we assume no resampling will occur so there's
@@ -412,6 +503,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*      aContext,
         // drawn without tiling.
         doTile = false;
     }
+#endif
 
     gfxContext::GraphicsOperator op = aContext->CurrentOperator();
     if ((op == gfxContext::OPERATOR_OVER || workaround.PushedGroup()) &&
@@ -497,7 +589,9 @@ gfxUtils::ClampToScaleFactor(gfxFloat aVal)
     power = ceil(power);
   }
 
-  return pow(kScaleResolution, power);
+  gfxFloat scale = pow(kScaleResolution, power);
+
+  return NS_MAX(scale, 1.0);
 }
 
 
@@ -692,4 +786,9 @@ gfxUtils::CopyAsDataURL(DrawTarget* aDT)
     NS_WARNING("Failed to get Thebes surface!");
   }
 }
+
+bool gfxUtils::sDumpPaintList = getenv("MOZ_DUMP_PAINT_LIST") != 0;
+bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
+bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
+FILE *gfxUtils::sDumpPaintFile = NULL;
 #endif

@@ -1,43 +1,11 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Kyle Yuan (kyle.yuan@sun.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHTMLSelectAccessible.h"
 
+#include "Accessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
 #include "nsDocAccessible.h"
@@ -87,9 +55,6 @@ nsHTMLSelectListAccessible::NativeState()
 role
 nsHTMLSelectListAccessible::NativeRole()
 {
-  if (mParent && mParent->Role() == roles::COMBOBOX)
-    return roles::COMBOBOX_LIST;
-
   return roles::LISTBOX;
 }
 
@@ -255,22 +220,6 @@ nsHTMLSelectOptionAccessible::GetNameInternal(nsAString& aName)
   return NS_OK;
 }
 
-// nsAccessible protected
-nsIFrame* nsHTMLSelectOptionAccessible::GetBoundsFrame()
-{
-  PRUint64 state = 0;
-  nsIContent* content = GetSelectState(&state);
-  if (state & states::COLLAPSED) {
-    if (content) {
-      return content->GetPrimaryFrame();
-    }
-
-    return nsnull;
-  }
-
-  return nsAccessible::GetBoundsFrame();
-}
-
 PRUint64
 nsHTMLSelectOptionAccessible::NativeState()
 {
@@ -280,9 +229,12 @@ nsHTMLSelectOptionAccessible::NativeState()
   // because we don't want EDITABLE or SELECTABLE_TEXT
   PRUint64 state = nsAccessible::NativeState();
 
-  PRUint64 selectState = 0;
-  nsIContent* selectContent = GetSelectState(&selectState);
-  if (!selectContent || selectState & states::INVISIBLE)
+  nsAccessible* select = GetSelect();
+  if (!select)
+    return state;
+
+  PRUint64 selectState = select->State();
+  if (selectState & states::INVISIBLE)
     return state;
 
   // Focusable and selectable
@@ -348,32 +300,15 @@ nsHTMLSelectOptionAccessible::GetLevelInternal()
 }
 
 void
-nsHTMLSelectOptionAccessible::GetPositionAndSizeInternal(PRInt32 *aPosInSet,
-                                                         PRInt32 *aSetSize)
+nsHTMLSelectOptionAccessible::GetBoundsRect(nsRect& aTotalBounds,
+                                            nsIFrame** aBoundingFrame)
 {
-  PRInt32 posInSet = 0, setSize = 0;
-  bool isContentFound = false;
-
-  nsIContent* parentContent = mContent->GetParent();
-  for (nsIContent* childContent = parentContent->GetFirstChild(); childContent;
-       childContent = childContent->GetNextSibling()) {
-    if (childContent->NodeInfo()->Equals(mContent->NodeInfo())) {
-      if (!isContentFound) {
-        if (childContent == mContent)
-          isContentFound = true;
-
-        posInSet++;
-      }
-      setSize++;
-    }
-  }
-
-  *aSetSize = setSize;
-  *aPosInSet = posInSet;
+  nsAccessible* combobox = GetCombobox();
+  if (combobox && (combobox->State() & states::COLLAPSED))
+    combobox->GetBoundsRect(aTotalBounds, aBoundingFrame);
+  else
+    nsHyperTextAccessibleWrap::GetBoundsRect(aTotalBounds, aBoundingFrame);
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// nsHTMLSelectOptionAccessible: nsIAccessible
 
 /** select us! close combo box if necessary*/
 NS_IMETHODIMP nsHTMLSelectOptionAccessible::GetActionName(PRUint8 aIndex, nsAString& aName)
@@ -422,30 +357,6 @@ nsHTMLSelectOptionAccessible::ContainerWidget() const
 {
   return mParent && mParent->IsListControl() ? mParent : nsnull;
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// nsHTMLSelectOptionAccessible: private methods
-
-nsIContent*
-nsHTMLSelectOptionAccessible::GetSelectState(PRUint64* aState)
-{
-  *aState = 0;
-
-  nsIContent* selectNode = mContent;
-  while (selectNode && selectNode->Tag() != nsGkAtoms::select) {
-    selectNode = selectNode->GetParent();
-  }
-
-  if (selectNode) {
-    nsAccessible* select = mDoc->GetAccessible(selectNode);
-    if (select) {
-      *aState = select->State();
-      return selectNode;
-    }
-  }
-  return nsnull; 
-}
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsHTMLSelectOptGroupAccessible
@@ -575,8 +486,6 @@ nsHTMLComboboxAccessible::Shutdown()
   }
 }
 
-/**
-  */
 PRUint64
 nsHTMLComboboxAccessible::NativeState()
 {
@@ -585,8 +494,7 @@ nsHTMLComboboxAccessible::NativeState()
   // Get focus status from base class
   PRUint64 state = nsAccessible::NativeState();
 
-  nsIFrame *frame = GetBoundsFrame();
-  nsIComboboxControlFrame *comboFrame = do_QueryFrame(frame);
+  nsIComboboxControlFrame* comboFrame = do_QueryFrame(GetFrame());
   if (comboFrame && comboFrame->IsDroppedDown())
     state |= states::EXPANDED;
   else
@@ -612,11 +520,13 @@ nsHTMLComboboxAccessible::Description(nsString& aDescription)
     option->Description(aDescription);
 }
 
-NS_IMETHODIMP nsHTMLComboboxAccessible::GetValue(nsAString& aValue)
+void
+nsHTMLComboboxAccessible::Value(nsString& aValue)
 {
   // Use accessible name of selected option.
   nsAccessible* option = SelectedOption();
-  return option ? option->GetName(aValue) : NS_OK;
+  if (option)
+    option->Name(aValue);
 }
 
 PRUint8
@@ -764,6 +674,12 @@ nsHTMLComboboxListAccessible::IsPrimaryForNode() const
 ////////////////////////////////////////////////////////////////////////////////
 // nsHTMLComboboxAccessible: nsAccessible
 
+role
+nsHTMLComboboxListAccessible::NativeRole()
+{
+  return roles::COMBOBOX_LIST;
+}
+
 PRUint64
 nsHTMLComboboxListAccessible::NativeState()
 {
@@ -772,8 +688,7 @@ nsHTMLComboboxListAccessible::NativeState()
   // Get focus status from base class
   PRUint64 state = nsAccessible::NativeState();
 
-  nsIFrame *boundsFrame = GetBoundsFrame();
-  nsIComboboxControlFrame* comboFrame = do_QueryFrame(boundsFrame);
+  nsIComboboxControlFrame* comboFrame = do_QueryFrame(mParent->GetFrame());
   if (comboFrame && comboFrame->IsDroppedDown())
     state |= states::FLOATING;
   else

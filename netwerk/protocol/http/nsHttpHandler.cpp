@@ -1,50 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:set ts=4 sw=4 sts=4 et cin: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com> (original author)
- *   Gagan Saksena <gagan@netscape.com>
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Christopher Blizzard <blizzard@mozilla.org>
- *   Adrian Havill <havill@redhat.com>
- *   Gervase Markham <gerv@gerv.net>
- *   Bradley Baetz <bbaetz@netscape.com>
- *   Benjamin Smedberg <bsmedberg@covad.net>
- *   Josh Aas <josh@mozilla.com>
- *   Dão Gottwald <dao@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
@@ -128,6 +86,8 @@ static NS_DEFINE_CID(kSocketProviderServiceCID, NS_SOCKETPROVIDERSERVICE_CID);
 #define NETWORK_ENABLEIDN       "network.enableIDN"
 #define BROWSER_PREF_PREFIX     "browser.cache."
 #define DONOTTRACK_HEADER_ENABLED "privacy.donottrackheader.enabled"
+#define TELEMETRY_ENABLED        "toolkit.telemetry.enabled"
+#define ALLOW_EXPERIMENTS        "network.allow-experiments"
 
 #define UA_PREF(_pref) UA_PREF_PREFIX _pref
 #define HTTP_PREF(_pref) HTTP_PREF_PREFIX _pref
@@ -183,11 +143,18 @@ nsHttpHandler::nsHttpHandler()
     , mMaxConnectionsPerServer(8)
     , mMaxPersistentConnectionsPerServer(2)
     , mMaxPersistentConnectionsPerProxy(4)
-    , mMaxPipelinedRequests(2)
+    , mMaxPipelinedRequests(32)
+    , mMaxOptimisticPipelinedRequests(4)
+    , mPipelineAggressive(false)
+    , mMaxPipelineObjectSize(300000)
+    , mPipelineRescheduleOnTimeout(true)
+    , mPipelineRescheduleTimeout(PR_MillisecondsToInterval(1500))
+    , mPipelineReadTimeout(PR_MillisecondsToInterval(30000))
     , mRedirectionLimit(10)
     , mPhishyUserPassLength(1)
     , mQoSBits(0x00)
     , mPipeliningOverSSL(false)
+    , mEnforceAssocReq(false)
     , mInPrivateBrowsingMode(PRIVATE_BROWSING_UNKNOWN)
     , mLastUniqueID(NowInSeconds())
     , mSessionStartTime(0)
@@ -200,6 +167,8 @@ nsHttpHandler::nsHttpHandler()
     , mSendSecureXSiteReferrer(true)
     , mEnablePersistentHttpsCaching(false)
     , mDoNotTrackEnabled(false)
+    , mTelemetryEnabled(false)
+    , mAllowExperiments(true)
     , mEnableSpdy(false)
     , mCoalesceSpdy(true)
     , mUseAlternateProtocol(false)
@@ -268,6 +237,7 @@ nsHttpHandler::Init()
         prefBranch->AddObserver(NETWORK_ENABLEIDN, this, true);
         prefBranch->AddObserver(BROWSER_PREF("disk_cache_ssl"), this, true);
         prefBranch->AddObserver(DONOTTRACK_HEADER_ENABLED, this, true);
+        prefBranch->AddObserver(TELEMETRY_ENABLED, this, true);
 
         PrefsChanged(prefBranch, nsnull);
     }
@@ -279,7 +249,11 @@ nsHttpHandler::Init()
 
     mAppName.AssignLiteral(MOZ_APP_UA_NAME);
     if (mAppName.Length() == 0 && appInfo) {
-        appInfo->GetName(mAppName);
+        // Try to get the UA name from appInfo, falling back to the name
+        appInfo->GetUAName(mAppName);
+        if (mAppName.Length() == 0) {
+          appInfo->GetName(mAppName);
+        }
         appInfo->GetVersion(mAppVersion);
         mAppName.StripChars(" ()<>@,;:\\\"/[]?={}");
     } else {
@@ -309,15 +283,7 @@ nsHttpHandler::Init()
     rv = InitConnectionMgr();
     if (NS_FAILED(rv)) return rv;
 
-#ifdef ANDROID
     mProductSub.AssignLiteral(MOZILLA_UAVERSION);
-#else
-    mProductSub.AssignLiteral(MOZ_UA_BUILDID);
-#endif
-    if (mProductSub.IsEmpty() && appInfo)
-        appInfo->GetPlatformBuildID(mProductSub);
-    if (mProductSub.Length() > 8)
-        mProductSub.SetLength(8);
 
     // Startup the http category
     // Bring alive the objects in the http-protocol-startup category
@@ -333,6 +299,7 @@ nsHttpHandler::Init()
         mObserverService->AddObserver(this, "net:clear-active-logins", true);
         mObserverService->AddObserver(this, NS_PRIVATE_BROWSING_SWITCH_TOPIC, true);
         mObserverService->AddObserver(this, "net:prune-dead-connections", true);
+        mObserverService->AddObserver(this, "net:failed-to-process-uri-content", true);
     }
  
     return NS_OK;
@@ -358,7 +325,8 @@ nsHttpHandler::InitConnectionMgr()
                         mMaxPersistentConnectionsPerServer,
                         mMaxPersistentConnectionsPerProxy,
                         mMaxRequestDelay,
-                        mMaxPipelinedRequests);
+                        mMaxPipelinedRequests,
+                        mMaxOptimisticPipelinedRequests);
     return rv;
 }
 
@@ -536,6 +504,27 @@ nsHttpHandler::GetIOService(nsIIOService** result)
     return NS_OK;
 }
 
+PRUint32
+nsHttpHandler::Get32BitsOfPseudoRandom()
+{
+    // only confirm rand seeding on socket thread
+    NS_ABORT_IF_FALSE(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+
+    // rand() provides different amounts of PRNG on different platforms.
+    // 15 or 31 bits are common amounts.
+
+    PR_STATIC_ASSERT(RAND_MAX >= 0xfff);
+    
+#if RAND_MAX < 0xffffU
+    return ((PRUint16) rand() << 20) |
+            (((PRUint16) rand() & 0xfff) << 8) |
+            ((PRUint16) rand() & 0xff);
+#elif RAND_MAX < 0xffffffffU
+    return ((PRUint16) rand() << 16) | ((PRUint16) rand() & 0xffff);
+#else
+    return (PRUint32) rand();
+#endif
+}
 
 void
 nsHttpHandler::NotifyObservers(nsIHttpChannel *chan, const char *event)
@@ -623,7 +612,7 @@ nsHttpHandler::BuildUserAgent()
     mUserAgent += mPlatform;
     mUserAgent.AppendLiteral("; ");
 #endif
-#ifdef ANDROID
+#if defined(ANDROID) || defined(MOZ_PLATFORM_MAEMO)
     if (!mCompatDevice.IsEmpty()) {
         mUserAgent += mCompatDevice;
         mUserAgent.AppendLiteral("; ");
@@ -681,7 +670,7 @@ nsHttpHandler::InitUserAgentComponents()
 #endif
     );
 
-#if defined(ANDROID)
+#if defined(ANDROID) || defined(MOZ_PLATFORM_MAEMO)
     nsCOMPtr<nsIPropertyBag2> infoService = do_GetService("@mozilla.org/system-info;1");
     NS_ASSERTION(infoService, "Could not find a system info service");
 
@@ -989,10 +978,67 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
     if (PREF_CHANGED(HTTP_PREF("pipelining.maxrequests"))) {
         rv = prefs->GetIntPref(HTTP_PREF("pipelining.maxrequests"), &val);
         if (NS_SUCCEEDED(rv)) {
-            mMaxPipelinedRequests = clamped(val, 1, NS_HTTP_MAX_PIPELINED_REQUESTS);
+            mMaxPipelinedRequests = clamped(val, 1, 0xffff);
             if (mConnMgr)
                 mConnMgr->UpdateParam(nsHttpConnectionMgr::MAX_PIPELINED_REQUESTS,
                                       mMaxPipelinedRequests);
+        }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("pipelining.max-optimistic-requests"))) {
+        rv = prefs->
+            GetIntPref(HTTP_PREF("pipelining.max-optimistic-requests"), &val);
+        if (NS_SUCCEEDED(rv)) {
+            mMaxOptimisticPipelinedRequests = clamped(val, 1, 0xffff);
+            if (mConnMgr)
+                mConnMgr->UpdateParam
+                    (nsHttpConnectionMgr::MAX_OPTIMISTIC_PIPELINED_REQUESTS,
+                     mMaxOptimisticPipelinedRequests);
+        }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("pipelining.aggressive"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("pipelining.aggressive"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mPipelineAggressive = cVar;
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("pipelining.maxsize"))) {
+        rv = prefs->GetIntPref(HTTP_PREF("pipelining.maxsize"), &val);
+        if (NS_SUCCEEDED(rv)) {
+            mMaxPipelineObjectSize =
+                static_cast<PRInt64>(clamped(val, 1000, 100000000));
+        }
+    }
+
+    // Determines whether or not to actually reschedule after the
+    // reschedule-timeout has expired
+    if (PREF_CHANGED(HTTP_PREF("pipelining.reschedule-on-timeout"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("pipelining.reschedule-on-timeout"),
+                                &cVar);
+        if (NS_SUCCEEDED(rv))
+            mPipelineRescheduleOnTimeout = cVar;
+    }
+
+    // The amount of time head of line blocking is allowed (in ms)
+    // before the blocked transactions are moved to another pipeline
+    if (PREF_CHANGED(HTTP_PREF("pipelining.reschedule-timeout"))) {
+        rv = prefs->GetIntPref(HTTP_PREF("pipelining.reschedule-timeout"),
+                               &val);
+        if (NS_SUCCEEDED(rv)) {
+            mPipelineRescheduleTimeout =
+                PR_MillisecondsToInterval((PRUint16) clamped(val, 500, 0xffff));
+        }
+    }
+
+    // The amount of time a pipelined transaction is allowed to wait before
+    // being canceled and retried in a non-pipeline connection
+    if (PREF_CHANGED(HTTP_PREF("pipelining.read-timeout"))) {
+        rv = prefs->GetIntPref(HTTP_PREF("pipelining.read-timeout"), &val);
+        if (NS_SUCCEEDED(rv)) {
+            mPipelineReadTimeout =
+                PR_MillisecondsToInterval((PRUint16) clamped(val, 5000,
+                                                             0xffff));
         }
     }
 
@@ -1075,6 +1121,13 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         if (NS_SUCCEEDED(rv)) {
             mPromptTempRedirect = cVar;
         }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("assoc-req.enforce"))) {
+        cVar = false;
+        rv = prefs->GetBoolPref(HTTP_PREF("assoc-req.enforce"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mEnforceAssocReq = cVar;
     }
 
     // enable Persistent caching for HTTPS - bug#205921    
@@ -1187,6 +1240,30 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         }
     }
 
+    //
+    // Telemetry
+    //
+
+    if (PREF_CHANGED(TELEMETRY_ENABLED)) {
+        cVar = false;
+        rv = prefs->GetBoolPref(TELEMETRY_ENABLED, &cVar);
+        if (NS_SUCCEEDED(rv)) {
+            mTelemetryEnabled = cVar;
+        }
+    }
+
+    //
+    // network.allow-experiments
+    //
+
+    if (PREF_CHANGED(ALLOW_EXPERIMENTS)) {
+        cVar = true;
+        rv = prefs->GetBoolPref(ALLOW_EXPERIMENTS, &cVar);
+        if (NS_SUCCEEDED(rv)) {
+            mAllowExperiments = cVar;
+        }
+    }
+
 #undef PREF_CHANGED
 #undef MULTI_PREF_CHANGED
 }
@@ -1294,12 +1371,13 @@ nsHttpHandler::SetAcceptEncodings(const char *aAcceptEncodings)
 // nsHttpHandler::nsISupports
 //-----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ISUPPORTS5(nsHttpHandler,
+NS_IMPL_THREADSAFE_ISUPPORTS6(nsHttpHandler,
                               nsIHttpProtocolHandler,
                               nsIProxiedProtocolHandler,
                               nsIProtocolHandler,
                               nsIObserver,
-                              nsISupportsWeakReference)
+                              nsISupportsWeakReference,
+                              nsISpeculativeConnect)
 
 //-----------------------------------------------------------------------------
 // nsHttpHandler::nsIProtocolHandler
@@ -1537,19 +1615,84 @@ nsHttpHandler::Observe(nsISupports *subject,
             mConnMgr->PruneDeadConnections();
         }
     }
+    else if (strcmp(topic, "net:failed-to-process-uri-content") == 0) {
+        nsCOMPtr<nsIURI> uri = do_QueryInterface(subject);
+        if (uri && mConnMgr)
+            mConnMgr->ReportFailedToProcess(uri);
+    }
   
     return NS_OK;
+}
+
+// nsISpeculativeConnect
+
+NS_IMETHODIMP
+nsHttpHandler::SpeculativeConnect(nsIURI *aURI,
+                                  nsIInterfaceRequestor *aCallbacks,
+                                  nsIEventTarget *aTarget)
+{
+    nsIStrictTransportSecurityService* stss = gHttpHandler->GetSTSService();
+    bool isStsHost = false;
+    if (!stss)
+        return NS_OK;
+    
+    nsCOMPtr<nsIURI> clone;
+    if (NS_SUCCEEDED(stss->IsStsURI(aURI, &isStsHost)) && isStsHost) {
+        if (NS_SUCCEEDED(aURI->Clone(getter_AddRefs(clone)))) {
+            clone->SetScheme(NS_LITERAL_CSTRING("https"));
+            aURI = clone.get();
+        }
+    }
+
+    nsCAutoString scheme;
+    nsresult rv = aURI->GetScheme(scheme);
+    if (NS_FAILED(rv))
+        return rv;
+
+    // If this is HTTPS, make sure PSM is initialized as the channel
+    // creation path may have been bypassed
+    if (scheme.EqualsLiteral("https")) {
+        if (!IsNeckoChild()) {
+            // make sure PSM gets initialized on the main thread.
+            net_EnsurePSMInit();
+        }
+    }
+    // Ensure that this is HTTP or HTTPS, otherwise we don't do preconnect here
+    else if (!scheme.EqualsLiteral("http"))
+        return NS_ERROR_UNEXPECTED;
+
+    // Construct connection info object
+    bool usingSSL = false;
+    rv = aURI->SchemeIs("https", &usingSSL);
+    if (NS_FAILED(rv))
+        return rv;
+
+    nsCAutoString host;
+    rv = aURI->GetAsciiHost(host);
+    if (NS_FAILED(rv))
+        return rv;
+
+    PRInt32 port = -1;
+    rv = aURI->GetPort(&port);
+    if (NS_FAILED(rv))
+        return rv;
+
+    nsHttpConnectionInfo *ci =
+        new nsHttpConnectionInfo(host, port, nsnull, usingSSL);
+
+    return SpeculativeConnect(ci, aCallbacks, aTarget);
 }
 
 //-----------------------------------------------------------------------------
 // nsHttpsHandler implementation
 //-----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ISUPPORTS4(nsHttpsHandler,
+NS_IMPL_THREADSAFE_ISUPPORTS5(nsHttpsHandler,
                               nsIHttpProtocolHandler,
                               nsIProxiedProtocolHandler,
                               nsIProtocolHandler,
-                              nsISupportsWeakReference)
+                              nsISupportsWeakReference,
+                              nsISpeculativeConnect)
 
 nsresult
 nsHttpsHandler::Init()

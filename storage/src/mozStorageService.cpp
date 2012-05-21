@@ -1,44 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Oracle Corporation code.
- *
- * The Initial Developer of the Original Code is
- *  Oracle Corporation
- * Portions created by the Initial Developer are Copyright (C) 2004
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir.vukicevic@oracle.com>
- *   Brett Wilson <brettw@gmail.com>
- *   Shawn Wilsher <me@shawnwilsher.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozStorageService.h"
 #include "mozStorageConnection.h"
@@ -169,15 +133,15 @@ public:
   StorageSQLiteMultiReporter(Service *aService) 
   : mService(aService)
   {
-    NS_NAMED_LITERAL_CSTRING(mStmtDesc,
+    mStmtDesc = NS_LITERAL_CSTRING(
       "Memory (approximate) used by all prepared statements used by "
       "connections to this database.");
 
-    NS_NAMED_LITERAL_CSTRING(mCacheDesc,
+    mCacheDesc = NS_LITERAL_CSTRING(
       "Memory (approximate) used by all pager caches used by connections "
       "to this database.");
 
-    NS_NAMED_LITERAL_CSTRING(mSchemaDesc,
+    mSchemaDesc = NS_LITERAL_CSTRING(
       "Memory (approximate) used to store the schema for all databases "
       "associated with connections to this database.");
   }
@@ -194,9 +158,10 @@ public:
   // main thread!  But at the time of writing this function is only called when
   // about:memory is loaded (not, for example, when telemetry pings occur) and
   // any delays in that case aren't so bad.
-  NS_IMETHOD CollectReports(nsIMemoryMultiReporterCallback *aCallback,
+  NS_IMETHOD CollectReports(nsIMemoryMultiReporterCallback *aCb,
                             nsISupports *aClosure)
   {
+    nsresult rv;
     size_t totalConnSize = 0;
     {
       nsTArray<nsRefPtr<Connection> > connections;
@@ -218,29 +183,32 @@ public:
 
         SQLiteMutexAutoLock lockedScope(conn->sharedDBMutex);
 
-        totalConnSize +=
-          doConnMeasurement(aCallback, aClosure, *conn.get(), pathHead,
-                            NS_LITERAL_CSTRING("stmt"), mStmtDesc,
-                            SQLITE_DBSTATUS_STMT_USED);
-        totalConnSize +=
-          doConnMeasurement(aCallback, aClosure, *conn.get(), pathHead,
-                            NS_LITERAL_CSTRING("cache"), mCacheDesc,
-                            SQLITE_DBSTATUS_CACHE_USED);
-        totalConnSize +=
-          doConnMeasurement(aCallback, aClosure, *conn.get(), pathHead,
-                            NS_LITERAL_CSTRING("schema"), mSchemaDesc,
-                            SQLITE_DBSTATUS_SCHEMA_USED);
+        rv = reportConn(aCb, aClosure, *conn.get(), pathHead,
+                        NS_LITERAL_CSTRING("stmt"), mStmtDesc,
+                        SQLITE_DBSTATUS_STMT_USED, &totalConnSize);
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        rv = reportConn(aCb, aClosure, *conn.get(), pathHead,
+                        NS_LITERAL_CSTRING("cache"), mCacheDesc,
+                        SQLITE_DBSTATUS_CACHE_USED, &totalConnSize);
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        rv = reportConn(aCb, aClosure, *conn.get(), pathHead,
+                        NS_LITERAL_CSTRING("schema"), mSchemaDesc,
+                        SQLITE_DBSTATUS_SCHEMA_USED, &totalConnSize);
+        NS_ENSURE_SUCCESS(rv, rv);
       }
     }
 
     PRInt64 other = ::sqlite3_memory_used() - totalConnSize;
 
-    aCallback->Callback(NS_LITERAL_CSTRING(""),
-                        NS_LITERAL_CSTRING("explicit/storage/sqlite/other"),
-                        nsIMemoryReporter::KIND_HEAP,
-                        nsIMemoryReporter::UNITS_BYTES, other,
-                        NS_LITERAL_CSTRING("All unclassified sqlite memory."),
-                        aClosure);
+    rv = aCb->Callback(NS_LITERAL_CSTRING(""),
+                       NS_LITERAL_CSTRING("explicit/storage/sqlite/other"),
+                       nsIMemoryReporter::KIND_HEAP,
+                       nsIMemoryReporter::UNITS_BYTES, other,
+                       NS_LITERAL_CSTRING("All unclassified sqlite memory."),
+                       aClosure);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;
   }
@@ -272,14 +240,17 @@ private:
    *        The memory report description.
    * @param aOption
    *        The SQLite constant for getting the measurement.
+   * @param aTotal
+   *        The accumulator for the measurement.
    */
-  size_t doConnMeasurement(nsIMemoryMultiReporterCallback *aCallback,
-                           nsISupports *aClosure,
-                           sqlite3 *aConn,
-                           const nsACString &aPathHead,
-                           const nsACString &aKind,
-                           const nsACString &aDesc,
-                           int aOption)
+  nsresult reportConn(nsIMemoryMultiReporterCallback *aCb,
+                      nsISupports *aClosure,
+                      sqlite3 *aConn,
+                      const nsACString &aPathHead,
+                      const nsACString &aKind,
+                      const nsACString &aDesc,
+                      int aOption,
+                      size_t *aTotal)
   {
     nsCString path(aPathHead);
     path.Append(aKind);
@@ -290,11 +261,14 @@ private:
     nsresult rv = convertResultCode(rc);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    aCallback->Callback(NS_LITERAL_CSTRING(""), path,
-                        nsIMemoryReporter::KIND_HEAP,
-                        nsIMemoryReporter::UNITS_BYTES, PRInt64(curr),
-                        aDesc, aClosure);
-    return curr;
+    rv = aCb->Callback(NS_LITERAL_CSTRING(""), path,
+                       nsIMemoryReporter::KIND_HEAP,
+                       nsIMemoryReporter::UNITS_BYTES, PRInt64(curr),
+                       aDesc, aClosure);
+    NS_ENSURE_SUCCESS(rv, rv);
+    *aTotal += curr;
+
+    return NS_OK;
   }
 };
 
@@ -336,6 +310,8 @@ public:
       mozilla::services::GetObserverService();
     NS_ENSURE_TRUE(os, NS_ERROR_FAILURE);
     nsresult rv = os->AddObserver(mObserver, "xpcom-shutdown", false);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = os->AddObserver(mObserver, "xpcom-shutdown-threads", false);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // We cache XPConnect for our language helpers.  XPConnect can only be
@@ -519,20 +495,8 @@ Service::shutdown()
 
 sqlite3_vfs *ConstructTelemetryVFS();
 
-#ifdef MOZ_MEMORY
-
-#  if defined(XP_WIN) || defined(SOLARIS) || defined(ANDROID) || defined(XP_MACOSX)
-#    include "jemalloc.h"
-#  elif defined(XP_LINUX)
-// jemalloc is directly linked into firefox-bin; libxul doesn't link
-// with it.  So if we tried to use je_malloc_usable_size_in_advance directly
-// here, it wouldn't be defined.  Instead, we don't include the jemalloc header
-// and weakly link against je_malloc_usable_size_in_advance.
-extern "C" {
-extern size_t je_malloc_usable_size_in_advance(size_t size)
-  NS_VISIBILITY_DEFAULT __attribute__((weak));
-}
-#  endif  // XP_LINUX
+#ifdef MOZ_STORAGE_MEMORY
+#  include "jemalloc.h"
 
 namespace {
 
@@ -601,7 +565,7 @@ const sqlite3_mem_methods memMethods = {
 
 } // anonymous namespace
 
-#endif  // MOZ_MEMORY
+#endif  // MOZ_STORAGE_MEMORY
 
 nsresult
 Service::initialize()
@@ -610,7 +574,7 @@ Service::initialize()
 
   int rc;
 
-#ifdef MOZ_MEMORY
+#ifdef MOZ_STORAGE_MEMORY
   rc = ::sqlite3_config(SQLITE_CONFIG_MALLOC, &memMethods);
   if (rc != SQLITE_OK)
     return convertResultCode(rc);
@@ -856,6 +820,32 @@ Service::Observe(nsISupports *, const char *aTopic, const PRUnichar *)
 {
   if (strcmp(aTopic, "xpcom-shutdown") == 0)
     shutdown();
+  if (strcmp(aTopic, "xpcom-shutdown-threads") == 0) {
+    nsCOMPtr<nsIObserverService> os =
+      mozilla::services::GetObserverService();
+    os->RemoveObserver(this, "xpcom-shutdown-threads");
+    bool anyOpen = false;
+    do {
+      nsTArray<nsRefPtr<Connection> > connections;
+      getConnections(connections);
+      anyOpen = false;
+      for (PRUint32 i = 0; i < connections.Length(); i++) {
+        nsRefPtr<Connection> &conn = connections[i];
+
+        // While it would be nice to close all connections, we only
+        // check async ones for now.
+        if (conn->isAsyncClosing()) {
+          anyOpen = true;
+          break;
+        }
+      }
+      if (anyOpen) {
+        nsCOMPtr<nsIThread> thread = do_GetCurrentThread();
+        NS_ProcessNextEvent(thread);
+      }
+    } while (anyOpen);
+  }
+
   return NS_OK;
 }
 

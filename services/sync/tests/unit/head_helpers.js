@@ -1,11 +1,14 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-Cu.import("resource://services-sync/async.js");
+Cu.import("resource://services-common/utils.js");
+Cu.import("resource://services-common/async.js");
+Cu.import("resource://services-sync/identity.js");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/engines.js");
-var btoa;
+let btoa;
+let atob;
 
 let provider = {
   getFile: function(prop, persistent) {
@@ -38,41 +41,8 @@ function waitForZeroTimer(callback) {
   timer = Utils.namedTimer(wait, 150, {}, "timer");
 }
 
-btoa = Cu.import("resource://services-sync/log4moz.js").btoa;
-function getTestLogger(component) {
-  return Log4Moz.repository.getLogger("Testing");
-}
-
-function initTestLogging(level) {
-  function LogStats() {
-    this.errorsLogged = 0;
-  }
-  LogStats.prototype = {
-    format: function BF_format(message) {
-      if (message.level == Log4Moz.Level.Error)
-        this.errorsLogged += 1;
-      return message.loggerName + "\t" + message.levelDesc + "\t" +
-        message.message + "\n";
-    }
-  };
-  LogStats.prototype.__proto__ = new Log4Moz.Formatter();
-
-  var log = Log4Moz.repository.rootLogger;
-  var logStats = new LogStats();
-  var appender = new Log4Moz.DumpAppender(logStats);
-
-  if (typeof(level) == "undefined")
-    level = "Debug";
-  getTestLogger().level = Log4Moz.Level[level];
-
-  log.level = Log4Moz.Level.Trace;
-  appender.level = Log4Moz.Level.Trace;
-  // Overwrite any other appenders (e.g. from previous incarnations)
-  log.ownAppenders = [appender];
-  log.updateAppenders();
-
-  return logStats;
-}
+btoa = Cu.import("resource://services-common/log4moz.js").btoa;
+atob = Cu.import("resource://services-common/log4moz.js").atob;
 
 // This is needed for loadAddonTestFunctions().
 let gGlobalScope = this;
@@ -258,14 +228,22 @@ FakeCryptoService.prototype = {
   }
 };
 
+function setBasicCredentials(username, password, syncKey) {
+  let auth = Identity;
+  auth.username = username;
+  auth.basicPassword = password;
+  auth.syncKey = syncKey;
+}
 
-function SyncTestingInfrastructure() {
-  Cu.import("resource://services-sync/identity.js");
+function SyncTestingInfrastructure(username, password, syncKey) {
+  Cu.import("resource://services-sync/service.js");
 
-  ID.set('WeaveID',
-         new Identity('Mozilla Services Encryption Passphrase', 'foo'));
-  ID.set('WeaveCryptoID',
-         new Identity('Mozilla Services Encryption Passphrase', 'foo'));
+  Identity.account = username || "foo";
+  Identity.basicPassword = password || "password";
+  Identity.syncKey = syncKey || "foo";
+
+  Service.serverURL = TEST_SERVER_URL;
+  Service.clusterURL = TEST_CLUSTER_URL;
 
   this.logStats = initTestLogging();
   this.fakeFilesystem = new FakeFilesystemService({});
@@ -273,34 +251,8 @@ function SyncTestingInfrastructure() {
   this.fakeCryptoService = new FakeCryptoService();
 }
 
-/*
- * Ensure exceptions from inside callbacks leads to test failures.
- */
-function ensureThrows(func) {
-  return function() {
-    try {
-      func.apply(this, arguments);
-    } catch (ex) {
-      do_throw(ex);
-    }
-  };
-}
-
-
-/**
- * Print some debug message to the console. All arguments will be printed,
- * separated by spaces.
- *
- * @param [arg0, arg1, arg2, ...]
- *        Any number of arguments to print out
- * @usage _("Hello World") -> prints "Hello World"
- * @usage _(1, 2, 3) -> prints "1 2 3"
- */
-let _ = function(some, debug, text, to) print(Array.slice(arguments).join(" "));
-
 _("Setting the identity for passphrase");
 Cu.import("resource://services-sync/identity.js");
-
 
 /*
  * Test setup helpers.
@@ -321,32 +273,6 @@ function generateNewKeys(collections) {
   let wbo = CollectionKeys.generateNewKeysWBO(collections);
   let modified = new_timestamp();
   CollectionKeys.setContents(wbo.cleartext, modified);
-}
-
-function do_check_empty(obj) {
-  do_check_attribute_count(obj, 0);
-}
-
-function do_check_attribute_count(obj, c) {
-  do_check_eq(c, Object.keys(obj).length);
-}
-
-function do_check_throws(aFunc, aResult, aStack)
-{
-  if (!aStack) {
-    try {
-      // We might not have a 'Components' object.
-      aStack = Components.stack.caller;
-    } catch (e) {}
-  }
-
-  try {
-    aFunc();
-  } catch (e) {
-    do_check_eq(e.result, aResult, aStack);
-    return;
-  }
-  do_throw("Expected result " + aResult + ", none thrown.", aStack);
 }
 
 /*
@@ -453,4 +379,27 @@ RotaryEngine.prototype = {
       }
     }
   }
+};
+
+deepCopy: function deepCopy(thing, noSort) {
+  if (typeof(thing) != "object" || thing == null){
+    return thing;
+  }
+  let ret;
+
+  if (Array.isArray(thing)) {
+    ret = [];
+    for (let i = 0; i < thing.length; i++){
+      ret.push(deepCopy(thing[i], noSort));
+	}
+  } else {
+    ret = {};
+    let props = [p for (p in thing)];
+    if (!noSort){
+      props = props.sort();
+    }
+    props.forEach(function(k) ret[k] = deepCopy(thing[k], noSort));
+  }
+
+  return ret;
 };

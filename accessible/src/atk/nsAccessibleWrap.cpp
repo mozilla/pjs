@@ -1,75 +1,31 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Sun Microsystems, Inc.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bolian Yin (bolian.yin@sun.com)
- *   John Sun (john.sun@sun.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Util.h"
-
-#include "nsAccessible.h"
 #include "nsAccessibleWrap.h"
 
+#include "Accessible-inl.h"
+#include "ApplicationAccessibleWrap.h"
+#include "InterfaceInitFuncs.h"
 #include "nsAccUtils.h"
-#include "nsApplicationAccessibleWrap.h"
 #include "nsIAccessibleRelation.h"
-#include "nsRootAccessible.h"
-#include "nsDocAccessibleWrap.h"
+#include "RootAccessible.h"
 #include "nsIAccessibleValue.h"
+#include "nsMai.h"
+#include "nsMaiHyperlink.h"
 #include "nsString.h"
 #include "nsAutoPtr.h"
 #include "prprf.h"
-#include "nsRoleMap.h"
 #include "nsStateMap.h"
 #include "Relation.h"
+#include "RootAccessible.h"
 #include "States.h"
 
-#include "nsMaiInterfaceComponent.h"
-#include "nsMaiInterfaceAction.h"
-#include "nsMaiInterfaceText.h"
-#include "nsMaiInterfaceEditableText.h"
-#include "nsMaiInterfaceSelection.h"
-#include "nsMaiInterfaceValue.h"
-#include "nsMaiInterfaceHypertext.h"
-#include "nsMaiInterfaceHyperlinkImpl.h"
-#include "nsMaiInterfaceTable.h"
+#include "mozilla/Util.h"
 #include "nsXPCOMStrings.h"
 #include "nsComponentManagerUtils.h"
-#include "nsMaiInterfaceDocument.h"
-#include "nsMaiInterfaceImage.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -77,7 +33,7 @@ using namespace mozilla::a11y;
 nsAccessibleWrap::EAvailableAtkSignals nsAccessibleWrap::gAvailableAtkSignals =
   eUnknown;
 
-//defined in nsApplicationAccessibleWrap.cpp
+//defined in ApplicationAccessibleWrap.cpp
 extern "C" GType g_atk_hyperlink_impl_type;
 
 /* MaiAtkObject */
@@ -688,25 +644,21 @@ finalizeCB(GObject *aObj)
         G_OBJECT_CLASS (parent_class)->finalize(aObj);
 }
 
-const gchar *
-getNameCB(AtkObject *aAtkObj)
+const gchar*
+getNameCB(AtkObject* aAtkObj)
 {
-    nsAccessibleWrap *accWrap = GetAccessibleWrap(aAtkObj);
-    if (!accWrap) {
-        return nsnull;
-    }
+  nsAccessibleWrap* accWrap = GetAccessibleWrap(aAtkObj);
+  if (!accWrap)
+    return nsnull;
 
-    /* nsIAccessible is responsible for the non-NULL name */
-    nsAutoString uniName;
-    nsresult rv = accWrap->GetName(uniName);
-    NS_ENSURE_SUCCESS(rv, nsnull);
+  nsAutoString uniName;
+  accWrap->Name(uniName);
 
-    NS_ConvertUTF8toUTF16 objName(aAtkObj->name);
-    if (!uniName.Equals(objName)) {
-        atk_object_set_name(aAtkObj,
-                            NS_ConvertUTF16toUTF8(uniName).get());
-    }
-    return aAtkObj->name;
+  NS_ConvertUTF8toUTF16 objName(aAtkObj->name);
+  if (!uniName.Equals(objName))
+    atk_object_set_name(aAtkObj, NS_ConvertUTF16toUTF8(uniName).get());
+
+  return aAtkObj->name;
 }
 
 const gchar *
@@ -731,24 +683,33 @@ getDescriptionCB(AtkObject *aAtkObj)
 AtkRole
 getRoleCB(AtkObject *aAtkObj)
 {
-    nsAccessibleWrap *accWrap = GetAccessibleWrap(aAtkObj);
-    if (!accWrap) {
-        return ATK_ROLE_INVALID;
-    }
+  nsAccessibleWrap* accWrap = GetAccessibleWrap(aAtkObj);
+  if (!accWrap)
+    return ATK_ROLE_INVALID;
 
-#ifdef DEBUG_A11Y
-    NS_ASSERTION(nsAccUtils::IsTextInterfaceSupportCorrect(accWrap),
-                 "Does not support nsIAccessibleText when it should");
+#ifdef DEBUG
+  NS_ASSERTION(nsAccUtils::IsTextInterfaceSupportCorrect(accWrap),
+      "Does not support nsIAccessibleText when it should");
 #endif
 
-    if (aAtkObj->role == ATK_ROLE_INVALID) {
-        // map to the actual value
-        PRUint32 atkRole = atkRoleMap[accWrap->Role()];
-        NS_ASSERTION(atkRoleMap[nsIAccessibleRole::ROLE_LAST_ENTRY] ==
-                     kROLE_ATK_LAST_ENTRY, "ATK role map skewed");
-        aAtkObj->role = static_cast<AtkRole>(atkRole);
-    }
+  if (aAtkObj->role != ATK_ROLE_INVALID)
     return aAtkObj->role;
+
+#define ROLE(geckoRole, stringRole, atkRole, macRole, msaaRole, ia2Role) \
+  case roles::geckoRole: \
+    aAtkObj->role = atkRole; \
+    break;
+
+  switch (accWrap->Role()) {
+#include "RoleMap.h"
+    default:
+      MOZ_NOT_REACHED("Unknown role.");
+      aAtkObj->role = ATK_ROLE_UNKNOWN;
+  };
+
+#undef ROLE
+
+  return aAtkObj->role;
 }
 
 AtkAttributeSet*
@@ -871,10 +832,11 @@ refChildCB(AtkObject *aAtkObj, gint aChildIndex)
     if (!childAtkObj)
         return nsnull;
     g_object_ref(childAtkObj);
-    
-    //this will addref parent
+
+  if (aAtkObj != childAtkObj->accessible_parent)
     atk_object_set_parent(childAtkObj, aAtkObj);
-    return childAtkObj;
+
+  return childAtkObj;
 }
 
 gint
@@ -984,25 +946,20 @@ refRelationSetCB(AtkObject *aAtkObj)
 // for it.
 nsAccessibleWrap *GetAccessibleWrap(AtkObject *aAtkObj)
 {
-    NS_ENSURE_TRUE(IS_MAI_OBJECT(aAtkObj), nsnull);
-    nsAccessibleWrap *tmpAccWrap = MAI_ATK_OBJECT(aAtkObj)->accWrap;
+  NS_ENSURE_TRUE(IS_MAI_OBJECT(aAtkObj), nsnull);
+  nsAccessibleWrap* accWrap = MAI_ATK_OBJECT(aAtkObj)->accWrap;
 
-    // Check if AccessibleWrap was deconstructed
-    if (tmpAccWrap == nsnull) {
-        return nsnull;
-    }
+  // Check if the accessible was deconstructed.
+  if (!accWrap)
+    return nsnull;
 
-    NS_ENSURE_TRUE(tmpAccWrap->GetAtkObject() == aAtkObj, nsnull);
+  NS_ENSURE_TRUE(accWrap->GetAtkObject() == aAtkObj, nsnull);
 
-    nsApplicationAccessible *applicationAcc =
-        nsAccessNode::GetApplicationAccessible();
-    nsAccessibleWrap* tmpAppAccWrap =
-        static_cast<nsAccessibleWrap*>(applicationAcc);
+  nsAccessibleWrap* appAccWrap = nsAccessNode::GetApplicationAccessible();
+  if (appAccWrap != accWrap && !accWrap->IsValidObject())
+    return nsnull;
 
-    if (tmpAppAccWrap != tmpAccWrap && !tmpAccWrap->IsValidObject())
-        return nsnull;
-
-    return tmpAccWrap;
+  return accWrap;
 }
 
 nsresult
@@ -1049,7 +1006,7 @@ nsAccessibleWrap::FirePlatformEvent(AccEvent* aEvent)
     case nsIAccessibleEvent::EVENT_FOCUS:
       {
         MAI_LOG_DEBUG(("\n\nReceived: EVENT_FOCUS\n"));
-        nsRootAccessible* rootAccWrap = accWrap->RootAccessible();
+        a11y::RootAccessible* rootAccWrap = accWrap->RootAccessible();
         if (rootAccWrap && rootAccWrap->mActivated) {
             atk_focus_tracker_notify(atkObj);
             // Fire state change event for focus
@@ -1061,8 +1018,8 @@ nsAccessibleWrap::FirePlatformEvent(AccEvent* aEvent)
 
     case nsIAccessibleEvent::EVENT_NAME_CHANGE:
       {
-        nsString newName;
-        accessible->GetName(newName);
+        nsAutoString newName;
+        accessible->Name(newName);
         NS_ConvertUTF16toUTF8 utf8Name(newName);
         if (!atkObj->name || !utf8Name.Equals(atkObj->name))
           atk_object_set_name(atkObj, utf8Name.get());
@@ -1242,9 +1199,7 @@ nsAccessibleWrap::FirePlatformEvent(AccEvent* aEvent)
     case nsIAccessibleEvent::EVENT_WINDOW_ACTIVATE:
       {
         MAI_LOG_DEBUG(("\n\nReceived: EVENT_WINDOW_ACTIVATED\n"));
-        nsRootAccessible *rootAcc =
-          static_cast<nsRootAccessible *>(accessible);
-        rootAcc->mActivated = true;
+        accessible->AsRoot()->mActivated = true;
         guint id = g_signal_lookup ("activate", MAI_TYPE_ATK_OBJECT);
         g_signal_emit(atkObj, id, 0);
 
@@ -1255,9 +1210,7 @@ nsAccessibleWrap::FirePlatformEvent(AccEvent* aEvent)
     case nsIAccessibleEvent::EVENT_WINDOW_DEACTIVATE:
       {
         MAI_LOG_DEBUG(("\n\nReceived: EVENT_WINDOW_DEACTIVATED\n"));
-        nsRootAccessible *rootAcc =
-          static_cast<nsRootAccessible *>(accessible);
-        rootAcc->mActivated = false;
+        accessible->AsRoot()->mActivated = false;
         guint id = g_signal_lookup ("deactivate", MAI_TYPE_ATK_OBJECT);
         g_signal_emit(atkObj, id, 0);
       } break;
@@ -1395,10 +1348,11 @@ nsresult
 nsAccessibleWrap::FireAtkShowHideEvent(AccEvent* aEvent,
                                        AtkObject *aObject, bool aIsAdded)
 {
-    if (aIsAdded)
+    if (aIsAdded) {
         MAI_LOG_DEBUG(("\n\nReceived: Show event\n"));
-    else
+    } else {
         MAI_LOG_DEBUG(("\n\nReceived: Hide event\n"));
+    }
 
     PRInt32 indexInParent = getIndexInParentCB(aObject);
     AtkObject *parentObject = getParentCB(aObject);
@@ -1412,4 +1366,3 @@ nsAccessibleWrap::FireAtkShowHideEvent(AccEvent* aEvent,
 
     return NS_OK;
 }
-

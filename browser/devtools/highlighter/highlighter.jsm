@@ -1,49 +1,16 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla Highlighter Module.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Rob Campbell <rcampbell@mozilla.com> (original author)
- *   Mihai Șucan <mihai.sucan@gmail.com>
- *   Julian Viereck <jviereck@mozilla.com>
- *   Paul Rouget <paul@mozilla.com>
- *   Kyle Simpson <ksimpson@mozilla.com>
- *   Johan Charlez <johan.charlez@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Cu = Components.utils;
+const Cc = Components.classes;
+const Ci = Components.interfaces;
+
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 var EXPORTED_SYMBOLS = ["Highlighter"];
 
@@ -59,6 +26,9 @@ const INSPECTOR_INVISIBLE_ELEMENTS = {
   "title": true,
 };
 
+const PSEUDO_CLASSES = [":hover", ":active", ":focus"];
+  // add ":visited" and ":link" after bug 713106 is fixed
+
 /**
  * A highlighter mechanism.
  *
@@ -70,7 +40,7 @@ const INSPECTOR_INVISIBLE_ELEMENTS = {
  *
  *   // Constructor and destructor.
  *   // @param aWindow - browser.xul window.
- *   Highlighter(aWindow); 
+ *   Highlighter(aWindow);
  *   void destroy();
  *
  *   // Highlight a node.
@@ -96,7 +66,13 @@ const INSPECTOR_INVISIBLE_ELEMENTS = {
  *   // Is a node highlightable.
  *   boolean isNodeHighlightable(aNode);
  *
- *   // Add/Remove lsiteners
+ *   // Show/hide the veil and the infobar
+ *   void showInfobar();
+ *   void hideInfobar();
+ *   void showVeil();
+ *   void hideVeil();
+ *
+ *   // Add/Remove listeners
  *   // @param aEvent - event name
  *   // @param aListener - function callback
  *   void addListener(aEvent, aListener);
@@ -109,6 +85,8 @@ const INSPECTOR_INVISIBLE_ELEMENTS = {
  *   "highlighting" - Highlighter is highlighting
  *   "locked" - The selected node has been locked
  *   "unlocked" - The selected ndoe has been unlocked
+ *   "pseudoclasstoggled" - A pseudo-class lock has changed on the selected node
+
  *
  * Structure:
  *
@@ -161,6 +139,7 @@ Highlighter.prototype = {
     // The veil will make the whole page darker except
     // for the region of the selected box.
     this.buildVeil(this.veilContainer);
+    this.showVeil();
 
     this.buildInfobar(controlsBox);
 
@@ -176,7 +155,6 @@ Highlighter.prototype = {
    */
   destroy: function Highlighter_destroy()
   {
-    this.detachKeysListeners();
     this.detachMouseListeners();
     this.detachPageListeners();
 
@@ -239,6 +217,18 @@ Highlighter.prototype = {
   },
 
   /**
+   * Notify that a pseudo-class lock was toggled on the highlighted element
+   *
+   * @param aPseudo - The pseudo-class to toggle, e.g. ":hover".
+   */
+  pseudoClassLockToggled: function Highlighter_pseudoClassLockToggled(aPseudo)
+  {
+    this.emitEvent("pseudoclasstoggled", [aPseudo]);
+    this.updateInfobar();
+    this.moveInfobar();
+  },
+
+  /**
    * Update the highlighter size and position.
    */
   invalidateSize: function Highlighter_invalidateSize(aScroll)
@@ -280,7 +270,6 @@ Highlighter.prototype = {
     if (!this.hidden) return;
     this.veilContainer.removeAttribute("hidden");
     this.nodeInfo.container.removeAttribute("hidden");
-    this.attachKeysListeners();
     this.attachPageListeners();
     this.invalidateSize();
     this.hidden = false;
@@ -293,7 +282,6 @@ Highlighter.prototype = {
     if (this.hidden) return;
     this.veilContainer.setAttribute("hidden", "true");
     this.nodeInfo.container.setAttribute("hidden", "true");
-    this.detachKeysListeners();
     this.detachPageListeners();
     this.hidden = true;
   },
@@ -348,6 +336,36 @@ Highlighter.prototype = {
     let nodeName = aNode.nodeName.toLowerCase();
     return !INSPECTOR_INVISIBLE_ELEMENTS[nodeName];
   },
+
+  /**
+   * Hide the veil
+   */
+   hideVeil: function Highlighter_hideVeil() {
+     this.veilContainer.removeAttribute("dim");
+   },
+
+  /**
+   * Show the veil
+   */
+   showVeil: function Highlighter_showVeil() {
+     this.veilContainer.setAttribute("dim", "true");
+   },
+
+   /**
+    * Hide the infobar
+    */
+    hideInfobar: function Highlighter_hideInfobar() {
+      this.nodeInfo.container.setAttribute("hidden", "true");
+    },
+
+   /**
+    * Show the infobar
+    */
+    showInfobar: function Highlighter_showInfobar() {
+      this.nodeInfo.container.removeAttribute("hidden");
+      this.moveInfobar();
+    },
+
   /**
    * Build the veil:
    *
@@ -364,7 +382,6 @@ Highlighter.prototype = {
    * @param nsIDOMElement aParent
    *        The container of the veil boxes.
    */
-
   buildVeil: function Highlighter_buildVeil(aParent)
   {
     // We will need to resize these boxes to surround a node.
@@ -410,9 +427,14 @@ Highlighter.prototype = {
    * <box id="highlighter-nodeinfobar-container">
    *   <box id="Highlighter-nodeinfobar-arrow-top"/>
    *   <hbox id="highlighter-nodeinfobar">
-   *     <xhtml:span id="highlighter-nodeinfobar-tagname"/>
-   *     <xhtml:span id="highlighter-nodeinfobar-id"/>
-   *     <xhtml:span id="highlighter-nodeinfobar-classes"/>
+   *     <toolbarbutton class="highlighter-nodeinfobar-button" id="highlighter-nodeinfobar-inspectbutton"/>
+   *     <hbox id="highlighter-nodeinfobar-text">
+   *       <xhtml:span id="highlighter-nodeinfobar-tagname"/>
+   *       <xhtml:span id="highlighter-nodeinfobar-id"/>
+   *       <xhtml:span id="highlighter-nodeinfobar-classes"/>
+   *       <xhtml:span id="highlighter-nodeinfobar-pseudo-classes"/>
+   *     </hbox>
+   *     <toolbarbutton class="highlighter-nodeinfobar-button" id="highlighter-nodeinfobar-menu"/>
    *   </hbox>
    *   <box id="Highlighter-nodeinfobar-arrow-bottom"/>
    * </box>
@@ -446,12 +468,66 @@ Highlighter.prototype = {
 
     let classesBox = this.chromeDoc.createElementNS("http://www.w3.org/1999/xhtml", "span");
     classesBox.id = "highlighter-nodeinfobar-classes";
-    // Add some content to force a better boundingClientRect down below.
-    classesBox.textContent = "&nbsp;";
 
-    nodeInfobar.appendChild(tagNameLabel);
-    nodeInfobar.appendChild(idLabel);
-    nodeInfobar.appendChild(classesBox);
+    let pseudoClassesBox = this.chromeDoc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+    pseudoClassesBox.id = "highlighter-nodeinfobar-pseudo-classes";
+
+    // Add some content to force a better boundingClientRect down below.
+    pseudoClassesBox.textContent = "&nbsp;";
+
+    // Create buttons
+
+    let inspect = this.chromeDoc.createElement("toolbarbutton");
+    inspect.id = "highlighter-nodeinfobar-inspectbutton";
+    inspect.className = "highlighter-nodeinfobar-button"
+    let toolbarInspectButton =
+      this.chromeDoc.getElementById("inspector-inspect-toolbutton");
+    inspect.setAttribute("tooltiptext",
+                         toolbarInspectButton.getAttribute("tooltiptext"));
+    inspect.setAttribute("command", "Inspector:Inspect");
+
+    let nodemenu = this.chromeDoc.createElement("toolbarbutton");
+    nodemenu.setAttribute("type", "menu");
+    nodemenu.id = "highlighter-nodeinfobar-menu";
+    nodemenu.className = "highlighter-nodeinfobar-button"
+    nodemenu.setAttribute("tooltiptext",
+                          this.strings.GetStringFromName("nodeMenu.tooltiptext"));
+
+    let menu = this.chromeDoc.getElementById("inspector-node-popup");
+    menu = menu.cloneNode(true);
+    menu.id = "highlighter-node-menu";
+
+    let separator = this.chromeDoc.createElement("menuseparator");
+    menu.appendChild(separator);
+
+    menu.addEventListener("popupshowing", function() {
+      let items = menu.getElementsByClassName("highlighter-pseudo-class-menuitem");
+      let i = items.length;
+      while (i--) {
+        menu.removeChild(items[i]);
+      }
+
+      let fragment = this.buildPseudoClassMenu();
+      menu.appendChild(fragment);
+    }.bind(this), true);
+
+    nodemenu.appendChild(menu);
+
+    // <hbox id="highlighter-nodeinfobar-text"/>
+    let texthbox = this.chromeDoc.createElement("hbox");
+    texthbox.id = "highlighter-nodeinfobar-text";
+    texthbox.setAttribute("align", "center");
+    texthbox.setAttribute("flex", "1");
+
+    texthbox.appendChild(tagNameLabel);
+    texthbox.appendChild(idLabel);
+    texthbox.appendChild(classesBox);
+    texthbox.appendChild(pseudoClassesBox);
+
+    nodeInfobar.appendChild(inspect);
+    nodeInfobar.appendChild(texthbox);
+    nodeInfobar.appendChild(nodemenu);
+
     container.appendChild(arrowBoxTop);
     container.appendChild(nodeInfobar);
     container.appendChild(arrowBoxBottom);
@@ -464,9 +540,34 @@ Highlighter.prototype = {
       tagNameLabel: tagNameLabel,
       idLabel: idLabel,
       classesBox: classesBox,
+      pseudoClassesBox: pseudoClassesBox,
       container: container,
       barHeight: barHeight,
     };
+  },
+
+  /**
+   * Create the menuitems for toggling the selection's pseudo-class state
+   *
+   * @returns DocumentFragment. The menuitems for toggling pseudo-classes.
+   */
+  buildPseudoClassMenu: function IUI_buildPseudoClassesMenu()
+  {
+    let fragment = this.chromeDoc.createDocumentFragment();
+    for (let i = 0; i < PSEUDO_CLASSES.length; i++) {
+      let pseudo = PSEUDO_CLASSES[i];
+      let item = this.chromeDoc.createElement("menuitem");
+      item.id = "highlighter-pseudo-class-menuitem-" + pseudo;
+      item.setAttribute("type", "checkbox");
+      item.setAttribute("label", pseudo);
+      item.className = "highlighter-pseudo-class-menuitem";
+      item.setAttribute("checked", DOMUtils.hasPseudoClassLock(this.node,
+                        pseudo));
+      item.addEventListener("command",
+                            this.pseudoClassLockToggled.bind(this, pseudo), false);
+      fragment.appendChild(item);
+    }
+    return fragment;
   },
 
   /**
@@ -543,6 +644,14 @@ Highlighter.prototype = {
 
     classes.textContent = this.node.classList.length ?
                             "." + Array.join(this.node.classList, ".") : "";
+
+    // Pseudo-classes
+    let pseudos = PSEUDO_CLASSES.filter(function(pseudo) {
+      return DOMUtils.hasPseudoClassLock(this.node, pseudo);
+    }, this);
+
+    let pseudoBox = this.nodeInfo.pseudoClassesBox;
+    pseudoBox.textContent = pseudos.join("");
   },
 
   /**
@@ -617,8 +726,8 @@ Highlighter.prototype = {
    */
   computeZoomFactor: function Highlighter_computeZoomFactor() {
     this.zoom =
-      this.win.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-      .getInterface(Components.interfaces.nsIDOMWindowUtils)
+      this.win.QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIDOMWindowUtils)
       .screenPixelsPerCSSPixel;
   },
 
@@ -697,18 +806,6 @@ Highlighter.prototype = {
     this.browser.removeEventListener("MozAfterPaint", this, true);
   },
 
-  attachKeysListeners: function Highlighter_attachKeysListeners()
-  {
-    this.browser.addEventListener("keypress", this, true);
-    this.highlighterContainer.addEventListener("keypress", this, true);
-  },
-
-  detachKeysListeners: function Highlighter_detachKeysListeners()
-  {
-    this.browser.removeEventListener("keypress", this, true);
-    this.highlighterContainer.removeEventListener("keypress", this, true);
-  },
-
   /**
    * Generic event handler.
    *
@@ -738,14 +835,6 @@ Highlighter.prototype = {
         aEvent.stopPropagation();
         aEvent.preventDefault();
         break;
-      case "keypress":
-        switch (aEvent.keyCode) {
-          case this.chromeWin.KeyEvent.DOM_VK_RETURN:
-            this.locked ? this.unlock() : this.lock();
-            aEvent.preventDefault();
-            aEvent.stopPropagation();
-            break;
-        }
     }
   },
 
@@ -805,3 +894,12 @@ Highlighter.prototype = {
 
 ///////////////////////////////////////////////////////////////////////////
 
+XPCOMUtils.defineLazyGetter(this, "DOMUtils", function () {
+  return Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils)
+});
+
+XPCOMUtils.defineLazyGetter(Highlighter.prototype, "strings",
+  function () {
+    return Services.strings.createBundle(
+            "chrome://browser/locale/devtools/inspector.properties");
+  });

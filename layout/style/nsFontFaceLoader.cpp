@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:cindent:ts=2:et:sw=2:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   John Daggett <jdaggett@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* code for loading in @font-face defined font data */
 
@@ -98,6 +65,9 @@ nsFontFaceLoader::nsFontFaceLoader(gfxProxyFontEntry *aProxy, nsIURI *aFontURI,
 
 nsFontFaceLoader::~nsFontFaceLoader()
 {
+  if (mFontEntry) {
+    mFontEntry->mLoader = nsnull;
+  }
   if (mLoadTimer) {
     mLoadTimer->Cancel();
     mLoadTimer = nsnull;
@@ -259,6 +229,7 @@ void
 nsFontFaceLoader::Cancel()
 {
   mFontEntry->mLoadingState = gfxProxyFontEntry::NOT_LOADING;
+  mFontEntry->mLoader = nsnull;
   mFontSet = nsnull;
   if (mLoadTimer) {
     mLoadTimer->Cancel();
@@ -273,7 +244,7 @@ nsFontFaceLoader::CheckLoadAllowed(nsIPrincipal* aSourcePrincipal,
                                    nsISupports* aContext)
 {
   nsresult rv;
-  
+
   if (!aSourcePrincipal)
     return NS_OK;
 
@@ -303,7 +274,7 @@ nsFontFaceLoader::CheckLoadAllowed(nsIPrincipal* aSourcePrincipal,
 
   return NS_OK;
 }
-  
+
 nsUserFontSet::nsUserFontSet(nsPresContext *aContext)
   : mPresContext(aContext)
 {
@@ -336,40 +307,19 @@ nsUserFontSet::RemoveLoader(nsFontFaceLoader *aLoader)
   mLoaders.RemoveEntry(aLoader);
 }
 
-nsresult 
+nsresult
 nsUserFontSet::StartLoad(gfxProxyFontEntry *aProxy,
                          const gfxFontFaceSrc *aFontFaceSrc)
 {
   nsresult rv;
-  
-  // check same-site origin
+  nsIPrincipal *principal = nsnull;
+
+  rv = CheckFontLoad(aProxy, aFontFaceSrc, &principal);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   nsIPresShell *ps = mPresContext->PresShell();
   if (!ps)
     return NS_ERROR_FAILURE;
-    
-  NS_ASSERTION(aFontFaceSrc && !aFontFaceSrc->mIsLocal, 
-               "bad font face url passed to fontloader");
-  NS_ASSERTION(aFontFaceSrc->mURI, "null font uri");
-  if (!aFontFaceSrc->mURI)
-    return NS_ERROR_FAILURE;
-
-  // use document principal, original principal if flag set
-  // this enables user stylesheets to load font files via
-  // @font-face rules
-  nsCOMPtr<nsIPrincipal> principal = ps->GetDocument()->NodePrincipal();
-
-  NS_ASSERTION(aFontFaceSrc->mOriginPrincipal, 
-               "null origin principal in @font-face rule");
-  if (aFontFaceSrc->mUseOriginPrincipal) {
-    principal = do_QueryInterface(aFontFaceSrc->mOriginPrincipal);
-  }
-  
-  rv = nsFontFaceLoader::CheckLoadAllowed(principal, aFontFaceSrc->mURI, 
-                                          ps->GetDocument());
-  if (NS_FAILED(rv)) {
-    LogMessage(aProxy, "download not allowed", nsIScriptError::errorFlag, rv);
-    return rv;
-  }
 
   nsCOMPtr<nsIStreamLoader> streamLoader;
   nsCOMPtr<nsILoadGroup> loadGroup(ps->GetDocument()->GetDocumentLoadGroup());
@@ -408,17 +358,17 @@ nsUserFontSet::StartLoad(gfxProxyFontEntry *aProxy,
     if (aFontFaceSrc->mReferrer)
       aFontFaceSrc->mReferrer->GetSpec(referrerURI);
     LOG(("fontdownloader (%p) download start - font uri: (%s) "
-         "referrer uri: (%s)\n", 
+         "referrer uri: (%s)\n",
          fontLoader.get(), fontURI.get(), referrerURI.get()));
   }
-#endif  
+#endif
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
   if (httpChannel)
     httpChannel->SetReferrer(aFontFaceSrc->mReferrer);
   rv = NS_NewStreamLoader(getter_AddRefs(streamLoader), fontLoader);
   NS_ENSURE_SUCCESS(rv, rv);
-  
+
   bool inherits = false;
   rv = NS_URIChainHasFlags(aFontFaceSrc->mURI,
                            nsIProtocolHandler::URI_INHERITS_SECURITY_CONTEXT,
@@ -428,7 +378,7 @@ nsUserFontSet::StartLoad(gfxProxyFontEntry *aProxy,
     rv = channel->AsyncOpen(streamLoader, nsnull);
   } else {
     nsCOMPtr<nsIStreamListener> listener =
-      new nsCORSListenerProxy(streamLoader, principal, channel, 
+      new nsCORSListenerProxy(streamLoader, principal, channel,
                               false, &rv);
     if (NS_FAILED(rv)) {
       fontLoader->DropChannel();  // explicitly need to break ref cycle
@@ -442,6 +392,8 @@ nsUserFontSet::StartLoad(gfxProxyFontEntry *aProxy,
   if (NS_SUCCEEDED(rv)) {
     mLoaders.PutEntry(fontLoader);
     fontLoader->StartedLoading(streamLoader);
+    aProxy->mLoader = fontLoader; // let the font entry remember the loader,
+                                  // in case we need to cancel it
   }
 
   return rv;
@@ -487,6 +439,19 @@ nsUserFontSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
   // if any rules are left in the old list, note that the set has changed
   if (oldRules.Length() > 0) {
     modified = true;
+    // any in-progress loaders for obsolete rules should be cancelled
+    size_t count = oldRules.Length();
+    for (size_t i = 0; i < count; ++i) {
+      gfxFontEntry *fe = oldRules[i].mFontEntry;
+      if (!fe->mIsProxy) {
+        continue;
+      }
+      gfxProxyFontEntry *proxy = static_cast<gfxProxyFontEntry*>(fe);
+      if (proxy->mLoader != nsnull) {
+        proxy->mLoader->Cancel();
+        RemoveLoader(proxy->mLoader);
+      }
+    }
   }
 
   if (modified) {
@@ -545,8 +510,8 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule *aRule, PRUint8 aSheetType,
 
   PRUint32 weight = NS_STYLE_FONT_WEIGHT_NORMAL;
   PRUint32 stretch = NS_STYLE_FONT_STRETCH_NORMAL;
-  PRUint32 italicStyle = FONT_STYLE_NORMAL;
-  nsString featureSettings, languageOverride;
+  PRUint32 italicStyle = NS_STYLE_FONT_STYLE_NORMAL;
+  nsString languageOverride;
 
   // set up weight
   aRule->GetDesc(eCSSFontDesc_Weight, val);
@@ -578,19 +543,20 @@ nsUserFontSet::InsertRule(nsCSSFontFaceRule *aRule, PRUint8 aSheetType,
   if (unit == eCSSUnit_Enumerated) {
     italicStyle = val.GetIntValue();
   } else if (unit == eCSSUnit_Normal) {
-    italicStyle = FONT_STYLE_NORMAL;
+    italicStyle = NS_STYLE_FONT_STYLE_NORMAL;
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face style has unexpected unit");
   }
 
   // set up font features
+  nsTArray<gfxFontFeature> featureSettings;
   aRule->GetDesc(eCSSFontDesc_FontFeatureSettings, val);
   unit = val.GetUnit();
   if (unit == eCSSUnit_Normal) {
-    // empty feature string
-  } else if (unit == eCSSUnit_String) {
-    val.GetStringValue(featureSettings);
+    // empty list of features
+  } else if (unit == eCSSUnit_PairList || unit == eCSSUnit_PairListDep) {
+    nsRuleNode::ComputeFontFeatures(val.GetPairListValue(), featureSettings);
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face font-feature-settings has unexpected unit");
@@ -762,8 +728,7 @@ nsUserFontSet::LogMessage(gfxProxyFontEntry *aProxy,
   }
 
   nsPrintfCString
-    msg(1024,
-        "downloadable font: %s "
+    msg("downloadable font: %s "
         "(font-family: \"%s\" style:%s weight:%s stretch:%s src index:%d)",
         aMessage,
         familyName.get(),
@@ -827,6 +792,127 @@ nsUserFontSet::LogMessage(gfxProxyFontEntry *aProxy,
                                      innerWindowID);
   if (NS_SUCCEEDED(rv)) {
     console->LogMessage(scriptError);
+  }
+
+  return NS_OK;
+}
+
+nsresult
+nsUserFontSet::CheckFontLoad(gfxProxyFontEntry *aFontToLoad,
+                             const gfxFontFaceSrc *aFontFaceSrc,
+                             nsIPrincipal **aPrincipal)
+{
+  nsresult rv;
+
+  // check same-site origin
+  nsIPresShell *ps = mPresContext->PresShell();
+  if (!ps)
+    return NS_ERROR_FAILURE;
+
+  NS_ASSERTION(aFontFaceSrc && !aFontFaceSrc->mIsLocal,
+               "bad font face url passed to fontloader");
+  NS_ASSERTION(aFontFaceSrc->mURI, "null font uri");
+  if (!aFontFaceSrc->mURI)
+    return NS_ERROR_FAILURE;
+
+  // use document principal, original principal if flag set
+  // this enables user stylesheets to load font files via
+  // @font-face rules
+  *aPrincipal = ps->GetDocument()->NodePrincipal();
+
+  NS_ASSERTION(aFontFaceSrc->mOriginPrincipal,
+               "null origin principal in @font-face rule");
+  if (aFontFaceSrc->mUseOriginPrincipal) {
+    nsCOMPtr<nsIPrincipal> p = do_QueryInterface(aFontFaceSrc->mOriginPrincipal);
+    *aPrincipal = p;
+  }
+
+  rv = nsFontFaceLoader::CheckLoadAllowed(*aPrincipal, aFontFaceSrc->mURI,
+                                          ps->GetDocument());
+  if (NS_FAILED(rv)) {
+    LogMessage(aFontToLoad, "download not allowed",
+               nsIScriptError::errorFlag, rv);
+  }
+
+  return rv;
+}
+
+nsresult
+nsUserFontSet::SyncLoadFontData(gfxProxyFontEntry *aFontToLoad,
+                                const gfxFontFaceSrc *aFontFaceSrc,
+                                PRUint8* &aBuffer,
+                                PRUint32 &aBufferLength)
+{
+  nsresult rv;
+  nsIPrincipal *principal = nsnull;
+
+  rv = CheckFontLoad(aFontToLoad, aFontFaceSrc, &principal);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIChannel> channel;
+  // get Content Security Policy from principal to pass into channel
+  nsCOMPtr<nsIChannelPolicy> channelPolicy;
+  nsCOMPtr<nsIContentSecurityPolicy> csp;
+  rv = principal->GetCsp(getter_AddRefs(csp));
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (csp) {
+    channelPolicy = do_CreateInstance("@mozilla.org/nschannelpolicy;1");
+    channelPolicy->SetContentSecurityPolicy(csp);
+    channelPolicy->SetLoadType(nsIContentPolicy::TYPE_FONT);
+  }
+  rv = NS_NewChannel(getter_AddRefs(channel),
+                     aFontFaceSrc->mURI,
+                     nsnull,
+                     nsnull,
+                     nsnull,
+                     nsIRequest::LOAD_NORMAL,
+                     channelPolicy);
+
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // blocking stream is OK for data URIs
+  nsCOMPtr<nsIInputStream> stream;
+  rv = channel->Open(getter_AddRefs(stream));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = stream->Available(&aBufferLength);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (aBufferLength == 0) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // read all the decoded data
+  aBuffer = static_cast<PRUint8*> (NS_Alloc(sizeof(PRUint8) * aBufferLength));
+  if (!aBuffer) {
+    aBufferLength = 0;
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  PRUint32 numRead, totalRead = 0;
+  while (NS_SUCCEEDED(rv =
+           stream->Read(reinterpret_cast<char*>(aBuffer + totalRead),
+                        aBufferLength - totalRead, &numRead)) &&
+         numRead != 0)
+  {
+    totalRead += numRead;
+    if (totalRead > aBufferLength) {
+      rv = NS_ERROR_FAILURE;
+      break;
+    }
+  }
+
+  // make sure there's a mime type
+  if (NS_SUCCEEDED(rv)) {
+    nsCAutoString mimeType;
+    rv = channel->GetContentType(mimeType);
+    aBufferLength = totalRead;
+  }
+
+  if (NS_FAILED(rv)) {
+    NS_Free(aBuffer);
+    aBuffer = nsnull;
+    aBufferLength = 0;
+    return rv;
   }
 
   return NS_OK;

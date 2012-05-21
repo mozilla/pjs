@@ -96,3 +96,8 @@ fails == mstyle-5.xhtml mstyle-5-ref.xhtml # See bug 569125#c29
 != link-1.xhtml link-ref.xhtml
 == munderover-empty-scripts.html munderover-empty-scripts-ref.html
 == positive-namedspace.html positive-namedspace-ref.html
+== mtable-width.html mtable-width-ref.html
+== maction-selection.html maction-selection-ref.html
+== maction-dynamic-embellished-op.html maction-dynamic-embellished-op-ref.html
+== maction-dynamic-1.html maction-dynamic-1-ref.html
+== maction-dynamic-2.html maction-dynamic-2-ref.html

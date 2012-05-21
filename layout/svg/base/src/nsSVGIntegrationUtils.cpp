@@ -1,54 +1,23 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   rocallahan@mozilla.com
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Main header first:
 #include "nsSVGIntegrationUtils.h"
 
-#include "nsSVGUtils.h"
-#include "nsSVGEffects.h"
-#include "nsRegion.h"
-#include "nsLayoutUtils.h"
-#include "nsDisplayList.h"
-#include "nsSVGFilterPaintCallback.h"
-#include "nsSVGFilterFrame.h"
-#include "nsSVGClipPathFrame.h"
-#include "nsSVGMaskFrame.h"
-#include "gfxPlatform.h"
+// Keep others in (case-insensitive) order:
 #include "gfxDrawable.h"
+#include "nsDisplayList.h"
+#include "nsLayoutUtils.h"
+#include "nsRenderingContext.h"
+#include "nsSVGClipPathFrame.h"
+#include "nsSVGEffects.h"
+#include "nsSVGFilterFrame.h"
+#include "nsSVGFilterPaintCallback.h"
+#include "nsSVGMaskFrame.h"
 #include "nsSVGPaintServerFrame.h"
+#include "nsSVGUtils.h"
 
 // ----------------------------------------------------------------------
 
@@ -217,12 +186,11 @@ public:
     : mBuilder(aBuilder), mInnerList(aInnerList), mFrame(aFrame),
       mOffset(aOffset) {}
 
-  virtual void Paint(nsSVGRenderState *aContext, nsIFrame *aTarget,
+  virtual void Paint(nsRenderingContext *aContext, nsIFrame *aTarget,
                      const nsIntRect* aDirtyRect)
   {
-    nsRenderingContext* ctx = aContext->GetRenderingContext(aTarget);
-    nsRenderingContext::AutoPushTranslation push(ctx, -mOffset);
-    mInnerList->PaintForFrame(mBuilder, ctx, mFrame, nsDisplayList::PAINT_DEFAULT);
+    nsRenderingContext::AutoPushTranslation push(aContext, -mOffset);
+    mInnerList->PaintForFrame(mBuilder, aContext, mFrame, nsDisplayList::PAINT_DEFAULT);
   }
 
 private:
@@ -283,7 +251,8 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
 
   gfxContext* gfx = aCtx->ThebesContext();
   gfxMatrix savedCTM = gfx->CurrentMatrix();
-  nsSVGRenderState svgContext(aCtx);
+
+  //SVGAutoRenderState autoRenderState(aCtx, SVGAutoRenderState::NORMAL);
 
   nsRect userSpaceRect = GetNonSVGUserSpace(firstFrame) + aBuilder->ToReferenceFrame(firstFrame);
   PRInt32 appUnitsPerDevPixel = aEffectsFrame->PresContext()->AppUnitsPerDevPixel();
@@ -307,7 +276,7 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
    */
   if (clipPathFrame && isTrivialClip) {
     gfx->Save();
-    clipPathFrame->ClipPaint(&svgContext, aEffectsFrame, matrix);
+    clipPathFrame->ClipPaint(aCtx, aEffectsFrame, matrix);
   }
 
   /* Paint the child */
@@ -315,7 +284,7 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
     RegularFramePaintCallback paint(aBuilder, aInnerList, aEffectsFrame,
                                     userSpaceRect.TopLeft());
     nsIntRect r = (aDirtyRect - userSpaceRect.TopLeft()).ToOutsidePixels(appUnitsPerDevPixel);
-    filterFrame->FilterPaint(&svgContext, aEffectsFrame, &paint, &r);
+    filterFrame->FilterPaint(aCtx, aEffectsFrame, &paint, &r);
   } else {
     gfx->SetMatrix(savedCTM);
     aInnerList->PaintForFrame(aBuilder, aCtx, aEffectsFrame,
@@ -336,14 +305,14 @@ nsSVGIntegrationUtils::PaintFramesWithEffects(nsRenderingContext* aCtx,
   gfx->PopGroupToSource();
 
   nsRefPtr<gfxPattern> maskSurface =
-    maskFrame ? maskFrame->ComputeMaskAlpha(&svgContext, aEffectsFrame,
+    maskFrame ? maskFrame->ComputeMaskAlpha(aCtx, aEffectsFrame,
                                             matrix, opacity) : nsnull;
 
   nsRefPtr<gfxPattern> clipMaskSurface;
   if (clipPathFrame && !isTrivialClip) {
     gfx->PushGroup(gfxASurface::CONTENT_COLOR_ALPHA);
 
-    nsresult rv = clipPathFrame->ClipPaint(&svgContext, aEffectsFrame, matrix);
+    nsresult rv = clipPathFrame->ClipPaint(aCtx, aEffectsFrame, matrix);
     clipMaskSurface = gfx->PopGroup();
 
     if (NS_SUCCEEDED(rv) && clipMaskSurface) {
@@ -443,7 +412,8 @@ PaintFrameCallback::operator()(gfxContext* aContext,
 
   mFrame->AddStateBits(NS_FRAME_DRAWING_AS_PAINTSERVER);
 
-  nsSVGRenderState renderState(aContext);
+  nsRenderingContext context;
+  context.Init(mFrame->PresContext()->DeviceContext(), aContext);
   aContext->Save();
 
   // Clip to aFillRect so that we don't paint outside.
@@ -475,7 +445,7 @@ PaintFrameCallback::operator()(gfxContext* aContext,
 
   // Draw.
   nsRect dirty(bbox.x, bbox.y, mPaintServerSize.width, mPaintServerSize.height);
-  nsLayoutUtils::PaintFrame(renderState.GetRenderingContext(mTarget), mFrame,
+  nsLayoutUtils::PaintFrame(&context, mFrame,
                             dirty, NS_RGBA(0, 0, 0, 0),
                             nsLayoutUtils::PAINT_IN_TRANSFORM |
                             nsLayoutUtils::PAINT_ALL_CONTINUATIONS);
@@ -511,7 +481,7 @@ DrawableFromPaintServer(nsIFrame*         aFrame,
                            aPaintServerSize.width, aPaintServerSize.height);
     overrideBounds.ScaleInverse(aFrame->PresContext()->AppUnitsPerDevPixel());
     nsRefPtr<gfxPattern> pattern =
-      server->GetPaintServerPattern(aTarget, 1.0, &overrideBounds);
+      server->GetPaintServerPattern(aTarget, &nsStyleSVG::mFill, 1.0, &overrideBounds);
 
     if (!pattern)
       return nsnull;

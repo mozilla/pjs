@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "nsIDOMHTMLAudioElement.h"
 #include "nsIDOMHTMLSourceElement.h"
 #include "nsHTMLAudioElement.h"
@@ -49,7 +17,6 @@
 #include "plbase64.h"
 #include "nsNetUtil.h"
 #include "prmem.h"
-#include "nsNetUtil.h"
 #include "nsXPCOMStrings.h"
 #include "prlock.h"
 #include "nsThreadUtils.h"
@@ -58,7 +25,6 @@
 #include "nsIXPConnect.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
-#include "jstypedarray.h"
 #include "nsJSUtils.h"
 
 #include "nsITimer.h"
@@ -134,23 +100,9 @@ nsHTMLAudioElement::Initialize(nsISupports* aOwner, JSContext* aContext,
     return NS_OK;
   }
 
-  // The only (optional) argument is the url of the audio
-  JSString* jsstr = JS_ValueToString(aContext, argv[0]);
-  if (!jsstr)
-    return NS_ERROR_FAILURE;
-
-  nsDependentJSString str;
-  if (!str.init(aContext, jsstr))
-    return NS_ERROR_FAILURE;
-
-  rv = SetAttr(kNameSpaceID_None, nsGkAtoms::src, str, true);
-  if (NS_FAILED(rv))
-    return rv;
-
-  // We have been specified with a src URL. Begin a load.
-  QueueSelectResourceTask();
-
-  return NS_OK;
+  // The only (optional) argument is the src of the audio (which can
+  // be a URL string or a MediaStream object)
+  return SetSrc(aContext, argv[0]);
 }
 
 NS_IMETHODIMP
@@ -179,42 +131,41 @@ nsHTMLAudioElement::MozSetup(PRUint32 aChannels, PRUint32 aRate)
     return rv;
   }
 
-  MetadataLoaded(aChannels, aRate);
+  MetadataLoaded(aChannels, aRate, true);
   mAudioStream->SetVolume(mVolume);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsHTMLAudioElement::MozWriteAudio(const jsval &aData, JSContext *aCx, PRUint32 *aRetVal)
+nsHTMLAudioElement::MozWriteAudio(const JS::Value& aData, JSContext* aCx, PRUint32* aRetVal)
 {
   if (!mAudioStream) {
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
-  if (JSVAL_IS_PRIMITIVE(aData)) {
+  if (!aData.isObject()) {
     return NS_ERROR_DOM_TYPE_MISMATCH_ERR;
   }
 
-  JSObject *darray = JSVAL_TO_OBJECT(aData);
-  JS::AutoValueRooter tsrc_tvr(aCx);
-  JSObject *tsrc = NULL;
+  JSObject* darray = &aData.toObject();
+  JS::AutoObjectRooter tvr(aCx);
+  JSObject* tsrc = NULL;
 
   // Allow either Float32Array or plain JS Array
-  if (js::GetObjectClass(darray) == &js::TypedArray::fastClasses[js::TypedArray::TYPE_FLOAT32])
-  {
-    tsrc = js::TypedArray::getTypedArray(darray);
+  if (JS_IsFloat32Array(darray, aCx)) {
+    tsrc = darray;
   } else if (JS_IsArrayObject(aCx, darray)) {
-    JSObject *nobj = js_CreateTypedArrayWithArray(aCx, js::TypedArray::TYPE_FLOAT32, darray);
+    JSObject* nobj = JS_NewFloat32ArrayFromArray(aCx, darray);
     if (!nobj) {
       return NS_ERROR_DOM_TYPE_MISMATCH_ERR;
     }
-    *tsrc_tvr.jsval_addr() = OBJECT_TO_JSVAL(nobj);
-    tsrc = js::TypedArray::getTypedArray(nobj);
+    tsrc = nobj;
   } else {
     return NS_ERROR_DOM_TYPE_MISMATCH_ERR;
   }
+  tvr.setObject(tsrc);
 
-  PRUint32 dataLength = JS_GetTypedArrayLength(tsrc);
+  PRUint32 dataLength = JS_GetTypedArrayLength(tsrc, aCx);
 
   // Make sure that we are going to write the correct amount of data based
   // on number of channels.
@@ -225,7 +176,7 @@ nsHTMLAudioElement::MozWriteAudio(const jsval &aData, JSContext *aCx, PRUint32 *
   // Don't write more than can be written without blocking.
   PRUint32 writeLen = NS_MIN(mAudioStream->Available(), dataLength / mChannels);
 
-  nsresult rv = mAudioStream->Write(JS_GetTypedArrayData(tsrc), writeLen);
+  nsresult rv = mAudioStream->Write(JS_GetFloat32ArrayData(tsrc, aCx), writeLen);
   if (NS_FAILED(rv)) {
     return rv;
   }

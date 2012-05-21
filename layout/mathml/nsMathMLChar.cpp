@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla MathML Project.
- *
- * The Initial Developer of the Original Code is
- * The University Of Queensland.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Roger B. Sidje <rbs@maths.uq.edu.au>
- *   Shyjan Mahamud <mahamud@cs.cmu.edu>
- *   Karl Tomlinson <karlt+@karlt.net>, Mozilla Corporation
- *   Frederic Wang <fred.wang@free.fr>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCOMPtr.h"
 #include "nsFrame.h"
@@ -1041,7 +1005,7 @@ insert:
 }
 
 // Update the font and rendering context if there is a family change
-static void
+static bool
 SetFontFamily(nsStyleContext*      aStyleContext,
               nsRenderingContext&  aRenderingContext,
               nsFont&              aFont,
@@ -1052,14 +1016,24 @@ SetFontFamily(nsStyleContext*      aStyleContext,
   const nsAString& family =
     aGlyphCode.font ? aGlyphTable->FontNameFor(aGlyphCode) : aDefaultFamily;
   if (! family.Equals(aFont.name)) {
-    aFont.name = family;
+    nsFont font = aFont;
+    font.name = family;
     nsRefPtr<nsFontMetrics> fm;
-    aRenderingContext.DeviceContext()->GetMetricsFor(aFont,
+    aRenderingContext.DeviceContext()->GetMetricsFor(font,
       aStyleContext->GetStyleFont()->mLanguage,
       aStyleContext->PresContext()->GetUserFontSet(),
       *getter_AddRefs(fm));
-    aRenderingContext.SetFont(fm);
+    // Set the font if it is an unicode table
+    // or if the same family name has been found
+    if (aGlyphTable == &gGlyphTableList->mUnicodeTable ||
+        fm->GetThebesFontGroup()->GetFontAt(0)->GetFontEntry()->
+        FamilyName() == family) {
+      aFont.name = family;
+      aRenderingContext.SetFont(fm);
+    } else
+        return false; // We did not set the font
   }
+  return true;
 }
 
 class nsMathMLChar::StretchEnumContext {
@@ -1089,9 +1063,6 @@ public:
   EnumCallback(const nsString& aFamily, bool aGeneric, void *aData);
 
 private:
-  static bool
-  ResolverCallback (const nsAString& aFamily, void *aData);
-
   bool TryVariants(nsGlyphTable* aGlyphTable, const nsAString& aFamily);
   bool TryParts(nsGlyphTable* aGlyphTable, const nsAString& aFamily);
 
@@ -1150,7 +1121,12 @@ nsMathMLChar::StretchEnumContext::TryVariants(nsGlyphTable*    aGlyphTable,
   nsGlyphCode ch;
   while ((ch = aGlyphTable->BigOf(mPresContext, mChar, size)).Exists()) {
 
-    SetFontFamily(sc, mRenderingContext, font, aGlyphTable, ch, aFamily);
+    if(!SetFontFamily(sc, mRenderingContext, font, aGlyphTable, ch, aFamily)) {
+      // if largeopOnly is set, break now
+      if (largeopOnly) break;
+      ++size;
+      continue;
+    }
 
     NS_ASSERTION(maxWidth || ch.code[0] != mChar->mGlyph.code[0] ||
                  ch.code[1] != mChar->mGlyph.code[1] ||
@@ -1274,8 +1250,10 @@ nsMathMLChar::StretchEnumContext::TryParts(nsGlyphTable*    aGlyphTable,
       sizedata[i] = mTargetSize;
     }
     else {
-      SetFontFamily(mChar->mStyleContext, mRenderingContext,
-                    font, aGlyphTable, ch, aFamily);
+      if (!SetFontFamily(mChar->mStyleContext, mRenderingContext,
+                         font, aGlyphTable, ch, aFamily))
+        return false;
+
       nsBoundingMetrics bm = mRenderingContext.GetBoundingMetrics(ch.code,
                                                                   ch.Length());
 
@@ -1370,38 +1348,6 @@ nsMathMLChar::StretchEnumContext::TryParts(nsGlyphTable*    aGlyphTable,
   return IsSizeOK(mPresContext, computedSize, mTargetSize, mStretchHint);
 }
 
-// This is only called for glyph table corresponding to a family that exists.
-// See if the table has a glyph that matches the container
-bool
-nsMathMLChar::StretchEnumContext::ResolverCallback (const nsAString& aFamily,
-                                                    void *aData)
-{
-  StretchEnumContext* context = static_cast<StretchEnumContext*>(aData);
-  nsGlyphTable* glyphTable = context->mGlyphTable;
-
-  // Only try this table once.
-  context->mTablesTried.AppendElement(glyphTable);
-
-  // If the unicode table is being used, then search all font families.  If a
-  // special table is being used then the font in this family should have the
-  // specified glyphs.
-  const nsAString& family = glyphTable == &gGlyphTableList->mUnicodeTable ?
-    context->mFamilies : aFamily;
-
-  if(context->mTryVariants) {
-    bool isOK = context->TryVariants(glyphTable, family);
-    if (isOK)
-      return false; // no need to continue
-  }
-
-  if(context->mTryParts) {
-    bool isOK = context->TryParts(glyphTable, family);
-    if (isOK)
-      return false; // no need to continue
-  }
-  return true;
-}
-
 // This is called for each family, whether it exists or not
 bool
 nsMathMLChar::StretchEnumContext::EnumCallback(const nsString& aFamily,
@@ -1417,16 +1363,32 @@ nsMathMLChar::StretchEnumContext::EnumCallback(const nsString& aFamily,
   if (context->mTablesTried.Contains(glyphTable))
     return true; // already tried this one
 
+  // Check font family if it is not a generic one
+  // We test with the kNullGlyph
+  nsStyleContext *sc = context->mChar->mStyleContext;
+  nsFont font = sc->GetStyleFont()->mFont;
+  if (!aGeneric && !SetFontFamily(sc, context->mRenderingContext,
+                                  font, NULL, kNullGlyph, aFamily))
+     return true; // Could not set the family
+
   context->mGlyphTable = glyphTable;
 
-  if (aGeneric)
-    return ResolverCallback(aFamily, aData);
+  // Now see if the table has a glyph that matches the container
 
-  bool aborted;
-  gfxPlatform *pf = gfxPlatform::GetPlatform();
-  nsresult rv =
-    pf->ResolveFontName(aFamily, ResolverCallback, aData, aborted);
-  return NS_SUCCEEDED(rv) && !aborted; // true means continue
+  // Only try this table once.
+  context->mTablesTried.AppendElement(glyphTable);
+
+  // If the unicode table is being used, then search all font families.  If a
+  // special table is being used then the font in this family should have the
+  // specified glyphs.
+  const nsAString& family = glyphTable == &gGlyphTableList->mUnicodeTable ?
+    context->mFamilies : aFamily;
+
+  if((context->mTryVariants && context->TryVariants(glyphTable, family)) ||
+     (context->mTryParts && context->TryParts(glyphTable, family)))
+    return false; // no need to continue
+
+  return true; // true means continue
 }
 
 nsresult
@@ -1899,8 +1861,9 @@ class nsDisplayMathMLCharForeground : public nsDisplayItem {
 public:
   nsDisplayMathMLCharForeground(nsDisplayListBuilder* aBuilder,
                                 nsIFrame* aFrame, nsMathMLChar* aChar,
-				                        bool aIsSelected)
-    : nsDisplayItem(aBuilder, aFrame), mChar(aChar), mIsSelected(aIsSelected) {
+				                PRUint32 aIndex, bool aIsSelected)
+    : nsDisplayItem(aBuilder, aFrame), mChar(aChar), 
+      mIndex(aIndex), mIsSelected(aIsSelected) {
     MOZ_COUNT_CTOR(nsDisplayMathMLCharForeground);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -1909,7 +1872,8 @@ public:
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder) {
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+    *aSnap = false;
     nsRect rect;
     mChar->GetRect(rect);
     nsPoint offset = ToReferenceFrame() + rect.TopLeft();
@@ -1930,11 +1894,15 @@ public:
 
   virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder)
   {
-    return GetBounds(aBuilder);
+    bool snap;
+    return GetBounds(aBuilder, &snap);
   }
+  
+  virtual PRUint32 GetPerFrameKey() { return (mIndex << nsDisplayItem::TYPE_BITS) | nsDisplayItem::GetPerFrameKey(); }
 
 private:
   nsMathMLChar* mChar;
+  PRUint32      mIndex;
   bool          mIsSelected;
 };
 
@@ -1980,6 +1948,7 @@ nsresult
 nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
                       nsIFrame*               aForFrame,
                       const nsDisplayListSet& aLists,
+                      PRUint32                aIndex,
                       const nsRect*           aSelectedRect)
 {
   nsresult rv = NS_OK;
@@ -2024,6 +1993,7 @@ nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
   }
   return aLists.Content()->AppendNewToTop(new (aBuilder)
         nsDisplayMathMLCharForeground(aBuilder, aForFrame, this,
+                                      aIndex,
                                       aSelectedRect && !aSelectedRect->IsEmpty()));
 }
 

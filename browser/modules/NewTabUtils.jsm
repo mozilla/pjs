@@ -27,6 +27,9 @@ const PREF_NEWTAB_ENABLED = "browser.newtabpage.enabled";
 // The maximum number of results we want to retrieve from history.
 const HISTORY_RESULTS_LIMIT = 100;
 
+// The gather telemetry topic.
+const TOPIC_GATHER_TELEMETRY = "gather-telemetry";
+
 /**
  * Singleton that provides storage functionality.
  */
@@ -121,8 +124,6 @@ let Storage = {
       // want any data from private browsing to show up.
       PinnedLinks.resetCache();
       BlockedLinks.resetCache();
-
-      Pages.update();
     }
   },
 
@@ -188,11 +189,6 @@ let AllPages = {
   _pages: [],
 
   /**
-   * Tells whether we already added a preference observer.
-   */
-  _observing: false,
-
-  /**
    * Cached value that tells whether the New Tab Page feature is enabled.
    */
   _enabled: null,
@@ -203,12 +199,7 @@ let AllPages = {
    */
   register: function AllPages_register(aPage) {
     this._pages.push(aPage);
-
-    // Add the preference observer if we haven't already.
-    if (!this._observing) {
-      this._observing = true;
-      Services.prefs.addObserver(PREF_NEWTAB_ENABLED, this, true);
-    }
+    this._addObserver();
   },
 
   /**
@@ -239,6 +230,14 @@ let AllPages = {
   },
 
   /**
+   * Returns the number of registered New Tab Pages (i.e. the number of open
+   * about:newtab instances).
+   */
+  get length() {
+    return this._pages.length;
+  },
+
+  /**
    * Updates all currently active pages but the given one.
    * @param aExceptPage The page to exclude from updating.
    */
@@ -262,6 +261,15 @@ let AllPages = {
     this._pages.forEach(function (aPage) {
       aPage.observe.apply(aPage, args);
     }, this);
+  },
+
+  /**
+   * Adds a preference observer and turns itself into a no-op after the first
+   * invokation.
+   */
+  _addObserver: function AllPages_addObserver() {
+    Services.prefs.addObserver(PREF_NEWTAB_ENABLED, this, true);
+    this._addObserver = function () {};
   },
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
@@ -379,6 +387,15 @@ let BlockedLinks = {
   },
 
   /**
+   * Unblocks a given link.
+   * @param aLink The link to unblock.
+   */
+  unblock: function BlockedLinks_unblock(aLink) {
+    if (this.isBlocked(aLink))
+      delete this.links[aLink.url];
+  },
+
+  /**
    * Returns whether a given link is blocked.
    * @param aLink The link to check.
    */
@@ -417,9 +434,6 @@ let PlacesProvider = {
 
     // Sort by frecency, descending.
     options.sortingMode = Ci.nsINavHistoryQueryOptions.SORT_BY_FRECENCY_DESCENDING
-
-    // We don't want source redirects for this query.
-    options.redirectsMode = Ci.nsINavHistoryQueryOptions.REDIRECTS_MODE_TARGET;
 
     let links = [];
 
@@ -512,6 +526,8 @@ let Links = {
         this._links = aLinks;
         executeCallbacks();
       }.bind(this));
+
+      this._addObserver();
     }
   },
 
@@ -543,22 +559,92 @@ let Links = {
    * Resets the links cache.
    */
   resetCache: function Links_resetCache() {
-    this._links = [];
+    this._links = null;
+  },
+
+  /**
+   * Implements the nsIObserver interface to get notified about browser history
+   * sanitization.
+   */
+  observe: function Links_observe(aSubject, aTopic, aData) {
+    // Make sure to update open about:newtab instances. If there are no opened
+    // pages we can just wait for the next new tab to populate the cache again.
+    if (AllPages.length && AllPages.enabled)
+      this.populateCache(function () { AllPages.update() }, true);
+    else
+      this._links = null;
+  },
+
+  /**
+   * Adds a sanitization observer and turns itself into a no-op after the first
+   * invokation.
+   */
+  _addObserver: function Links_addObserver() {
+    Services.obs.addObserver(this, "browser:purge-session-history", true);
+    this._addObserver = function () {};
+  },
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
+                                         Ci.nsISupportsWeakReference])
+};
+
+/**
+ * Singleton used to collect telemetry data.
+ *
+ */
+let Telemetry = {
+  /**
+   * Initializes object.
+   */
+  init: function Telemetry_init() {
+    Services.obs.addObserver(this, TOPIC_GATHER_TELEMETRY, false);
+  },
+
+  /**
+   * Collects data.
+   */
+  _collect: function Telemetry_collect() {
+    let probes = [
+      { histogram: "NEWTAB_PAGE_ENABLED",
+        value: AllPages.enabled },
+      { histogram: "NEWTAB_PAGE_PINNED_SITES_COUNT",
+        value: PinnedLinks.links.length },
+      { histogram: "NEWTAB_PAGE_BLOCKED_SITES_COUNT",
+        value: Object.keys(BlockedLinks.links).length }
+    ];
+
+    probes.forEach(function Telemetry_collect_forEach(aProbe) {
+      Services.telemetry.getHistogramById(aProbe.histogram)
+        .add(aProbe.value);
+    });
+  },
+
+  /**
+   * Listens for gather telemetry topic.
+   */
+  observe: function Telemetry_observe(aSubject, aTopic, aData) {
+    this._collect();
   }
 };
+
+Telemetry.init();
 
 /**
  * Singleton that provides the public API of this JSM.
  */
 let NewTabUtils = {
   /**
-   * Resets the NewTabUtils module, its links and its storage.
+   * Restores all sites that have been removed from the grid.
    */
-  reset: function NewTabUtils_reset() {
+  restore: function NewTabUtils_restore() {
     Storage.clear();
     Links.resetCache();
     PinnedLinks.resetCache();
     BlockedLinks.resetCache();
+
+    Links.populateCache(function () {
+      AllPages.update();
+    }, true);
   },
 
   allPages: AllPages,

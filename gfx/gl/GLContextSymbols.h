@@ -1,44 +1,12 @@
 /* -*- Mode: c++; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40; -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Benoit Jacob <bjacob@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GLCONTEXTSYMBOLS_H_
 #define GLCONTEXTSYMBOLS_H_
+
+#include "GLDefs.h"
 
 /*
  * This file should only be included by GLContext.h, and should be
@@ -99,6 +67,10 @@ struct GLContextSymbols
     PFNGLCLEARSTENCILPROC fClearStencil;
     typedef void (GLAPIENTRY * PFNGLCOLORMASKPROC) (realGLboolean red, realGLboolean green, realGLboolean blue, realGLboolean alpha);
     PFNGLCOLORMASKPROC fColorMask;
+    typedef void (GLAPIENTRY * PFNGLCOMPRESSEDTEXIMAGE2D) (GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const GLvoid *pixels);
+    PFNGLCOMPRESSEDTEXIMAGE2D fCompressedTexImage2D;
+    typedef void (GLAPIENTRY * PFNGLCOMPRESSEDTEXSUBIMAGE2D) (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const GLvoid *pixels);
+    PFNGLCOMPRESSEDTEXSUBIMAGE2D fCompressedTexSubImage2D;
     typedef void (GLAPIENTRY * PFNGLCULLFACEPROC) (GLenum mode);
     PFNGLCULLFACEPROC fCullFace;
     typedef void (GLAPIENTRY * PFNGLDETACHSHADERPROC) (GLuint program, GLuint shader);
@@ -155,6 +127,10 @@ struct GLContextSymbols
     PFNGLTEXPARAMETERFPROC fTexParameterf;
     typedef GLubyte* (GLAPIENTRY * PFNGLGETSTRINGPROC) (GLenum);
     PFNGLGETSTRINGPROC fGetString;
+    typedef void (GLAPIENTRY * PFNGLGETTEXIMAGEPROC) (GLenum target, GLint level, GLenum format, GLenum type, GLvoid* image);
+    PFNGLGETTEXIMAGEPROC fGetTexImage;
+    typedef void (GLAPIENTRY * PFNGLGETTEXLEVELPARAMETERIVPROC) (GLenum target, GLint level, GLenum pname, GLint *params);
+    PFNGLGETTEXLEVELPARAMETERIVPROC fGetTexLevelParameteriv;
     typedef void (GLAPIENTRY * PFNGLGETTEXPARAMETERFVPROC) (GLenum target, GLenum pname, const GLfloat *params);
     PFNGLGETTEXPARAMETERFVPROC fGetTexParameterfv;
     typedef void (GLAPIENTRY * PFNGLGETTEXPARAMETERIVPROC) (GLenum target, GLenum pname, const GLint *params);
@@ -377,6 +353,24 @@ struct GLContextSymbols
 
     typedef GLenum (GLAPIENTRY * PFNGLGETGRAPHICSRESETSTATUS) (void);
     PFNGLGETGRAPHICSRESETSTATUS fGetGraphicsResetStatus;
+
+    /*
+     * ARB_sync extension
+     */
+    typedef GLsync (GLAPIENTRY * PFNGLFENCESYNC) (GLenum condition, GLbitfield flags);
+    PFNGLFENCESYNC fFenceSync;
+    typedef realGLboolean (GLAPIENTRY * PFNGLISSYNC) (GLsync sync);
+    PFNGLISSYNC fIsSync;
+    typedef void (GLAPIENTRY * PFNGLDELETESYNC) (GLsync sync);
+    PFNGLDELETESYNC fDeleteSync;
+    typedef GLenum (GLAPIENTRY * PFNGLCLIENTWAITSYNC) (GLsync sync, GLbitfield flags, GLuint64 timeout);
+    PFNGLCLIENTWAITSYNC fClientWaitSync;
+    typedef void (GLAPIENTRY * PFNGLWAITSYNC) (GLsync sync, GLbitfield flags, GLuint64 timeout);
+    PFNGLWAITSYNC fWaitSync;
+    typedef void (GLAPIENTRY * PFNGLGETINTEGER64V) (GLenum pname, GLint64 *params);
+    PFNGLGETINTEGER64V fGetInteger64v;
+    typedef void (GLAPIENTRY * PFNGLGETSYNCIV) (GLsync sync, GLenum pname, GLsizei bufSize, GLsizei *length, GLint *values);
+    PFNGLGETSYNCIV fGetSynciv;
 };
 
 }

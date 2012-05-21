@@ -1,38 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.com>
- *   Matt Woodrow <mwoodrow@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GLContextProvider.h"
 #include "nsDebug.h"
@@ -90,11 +59,11 @@ public:
                 NSOpenGLPFAAccelerated,
                 NSOpenGLPFAAllowOfflineRenderers,
                 NSOpenGLPFADoubleBuffer,
-                (NSOpenGLPixelFormatAttribute)nil 
+                0
             };
 
             if (!gUseDoubleBufferedWindows) {
-              attribs[2] = (NSOpenGLPixelFormatAttribute)nil;
+              attribs[2] = 0;
             }
 
             mPixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attribs];
@@ -153,7 +122,11 @@ public:
     bool Init()
     {
         MakeCurrent();
-        return InitWithPrefix("gl", true);
+        if (!InitWithPrefix("gl", true))
+            return false;
+
+        InitFramebuffers();
+        return true;
     }
 
     void *GetNativeData(NativeDataType aType)
@@ -210,7 +183,8 @@ public:
                             const nsIntSize& aSize,
                             GLenum aWrapMode,
                             TextureImage::ContentType aContentType,
-                            GLContext* aContext);
+                            GLContext* aContext,
+                            TextureImage::Flags aFlags = TextureImage::NoFlags);
 
     NSOpenGLContext *mContext;
     NSOpenGLPixelBuffer *mPBuffer;
@@ -285,7 +259,7 @@ GLContextCGL::ResizeOffscreen(const gfxIntSize& aNewSize)
             return false;
         }
 
-        if (!ResizeOffscreenFBO(aNewSize, false)) {
+        if (!ResizeOffscreenFBOs(aNewSize, false)) {
             [pb release];
             return false;
         }
@@ -305,7 +279,7 @@ GLContextCGL::ResizeOffscreen(const gfxIntSize& aNewSize)
         return true;
     }
 
-    return ResizeOffscreenFBO(aNewSize, true);
+    return ResizeOffscreenFBOs(aNewSize, true);
 }
 
 class TextureImageCGL : public BasicTextureImage
@@ -315,7 +289,8 @@ class TextureImageCGL : public BasicTextureImage
                                           const nsIntSize&,
                                           GLenum,
                                           TextureImage::ContentType,
-                                          GLContext*);
+                                          GLContext*,
+                                          TextureImage::Flags);
 public:
     ~TextureImageCGL()
     {
@@ -329,12 +304,13 @@ protected:
     already_AddRefed<gfxASurface>
     GetSurfaceForUpdate(const gfxIntSize& aSize, ImageFormat aFmt)
     {
+        gfxIntSize size(aSize.width + 1, aSize.height + 1);
         mGLContext->MakeCurrent();
         if (!mGLContext->
             IsExtensionSupported(GLContext::ARB_pixel_buffer_object)) 
         {
             return gfxPlatform::GetPlatform()->
-                CreateOffscreenSurface(aSize, 
+                CreateOffscreenSurface(size,
                                        gfxASurface::ContentFromFormat(aFmt));
         }
 
@@ -342,12 +318,12 @@ protected:
             mGLContext->fGenBuffers(1, &mPixelBuffer);
         }
         mGLContext->fBindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, mPixelBuffer);
-        PRInt32 size = aSize.width * 4 * aSize.height;
+        PRInt32 length = size.width * 4 * size.height;
 
-        if (size > mPixelBufferSize) {
-            mGLContext->fBufferData(LOCAL_GL_PIXEL_UNPACK_BUFFER, size,
+        if (length > mPixelBufferSize) {
+            mGLContext->fBufferData(LOCAL_GL_PIXEL_UNPACK_BUFFER, length,
                                     NULL, LOCAL_GL_STREAM_DRAW);
-            mPixelBufferSize = size;
+            mPixelBufferSize = length;
         }
         unsigned char* data = 
             (unsigned char*)mGLContext->
@@ -359,18 +335,17 @@ protected:
         if (!data) {
             nsCAutoString failure;
             failure += "Pixel buffer binding failed: ";
-            failure.AppendPrintf("%dx%d\n", aSize.width, aSize.height);
+            failure.AppendPrintf("%dx%d\n", size.width, size.height);
             gfx::LogFailure(failure);
 
             mGLContext->fBindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, 0);
             return gfxPlatform::GetPlatform()->
-                CreateOffscreenSurface(aSize, 
+                CreateOffscreenSurface(size,
                                        gfxASurface::ContentFromFormat(aFmt));
         }
 
         nsRefPtr<gfxQuartzSurface> surf = 
-            new gfxQuartzSurface(data, aSize,
-                                 aSize.width * 4, aFmt);
+            new gfxQuartzSurface(data, size, size.width * 4, aFmt);
 
         mBoundPixelBuffer = true;
         return surf.forget();
@@ -401,8 +376,9 @@ private:
                     const nsIntSize& aSize,
                     GLenum aWrapMode,
                     ContentType aContentType,
-                    GLContext* aContext)
-        : BasicTextureImage(aTexture, aSize, aWrapMode, aContentType, aContext)
+                    GLContext* aContext,
+                    TextureImage::Flags aFlags = TextureImage::NoFlags)
+        : BasicTextureImage(aTexture, aSize, aWrapMode, aContentType, aContext, aFlags)
         , mPixelBuffer(0)
         , mPixelBufferSize(0)
         , mBoundPixelBuffer(false)
@@ -418,10 +394,11 @@ GLContextCGL::CreateBasicTextureImage(GLuint aTexture,
                                       const nsIntSize& aSize,
                                       GLenum aWrapMode,
                                       TextureImage::ContentType aContentType,
-                                      GLContext* aContext)
+                                      GLContext* aContext,
+                                      TextureImage::Flags aFlags)
 {
     nsRefPtr<TextureImageCGL> teximage
-        (new TextureImageCGL(aTexture, aSize, aWrapMode, aContentType, aContext));
+        (new TextureImageCGL(aTexture, aSize, aWrapMode, aContentType, aContext, aFlags));
     return teximage.forget();
 }
 
@@ -456,7 +433,7 @@ GLContextProviderCGL::CreateForWindow(nsIWidget *aWidget)
                                                         context);
     if (!glContext->Init()) {
         return nsnull;
-    }    
+    }
 
     return glContext.forget();
 }
@@ -496,8 +473,6 @@ CreateOffscreenPBufferContext(const gfxIntSize& aSize,
 
     A_(0);
 #undef A_
-
-    printf_stderr("colorbits: %d alpha: %d depth: %d stencil: %d\n", aFormat.colorBits(), aFormat.alpha, aFormat.depth, aFormat.stencil);
 
     NSOpenGLPixelFormat *pbFormat = [[NSOpenGLPixelFormat alloc]
                                      initWithAttributes:attribs.Elements()];
@@ -548,12 +523,12 @@ CreateOffscreenPBufferContext(const gfxIntSize& aSize,
     {
         GLint l;
         [pbFormat getValues:&l forAttribute:NSOpenGLPFADepthSize forVirtualScreen:[context currentVirtualScreen]];
-        printf_stderr("*** depth: %d (req: %d)\n", l, aFormat.depth);
     }
 
     [pbFormat release];
 
     nsRefPtr<GLContextCGL> glContext = new GLContextCGL(aFormat, shareContext, context, pb);
+
     return glContext.forget();
 }
 
@@ -579,12 +554,14 @@ CreateOffscreenFBOContext(const ContextFormat& aFormat,
     }
 
     nsRefPtr<GLContextCGL> glContext = new GLContextCGL(aFormat, shareContext, context, true);
+
     return glContext.forget();
 }
 
 already_AddRefed<GLContext>
 GLContextProviderCGL::CreateOffscreen(const gfxIntSize& aSize,
-                                      const ContextFormat& aFormat)
+                                      const ContextFormat& aFormat,
+                                      const ContextFlags flags)
 {
     ContextFormat actualFormat(aFormat);
 
@@ -597,7 +574,7 @@ GLContextProviderCGL::CreateOffscreen(const gfxIntSize& aSize,
         glContext = CreateOffscreenPBufferContext(aSize, actualFormat);
         if (glContext &&
             glContext->Init() &&
-            glContext->ResizeOffscreenFBO(aSize, false))
+            glContext->ResizeOffscreenFBOs(aSize, false))
         {
             glContext->mOffscreenSize = aSize;
             glContext->mOffscreenActualSize = aSize;
@@ -610,7 +587,7 @@ GLContextProviderCGL::CreateOffscreen(const gfxIntSize& aSize,
     glContext = CreateOffscreenFBOContext(actualFormat);
     if (glContext &&
         glContext->Init() &&
-        glContext->ResizeOffscreenFBO(aSize, true))
+        glContext->ResizeOffscreenFBOs(aSize, true))
     {
         return glContext.forget();
     }

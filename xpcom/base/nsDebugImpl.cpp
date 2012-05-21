@@ -1,42 +1,10 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   IBM Corp.
- *   Henry Sobotka
- *   Benjamin Smedberg <benjamin@smedbergs.us>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// Chromium headers must come before Mozilla headers.
+#include "base/process_util.h"
 
 #include "nsDebugImpl.h"
 #include "nsDebug.h"
@@ -100,6 +68,11 @@ Break(const char *aMsg);
 #include <stdlib.h>
 #endif
 
+using namespace mozilla;
+
+static bool sIsMultiprocess = false;
+static const char *sMultiprocessDescription = NULL;
+
 static PRInt32 gAssertionCount = 0;
 
 NS_IMPL_QUERY_INTERFACE2(nsDebugImpl, nsIDebug, nsIDebug2)
@@ -161,6 +134,13 @@ nsDebugImpl::GetAssertionCount(PRInt32* aResult)
 {
   *aResult = gAssertionCount;
   return NS_OK;
+}
+
+/* static */ void
+nsDebugImpl::SetMultiprocessMode(const char *aDesc)
+{
+  sIsMultiprocess = true;
+  sMultiprocessDescription = aDesc;
 }
 
 /**
@@ -288,19 +268,33 @@ NS_DebugBreak(PRUint32 aSeverity, const char *aStr, const char *aExpr,
      aSeverity = NS_DEBUG_WARNING;
    };
 
-   PR_sxprintf(StuffFixedBuffer, &buf, "%s: ", sevString);
+#  define PrintToBuffer(...) PR_sxprintf(StuffFixedBuffer, &buf, __VA_ARGS__)
+
+   // If we're multiprocess, print "[PID]" or "[Desc PID]" at the beginning of
+   // the message.
+   if (sIsMultiprocess) {
+     PrintToBuffer("[");
+     if (sMultiprocessDescription) {
+       PrintToBuffer("%s ", sMultiprocessDescription);
+     }
+     PrintToBuffer("%d] ", base::GetCurrentProcId());
+   }
+
+   PrintToBuffer("%s: ", sevString);
 
    if (aStr)
-     PR_sxprintf(StuffFixedBuffer, &buf, "%s: ", aStr);
+     PrintToBuffer("%s: ", aStr);
 
    if (aExpr)
-     PR_sxprintf(StuffFixedBuffer, &buf, "'%s', ", aExpr);
+     PrintToBuffer("'%s', ", aExpr);
 
    if (aFile)
-     PR_sxprintf(StuffFixedBuffer, &buf, "file %s, ", aFile);
+     PrintToBuffer("file %s, ", aFile);
 
    if (aLine != -1)
-     PR_sxprintf(StuffFixedBuffer, &buf, "line %d", aLine);
+     PrintToBuffer("line %d", aLine);
+
+#  undef PrintToBuffer
 
    // Write out the message to the debug log
    PR_LOG(gDebugLog, ll, ("%s", buf.buffer));

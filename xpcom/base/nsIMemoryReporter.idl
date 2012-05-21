@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 50; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * mozilla.org
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com> (original author)
- *   Nicholas Nethercote <nnethercote@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
@@ -105,21 +71,25 @@ interface nsIMemoryReporter : nsISupports
    *   So in the example above, |a| may not count any allocations counted by
    *   |d|, and vice versa.
    *
+   *   Reporters in this category must have kind HEAP or NONHEAP, units BYTES,
+   *   and a description that is a sentence (i.e. starts with a capital letter
+   *   and ends with a period, or similar).
+   *
    * - Paths starting with "smaps/" represent regions of virtual memory that the
    *   process has mapped.  The rest of the path describes the type of
    *   measurement; for instance, the reporter "smaps/rss/[stack]" might report
    *   how much of the process's stack is currently in physical memory.
    *
-   *   Reporters in this category must have kind NONHEAP and units BYTES.
+   *   Reporters in this category must have kind NONHEAP, units BYTES, and
+   *   a non-empty description.
    *
-   * - Paths starting with "compartments/" represent the names of JS
-   *   compartments.  Reporters in this category must paths of the form
-   *   "compartments/user/<name>" or "compartments/system/<name>", amount 1,
-   *   kind OTHER, units COUNT, and an empty description.
+   * - Reporters with kind SUMMARY may have any path which doesn't start with
+   *   "explicit/" or "smaps/".
    *
    * - All other paths represent cross-cutting values and may overlap with any
    *   other reporter.  Reporters in this category must have paths that do not
-   *   contain '/' separators, and kind OTHER.
+   *   contain '/' separators, kind OTHER, and a description that is a
+   *   sentence.
    */
   readonly attribute AUTF8String path;
 
@@ -140,10 +110,22 @@ interface nsIMemoryReporter : nsISupports
    *  - OTHER: reporters which don't fit into either of these categories. Such
    *    reporters must have a path that does not start with "explicit/" or
    *    "smaps/" and may have any units.
+   *
+   *  - SUMMARY: reporters which report data that's available in a more
+   *    detailed form via other reporters.  These reporters are sometimes
+   *    useful for efficiency purposes -- for example, a KIND_SUMMARY reporter
+   *    might list all the JS compartments without the overhead of the full JS
+   *    memory reporter, which walks the JS heap.
+   *
+   *    Unlike other reporters, SUMMARY reporters may have empty descriptions.
+   *
+   *    SUMMARY reporters must not have a path starting with "explicit/" or
+   *    "smaps/".
    */
   const PRInt32 KIND_NONHEAP = 0;
   const PRInt32 KIND_HEAP    = 1;
   const PRInt32 KIND_OTHER   = 2;
+  const PRInt32 KIND_SUMMARY = 3;
 
   /*
    * KIND_MAPPED is a deprecated synonym for KIND_NONHEAP.  We keep it around
@@ -181,6 +163,8 @@ interface nsIMemoryReporter : nsISupports
    *    This allows a fractional percentage to be shown even though |amount| is
    *    an integer.  E.g. if the actual percentage is 12.34%, |amount| should
    *    be 1234.
+   *
+   *    Values greater than 100% are allowed.
    */
   const PRInt32 UNITS_BYTES = 0;
   const PRInt32 UNITS_COUNT = 1;
@@ -193,8 +177,8 @@ interface nsIMemoryReporter : nsISupports
   readonly attribute PRInt32 units;
 
   /*
-   * The numeric value reported by this memory reporter.  -1 means "unknown",
-   * ie. something went wrong when getting the amount.
+   * The numeric value reported by this memory reporter.  Accesses can fail if
+   * something goes wrong when getting the amount.
    */
   readonly attribute PRInt64 amount;
 
@@ -301,7 +285,7 @@ interface nsIMemoryReporterManager : nsISupports
    * Get the resident size (aka. RSS, physical memory used).  This reporter
    * is special-cased because it's interesting, is available on all
    * platforms, and returns a meaningful result on all common platforms.
-   * -1 means unknown.
+   * Accesses can fail.
    */
   readonly attribute PRInt64 resident;
 
@@ -311,7 +295,7 @@ interface nsIMemoryReporterManager : nsISupports
    * calloc, operator new).  (Nb: it covers all heap allocations, but will
    * miss any OS-level ones not covered by memory reporters.)  This reporter
    * is special-cased because it's interesting, and is moderately difficult
-   * to compute in JS.  -1 means unknown.
+   * to compute in JS.  Accesses can fail.
    */
   readonly attribute PRInt64 explicit;
 
@@ -330,12 +314,29 @@ interface nsIMemoryReporterManager : nsISupports
     class MemoryReporter_##_classname MOZ_FINAL : public nsIMemoryReporter {                  \
     public:                                                                                   \
       NS_DECL_ISUPPORTS                                                                       \
-      NS_IMETHOD GetProcess(nsACString &process) { process.Truncate(); return NS_OK; } \
-      NS_IMETHOD GetPath(nsACString &memoryPath) { memoryPath.Assign(_path); return NS_OK; } \
+      NS_IMETHOD GetProcess(nsACString &process) { process.Truncate(); return NS_OK; }        \
+      NS_IMETHOD GetPath(nsACString &memoryPath) { memoryPath.Assign(_path); return NS_OK; }  \
       NS_IMETHOD GetKind(int *kind) { *kind = _kind; return NS_OK; }                          \
       NS_IMETHOD GetUnits(int *units) { *units = _units; return NS_OK; }                      \
-      NS_IMETHOD GetAmount(PRInt64 *amount) { *amount = _amountFunction(); return NS_OK; }     \
-      NS_IMETHOD GetDescription(nsACString &desc) { desc.Assign(_desc); return NS_OK; } \
+      NS_IMETHOD GetAmount(PRInt64 *amount) { *amount = _amountFunction(); return NS_OK; }    \
+      NS_IMETHOD GetDescription(nsACString &desc) { desc.Assign(_desc); return NS_OK; }       \
+    };                                                                                        \
+    NS_IMPL##_ts##ISUPPORTS1(MemoryReporter_##_classname, nsIMemoryReporter)
+
+/*
+ * The only difference between this and NS_MEMORY_REPORTER_IMPLEMENT_HELPER
+ * is that the function used to implement GetAmount is fallible.
+ */
+#define NS_FALLIBLE_MEMORY_REPORTER_IMPLEMENT_HELPER(_classname, _path, _kind, _units, _amountFunction, _desc, _ts) \
+    class MemoryReporter_##_classname MOZ_FINAL : public nsIMemoryReporter {                  \
+    public:                                                                                   \
+      NS_DECL_ISUPPORTS                                                                       \
+      NS_IMETHOD GetProcess(nsACString &process) { process.Truncate(); return NS_OK; }        \
+      NS_IMETHOD GetPath(nsACString &memoryPath) { memoryPath.Assign(_path); return NS_OK; }  \
+      NS_IMETHOD GetKind(int *kind) { *kind = _kind; return NS_OK; }                          \
+      NS_IMETHOD GetUnits(int *units) { *units = _units; return NS_OK; }                      \
+      NS_IMETHOD GetAmount(PRInt64 *amount) { return _amountFunction(amount); }               \
+      NS_IMETHOD GetDescription(nsACString &desc) { desc.Assign(_desc); return NS_OK; }       \
     };                                                                                        \
     NS_IMPL##_ts##ISUPPORTS1(MemoryReporter_##_classname, nsIMemoryReporter)
 
@@ -343,6 +344,10 @@ interface nsIMemoryReporterManager : nsISupports
         NS_MEMORY_REPORTER_IMPLEMENT_HELPER(_c, _p, _k, _u, _a, _d, _)
 #define NS_THREADSAFE_MEMORY_REPORTER_IMPLEMENT(_c, _p, _k, _u, _a, _d) \
         NS_MEMORY_REPORTER_IMPLEMENT_HELPER(_c, _p, _k, _u, _a, _d, _THREADSAFE_)
+#define NS_FALLIBLE_MEMORY_REPORTER_IMPLEMENT(_c, _p, _k, _u, _a, _d) \
+        NS_FALLIBLE_MEMORY_REPORTER_IMPLEMENT_HELPER(_c, _p, _k, _u, _a, _d, _)
+#define NS_FALLIBLE_THREADSAFE_MEMORY_REPORTER_IMPLEMENT(_c, _p, _k, _u, _a, _d) \
+        NS_FALLIBLE_MEMORY_REPORTER_IMPLEMENT_HELPER(_c, _p, _k, _u, _a, _d, _THREADSAFE_)
 
 #define NS_MEMORY_REPORTER_NAME(_classname)  MemoryReporter_##_classname
 

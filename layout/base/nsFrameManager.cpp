@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim:cindent:ts=2:et:sw=2:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK *****
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  * This Original Code has been modified by IBM Corporation. Modifications made by IBM 
  * described herein are Copyright (c) International Business Machines Corporation, 2000.
@@ -501,7 +468,8 @@ nsFrameManager::InsertFrames(nsIFrame*       aParentFrame,
 
 nsresult
 nsFrameManager::RemoveFrame(ChildListID     aListID,
-                            nsIFrame*       aOldFrame)
+                            nsIFrame*       aOldFrame,
+                            bool            aInvalidate /* = true */)
 {
   bool wasDestroyingFrames = mIsDestroyingFrames;
   mIsDestroyingFrames = true;
@@ -512,7 +480,9 @@ nsFrameManager::RemoveFrame(ChildListID     aListID,
   // that doesn't change the size of the parent.)
   // This has to sure to invalidate the entire overflow rect; this
   // is important in the presence of absolute positioning
-  aOldFrame->InvalidateFrameSubtree();
+  if (aInvalidate) {
+    aOldFrame->InvalidateFrameSubtree();
+  }
 
   NS_ASSERTION(!aOldFrame->GetPrevContinuation() ||
                // exception for nsCSSFrameConstructor::RemoveFloatingFirstLetterFrames
@@ -673,9 +643,8 @@ VerifyStyleTree(nsPresContext* aPresContext, nsIFrame* aFrame,
     nsFrameList::Enumerator childFrames(lists.CurrentList());
     for (; !childFrames.AtEnd(); childFrames.Next()) {
       nsIFrame* child = childFrames.get();
-      if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)
-          || (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) {
-        // only do frames that don't have placeholders
+      if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)) {
+        // only do frames that are in flow
         if (nsGkAtoms::placeholderFrame == child->GetType()) { 
           // placeholder: first recurse and verify the out of flow frame,
           // then verify the placeholder's context
@@ -683,7 +652,9 @@ VerifyStyleTree(nsPresContext* aPresContext, nsIFrame* aFrame,
             nsPlaceholderFrame::GetRealFrameForPlaceholder(child);
 
           // recurse to out of flow frame, letting the parent context get resolved
-          VerifyStyleTree(aPresContext, outOfFlowFrame, nsnull);
+          do {
+            VerifyStyleTree(aPresContext, outOfFlowFrame, nsnull);
+          } while ((outOfFlowFrame = outOfFlowFrame->GetNextContinuation()));
 
           // verify placeholder using the parent frame's context as
           // parent context
@@ -927,9 +898,8 @@ nsFrameManager::ReparentStyleContext(nsIFrame* aFrame)
           nsFrameList::Enumerator childFrames(lists.CurrentList());
           for (; !childFrames.AtEnd(); childFrames.Next()) {
             nsIFrame* child = childFrames.get();
-            // only do frames that don't have placeholders
-            if ((!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW) ||
-                 (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) &&
+            // only do frames that are in flow
+            if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW) &&
                 child != providerChild) {
 #ifdef DEBUG
               if (nsGkAtoms::placeholderFrame == child->GetType()) {
@@ -1141,6 +1111,11 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
         parentContext = nsnull;
     }
     else {
+      MOZ_ASSERT(providerFrame->GetContent() == aFrame->GetContent(),
+                 "Postcondition for GetParentStyleContextFrame() violated. "
+                 "That means we need to add the current element to the "
+                 "ancestor filter.");
+
       // resolve the provider here (before aFrame below).
 
       // assumeDifferenceHint forces the parent's change to be also
@@ -1389,8 +1364,12 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
       undisplayedParent = localContent;
     }
     if (checkUndisplayed && mUndisplayedMap) {
-      for (UndisplayedNode* undisplayed =
-                              mUndisplayedMap->GetFirstNode(undisplayedParent);
+      UndisplayedNode* undisplayed =
+        mUndisplayedMap->GetFirstNode(undisplayedParent);
+      for (AncestorFilter::AutoAncestorPusher
+             pushAncestor(undisplayed, aTreeMatchContext.mAncestorFilter,
+                          undisplayedParent ? undisplayedParent->AsElement()
+                                            : nsnull);
            undisplayed; undisplayed = undisplayed->mNext) {
         NS_ASSERTION(undisplayedParent ||
                      undisplayed->mContent ==
@@ -1538,13 +1517,17 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
 
       // now do children
       nsIFrame::ChildListIterator lists(aFrame);
-      for (; !lists.IsDone(); lists.Next()) {
+      for (AncestorFilter::AutoAncestorPusher
+             pushAncestor(!lists.IsDone(),
+                          aTreeMatchContext.mAncestorFilter,
+                          content && content->IsElement() ? content->AsElement()
+                                                          : nsnull);
+           !lists.IsDone(); lists.Next()) {
         nsFrameList::Enumerator childFrames(lists.CurrentList());
         for (; !childFrames.AtEnd(); childFrames.Next()) {
           nsIFrame* child = childFrames.get();
-          if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)
-              || (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) {
-            // only do frames that don't have placeholders
+          if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)) {
+            // only do frames that are in flow
             if (nsGkAtoms::placeholderFrame == child->GetType()) { // placeholder
               // get out of flow frame and recur there
               nsIFrame* outOfFlowFrame =
@@ -1649,8 +1632,9 @@ nsFrameManager::ComputeStyleChangeFor(nsIFrame          *aFrame,
                                       RestyleTracker&    aRestyleTracker,
                                       bool               aRestyleDescendants)
 {
+  nsIContent *content = aFrame->GetContent();
   if (aMinChange) {
-    aChangeList->AppendChange(aFrame, aFrame->GetContent(), aMinChange);
+    aChangeList->AppendChange(aFrame, content, aMinChange);
   }
 
   nsChangeHint topLevelChange = aMinChange;
@@ -1669,6 +1653,10 @@ nsFrameManager::ComputeStyleChangeFor(nsIFrame          *aFrame,
   TreeMatchContext treeMatchContext(true,
                                     nsRuleWalker::eRelevantLinkUnvisited,
                                     mPresShell->GetDocument());
+  nsIContent *parent = content ? content->GetParent() : nsnull;
+  Element *parentElement =
+    parent && parent->IsElement() ? parent->AsElement() : nsnull;
+  treeMatchContext.mAncestorFilter.Init(parentElement);
   nsTArray<nsIContent*> visibleKidsOfHiddenElement;
   do {
     // Outer loop over special siblings
@@ -1765,7 +1753,15 @@ nsFrameManager::CaptureFrameState(nsIFrame* aFrame,
   for (; !lists.IsDone(); lists.Next()) {
     nsFrameList::Enumerator childFrames(lists.CurrentList());
     for (; !childFrames.AtEnd(); childFrames.Next()) {
-      CaptureFrameState(childFrames.get(), aState);
+      nsIFrame* child = childFrames.get();
+      if (child->GetStateBits() & NS_FRAME_OUT_OF_FLOW) {
+        // We'll pick it up when we get to its placeholder
+        continue;
+      }
+      // Make sure to walk through placeholders as needed, so that we
+      // save state for out-of-flows which may not be our descendants
+      // themselves but whose placeholders are our descendants.
+      CaptureFrameState(nsPlaceholderFrame::GetRealFrameFor(child), aState);
     }
   }
 }

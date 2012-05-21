@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * Base class for all our document implementations.
@@ -50,7 +18,6 @@
 #include "nsWeakPtr.h"
 #include "nsVoidArray.h"
 #include "nsTArray.h"
-#include "nsHashSets.h"
 #include "nsIDOMXMLDocument.h"
 #include "nsIDOMDocumentXBL.h"
 #include "nsStubDocumentObserver.h"
@@ -124,6 +91,8 @@ class nsXMLEventsManager;
 class nsHTMLStyleSheet;
 class nsHTMLCSSStyleSheet;
 class nsDOMNavigationTiming;
+class nsWindowSizes;
+class nsHtml5TreeOpExecutor;
 
 /**
  * Right now our identifier map entries contain information for 'name'
@@ -238,8 +207,7 @@ public:
     static KeyTypePointer KeyToPointer(KeyType& aKey) { return &aKey; }
     static PLDHashNumber HashKey(KeyTypePointer aKey)
     {
-      return (NS_PTR_TO_INT32(aKey->mCallback) >> 2) ^
-             (NS_PTR_TO_INT32(aKey->mData));
+      return mozilla::HashGeneric(aKey->mCallback, aKey->mData);
     }
     enum { ALLOW_MEMMOVE = true };
     
@@ -500,15 +468,15 @@ class nsDocument : public nsIDocument,
                    public nsIApplicationCacheContainer,
                    public nsStubMutationObserver,
                    public nsIDOMDocumentTouch,
-                   public nsIInlineEventHandlers
+                   public nsIInlineEventHandlers,
+                   public nsIObserver
 {
 public:
   typedef mozilla::dom::Element Element;
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_DOM_MEMORY_REPORTER_SIZEOF
 
-  using nsINode::GetScriptTypeID;
+  NS_DECL_SIZEOF_EXCLUDING_THIS
 
   virtual void Reset(nsIChannel *aChannel, nsILoadGroup *aLoadGroup);
   virtual void ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
@@ -629,14 +597,6 @@ public:
   }
 
   /**
-   * Get this document's attribute stylesheet.  May return null if
-   * there isn't one.
-   */
-  virtual nsHTMLStyleSheet* GetAttributeStyleSheet() const {
-    return mAttrStyleSheet;
-  }
-
-  /**
    * Get this document's inline style sheet.  May return null if there
    * isn't one
    */
@@ -731,7 +691,7 @@ public:
   virtual nsresult InsertChildAt(nsIContent* aKid, PRUint32 aIndex,
                                  bool aNotify);
   virtual nsresult AppendChildTo(nsIContent* aKid, bool aNotify);
-  virtual nsresult RemoveChildAt(PRUint32 aIndex, bool aNotify);
+  virtual void RemoveChildAt(PRUint32 aIndex, bool aNotify);
   virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
   {
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -745,9 +705,6 @@ public:
                                    nsIDOMHTMLInputElement* aRadio);
   NS_IMETHOD GetCurrentRadioButton(const nsAString& aName,
                                    nsIDOMHTMLInputElement** aRadio);
-  NS_IMETHOD GetPositionInGroup(nsIDOMHTMLInputElement *aRadio,
-                                PRInt32 *aPositionIndex,
-                                PRInt32 *aItemsInGroup);
   NS_IMETHOD GetNextRadioButton(const nsAString& aName,
                                 const bool aPrevious,
                                 nsIDOMHTMLInputElement*  aFocusedRadio,
@@ -763,8 +720,7 @@ public:
   virtual void SetValueMissingState(const nsAString& aName, bool aValue);
 
   // for radio group
-  nsresult GetRadioGroup(const nsAString& aName,
-                         nsRadioGroupStruct **aRadioGroup);
+  nsRadioGroupStruct* GetRadioGroup(const nsAString& aName);
 
   // nsIDOMNode
   NS_DECL_NSIDOMNODE
@@ -797,6 +753,9 @@ public:
 
   // nsIInlineEventHandlers
   NS_DECL_NSIINLINEEVENTHANDLERS
+
+  // nsIObserver
+  NS_DECL_NSIOBSERVER
 
   virtual nsresult Init();
   
@@ -942,6 +901,16 @@ public:
   virtual NS_HIDDEN_(nsresult) RemoveImage(imgIRequest* aImage);
   virtual NS_HIDDEN_(nsresult) SetImageLockingState(bool aLocked);
 
+  // AddPlugin adds a plugin-related element to mPlugins when the element is
+  // added to the tree.
+  virtual nsresult AddPlugin(nsIObjectLoadingContent* aPlugin);
+  // RemovePlugin removes a plugin-related element to mPlugins when the
+  // element is removed from the tree.
+  virtual void RemovePlugin(nsIObjectLoadingContent* aPlugin);
+  // GetPlugins returns the plugin-related elements from
+  // the frame and any subframes.
+  virtual void GetPlugins(nsTArray<nsIObjectLoadingContent*>& aPlugins);
+
   virtual nsresult GetStateObject(nsIVariant** aResult);
 
   virtual nsDOMNavigationTiming* GetNavigationTiming() const;
@@ -985,14 +954,21 @@ public:
   // Returns the top element from the full-screen stack.
   Element* FullScreenStackTop();
 
+  void RequestPointerLock(Element* aElement);
+  bool ShouldLockPointer(Element* aElement);
+  bool SetPointerLock(Element* aElement, int aCursorStyle);
+  static void UnlockPointer();
+
   // This method may fire a DOM event; if it does so it will happen
   // synchronously.
   void UpdateVisibilityState();
   // Posts an event to call UpdateVisibilityState
   virtual void PostVisibilityUpdateEvent();
 
-  virtual size_t SizeOfStyleSheets(nsMallocSizeOfFun aMallocSizeOf) const;
+  virtual void DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const;
+  // DocSizeOfIncludingThis is inherited from nsIDocument.
 
+  virtual nsIDOMNode* AsDOMNode() { return this; }
 protected:
   friend class nsNodeUtils;
 
@@ -1025,9 +1001,10 @@ protected:
 
   void RetrieveRelevantHeaders(nsIChannel *aChannel);
 
-  static bool TryChannelCharset(nsIChannel *aChannel,
-                                  PRInt32& aCharsetSource,
-                                  nsACString& aCharset);
+  bool TryChannelCharset(nsIChannel *aChannel,
+                         PRInt32& aCharsetSource,
+                         nsACString& aCharset,
+                         nsHtml5TreeOpExecutor* aExecutor);
 
   // Call this before the document does something that will unbind all content.
   // That will stop us from doing a lot of work as each element is removed.
@@ -1126,6 +1103,15 @@ protected:
   // document is hidden/navigation occurs.
   static nsWeakPtr sFullScreenRootDoc;
 
+  // Weak reference to the document which owned the pending pointer lock
+  // element, at the time it requested pointer lock.
+  static nsWeakPtr sPendingPointerLockDoc;
+
+  // Weak reference to the element which requested pointer lock. This request
+  // is "pending", and will be processed once the element's document has had
+  // the "fullscreen" permission granted.
+  static nsWeakPtr sPendingPointerLockElement;
+
   // Stack of full-screen elements. When we request full-screen we push the
   // full-screen element onto this stack, and when we cancel full-screen we
   // pop one off this stack, restoring the previous full-screen state
@@ -1186,20 +1172,20 @@ protected:
   // "mozaudioavailable" event.
   bool mHasAudioAvailableListener:1;
 
-  // Whether we are currently in full-screen mode, as per the DOM API.
-  bool mIsFullScreen:1;
-
   // Whether we're currently under a FlushPendingNotifications call to
   // our presshell.  This is used to handle flush reentry correctly.
   bool mInFlush:1;
 
+  // Parser aborted. True if the parser of this document was forcibly
+  // terminated instead of letting it finish at its own pace.
+  bool mParserAborted:1;
+
   PRUint8 mXMLDeclarationBits;
 
-  nsInterfaceHashtable<nsVoidPtrHashKey, nsPIBoxObject> *mBoxObjectTable;
+  nsInterfaceHashtable<nsPtrHashKey<nsIContent>, nsPIBoxObject> *mBoxObjectTable;
 
   // The channel that got passed to StartDocumentLoad(), if any
   nsCOMPtr<nsIChannel> mChannel;
-  nsRefPtr<nsHTMLStyleSheet> mAttrStyleSheet;
   nsRefPtr<nsHTMLCSSStyleSheet> mStyleAttrStyleSheet;
   nsRefPtr<nsXMLEventsManager> mXMLEventsManager;
 
@@ -1232,6 +1218,16 @@ private:
 
   nsresult CheckFrameOptions();
   nsresult InitCSP();
+
+  // Sets aElement to be the pending pointer lock element. Once this document's
+  // node principal's URI is granted the "fullscreen" permission, the pointer
+  // lock request will be processed. At any one time there can be only one
+  // pending pointer lock request; calling this clears the previous pending
+  // request.
+  static nsresult SetPendingPointerLockRequest(Element* aElement);
+
+  // Clears any pending pointer lock request.
+  static void ClearPendingPointerLockRequest(bool aDispatchErrorEvents);
 
   /**
    * See if aDocument is a child of this.  If so, return the frame element in
@@ -1305,6 +1301,9 @@ private:
 
   // Tracking for images in the document.
   nsDataHashtable< nsPtrHashKey<imgIRequest>, PRUint32> mImageTracker;
+
+  // Tracking for plugins in the document.
+  nsTHashtable< nsPtrHashKey<nsIObjectLoadingContent> > mPlugins;
 
   VisibilityState mVisibilityState;
 

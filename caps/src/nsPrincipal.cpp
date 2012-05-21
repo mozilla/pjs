@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Christopher A. Aillon <christopher@aillon.com>
- *   Giorgio Maone <g.maone@informaction.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nscore.h"
 #include "nsScriptSecurityManager.h"
@@ -60,6 +26,7 @@
 #include "nsPrincipal.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/HashFunctions.h"
 
 using namespace mozilla;
 
@@ -93,9 +60,9 @@ NS_IMPL_CI_INTERFACE_GETTER2(nsPrincipal,
 NS_IMETHODIMP_(nsrefcnt)
 nsPrincipal::AddRef()
 {
-  NS_PRECONDITION(PRInt32(mJSPrincipals.refcount) >= 0, "illegal refcnt");
+  NS_PRECONDITION(PRInt32(refcount) >= 0, "illegal refcnt");
   // XXXcaa does this need to be threadsafe?  See bug 143559.
-  nsrefcnt count = PR_ATOMIC_INCREMENT(&mJSPrincipals.refcount);
+  nsrefcnt count = PR_ATOMIC_INCREMENT(&refcount);
   NS_LOG_ADDREF(this, count, "nsPrincipal", sizeof(*this));
   return count;
 }
@@ -103,8 +70,8 @@ nsPrincipal::AddRef()
 NS_IMETHODIMP_(nsrefcnt)
 nsPrincipal::Release()
 {
-  NS_PRECONDITION(0 != mJSPrincipals.refcount, "dup release");
-  nsrefcnt count = PR_ATOMIC_DECREMENT(&mJSPrincipals.refcount);
+  NS_PRECONDITION(0 != refcount, "dup release");
+  nsrefcnt count = PR_ATOMIC_DECREMENT(&refcount);
   NS_LOG_RELEASE(this, count, "nsPrincipal");
   if (count == 0) {
     delete this;
@@ -147,24 +114,10 @@ nsPrincipal::Init(const nsACString& aCertFingerprint,
   mCodebase = NS_TryToMakeImmutable(aCodebase);
   mCodebaseImmutable = URIIsImmutable(mCodebase);
 
-  nsresult rv;
-  if (!aCertFingerprint.IsEmpty()) {
-    rv = SetCertificate(aCertFingerprint, aSubjectName, aPrettyName, aCert);
-    if (NS_SUCCEEDED(rv)) {
-      rv = mJSPrincipals.Init(this, mCert->fingerprint);
-    }
-  }
-  else {
-    nsCAutoString spec;
-    rv = mCodebase->GetSpec(spec);
-    if (NS_SUCCEEDED(rv)) {
-      rv = mJSPrincipals.Init(this, spec);
-    }
-  }
+  if (aCertFingerprint.IsEmpty())
+    return NS_OK;
 
-  NS_ASSERTION(NS_SUCCEEDED(rv), "nsPrincipal::Init() failed");
-
-  return rv;
+  return SetCertificate(aCertFingerprint, aSubjectName, aPrettyName, aCert);
 }
 
 nsPrincipal::~nsPrincipal(void)
@@ -173,15 +126,24 @@ nsPrincipal::~nsPrincipal(void)
   delete mCapabilities;
 }
 
-NS_IMETHODIMP
-nsPrincipal::GetJSPrincipals(JSContext *cx, JSPrincipals **jsprin)
+void
+nsPrincipal::GetScriptLocation(nsACString &aStr)
 {
-  NS_PRECONDITION(mJSPrincipals.nsIPrincipalPtr, "mJSPrincipals is uninitialized!");
-
-  JSPRINCIPALS_HOLD(cx, &mJSPrincipals);
-  *jsprin = &mJSPrincipals;
-  return NS_OK;
+  if (mCert) {
+    aStr.Assign(mCert->fingerprint);
+  } else {
+    mCodebase->GetSpec(aStr);
+  }
 }
+
+#ifdef DEBUG
+void nsPrincipal::dumpImpl()
+{
+  nsCAutoString str;
+  GetScriptLocation(str);
+  fprintf(stderr, "nsPrincipal (%p) = %s\n", this, str.get());
+}
+#endif 
 
 NS_IMETHODIMP
 nsPrincipal::GetOrigin(char **aOrigin)
@@ -546,7 +508,7 @@ nsPrincipal::CanEnableCapability(const char *capability, PRInt16 *result)
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsPrincipal::SetCanEnableCapability(const char *capability,
                                     PRInt16 canEnable)
 {
@@ -617,34 +579,6 @@ NS_IMETHODIMP
 nsPrincipal::EnableCapability(const char *capability, void **annotation)
 {
   return SetCapability(capability, annotation, AnnotationEnabled);
-}
-
-NS_IMETHODIMP
-nsPrincipal::DisableCapability(const char *capability, void **annotation)
-{
-  return SetCapability(capability, annotation, AnnotationDisabled);
-}
-
-NS_IMETHODIMP
-nsPrincipal::RevertCapability(const char *capability, void **annotation)
-{
-  if (*annotation) {
-    nsHashtable *ht = (nsHashtable *) *annotation;
-    const char *start = capability;
-    for(;;) {
-      const char *space = PL_strchr(start, ' ');
-      int len = space ? space - start : strlen(start);
-      nsCAutoString capString(start, len);
-      nsCStringKey key(capString);
-      ht->Remove(&key);
-      if (!space) {
-        return NS_OK;
-      }
-
-      start = space + 1;
-    }
-  }
-  return NS_OK;
 }
 
 nsresult
@@ -806,7 +740,7 @@ nsPrincipal::GetHashValue(PRUint32* aValue)
 
   // If there is a certificate, it takes precendence over the codebase.
   if (mCert) {
-    *aValue = nsCRT::HashCode(mCert->fingerprint.get());
+    *aValue = HashString(mCert->fingerprint);
   }
   else {
     *aValue = nsScriptSecurityManager::HashPrincipalByOrigin(this);
@@ -882,9 +816,6 @@ nsPrincipal::InitFromPersistent(const char* aPrefName,
 
     mTrusted = aTrusted;
   }
-
-  rv = mJSPrincipals.Init(this, aToken);
-  NS_ENSURE_SUCCESS(rv, rv);
 
   //-- Save the preference name
   mPrefName = aPrefName;

@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is frame poisoning tests.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Zachary Weinberg <zweinberg@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK *****
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 /* Code in this file needs to be kept in sync with code in nsPresArena.cpp.
@@ -397,7 +365,7 @@ ReservePoisonArea()
     uintptr_t result = (((uintptr_t(0x7FFFFFFFu) << 31) << 1 |
                          uintptr_t(0xF0DEAFFFu)) &
                         ~uintptr_t(PAGESIZE-1));
-    printf("INFO | poison area assumed at 0x%.*"PRIxPTR"\n", SIZxPTR, result);
+    printf("INFO | poison area assumed at 0x%.*" PRIxPTR "\n", SIZxPTR, result);
     return result;
   } else {
     // First see if we can allocate the preferred poison address from the OS.
@@ -405,7 +373,7 @@ ReservePoisonArea()
     void *result = ReserveRegion(candidate, false);
     if (result == (void *)candidate) {
       // success - inaccessible page allocated
-      printf("INFO | poison area allocated at 0x%.*"PRIxPTR
+      printf("INFO | poison area allocated at 0x%.*" PRIxPTR
              " (preferred addr)\n", SIZxPTR, (uintptr_t)result);
       return candidate;
     }
@@ -416,7 +384,7 @@ ReservePoisonArea()
       // success - selected page cannot be usable memory
       if (result != MAP_FAILED)
         ReleaseRegion(result);
-      printf("INFO | poison area assumed at 0x%.*"PRIxPTR
+      printf("INFO | poison area assumed at 0x%.*" PRIxPTR
              " (preferred addr)\n", SIZxPTR, candidate);
       return candidate;
     }
@@ -424,7 +392,7 @@ ReservePoisonArea()
     // The preferred address is already in use.  Did the OS give us a
     // consolation prize?
     if (result != MAP_FAILED) {
-      printf("INFO | poison area allocated at 0x%.*"PRIxPTR
+      printf("INFO | poison area allocated at 0x%.*" PRIxPTR
              " (consolation prize)\n", SIZxPTR, (uintptr_t)result);
       return (uintptr_t)result;
     }
@@ -433,7 +401,7 @@ ReservePoisonArea()
     // the address.
     result = ReserveRegion(0, false);
     if (result != MAP_FAILED) {
-      printf("INFO | poison area allocated at 0x%.*"PRIxPTR
+      printf("INFO | poison area allocated at 0x%.*" PRIxPTR
              " (fallback)\n", SIZxPTR, (uintptr_t)result);
       return (uintptr_t)result;
     }
@@ -455,7 +423,7 @@ ReservePositiveControl()
     printf("ERROR | allocating positive control | %s\n", LastErrMsg());
     return 0;
   }
-  printf("INFO | positive control allocated at 0x%.*"PRIxPTR"\n",
+  printf("INFO | positive control allocated at 0x%.*" PRIxPTR "\n",
          SIZxPTR, (uintptr_t)result);
   return (uintptr_t)result;
 }
@@ -486,7 +454,7 @@ ReserveNegativeControl()
     return 0;
   }
 
-  printf("INFO | negative control allocated at 0x%.*"PRIxPTR"\n",
+  printf("INFO | negative control allocated at 0x%.*" PRIxPTR "\n",
          SIZxPTR, (uintptr_t)result);
   return (uintptr_t)result;
 }

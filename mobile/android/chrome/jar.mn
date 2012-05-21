@@ -1,4 +1,8 @@
 #filter substitution
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 
 chrome.jar:
 % content browser %content/
@@ -6,15 +10,21 @@ chrome.jar:
 * content/about.xhtml                  (content/about.xhtml)
   content/config.xhtml                 (content/config.xhtml)
   content/aboutAddons.xhtml            (content/aboutAddons.xhtml)
+  content/aboutAddons.js               (content/aboutAddons.js)
   content/aboutCertError.xhtml         (content/aboutCertError.xhtml)
+  content/aboutDownloads.xhtml         (content/aboutDownloads.xhtml)
+  content/aboutDownloads.js            (content/aboutDownloads.js)
   content/aboutHome.xhtml              (content/aboutHome.xhtml)
 * content/aboutRights.xhtml            (content/aboutRights.xhtml)
+* content/aboutApps.xhtml              (content/aboutApps.xhtml)
+  content/aboutApps.js                 (content/aboutApps.js)
   content/blockedSite.xhtml            (content/blockedSite.xhtml)
   content/languages.properties         (content/languages.properties)
 * content/browser.xul                  (content/browser.xul)
 * content/browser.js                   (content/browser.js)
 * content/bindings.xml                 (content/bindings.xml)
   content/bindings/checkbox.xml        (content/bindings/checkbox.xml)
+  content/bindings/settings.xml        (content/bindings/settings.xml)
   content/bindings/dialog.xml          (content/bindings/dialog.xml)
   content/browser.css                  (content/browser.css)
   content/cursor.css                   (content/cursor.css)
@@ -23,7 +33,9 @@ chrome.jar:
   content/exceptions.js                (content/exceptions.js)
 * content/downloads.js                 (content/downloads.js)
   content/netError.xhtml               (content/netError.xhtml)
-  
+  content/SelectHelper.js              (content/SelectHelper.js)
+  content/dbg-browser-actors.js        (content/dbg-browser-actors.js)
+
 % override chrome://global/content/config.xul chrome://browser/content/config.xhtml
 % override chrome://global/content/netError.xhtml chrome://browser/content/netError.xhtml
 % override chrome://mozapps/content/extensions/extensions.xul chrome://browser/content/aboutAddons.xhtml

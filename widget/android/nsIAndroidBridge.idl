@@ -1,20 +1,24 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "nsISupports.idl"
 #include "nsIDOMWindow.idl"
 
-[scriptable, uuid(38b5c83a-3e8d-45c2-8311-6e36bd5116c0)]
+[scriptable, uuid(56fd8e18-a5cf-4e7a-92ba-4f68b4ad50ac)]
 interface nsIAndroidDrawMetadataProvider : nsISupports {
   AString getDrawMetadata();
+};
 
-  /*
-   * Returns true if the presentation shell corresponding to the currently-viewed document is
-   * suppressing painting (which occurs during page transitions) and false otherwise.
-   */
-  boolean paintingSuppressed();
+[scriptable, uuid(0843f3c1-043e-4c64-9d8c-091370548c05)]
+interface nsIBrowserTab : nsISupports {
+  readonly attribute nsIDOMWindow window;
+  readonly attribute float scale;
 };
 
 [scriptable, uuid(d10377b4-1c90-493a-a532-63cb3f16ee2b)]
 interface nsIAndroidBrowserApp : nsISupports {
-  nsIDOMWindow getWindowForTab(in PRInt32 tabId);
+  nsIBrowserTab getBrowserTab(in PRInt32 tabId);
 };
 
 [scriptable, uuid(7dd8441a-4f38-49b2-bd90-da69d02a96cf)]

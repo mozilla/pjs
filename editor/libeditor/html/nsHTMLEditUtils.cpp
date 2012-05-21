@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHTMLEditUtils.h"
 
@@ -72,7 +40,15 @@ bool
 nsHTMLEditUtils::IsInlineStyle(nsIDOMNode *node)
 {
   NS_PRECONDITION(node, "null parent passed to nsHTMLEditUtils::IsInlineStyle");
-  nsCOMPtr<nsIAtom> nodeAtom = nsEditor::GetTag(node);
+  nsCOMPtr<dom::Element> element = do_QueryInterface(node);
+  return element && IsInlineStyle(element);
+}
+
+bool
+nsHTMLEditUtils::IsInlineStyle(dom::Element* aElement)
+{
+  MOZ_ASSERT(aElement);
+  nsIAtom* nodeAtom = aElement->Tag();
   return (nodeAtom == nsEditProperty::b)
       || (nodeAtom == nsEditProperty::i)
       || (nodeAtom == nsEditProperty::u)
@@ -94,7 +70,15 @@ bool
 nsHTMLEditUtils::IsFormatNode(nsIDOMNode *node)
 {
   NS_PRECONDITION(node, "null parent passed to nsHTMLEditUtils::IsFormatNode");
-  nsCOMPtr<nsIAtom> nodeAtom = nsEditor::GetTag(node);
+  nsCOMPtr<dom::Element> element = do_QueryInterface(node);
+  return element && IsFormatNode(element);
+}
+
+bool
+nsHTMLEditUtils::IsFormatNode(dom::Element* aElement)
+{
+  MOZ_ASSERT(aElement);
+  nsIAtom* nodeAtom = aElement->Tag();
   return (nodeAtom == nsEditProperty::p)
       || (nodeAtom == nsEditProperty::pre)
       || (nodeAtom == nsEditProperty::h1)
@@ -228,7 +212,15 @@ bool
 nsHTMLEditUtils::IsTableElementButNotTable(nsIDOMNode *node)
 {
   NS_PRECONDITION(node, "null node passed to nsHTMLEditor::IsTableElementButNotTable");
-  nsCOMPtr<nsIAtom> nodeAtom = nsEditor::GetTag(node);
+  nsCOMPtr<dom::Element> element = do_QueryInterface(node);
+  return element && IsTableElementButNotTable(element);
+}
+
+bool
+nsHTMLEditUtils::IsTableElementButNotTable(dom::Element* aNode)
+{
+  MOZ_ASSERT(aNode);
+  nsCOMPtr<nsIAtom> nodeAtom = aNode->Tag();
   return (nodeAtom == nsEditProperty::tr)
       || (nodeAtom == nsEditProperty::td)
       || (nodeAtom == nsEditProperty::th)
@@ -423,34 +415,29 @@ nsHTMLEditUtils::IsMozDiv(nsIDOMNode *node)
 ///////////////////////////////////////////////////////////////////////////
 // IsMailCite: true if node an html blockquote with type=cite
 //                  
-bool 
-nsHTMLEditUtils::IsMailCite(nsIDOMNode *node)
+bool
+nsHTMLEditUtils::IsMailCite(nsIDOMNode* aNode)
 {
-  NS_PRECONDITION(node, "null parent passed to nsHTMLEditUtils::IsMailCite");
-  nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(node);
-  if (!elem) {
-    return false;
-  }
-  nsAutoString attrName (NS_LITERAL_STRING("type")); 
-  
+  NS_PRECONDITION(aNode, "null parent passed to nsHTMLEditUtils::IsMailCite");
+  nsCOMPtr<dom::Element> element = do_QueryInterface(aNode);
+  return element && IsMailCite(element);
+}
+
+bool
+nsHTMLEditUtils::IsMailCite(dom::Element* aElement)
+{
+  MOZ_ASSERT(aElement);
+
   // don't ask me why, but our html mailcites are id'd by "type=cite"...
-  nsAutoString attrVal;
-  nsresult res = elem->GetAttribute(attrName, attrVal);
-  ToLowerCase(attrVal);
-  if (NS_SUCCEEDED(res))
-  {
-    if (attrVal.EqualsLiteral("cite"))
-      return true;
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                            NS_LITERAL_STRING("cite"), eIgnoreCase)) {
+    return true;
   }
 
   // ... but our plaintext mailcites by "_moz_quote=true".  go figure.
-  attrName.AssignLiteral("_moz_quote");
-  res = elem->GetAttribute(attrName, attrVal);
-  if (NS_SUCCEEDED(res))
-  {
-    ToLowerCase(attrVal);
-    if (attrVal.EqualsLiteral("true"))
-      return true;
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozquote,
+                            NS_LITERAL_STRING("true"), eIgnoreCase)) {
+    return true;
   }
 
   return false;

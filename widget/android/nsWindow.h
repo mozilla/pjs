@@ -1,39 +1,7 @@
 /* -*- Mode: c++; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef NSWINDOW_H_
 #define NSWINDOW_H_
@@ -43,16 +11,24 @@
 
 #include "nsTArray.h"
 
-#ifdef ACCESSIBILITY
-#include "nsAccessible.h"
+#ifdef MOZ_JAVA_COMPOSITOR
+#include "AndroidJavaWrappers.h"
+#include "Layers.h"
 #endif
 
 class gfxASurface;
 class nsIdleService;
 
+struct ANPEvent;
+
 namespace mozilla {
     class AndroidGeckoEvent;
     class AndroidKeyEvent;
+
+    namespace layers {
+        class CompositorParent;
+        class CompositorChild;
+    }
 }
 
 class nsWindow :
@@ -68,6 +44,7 @@ public:
 
     static void OnGlobalAndroidEvent(mozilla::AndroidGeckoEvent *ae);
     static gfxIntSize GetAndroidScreenBounds();
+    static nsWindow* TopWindow();
 
     nsWindow* FindWindowForPoint(const nsIntPoint& pt);
 
@@ -168,17 +145,21 @@ public:
                                    LayersBackend aBackendHint = LayerManager::LAYERS_NONE, 
                                    LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT, 
                                    bool* aAllowRetaining = nsnull);
-    gfxASurface* GetThebesSurface();
 
     NS_IMETHOD ReparentNativeWidget(nsIWidget* aNewParent);
 
-#ifdef ACCESSIBILITY
-    static bool sAccessibilityEnabled;
-#endif
-
 #ifdef MOZ_JAVA_COMPOSITOR
-    static void BindToTexture();
-    static bool HasDirectTexture();
+    virtual void DrawWindowUnderlay(LayerManager* aManager, nsIntRect aRect);
+    virtual void DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect);
+
+    static void SetCompositor(mozilla::layers::CompositorParent* aCompositorParent,
+                              mozilla::layers::CompositorChild* aCompositorChild,
+                              ::base::Thread* aCompositorThread);
+    static void ScheduleComposite();
+    static void SchedulePauseComposition();
+    static void ScheduleResumeComposition(int width, int height);
+
+    virtual bool WidgetPaintsBackground() { return true; }
 #endif
 
 protected:
@@ -221,7 +202,8 @@ protected:
     static void LogWindow(nsWindow *win, int index, int indent);
 
 private:
-    void InitKeyEvent(nsKeyEvent& event, mozilla::AndroidGeckoEvent& key);
+    void InitKeyEvent(nsKeyEvent& event, mozilla::AndroidGeckoEvent& key,
+                      ANPEvent* pluginEvent);
     bool DispatchMultitouchEvent(nsTouchEvent &event,
                              mozilla::AndroidGeckoEvent *ae);
     void DispatchMotionEvent(nsInputEvent &event,
@@ -232,20 +214,14 @@ private:
     void HandleSpecialKey(mozilla::AndroidGeckoEvent *ae);
     void RedrawAll();
 
-#ifdef ACCESSIBILITY
-    nsRefPtr<nsAccessible> mRootAccessible;
+#ifdef MOZ_JAVA_COMPOSITOR
+    mozilla::AndroidLayerRendererFrame mLayerRendererFrame;
 
-    /**
-     * Request to create the accessible for this window if it is top level.
-     */
-    void CreateRootAccessible();
-
-    /**
-     * Generate the NS_GETACCESSIBLE event to get accessible for this window
-     * and return it.
-     */
-    nsAccessible *DispatchAccessibleEvent();
-#endif // ACCESSIBILITY
+    static nsRefPtr<mozilla::layers::CompositorParent> sCompositorParent;
+    static nsRefPtr<mozilla::layers::CompositorChild> sCompositorChild;
+    static bool sCompositorPaused;
+    static base::Thread *sCompositorThread;
+#endif
 };
 
 #endif /* NSWINDOW_H_ */

@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:cindent:ts=2:et:sw=2:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* representation of one line within a block frame, a CSS line box */
 
@@ -44,8 +10,8 @@
 #include "nsLineLayout.h"
 #include "prprf.h"
 #include "nsBlockFrame.h"
-#include "nsGkAtoms.h"
-#include "nsFrameManager.h"
+#include "nsIFrame.h"
+#include "nsPresArena.h"
 #ifdef IBMBIDI
 #include "nsBidiPresUtils.h"
 #endif
@@ -55,11 +21,14 @@ static PRInt32 ctorCount;
 PRInt32 nsLineBox::GetCtorCount() { return ctorCount; }
 #endif
 
+#ifndef _MSC_VER
+// static nsLineBox constant; initialized in the header file.
+const PRUint32 nsLineBox::kMinChildCountForHashtable;
+#endif
+
 nsLineBox::nsLineBox(nsIFrame* aFrame, PRInt32 aCount, bool aIsBlock)
-  : mFirstChild(aFrame),
-    mBounds(0, 0, 0, 0),
-    mAscent(0),
-    mData(nsnull)
+  : mFirstChild(aFrame)
+// NOTE: memory is already zeroed since we allocate with AllocateByObjectID.
 {
   MOZ_COUNT_CTOR(nsLineBox);
 #ifdef DEBUG
@@ -72,11 +41,10 @@ nsLineBox::nsLineBox(nsIFrame* aFrame, PRInt32 aCount, bool aIsBlock)
   }
 #endif
 
-  mAllFlags = 0;
 #if NS_STYLE_CLEAR_NONE > 0
   mFlags.mBreakType = NS_STYLE_CLEAR_NONE;
 #endif
-  SetChildCount(aCount);
+  mChildCount = aCount;
   MarkDirty();
   mFlags.mBlock = aIsBlock;
 }
@@ -84,14 +52,88 @@ nsLineBox::nsLineBox(nsIFrame* aFrame, PRInt32 aCount, bool aIsBlock)
 nsLineBox::~nsLineBox()
 {
   MOZ_COUNT_DTOR(nsLineBox);
+  if (NS_UNLIKELY(mFlags.mHasHashedFrames)) {
+    delete mFrames;
+  }  
   Cleanup();
 }
 
 nsLineBox*
-NS_NewLineBox(nsIPresShell* aPresShell, nsIFrame* aFrame,
-              PRInt32 aCount, bool aIsBlock)
+NS_NewLineBox(nsIPresShell* aPresShell, nsIFrame* aFrame, bool aIsBlock)
 {
-  return new (aPresShell)nsLineBox(aFrame, aCount, aIsBlock);
+  return new (aPresShell) nsLineBox(aFrame, 1, aIsBlock);
+}
+
+nsLineBox*
+NS_NewLineBox(nsIPresShell* aPresShell, nsLineBox* aFromLine,
+              nsIFrame* aFrame, PRInt32 aCount)
+{
+  nsLineBox* newLine = new (aPresShell) nsLineBox(aFrame, aCount, false);
+  if (newLine) {
+    newLine->NoteFramesMovedFrom(aFromLine);
+  }
+  return newLine;
+}
+
+void
+nsLineBox::StealHashTableFrom(nsLineBox* aFromLine, PRUint32 aFromLineNewCount)
+{
+  MOZ_ASSERT(!mFlags.mHasHashedFrames);
+  MOZ_ASSERT(GetChildCount() >= PRInt32(aFromLineNewCount));
+  mFrames = aFromLine->mFrames;
+  mFlags.mHasHashedFrames = 1;
+  aFromLine->mFlags.mHasHashedFrames = 0;
+  aFromLine->mChildCount = aFromLineNewCount;
+  // remove aFromLine's frames that aren't on this line
+  nsIFrame* f = aFromLine->mFirstChild;
+  for (PRUint32 i = 0; i < aFromLineNewCount; f = f->GetNextSibling(), ++i) {
+    mFrames->RemoveEntry(f);
+  }
+}
+
+void
+nsLineBox::NoteFramesMovedFrom(nsLineBox* aFromLine)
+{
+  PRUint32 fromCount = aFromLine->GetChildCount();
+  PRUint32 toCount = GetChildCount();
+  MOZ_ASSERT(toCount <= fromCount, "moved more frames than aFromLine has");
+  PRUint32 fromNewCount = fromCount - toCount;
+  if (NS_LIKELY(!aFromLine->mFlags.mHasHashedFrames)) {
+    aFromLine->mChildCount = fromNewCount;
+    MOZ_ASSERT(toCount < kMinChildCountForHashtable);
+  } else if (fromNewCount < kMinChildCountForHashtable) {
+    // aFromLine has a hash table but will not have it after moving the frames
+    // so this line can steal the hash table if it needs it.
+    if (toCount >= kMinChildCountForHashtable) {
+      StealHashTableFrom(aFromLine, fromNewCount);
+    } else {
+      delete aFromLine->mFrames;
+      aFromLine->mFlags.mHasHashedFrames = 0;
+      aFromLine->mChildCount = fromNewCount;
+    }
+  } else {
+    // aFromLine still needs a hash table.
+    if (toCount < kMinChildCountForHashtable) {
+      // remove the moved frames from it
+      nsIFrame* f = mFirstChild;
+      for (PRUint32 i = 0; i < toCount; f = f->GetNextSibling(), ++i) {
+        aFromLine->mFrames->RemoveEntry(f);
+      }
+    } else if (toCount <= fromNewCount) {
+      // This line needs a hash table, allocate a hash table for it since that
+      // means fewer hash ops.
+      nsIFrame* f = mFirstChild;
+      for (PRUint32 i = 0; i < toCount; f = f->GetNextSibling(), ++i) {
+        aFromLine->mFrames->RemoveEntry(f); // toCount RemoveEntry
+      }
+      SwitchToHashtable(); // toCount PutEntry
+    } else {
+      // This line needs a hash table, but it's fewer hash ops to steal
+      // aFromLine's hash table and allocate a new hash table for that line.
+      StealHashTableFrom(aFromLine, fromNewCount); // fromNewCount RemoveEntry
+      aFromLine->SwitchToHashtable(); // fromNewCount PutEntry
+    }
+  }
 }
 
 // Overloaded new operator. Uses an arena (which comes from the presShell)
@@ -99,24 +141,14 @@ NS_NewLineBox(nsIPresShell* aPresShell, nsIFrame* aFrame,
 void*
 nsLineBox::operator new(size_t sz, nsIPresShell* aPresShell) CPP_THROW_NEW
 {
-  return aPresShell->AllocateMisc(sz);
-}
-
-// Overloaded delete operator. Doesn't actually free the memory, because we
-// use an arena
-void
-nsLineBox::operator delete(void* aPtr, size_t sz)
-{
+  return aPresShell->AllocateByObjectID(nsPresArena::nsLineBox_id, sz);
 }
 
 void
 nsLineBox::Destroy(nsIPresShell* aPresShell)
 {
-  // Destroy the object. This won't actually free the memory, though
-  delete this;
-
-  // Have the pres shell recycle the memory
-  aPresShell->FreeMisc(sizeof(*this), (void*)this);
+  this->nsLineBox::~nsLineBox();
+  aPresShell->FreeByObjectID(nsPresArena::nsLineBox_id, this);
 }
 
 void
@@ -235,6 +267,7 @@ nsLineBox::List(FILE* out, PRInt32 aIndent) const
 }
 #endif
 
+#ifdef DEBUG
 nsIFrame*
 nsLineBox::LastChild() const
 {
@@ -245,13 +278,7 @@ nsLineBox::LastChild() const
   }
   return frame;
 }
-
-bool
-nsLineBox::IsLastChild(nsIFrame* aFrame) const
-{
-  nsIFrame* lastFrame = LastChild();
-  return aFrame == lastFrame;
-}
+#endif
 
 PRInt32
 nsLineBox::IndexOf(nsIFrame* aFrame) const
@@ -370,10 +397,18 @@ nsLineBox::RFindLineContaining(nsIFrame* aFrame,
                                PRInt32* aFrameIndexInLine)
 {
   NS_PRECONDITION(aFrame, "null ptr");
+
   nsIFrame* curFrame = aLastFrameBeforeEnd;
   while (aBegin != aEnd) {
     --aEnd;
-    NS_ASSERTION(aEnd->IsLastChild(curFrame), "Unexpected curFrame");
+    NS_ASSERTION(aEnd->LastChild() == curFrame, "Unexpected curFrame");
+    if (NS_UNLIKELY(aEnd->mFlags.mHasHashedFrames) &&
+        !aEnd->Contains(aFrame)) {
+      if (aEnd->mFirstChild) {
+        curFrame = aEnd->mFirstChild->GetPrevSibling();
+      }
+      continue;
+    }
     // i is the index of curFrame in aEnd
     PRInt32 i = aEnd->GetChildCount() - 1;
     while (i >= 0) {
@@ -384,6 +419,7 @@ nsLineBox::RFindLineContaining(nsIFrame* aFrame,
       --i;
       curFrame = curFrame->GetPrevSibling();
     }
+    MOZ_ASSERT(!aEnd->mFlags.mHasHashedFrames, "Contains lied to us!");
   }
   *aFrameIndexInLine = -1;
   return false;

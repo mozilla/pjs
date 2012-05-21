@@ -1,45 +1,7 @@
 /* -*- Mode: objc; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is 
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Josh Aas <josh@mozilla.com>
- *   Mark Mentovai <mark@moxienet.com>
- *   Håkan Waara <hwaara@gmail.com>
- *   Stuart Morgan <stuart.morgan@alumni.case.edu>
- *   Mats Palmgren <matspal@gmail.com>
- *   Thomas K. Dyas <tdyas@zecador.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or 
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -74,6 +36,7 @@
 #include "nsClipboard.h"
 #include "nsCursorManager.h"
 #include "nsWindowMap.h"
+#include "nsCocoaFeatures.h"
 #include "nsCocoaUtils.h"
 #include "nsMenuUtilsX.h"
 #include "nsMenuBarX.h"
@@ -152,9 +115,6 @@ PRUint32 nsChildView::sLastInputEventCount = 0;
 // sets up our view, attaching it to its owning gecko view
 - (id)initWithFrame:(NSRect)inFrame geckoChild:(nsChildView*)inChild;
 - (void)forceRefreshOpenGL;
-
-// do generic gecko event setup with a generic cocoa event. accepts nil inEvent.
-- (void) convertGenericCocoaEvent:(NSEvent*)inEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent;
 
 // set up a gecko mouse event based on a cocoa mouse event
 - (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent;
@@ -309,7 +269,7 @@ nsresult nsChildView::Create(nsIWidget *aParent,
     nsToolkit::SwizzleMethods([NSView class], @selector(mouseDownCanMoveWindow),
                               @selector(nsChildView_NSView_mouseDownCanMoveWindow));
 #ifdef __LP64__
-    if (nsToolkit::OnLionOrLater()) {
+    if (nsCocoaFeatures::OnLionOrLater()) {
       nsToolkit::SwizzleMethods([NSEvent class], @selector(addLocalMonitorForEventsMatchingMask:handler:),
                                 @selector(nsChildView_NSEvent_addLocalMonitorForEventsMatchingMask:handler:),
                                 true);
@@ -1848,7 +1808,7 @@ nsChildView::DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect)
     mResizerImage = manager->gl()->CreateTextureImage(nsIntSize(15, 15),
                                                       gfxASurface::CONTENT_COLOR_ALPHA,
                                                       LOCAL_GL_CLAMP_TO_EDGE,
-                                                      /* aUseNearestFilter = */ true);
+                                                      TextureImage::UseNearestFilter);
 
     // Creation of texture images can fail.
     if (!mResizerImage)
@@ -1877,8 +1837,8 @@ nsChildView::DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect)
 
   TextureImage::ScopedBindTexture texBind(mResizerImage, LOCAL_GL_TEXTURE0);
 
-  ColorTextureLayerProgram *program =
-    manager->GetColorTextureLayerProgram(mResizerImage->GetShaderProgramType());
+  ShaderProgramOGL *program =
+    manager->GetProgram(mResizerImage->GetShaderProgramType());
   program->Activate();
   program->SetLayerQuadRect(nsIntRect(bottomX - 15,
                                       bottomY - 15,
@@ -3056,7 +3016,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 - (void)maybeTrackScrollEventAsSwipe:(NSEvent *)anEvent
                       scrollOverflow:(PRInt32)overflow
 {
-  if (!nsToolkit::OnLionOrLater()) {
+  if (!nsCocoaFeatures::OnLionOrLater()) {
     return;
   }
   // This method checks whether the AppleEnableSwipeNavigateWithScrolls global
@@ -3241,7 +3201,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   NSUInteger modifierFlags = [theEvent modifierFlags];
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   NSInteger clickCount = [theEvent clickCount];
@@ -3309,7 +3269,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 #endif // ifndef NP_NO_CARBON
   NPCocoaEvent cocoaEvent;
 	
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   if ([theEvent modifierFlags] & NSControlKeyMask)
     geckoEvent.button = nsMouseEvent::eRightButton;
@@ -3358,7 +3318,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 #endif
     {
       if (ChildViewMouseTracker::ViewForEvent(theEvent) != self) {
-        nsMouseEvent geckoExitEvent(true, NS_MOUSE_EXIT, nsnull, nsMouseEvent::eReal);
+        nsMouseEvent geckoExitEvent(true, NS_MOUSE_EXIT, mGeckoChild, nsMouseEvent::eReal);
         [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoExitEvent];
 
         NPCocoaEvent cocoaEvent;
@@ -3442,7 +3402,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   // Create event for use by plugins.
@@ -3497,7 +3457,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 #endif // ifndef NP_NO_CARBON
   NPCocoaEvent cocoaEvent;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   // create event for use by plugins
@@ -3550,7 +3510,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
 
   // The right mouse went down, fire off a right mouse down event to gecko
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eRightButton;
   geckoEvent.clickCount = [theEvent clickCount];
@@ -3605,7 +3565,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 #endif // ifndef NP_NO_CARBON
   NPCocoaEvent cocoaEvent;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eRightButton;
   geckoEvent.clickCount = [theEvent clickCount];
@@ -3649,7 +3609,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eRightButton;
 
@@ -3671,7 +3631,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eMiddleButton;
   geckoEvent.clickCount = [theEvent clickCount];
@@ -3686,7 +3646,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eMiddleButton;
 
@@ -3698,7 +3658,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eMiddleButton;
 
@@ -3759,7 +3719,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   if (scrollDelta != 0) {
     // Send the line scroll event.
-    nsMouseScrollEvent geckoEvent(true, NS_MOUSE_SCROLL, nsnull);
+    nsMouseScrollEvent geckoEvent(true, NS_MOUSE_SCROLL, mGeckoChild);
     [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
     geckoEvent.scrollFlags |= inAxis;
 
@@ -3851,7 +3811,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   if (hasPixels) {
     // Send the pixel scroll event.
-    nsMouseScrollEvent geckoEvent(true, NS_MOUSE_PIXEL_SCROLL, nsnull);
+    nsMouseScrollEvent geckoEvent(true, NS_MOUSE_PIXEL_SCROLL, mGeckoChild);
     [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
     geckoEvent.scrollFlags |= inAxis;
     if (isMomentumScroll)
@@ -3915,7 +3875,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
       return nil;
   }
 
-  nsMouseEvent geckoEvent(true, NS_CONTEXTMENU, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_CONTEXTMENU, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   geckoEvent.button = nsMouseEvent::eRightButton;
   mGeckoChild->DispatchWindowEvent(geckoEvent);
@@ -3943,30 +3903,6 @@ NSEvent* gLastDragMouseDownEvent = nil;
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
 
-// Basic conversion for cocoa to gecko events, common to all conversions.
-// Note that it is OK for inEvent to be nil.
-- (void) convertGenericCocoaEvent:(NSEvent*)inEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent
-{
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  NS_ASSERTION(outGeckoEvent, "convertGenericCocoaEvent:toGeckoEvent: requires non-null outGeckoEvent");
-  if (!outGeckoEvent)
-    return;
-
-  outGeckoEvent->widget = [self widget];
-  outGeckoEvent->time = PR_IntervalNow();
-
-  if (inEvent) {
-    unsigned int modifiers = [inEvent modifierFlags];
-    outGeckoEvent->isShift   = ((modifiers & NSShiftKeyMask) != 0);
-    outGeckoEvent->isControl = ((modifiers & NSControlKeyMask) != 0);
-    outGeckoEvent->isAlt     = ((modifiers & NSAlternateKeyMask) != 0);
-    outGeckoEvent->isMeta    = ((modifiers & NSCommandKeyMask) != 0);
-  }
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
-}
-
 - (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
@@ -3975,13 +3911,35 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!outGeckoEvent)
     return;
 
-  [self convertGenericCocoaEvent:aMouseEvent toGeckoEvent:outGeckoEvent];
+  nsCocoaUtils::InitInputEvent(*outGeckoEvent, aMouseEvent);
 
   // convert point to view coordinate system
   NSPoint locationInWindow = nsCocoaUtils::EventLocationForWindow(aMouseEvent, [self window]);
   NSPoint localPoint = [self convertPoint:locationInWindow fromView:nil];
   outGeckoEvent->refPoint.x = static_cast<nscoord>(localPoint.x);
   outGeckoEvent->refPoint.y = static_cast<nscoord>(localPoint.y);
+
+  nsMouseEvent_base* mouseEvent =
+    static_cast<nsMouseEvent_base*>(outGeckoEvent);
+  mouseEvent->buttons = 0;
+  NSUInteger mouseButtons =
+    nsCocoaFeatures::OnSnowLeopardOrLater() ? [NSEvent pressedMouseButtons] : 0;
+
+  if (mouseButtons & 0x01) {
+    mouseEvent->buttons |= nsMouseEvent::eLeftButtonFlag;
+  }
+  if (mouseButtons & 0x02) {
+    mouseEvent->buttons |= nsMouseEvent::eRightButtonFlag;
+  }
+  if (mouseButtons & 0x04) {
+    mouseEvent->buttons |= nsMouseEvent::eMiddleButtonFlag;
+  }
+  if (mouseButtons & 0x08) {
+    mouseEvent->buttons |= nsMouseEvent::e4thButtonFlag;
+  }
+  if (mouseButtons & 0x10) {
+    mouseEvent->buttons |= nsMouseEvent::e5thButtonFlag;
+  }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -4220,7 +4178,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return YES;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_ACTIVATE, nsnull, nsMouseEvent::eReal);
+  nsMouseEvent geckoEvent(true, NS_MOUSE_ACTIVATE, mGeckoChild, nsMouseEvent::eReal);
   [self convertCocoaMouseEvent:aEvent toGeckoEvent:&geckoEvent];
   return !mGeckoChild->DispatchWindowEvent(geckoEvent);
 }
@@ -4463,8 +4421,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   // set up gecko event
-  nsDragEvent geckoEvent(true, aMessage, nsnull);
-  [self convertGenericCocoaEvent:[NSApp currentEvent] toGeckoEvent:&geckoEvent];
+  nsDragEvent geckoEvent(true, aMessage, mGeckoChild);
+  nsCocoaUtils::InitInputEvent(geckoEvent, [NSApp currentEvent]);
 
   // Use our own coordinates in the gecko event.
   // Convert event from gecko global coords to gecko view coords.

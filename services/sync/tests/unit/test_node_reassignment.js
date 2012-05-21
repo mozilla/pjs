@@ -7,12 +7,12 @@ _("Test that node reassignment responses are respected on all kinds of " +
 // Don't sync any engines by default.
 Svc.DefaultPrefs.set("registerEngines", "")
 
+Cu.import("resource://services-common/rest.js");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/policies.js");
-Cu.import("resource://services-sync/rest.js");
 Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/status.js");
-Cu.import("resource://services-sync/log4moz.js");
+Cu.import("resource://services-common/log4moz.js");
 
 function run_test() {
   Log4Moz.repository.getLogger("Sync.AsyncResource").level = Log4Moz.Level.Trace;
@@ -73,9 +73,7 @@ function installNodeHandler(server, next) {
 }
 
 function prepareServer() {
-  Service.username   = "johndoe";
-  Service.passphrase = "abcdeabcdeabcdeabcdeabcdea";
-  Service.password   = "ilovejane";
+  setBasicCredentials("johndoe", "ilovejane", "abcdeabcdeabcdeabcdeabcdea");
   Service.serverURL  = TEST_SERVER_URL;
   Service.clusterURL = TEST_CLUSTER_URL;
 

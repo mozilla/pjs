@@ -1,39 +1,7 @@
 /* vim:set ts=4 sw=4 sts=4 et cin: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by IBM Corporation are Copyright (C) 2003
- * IBM Corporation. All Rights Reserved.
- *
- * Contributor(s):
- *   IBM Corp.
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsDNSService2.h"
 #include "nsIDNSRecord.h"
@@ -57,6 +25,7 @@
 #include "prio.h"
 #include "plstr.h"
 #include "nsIOService.h"
+#include "nsCharSeparatedTokenizer.h"
 
 #include "mozilla/FunctionTimer.h"
 
@@ -69,6 +38,7 @@ static const char kPrefEnableIDN[]          = "network.enableIDN";
 static const char kPrefIPv4OnlyDomains[]    = "network.dns.ipv4OnlyDomains";
 static const char kPrefDisableIPv6[]        = "network.dns.disableIPv6";
 static const char kPrefDisablePrefetch[]    = "network.dns.disablePrefetch";
+static const char kPrefDnsLocalDomains[]    = "network.dns.localDomains";
 
 //-----------------------------------------------------------------------------
 
@@ -406,6 +376,7 @@ nsDNSService::Init()
     int      proxyType        = nsIProtocolProxyService::PROXYCONFIG_DIRECT;
     
     nsAdoptingCString ipv4OnlyDomains;
+    nsAdoptingCString localDomains;
 
     // read prefs
     nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -422,6 +393,7 @@ nsDNSService::Init()
         prefs->GetBoolPref(kPrefEnableIDN, &enableIDN);
         prefs->GetBoolPref(kPrefDisableIPv6, &disableIPv6);
         prefs->GetCharPref(kPrefIPv4OnlyDomains, getter_Copies(ipv4OnlyDomains));
+        prefs->GetCharPref(kPrefDnsLocalDomains, getter_Copies(localDomains));
         prefs->GetBoolPref(kPrefDisablePrefetch, &disablePrefetch);
 
         // If a manual proxy is in use, disable prefetch implicitly
@@ -431,6 +403,8 @@ nsDNSService::Init()
     if (mFirstTime) {
         mFirstTime = false;
 
+        mLocalDomains.Init();
+
         // register as prefs observer
         if (prefs) {
             prefs->AddObserver(kPrefDnsCacheEntries, this, false);
@@ -438,6 +412,7 @@ nsDNSService::Init()
             prefs->AddObserver(kPrefDnsCacheGrace, this, false);
             prefs->AddObserver(kPrefEnableIDN, this, false);
             prefs->AddObserver(kPrefIPv4OnlyDomains, this, false);
+            prefs->AddObserver(kPrefDnsLocalDomains, this, false);
             prefs->AddObserver(kPrefDisableIPv6, this, false);
             prefs->AddObserver(kPrefDisablePrefetch, this, false);
 
@@ -475,6 +450,19 @@ nsDNSService::Init()
 
         // Disable prefetching either by explicit preference or if a manual proxy is configured 
         mDisablePrefetch = disablePrefetch || (proxyType == nsIProtocolProxyService::PROXYCONFIG_MANUAL);
+
+        mLocalDomains.Clear();
+        if (localDomains) {
+            nsAdoptingString domains;
+            domains.AssignASCII(nsDependentCString(localDomains).get());
+            nsCharSeparatedTokenizer tokenizer(domains, ',',
+                                               nsCharSeparatedTokenizerTemplate<>::SEPARATOR_OPTIONAL);
+ 
+            while (tokenizer.hasMoreTokens()) {
+                const nsSubstring& domain = tokenizer.nextToken();
+                mLocalDomains.PutEntry(nsDependentCString(NS_ConvertUTF16toUTF8(domain).get()));
+            }
+        }
     }
     return rv;
 }
@@ -577,6 +565,7 @@ nsDNSService::AsyncResolve(const nsACString  &hostname,
     // simultaneous shutdown!!
     nsRefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
+    bool localDomain = false;
     {
         MutexAutoLock lock(mLock);
 
@@ -585,16 +574,21 @@ nsDNSService::AsyncResolve(const nsACString  &hostname,
 
         res = mResolver;
         idn = mIDN;
+        localDomain = mLocalDomains.GetEntry(hostname);
     }
     if (!res)
         return NS_ERROR_OFFLINE;
 
     const nsACString *hostPtr = &hostname;
 
+    if (localDomain) {
+        hostPtr = &(NS_LITERAL_CSTRING("localhost"));
+    }
+
     nsresult rv;
     nsCAutoString hostACE;
-    if (idn && !IsASCII(hostname)) {
-        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(hostname, hostACE)))
+    if (idn && !IsASCII(*hostPtr)) {
+        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE)))
             hostPtr = &hostACE;
     }
 
@@ -665,19 +659,25 @@ nsDNSService::Resolve(const nsACString &hostname,
     // simultaneous shutdown!!
     nsRefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
+    bool localDomain = false;
     {
         MutexAutoLock lock(mLock);
         res = mResolver;
         idn = mIDN;
+        localDomain = mLocalDomains.GetEntry(hostname);
     }
     NS_ENSURE_TRUE(res, NS_ERROR_OFFLINE);
 
     const nsACString *hostPtr = &hostname;
 
+    if (localDomain) {
+        hostPtr = &(NS_LITERAL_CSTRING("localhost"));
+    }
+
     nsresult rv;
     nsCAutoString hostACE;
-    if (idn && !IsASCII(hostname)) {
-        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(hostname, hostACE)))
+    if (idn && !IsASCII(*hostPtr)) {
+        if (NS_SUCCEEDED(idn->ConvertUTF8toACE(*hostPtr, hostACE)))
             hostPtr = &hostACE;
     }
 

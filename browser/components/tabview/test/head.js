@@ -1,6 +1,15 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
+// Some tests here assume that all restored tabs are loaded without waiting for
+// the user to bring them to the foreground. We ensure this by resetting the
+// related preference (see the "firefox.js" defaults file for details).
+Services.prefs.setBoolPref("browser.sessionstore.restore_on_demand", false);
+registerCleanupFunction(function () {
+  Services.prefs.clearUserPref("browser.sessionstore.restore_on_demand");
+});
+
+// ----------
 function createEmptyGroupItem(contentWindow, width, height, padding, animate) {
   let pageBounds = contentWindow.Items.getPageBounds();
   pageBounds.inset(padding, padding);
@@ -69,13 +78,23 @@ function closeGroupItem(groupItem, callback) {
 function afterAllTabItemsUpdated(callback, win) {
   win = win || window;
   let tabItems = win.document.getElementById("tab-view").contentWindow.TabItems;
+  let counter = 0;
 
   for (let a = 0; a < win.gBrowser.tabs.length; a++) {
     let tabItem = win.gBrowser.tabs[a]._tabViewTabItem;
-    if (tabItem)
-      tabItems._update(win.gBrowser.tabs[a]);
+    if (tabItem) {
+      let tab = win.gBrowser.tabs[a];
+      counter++;
+      tabItem.addSubscriber("updated", function onUpdated() {
+        tabItem.removeSubscriber("updated", onUpdated);
+        if (--counter == 0)
+          callback();
+      });
+      tabItems.update(tab);
+    }
   }
-  callback();
+  if (counter == 0)
+    callback();
 }
 
 // ---------
@@ -243,7 +262,6 @@ function whenSearchIsDisabled(callback, win) {
   }, false);
 }
 
-
 // ----------
 function hideGroupItem(groupItem, callback) {
   if (groupItem.hidden) {
@@ -375,4 +393,27 @@ function togglePrivateBrowsing(callback) {
            getService(Ci.nsIPrivateBrowsingService);
 
   pb.privateBrowsingEnabled = !pb.privateBrowsingEnabled;
+}
+
+// ----------
+function goToNextGroup(win) {
+  win = win || window;
+
+  let utils =
+    win.QueryInterface(Ci.nsIInterfaceRequestor).
+      getInterface(Ci.nsIDOMWindowUtils);
+
+  const masks = Ci.nsIDOMNSEvent;
+  let mval = 0;
+  mval |= masks.CONTROL_MASK;
+
+  utils.sendKeyEvent("keypress", 0, 96, mval);
+}
+
+// ----------
+function whenAppTabIconAdded(groupItem, callback) {
+  groupItem.addSubscriber("appTabIconAdded", function onAppTabIconAdded() {
+    groupItem.removeSubscriber("appTabIconAdded", onAppTabIconAdded);
+    executeSoon(callback);
+  });
 }

@@ -1,45 +1,8 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Bug 384370 code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Dietrich Ayala <dietrich@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
-
-// The following components need to be initialized to perform tests without
-// asserting in debug builds (Bug 448804).
-Cc["@mozilla.org/browser/livemark-service;2"].getService(Ci.nsILivemarkService);
-Cc["@mozilla.org/feed-processor;1"].createInstance(Ci.nsIFeedProcessor);
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const LOAD_IN_SIDEBAR_ANNO = "bookmarkProperties/loadInSidebar";
 const DESCRIPTION_ANNO = "bookmarkProperties/description";
@@ -49,6 +12,8 @@ do_check_eq(typeof PlacesUtils, "object");
 
 // main
 function run_test() {
+  do_test_pending();
+
   /*
     HTML+FEATURES SUMMARY:
     - import legacy bookmarks
@@ -61,12 +26,11 @@ function run_test() {
     - export as json, import, test
   */
 
-  // get places import/export service
-  var importer = Cc["@mozilla.org/browser/places/import-export-service;1"].getService(Ci.nsIPlacesImportExportService);
+  // import the importer
+  Cu.import("resource://gre/modules/BookmarkHTMLUtils.jsm");
 
   // avoid creating the places smart folder during tests
-  Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch).
-  setIntPref("browser.places.smartBookmarksVersion", -1);
+  Services.prefs.setIntPref("browser.places.smartBookmarksVersion", -1);
 
   // file pointer to legacy bookmarks file
   //var bookmarksFileOld = do_get_file("bookmarks.large.html");
@@ -84,29 +48,43 @@ function run_test() {
 
   // Test importing a pre-Places canonical bookmarks file.
   // 1. import bookmarks.preplaces.html
-  // 2. run the test-suite
   // Note: we do not empty the db before this import to catch bugs like 380999
   try {
-    importer.importHTMLFromFile(bookmarksFileOld, true);
+    BookmarkHTMLUtils.importFromFile(bookmarksFileOld, true, after_import);
   } catch(ex) { do_throw("couldn't import legacy bookmarks file: " + ex); }
-  populate();
-  validate();
 
-  // Test exporting a Places canonical json file.
-  // 1. export to bookmarks.exported.json
-  // 2. empty bookmarks db
-  // 3. import bookmarks.exported.json
-  // 4. run the test-suite
-  try {
-    PlacesUtils.backups.saveBookmarksToJSONFile(jsonFile);
-  } catch(ex) { do_throw("couldn't export to file: " + ex); }
-  LOG("exported json"); 
-  try {
-    PlacesUtils.restoreBookmarksFromJSONFile(jsonFile);
-  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
-  LOG("imported json"); 
-  validate();
-  LOG("validated import"); 
+  function after_import(success) {
+    if (!success) {
+      do_throw("Couldn't import legacy bookmarks file.");
+    }
+
+    populate();
+
+    // 2. run the test-suite
+    validate();
+  
+    waitForAsyncUpdates(function testJsonExport() {
+      // Test exporting a Places canonical json file.
+      // 1. export to bookmarks.exported.json
+      try {
+        PlacesUtils.backups.saveBookmarksToJSONFile(jsonFile);
+      } catch(ex) { do_throw("couldn't export to file: " + ex); }
+      LOG("exported json");
+
+      // 2. empty bookmarks db
+      // 3. import bookmarks.exported.json
+      try {
+        PlacesUtils.restoreBookmarksFromJSONFile(jsonFile);
+      } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
+      LOG("imported json");
+
+      // 4. run the test-suite
+      validate();
+      LOG("validated import");
+  
+      waitForAsyncUpdates(do_test_finished);
+    });
+  }
 }
 
 var tagData = [
@@ -243,14 +221,17 @@ function testToolbarFolder() {
   var livemark = toolbar.getChild(1);
   // title
   do_check_eq("Latest Headlines", livemark.title);
-  // livemark check
-  do_check_true(PlacesUtils.livemarks.isLivemark(livemark.itemId));
-  // site url
-  do_check_eq("http://en-us.fxfeeds.mozilla.com/en-US/firefox/livebookmarks/",
-              PlacesUtils.livemarks.getSiteURI(livemark.itemId).spec);
-  // feed url
-  do_check_eq("http://en-us.fxfeeds.mozilla.com/en-US/firefox/headlines.xml",
-              PlacesUtils.livemarks.getFeedURI(livemark.itemId).spec);
+
+  PlacesUtils.livemarks.getLivemark(
+    { id: livemark.itemId },
+    function (aStatus, aLivemark) {
+      do_check_true(Components.isSuccessCode(aStatus));
+      do_check_eq("http://en-us.fxfeeds.mozilla.com/en-US/firefox/livebookmarks/",
+                  aLivemark.siteURI.spec);
+      do_check_eq("http://en-us.fxfeeds.mozilla.com/en-US/firefox/headlines.xml",
+                  aLivemark.feedURI.spec);
+    }
+  );
 
   // test added bookmark data
   var child = toolbar.getChild(2);

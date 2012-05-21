@@ -48,7 +48,6 @@
 #include "nsHtml5TreeOpExecutor.h"
 #include "nsHtml5OwningUTF16Buffer.h"
 #include "nsIInputStream.h"
-#include "nsICharsetAlias.h"
 #include "mozilla/Mutex.h"
 #include "nsHtml5AtomTable.h"
 #include "nsHtml5Speculation.h"
@@ -540,6 +539,11 @@ class nsHtml5StreamParser : public nsIStreamListener,
      * If false, don't push data to chardet.
      */
     bool                          mFeedChardet;
+
+    /**
+     * Whether the initial charset source was kCharsetFromParentFrame
+     */
+    bool                          mInitialEncodingWasFromParentFrame;
 
     /**
      * Timer for flushing tree ops once in a while when not speculating.

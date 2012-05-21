@@ -1,16 +1,6 @@
 function testValue(aID, aAcc, aValue, aRole)
 {
-  if (aRole == ROLE_PASSWORD_TEXT) {
-    var value;
-    try {
-      value = aAcc.value;
-      do_throw("We do not want a value on " + aID + "!");
-    } catch(e) {
-      is(e.result, Components.results.NS_ERROR_FAILURE,
-         "Wrong return value for getValue on " + aID + "!");
-    }
-  } else
-    is(aAcc.value, aValue, "Wrong value for " + aID + "!");
+  is(aAcc.value, aValue, "Wrong value for " + aID + "!");
 }
 
 function testAction(aID, aAcc, aNumActions, aActionName, aActionDescription)
@@ -27,9 +17,8 @@ function testAction(aID, aAcc, aNumActions, aActionName, aActionDescription)
   }
 }
 
-function testThis(aID, aName, aValue, aDescription, aRole, aState,
-                  aExtraState, aAbsentState, aNumActions, aActionName,
-                  aActionDescription)
+function testThis(aID, aName, aValue, aDescription, aRole,
+                  aNumActions, aActionName, aActionDescription)
 {
   var acc = getAccessible(aID);
   if (!acc)
@@ -39,8 +28,6 @@ function testThis(aID, aName, aValue, aDescription, aRole, aState,
   testValue(aID, acc, aValue, aRole);
   is(acc.description, aDescription, "Wrong description for " + aID + "!");
   testRole(aID, aRole);
-
-  testStates(acc, aState, aExtraState, aAbsentState);
 
   testAction(aID, acc, aNumActions, aActionName, aActionDescription);
 }

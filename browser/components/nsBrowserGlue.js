@@ -1,46 +1,7 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is the Browser Search Service.
-#
-# The Initial Developer of the Original Code is
-# Giorgio Maone
-# Portions created by the Initial Developer are Copyright (C) 2005
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Giorgio Maone <g.maone@informaction.com>
-#   Seth Spitzer <sspitzer@mozilla.com>
-#   Asaf Romano <mano@mozilla.com>
-#   Marco Bonardo <mak77@bonardo.net>
-#   Dietrich Ayala <dietrich@mozilla.com>
-#   Ehsan Akhgari <ehsan.akhgari@gmail.com>
-#   Nils Maier <maierman@web.de>
-#   Robert Strong <robert.bugzilla@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# -*- indent-tabs-mode: nil -*-
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
@@ -51,17 +12,24 @@ const XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/AddonManager.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "NetUtil", function() {
-  Cu.import("resource://gre/modules/NetUtil.jsm");
-  return NetUtil;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                  "resource://gre/modules/AddonManager.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "PlacesUtils", function() {
-  Cu.import("resource://gre/modules/PlacesUtils.jsm");
-  return PlacesUtils;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                  "resource://gre/modules/NetUtil.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+                                  "resource://gre/modules/PlacesUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
+                                  "resource://gre/modules/BookmarkHTMLUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "webappsUI", 
+                                  "resource:///modules/webappsUI.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
+                                  "resource:///modules/PageThumbs.jsm");
 
 const PREF_PLUGINS_NOTIFYUSER = "plugins.update.notifyUser";
 const PREF_PLUGINS_UPDATEURL  = "plugins.update.url";
@@ -223,10 +191,6 @@ BrowserGlue.prototype = {
         // no longer needed, since history was initialized completely.
         Services.obs.removeObserver(this, "places-database-locked");
         this._isPlacesLockedObserver = false;
-
-        // Now apply distribution customized bookmarks.
-        // This should always run after Places initialization.
-        this._distributionCustomizer.applyBookmarks();
         break;
       case "places-database-locked":
         this._isPlacesDatabaseLocked = true;
@@ -252,13 +216,6 @@ BrowserGlue.prototype = {
         // Customization has finished, we don't need the customizer anymore.
         delete this._distributionCustomizer;
         break;
-      case "bookmarks-restore-success":
-      case "bookmarks-restore-failed":
-        Services.obs.removeObserver(this, "bookmarks-restore-success");
-        Services.obs.removeObserver(this, "bookmarks-restore-failed");
-        if (topic == "bookmarks-restore-success" && data == "html-initial")
-          this.ensurePlacesDefaultQueriesInitialized();
-        break;
       case "browser-glue-test": // used by tests
         if (data == "post-update-notification") {
           if (Services.prefs.prefHasUserValue("app.update.postupdate"))
@@ -275,6 +232,9 @@ BrowserGlue.prototype = {
         else if (data == "force-places-init") {
           this._initPlaces();
         }
+        break;
+      case "initial-migration":
+        this._initialMigrationPerformed = true;
         break;
     }
   }, 
@@ -333,6 +293,7 @@ BrowserGlue.prototype = {
       os.removeObserver(this, "places-database-locked");
     if (this._isPlacesShutdownObserver)
       os.removeObserver(this, "places-shutdown");
+    webappsUI.uninit();
   },
 
   _onAppDefaults: function BG__onAppDefaults() {
@@ -357,6 +318,11 @@ BrowserGlue.prototype = {
     // handle any UI migration
     this._migrateUI();
 
+    // Initialize webapps UI
+    webappsUI.init();
+
+    PageThumbs.init();
+
     Services.obs.notifyObservers(null, "browser-ui-startup-complete", "");
   },
 
@@ -378,6 +344,7 @@ BrowserGlue.prototype = {
   _onProfileShutdown: function BG__onProfileShutdown() {
     this._shutdownPlaces();
     this._sanitizer.onShutdown();
+    PageThumbs.uninit();
   },
 
   // All initial windows have opened.
@@ -391,7 +358,6 @@ BrowserGlue.prototype = {
       this._showTelemetryNotification();
 #endif
     }
-
 
     // Show update notification, if needed.
     if (Services.prefs.prefHasUserValue("app.update.postupdate"))
@@ -409,22 +375,67 @@ BrowserGlue.prototype = {
       this._showPluginUpdatePage();
 
     // For any add-ons that were installed disabled and can be enabled offer
-    // them to the user
-    var win = this.getMostRecentBrowserWindow();
-    var browser = win.gBrowser;
-    var changedIDs = AddonManager.getStartupChanges(AddonManager.STARTUP_CHANGE_INSTALLED);
-    AddonManager.getAddonsByIDs(changedIDs, function(aAddons) {
-      aAddons.forEach(function(aAddon) {
-        // If the add-on isn't user disabled or can't be enabled then skip it
-        if (!aAddon.userDisabled || !(aAddon.permissions & AddonManager.PERM_CAN_ENABLE))
-          return;
+    // them to the user.
+    let changedIDs = AddonManager.getStartupChanges(AddonManager.STARTUP_CHANGE_INSTALLED);
+    if (changedIDs.length > 0) {
+      let browser = this.getMostRecentBrowserWindow().gBrowser;
+      AddonManager.getAddonsByIDs(changedIDs, function(aAddons) {
+        aAddons.forEach(function(aAddon) {
+          // If the add-on isn't user disabled or can't be enabled then skip it.
+          if (!aAddon.userDisabled || !(aAddon.permissions & AddonManager.PERM_CAN_ENABLE))
+            return;
 
-        browser.selectedTab = browser.addTab("about:newaddon?id=" + aAddon.id);
-      })
-    });
+          browser.selectedTab = browser.addTab("about:newaddon?id=" + aAddon.id);
+        })
+      });
+    }
 
     let keywordURLUserSet = Services.prefs.prefHasUserValue("keyword.URL");
     Services.telemetry.getHistogramById("FX_KEYWORD_URL_USERSET").add(keywordURLUserSet);
+
+    // Perform default browser checking.
+    var shell;
+    try {
+      shell = Components.classes["@mozilla.org/browser/shell-service;1"]
+        .getService(Components.interfaces.nsIShellService);
+    } catch (e) { }
+    if (shell) {
+#ifdef DEBUG
+      let shouldCheck = false;
+#else
+      let shouldCheck = shell.shouldCheckDefaultBrowser;
+#endif
+      let willRecoverSession = false;
+      try {
+        let ss = Cc["@mozilla.org/browser/sessionstartup;1"].
+                 getService(Ci.nsISessionStartup);
+        willRecoverSession =
+          (ss.sessionType == Ci.nsISessionStartup.RECOVER_SESSION);
+      }
+      catch (ex) { /* never mind; suppose SessionStore is broken */ }
+      if (shouldCheck && !shell.isDefaultBrowser(true) && !willRecoverSession) {
+        Services.tm.mainThread.dispatch(function() {
+          var win = this.getMostRecentBrowserWindow();
+          var brandBundle = win.document.getElementById("bundle_brand");
+          var shellBundle = win.document.getElementById("bundle_shell");
+  
+          var brandShortName = brandBundle.getString("brandShortName");
+          var promptTitle = shellBundle.getString("setDefaultBrowserTitle");
+          var promptMessage = shellBundle.getFormattedString("setDefaultBrowserMessage",
+                                                             [brandShortName]);
+          var checkboxLabel = shellBundle.getFormattedString("setDefaultBrowserDontAsk",
+                                                             [brandShortName]);
+          var checkEveryTime = { value: shouldCheck };
+          var ps = Services.prompt;
+          var rv = ps.confirmEx(win, promptTitle, promptMessage,
+                                ps.STD_YES_NO_BUTTONS,
+                                null, null, null, checkboxLabel, checkEveryTime);
+          if (rv == 0)
+            shell.setDefaultBrowser(true, false);
+          shell.shouldCheckDefaultBrowser = checkEveryTime.value;
+        }.bind(this), Ci.nsIThread.DISPATCH_NORMAL);
+      }
+    }
   },
 
   _onQuitRequest: function BG__onQuitRequest(aCancelQuit, aQuitType) {
@@ -760,7 +771,7 @@ BrowserGlue.prototype = {
     try {
       // This will throw NS_ERROR_NOT_AVAILABLE if the notification cannot
       // be displayed per the idl.
-      notifier.showAlertNotification("post-update-notification", title, text,
+      notifier.showAlertNotification(null, title, text,
                                      true, url, clickCallback);
     }
     catch (e) {
@@ -774,8 +785,70 @@ BrowserGlue.prototype = {
     const PREF_TELEMETRY_REJECTED  = "toolkit.telemetry.rejected";
     const PREF_TELEMETRY_INFOURL  = "toolkit.telemetry.infoURL";
     const PREF_TELEMETRY_SERVER_OWNER = "toolkit.telemetry.server_owner";
+    const PREF_TELEMETRY_ENABLED_BY_DEFAULT = "toolkit.telemetry.enabledByDefault";
+    const PREF_TELEMETRY_NOTIFIED_OPTOUT = "toolkit.telemetry.notifiedOptOut";
     // This is used to reprompt users when privacy message changes
     const TELEMETRY_PROMPT_REV = 2;
+
+    // Stick notifications onto the selected tab of the active browser window.
+    var win = this.getMostRecentBrowserWindow();
+    var tabbrowser = win.gBrowser;
+    var notifyBox = tabbrowser.getNotificationBox();
+
+    var browserBundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
+    var brandBundle = Services.strings.createBundle("chrome://branding/locale/brand.properties");
+    var productName = brandBundle.GetStringFromName("brandFullName");
+    var serverOwner = Services.prefs.getCharPref(PREF_TELEMETRY_SERVER_OWNER);
+
+    function appendTelemetryNotification(message, buttons, hideclose) {
+      let notification = notifyBox.appendNotification(message, "telemetry", null,
+                                                      notifyBox.PRIORITY_INFO_LOW,
+                                                      buttons);
+      if (hideclose)
+        notification.setAttribute("hideclose", hideclose);
+      notification.persistence = -1;  // Until user closes it
+      return notification;
+    }
+
+    function appendLearnMoreLink(notification) {
+      let XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+      let link = notification.ownerDocument.createElementNS(XULNS, "label");
+      link.className = "text-link telemetry-text-link";
+      link.setAttribute("value", browserBundle.GetStringFromName("telemetryLinkLabel"));
+      let description = notification.ownerDocument.getAnonymousElementByAttribute(notification, "anonid", "messageText");
+      description.appendChild(link);
+      return link;
+    }
+
+    var telemetryEnabledByDefault = false;
+    try {
+      telemetryEnabledByDefault = Services.prefs.getBoolPref(PREF_TELEMETRY_ENABLED_BY_DEFAULT);
+    } catch(e) {}
+    if (telemetryEnabledByDefault) {
+      var telemetryNotifiedOptOut = false;
+      try {
+        telemetryNotifiedOptOut = Services.prefs.getBoolPref(PREF_TELEMETRY_NOTIFIED_OPTOUT);
+      } catch(e) {}
+      if (telemetryNotifiedOptOut)
+        return;
+
+      var telemetryPrompt = browserBundle.formatStringFromName("telemetryOptOutPrompt",
+                                                               [productName, serverOwner, productName], 3);
+
+      Services.prefs.setBoolPref(PREF_TELEMETRY_NOTIFIED_OPTOUT, true);
+
+      let notification = appendTelemetryNotification(telemetryPrompt, null, false);
+      let link = appendLearnMoreLink(notification);
+      link.addEventListener('click', function() {
+        // Open the learn more url in a new tab
+        let url = Services.urlFormatter.formatURLPref("app.support.baseURL");
+        url += "how-can-i-help-submitting-performance-data";
+        tabbrowser.selectedTab = tabbrowser.addTab(url);
+        // Remove the notification on which the user clicked
+        notification.parentNode.removeNotification(notification, true);
+      }, false);
+      return;
+    }
 
     var telemetryPrompted = null;
     try {
@@ -789,17 +862,7 @@ BrowserGlue.prototype = {
     Services.prefs.clearUserPref(PREF_TELEMETRY_PROMPTED);
     Services.prefs.clearUserPref(PREF_TELEMETRY_ENABLED);
     
-    // Stick the notification onto the selected tab of the active browser window.
-    var win = this.getMostRecentBrowserWindow();
-    var browser = win.gBrowser; // for closure in notification bar callback
-    var notifyBox = browser.getNotificationBox();
-
-    var browserBundle   = Services.strings.createBundle("chrome://browser/locale/browser.properties");
-    var brandBundle     = Services.strings.createBundle("chrome://branding/locale/brand.properties");
-
-    var productName        = brandBundle.GetStringFromName("brandFullName");
-    var serverOwner        = Services.prefs.getCharPref(PREF_TELEMETRY_SERVER_OWNER);
-    var telemetryPrompt    = browserBundle.formatStringFromName("telemetryPrompt", [productName, serverOwner], 2);
+    var telemetryPrompt = browserBundle.formatStringFromName("telemetryOptInPrompt", [productName, serverOwner], 2);
 
     var buttons = [
                     {
@@ -823,26 +886,17 @@ BrowserGlue.prototype = {
     // Set pref to indicate we've shown the notification.
     Services.prefs.setIntPref(PREF_TELEMETRY_PROMPTED, TELEMETRY_PROMPT_REV);
 
-    var notification = notifyBox.appendNotification(telemetryPrompt, "telemetry", null, notifyBox.PRIORITY_INFO_LOW, buttons);
-    notification.setAttribute("hideclose", true);
-    notification.persistence = -1;  // Until user closes it
-
-    let XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
-    let link = notification.ownerDocument.createElementNS(XULNS, "label");
-    link.className = "text-link telemetry-text-link";
-    link.setAttribute("value", browserBundle.GetStringFromName("telemetryLinkLabel"));
+    let notification = appendTelemetryNotification(telemetryPrompt, buttons, true);
+    let link = appendLearnMoreLink(notification);
     link.addEventListener('click', function() {
       // Open the learn more url in a new tab
-      browser.selectedTab = browser.addTab(Services.prefs.getCharPref(PREF_TELEMETRY_INFOURL));
+      tabbrowser.selectedTab = tabbrowser.addTab(Services.prefs.getCharPref(PREF_TELEMETRY_INFOURL));
       // Remove the notification on which the user clicked
       notification.parentNode.removeNotification(notification, true);
       // Add a new notification to that tab, with no "Learn more" link
-      notifyBox = browser.getNotificationBox();
-      notification = notifyBox.appendNotification(telemetryPrompt, "telemetry", null, notifyBox.PRIORITY_INFO_LOW, buttons);
-      notification.persistence = -1; // Until user closes it
+      notifyBox = tabbrowser.getNotificationBox();
+      appendTelemetryNotification(telemetryPrompt, buttons, true);
     }, false);
-    let description = notification.ownerDocument.getAnonymousElementByAttribute(notification, "anonid", "messageText");
-    description.appendChild(link);
   },
 #endif
 
@@ -885,18 +939,9 @@ BrowserGlue.prototype = {
     // If the database is corrupt or has been newly created we should
     // import bookmarks.
     var dbStatus = PlacesUtils.history.databaseStatus;
-    var importBookmarks = dbStatus == PlacesUtils.history.DATABASE_STATUS_CREATE ||
-                          dbStatus == PlacesUtils.history.DATABASE_STATUS_CORRUPT;
-
-    if (dbStatus == PlacesUtils.history.DATABASE_STATUS_CREATE) {
-      // If the database has just been created, but we already have any
-      // bookmark, this is not the initial import.  This can happen after a
-      // migration from a different browser since migrators run before us.
-      // In such a case we should not import, unless some pref has been set.
-      if (PlacesUtils.bookmarks.getIdForItemAt(PlacesUtils.bookmarksMenuFolderId, 0) != -1 ||
-          PlacesUtils.bookmarks.getIdForItemAt(PlacesUtils.toolbarFolderId, 0) != -1)
-        importBookmarks = false;
-    }
+    var importBookmarks = !this._initialMigrationPerformed &&
+                          (dbStatus == PlacesUtils.history.DATABASE_STATUS_CREATE ||
+                           dbStatus == PlacesUtils.history.DATABASE_STATUS_CORRUPT);
 
     // Check if user or an extension has required to import bookmarks.html
     var importBookmarksHTML = false;
@@ -953,6 +998,9 @@ BrowserGlue.prototype = {
     // delayed till the import operations has finished.  Not doing so would
     // cause them to be overwritten by the newly imported bookmarks.
     if (!importBookmarks) {
+      // Now apply distribution customized bookmarks.
+      // This should always run after Places initialization.
+      this._distributionCustomizer.applyBookmarks();
       this.ensurePlacesDefaultQueriesInitialized();
     }
     else {
@@ -986,25 +1034,28 @@ BrowserGlue.prototype = {
       }
 
       if (bookmarksURI) {
-        // Add an import observer.  It will ensure that smart bookmarks are
-        // created once the operation is complete.
-        Services.obs.addObserver(this, "bookmarks-restore-success", false);
-        Services.obs.addObserver(this, "bookmarks-restore-failed", false);
-
         // Import from bookmarks.html file.
         try {
-          var importer = Cc["@mozilla.org/browser/places/import-export-service;1"].
-                         getService(Ci.nsIPlacesImportExportService);
-          importer.importHTMLFromURI(bookmarksURI, true /* overwrite existing */);
+          BookmarkHTMLUtils.importFromURL(bookmarksURI.spec, true, (function (success) {
+            if (success) {
+              // Now apply distribution customized bookmarks.
+              // This should always run after Places initialization.
+              this._distributionCustomizer.applyBookmarks();
+              // Ensure that smart bookmarks are created once the operation is
+              // complete.
+              this.ensurePlacesDefaultQueriesInitialized();
+            }
+            else {
+              Cu.reportError("Bookmarks.html file could be corrupt.");
+            }
+          }).bind(this));
         } catch (err) {
-          // Report the error, but ignore it.
           Cu.reportError("Bookmarks.html file could be corrupt. " + err);
-          Services.obs.removeObserver(this, "bookmarks-restore-success");
-          Services.obs.removeObserver(this, "bookmarks-restore-failed");
         }
       }
-      else
+      else {
         Cu.reportError("Unable to find bookmarks.html file.");
+      }
 
       // Reset preferences, so we won't try to import again at next run
       if (importBookmarksHTML)
@@ -1123,33 +1174,6 @@ BrowserGlue.prototype = {
     this._dataSource = this._rdf.GetDataSource("rdf:local-store");
     this._dirty = false;
 
-    if (currentUIVersion < 1) {
-      // this code should always migrate pre-FF3 profiles to the current UI state
-      let currentsetResource = this._rdf.GetResource("currentset");
-      let toolbars = ["nav-bar", "toolbar-menubar", "PersonalToolbar"];
-      for (let i = 0; i < toolbars.length; i++) {
-        let toolbar = this._rdf.GetResource(BROWSER_DOCURL + toolbars[i]);
-        let currentset = this._getPersist(toolbar, currentsetResource);
-        if (!currentset) {
-          // toolbar isn't customized
-          if (i == 0)
-            // new button is in the defaultset, nothing to migrate
-            break;
-          continue;
-        }
-        if (/(?:^|,)unified-back-forward-button(?:$|,)/.test(currentset))
-          // new button is already there, nothing to migrate
-          break;
-        if (/(?:^|,)back-button(?:$|,)/.test(currentset)) {
-          let newset = currentset.replace(/(^|,)back-button($|,)/,
-                                          "$1unified-back-forward-button,back-button$2")
-          this._setPersist(toolbar, currentsetResource, newset);
-          // done migrating
-          break;
-        }
-      }
-    }
-
     if (currentUIVersion < 2) {
       // This code adds the customizable bookmarks button.
       let currentsetResource = this._rdf.GetResource("currentset");
@@ -1158,13 +1182,7 @@ BrowserGlue.prototype = {
       // Need to migrate only if toolbar is customized and the element is not found.
       if (currentset &&
           currentset.indexOf("bookmarks-menu-button-container") == -1) {
-        if (currentset.indexOf("fullscreenflex") != -1) {
-          currentset = currentset.replace(/(^|,)fullscreenflex($|,)/,
-                                          "$1bookmarks-menu-button-container,fullscreenflex$2")
-        }
-        else {
-          currentset += ",bookmarks-menu-button-container";
-        }
+        currentset += ",bookmarks-menu-button-container";
         this._setPersist(toolbarResource, currentsetResource, currentset);
       }
     }
@@ -1300,7 +1318,7 @@ BrowserGlue.prototype = {
     // be set to the version it has been added in, we will compare its value
     // to users' smartBookmarksVersion and add new smart bookmarks without
     // recreating old deleted ones.
-    const SMART_BOOKMARKS_VERSION = 2;
+    const SMART_BOOKMARKS_VERSION = 4;
     const SMART_BOOKMARKS_ANNO = "Places/SmartBookmark";
     const SMART_BOOKMARKS_PREF = "browser.places.smartBookmarksVersion";
 
@@ -1328,9 +1346,7 @@ BrowserGlue.prototype = {
         let smartBookmarks = {
           MostVisited: {
             title: bundle.GetStringFromName("mostVisitedTitle"),
-            uri: NetUtil.newURI("place:redirectsMode=" +
-                                Ci.nsINavHistoryQueryOptions.REDIRECTS_MODE_TARGET +
-                                "&sort=" +
+            uri: NetUtil.newURI("place:sort=" +
                                 Ci.nsINavHistoryQueryOptions.SORT_BY_VISITCOUNT_DESCENDING +
                                 "&maxResults=" + MAX_RESULTS),
             parent: PlacesUtils.toolbarFolderId,
@@ -1346,7 +1362,6 @@ BrowserGlue.prototype = {
                                 Ci.nsINavHistoryQueryOptions.QUERY_TYPE_BOOKMARKS +
                                 "&sort=" +
                                 Ci.nsINavHistoryQueryOptions.SORT_BY_DATEADDED_DESCENDING +
-                                "&excludeItemIfParentHasAnnotation=livemark%2FfeedURI" +
                                 "&maxResults=" + MAX_RESULTS +
                                 "&excludeQueries=1"),
             parent: PlacesUtils.bookmarksMenuFolderId,
@@ -1364,7 +1379,7 @@ BrowserGlue.prototype = {
             parent: PlacesUtils.bookmarksMenuFolderId,
             position: menuIndex++,
             newInVersion: 1
-          },
+          }
         };
 
         // Set current itemId, parent and position if Smart Bookmark exists,
@@ -1375,9 +1390,9 @@ BrowserGlue.prototype = {
           let queryId = PlacesUtils.annotations.getItemAnnotation(itemId, SMART_BOOKMARKS_ANNO);
           if (queryId in smartBookmarks) {
             let smartBookmark = smartBookmarks[queryId];
-            smartBookmarks[queryId].itemId = itemId;
-            smartBookmarks[queryId].parent = PlacesUtils.bookmarks.getFolderIdForItem(itemId);
-            smartBookmarks[queryId].position = PlacesUtils.bookmarks.getItemIndex(itemId);
+            smartBookmark.itemId = itemId;
+            smartBookmark.parent = PlacesUtils.bookmarks.getFolderIdForItem(itemId);
+            smartBookmark.position = PlacesUtils.bookmarks.getItemIndex(itemId);
           }
           else {
             // We don't remove old Smart Bookmarks because user could still

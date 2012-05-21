@@ -1395,15 +1395,6 @@ _pixman_image_for_surface (const cairo_surface_pattern_t *pattern,
 
 	type = source->base.backend->type;
 	if (type == CAIRO_SURFACE_TYPE_IMAGE) {
-	    if (extend != CAIRO_EXTEND_NONE &&
-		sample.x >= 0 &&
-		sample.y >= 0 &&
-		sample.x + sample.width  <= source->width &&
-		sample.y + sample.height <= source->height)
-	    {
-		extend = CAIRO_EXTEND_NONE;
-	    }
-
 	    if (sample.width == 1 && sample.height == 1) {
 		if (sample.x < 0 ||
 		    sample.y < 0 ||
@@ -4040,7 +4031,13 @@ _cairo_image_surface_glyphs (void			*abstract_surface,
     composite_glyphs_info_t glyph_info;
     cairo_clip_t local_clip;
     cairo_bool_t have_clip = FALSE;
+#ifdef MOZ_GFX_OPTIMIZE_MOBILE
+    // For performance reasons we don't want to use two passes for overlapping glyphs
+    // on mobile
+    cairo_bool_t overlap = FALSE;
+#else
     cairo_bool_t overlap;
+#endif
     cairo_status_t status;
 
     cairo_rectangle_int_t rect;
@@ -4054,7 +4051,12 @@ _cairo_image_surface_glyphs (void			*abstract_surface,
 							  scaled_font,
 							  glyphs, num_glyphs,
 							  clip,
+#ifdef MOZ_GFX_OPTIMIZE_MOBILE
+							  NULL);
+#else
 							  &overlap);
+#endif
+
     if (unlikely (status))
 	return status;
 

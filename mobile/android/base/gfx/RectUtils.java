@@ -1,39 +1,7 @@
 /* -*- Mode: Java; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Kartikaya Gupta <kgupta@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 package org.mozilla.gecko.gfx;
 
@@ -58,22 +26,14 @@ public final class RectUtils {
         }
     }
 
-    public static Rect contract(Rect rect, int lessWidth, int lessHeight) {
-        float halfLessWidth = lessWidth / 2.0f;
-        float halfLessHeight = lessHeight / 2.0f;
-        return new Rect(Math.round(rect.left + halfLessWidth),
-                        Math.round(rect.top + halfLessHeight),
-                        Math.round(rect.right - halfLessWidth),
-                        Math.round(rect.bottom - halfLessHeight));
-    }
-
-    public static RectF contract(RectF rect, float lessWidth, float lessHeight) {
-        float halfLessWidth = lessWidth / 2;
-        float halfLessHeight = lessHeight / 2;
-        return new RectF(rect.left + halfLessWidth,
-                         rect.top + halfLessHeight,
-                         rect.right - halfLessWidth,
-                         rect.bottom - halfLessHeight);
+    public static String toJSON(RectF rect) {
+        StringBuffer sb = new StringBuffer(256);
+        sb.append("{ \"left\": ").append(rect.left)
+          .append(", \"top\": ").append(rect.top)
+          .append(", \"right\": ").append(rect.right)
+          .append(", \"bottom\": ").append(rect.bottom)
+          .append('}');
+        return sb.toString();
     }
 
     public static RectF expand(RectF rect, float moreWidth, float moreHeight) {
@@ -83,6 +43,15 @@ public final class RectUtils {
                          rect.top - halfMoreHeight,
                          rect.right + halfMoreWidth,
                          rect.bottom + halfMoreHeight);
+    }
+
+    public static RectF contract(RectF rect, float lessWidth, float lessHeight) {
+        float halfLessWidth = lessWidth / 2.0f;
+        float halfLessHeight = lessHeight / 2.0f;
+        return new RectF(rect.left + halfLessWidth,
+                         rect.top + halfLessHeight,
+                         rect.right - halfLessWidth,
+                         rect.bottom - halfLessHeight);
     }
 
     public static RectF intersect(RectF one, RectF two) {
@@ -105,6 +74,11 @@ public final class RectUtils {
     public static Rect round(RectF rect) {
         return new Rect(Math.round(rect.left), Math.round(rect.top),
                         Math.round(rect.right), Math.round(rect.bottom));
+    }
+
+    public static Rect roundIn(RectF rect) {
+        return new Rect((int)Math.ceil(rect.left), (int)Math.ceil(rect.top),
+                        (int)Math.floor(rect.right), (int)Math.floor(rect.bottom));
     }
 
     public static IntSize getSize(Rect rect) {
@@ -131,9 +105,14 @@ public final class RectUtils {
     }
 
     public static boolean fuzzyEquals(RectF a, RectF b) {
-        return FloatUtils.fuzzyEquals(a.top, b.top)
-            && FloatUtils.fuzzyEquals(a.left, b.left)
-            && FloatUtils.fuzzyEquals(a.right, b.right)
-            && FloatUtils.fuzzyEquals(a.bottom, b.bottom);
+        if (a == null && b == null)
+            return true;
+        else if ((a == null && b != null) || (a != null && b == null))
+            return false;
+        else
+            return FloatUtils.fuzzyEquals(a.top, b.top)
+                && FloatUtils.fuzzyEquals(a.left, b.left)
+                && FloatUtils.fuzzyEquals(a.right, b.right)
+                && FloatUtils.fuzzyEquals(a.bottom, b.bottom);
     }
 }

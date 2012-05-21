@@ -1,39 +1,7 @@
 // -*- Mode: js2; tab-width: 2; indent-tabs-mode: nil; js2-basic-offset: 2; js2-skip-preprocessor-directives: t; -*-
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Mobile Browser.
- *
- * The Initial Developer of the Original Code is Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mark Finkle <mfinkle@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const PREFIX_ITEM_URI = "urn:mozilla:item:";
 const PREFIX_NS_EM = "http://www.mozilla.org/2004/em-rdf#";
@@ -48,21 +16,6 @@ const URI_GENERIC_ICON_XPINSTALL = "drawable://alertaddons";
 const URI_GENERIC_ICON_XPINSTALL = "chrome://browser/skin/images/alert-addons-30.png";
 #endif
 const ADDONS_NOTIFICATION_NAME = "addons";
-
-XPCOMUtils.defineLazyGetter(this, "AddonManager", function() {
-  Cu.import("resource://gre/modules/AddonManager.jsm");
-  return AddonManager;
-});
-
-XPCOMUtils.defineLazyGetter(this, "AddonRepository", function() {
-  Cu.import("resource://gre/modules/AddonRepository.jsm");
-  return AddonRepository;
-});
-
-XPCOMUtils.defineLazyGetter(this, "NetUtil", function() {
-  Cu.import("resource://gre/modules/NetUtil.jsm");
-  return NetUtil;
-});
 
 var ExtensionsView = {
   _strings: {},
@@ -565,18 +518,18 @@ var ExtensionsView = {
     // Make sure we're online before attempting to load
     Util.forceOnline();
 
-    if (AddonRepository.isSearching)
-      AddonRepository.cancelSearch();
+    if (this._AddonRepository.isSearching)
+      this._AddonRepository.cancelSearch();
 
     let strings = Strings.browser;
     if (aTerms) {
       AddonSearchResults.selectFirstResult = aSelectFirstResult;
       this.displaySectionMessage("repo", strings.GetStringFromName("addonsSearchStart.label"), strings.GetStringFromName("addonsSearchStart.button"), false);
-      AddonRepository.searchAddons(aTerms, Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS), AddonSearchResults);
+      this._AddonRepository.searchAddons(aTerms, Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS), AddonSearchResults);
     }
     else {
       this.displaySectionMessage("repo", strings.GetStringFromName("addonsSearchStart.label"), strings.GetStringFromName("addonsSearchStart.button"), false);
-      AddonRepository.retrieveRecommendedAddons(Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS), RecommendedSearchResults);
+      this._AddonRepository.retrieveRecommendedAddons(Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS), RecommendedSearchResults);
     }
   },
 
@@ -905,6 +858,9 @@ function searchFailed() {
   let failButton = strings.GetStringFromName("addonsSearchFail.retryButton");
   ExtensionsView.displaySectionMessage("repo", failLabel, failButton, true);
 }
+ 
+XPCOMUtils.defineLazyModuleGetter(ExtensionsView, "_AddonRepository",
+                                  "resource://gre/modules/AddonRepository.jsm", "AddonRepository");
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -914,7 +870,8 @@ var RecommendedSearchResults = {
 
   searchSucceeded: function(aAddons, aAddonCount, aTotalResults) {
     this.cache = aAddons;
-    AddonRepository.searchAddons(" ", Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS), BrowseSearchResults);
+    ExtensionsView._AddonRepository.searchAddons(" ", Services.prefs.getIntPref(PREF_GETADDONS_MAXRESULTS),
+                                                 BrowseSearchResults);
   },
 
   searchFailed: searchFailed

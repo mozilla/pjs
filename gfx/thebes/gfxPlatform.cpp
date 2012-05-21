@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_LOGGING
 #define FORCE_PR_LOG /* Allow logging in the release build */
@@ -57,13 +25,13 @@
 #include "gfxAndroidPlatform.h"
 #endif
 
-#include "gfxAtoms.h"
+#include "nsGkAtoms.h"
 #include "gfxPlatformFontList.h"
 #include "gfxContext.h"
 #include "gfxImageSurface.h"
 #include "gfxUserFontSet.h"
 #include "nsUnicodeProperties.h"
-#include "harfbuzz/hb-unicode.h"
+#include "harfbuzz/hb.h"
 #ifdef MOZ_GRAPHITE
 #include "gfxGraphiteShaper.h"
 #endif
@@ -86,6 +54,7 @@
 
 #include "mozilla/FunctionTimer.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Assertions.h"
 
 #include "nsIGfxInfo.h"
 
@@ -118,6 +87,7 @@ static PRLogModuleInfo *sFontlistLog = nsnull;
 static PRLogModuleInfo *sFontInitLog = nsnull;
 static PRLogModuleInfo *sTextrunLog = nsnull;
 static PRLogModuleInfo *sTextrunuiLog = nsnull;
+static PRLogModuleInfo *sCmapDataLog = nsnull;
 #endif
 
 /* Class to listen for pref changes so that chrome code can dynamically
@@ -149,6 +119,7 @@ SRGBOverrideObserver::Observe(nsISupports *aSubject,
 
 #define GFX_PREF_HARFBUZZ_SCRIPTS "gfx.font_rendering.harfbuzz.scripts"
 #define HARFBUZZ_SCRIPTS_DEFAULT  mozilla::unicode::SHAPING_DEFAULT
+#define GFX_PREF_FALLBACK_USE_CMAPS  "gfx.font_rendering.fallback.always_use_cmaps"
 
 #ifdef MOZ_GRAPHITE
 #define GFX_PREF_GRAPHITE_SHAPING "gfx.font_rendering.graphite.enabled"
@@ -232,6 +203,8 @@ gfxPlatform::gfxPlatform()
     mUseHarfBuzzScripts = UNINITIALIZED_VALUE;
     mAllowDownloadableFonts = UNINITIALIZED_VALUE;
     mDownloadableFontsSanitize = UNINITIALIZED_VALUE;
+    mFallbackUsesCmaps = UNINITIALIZED_VALUE;
+
 #ifdef MOZ_GRAPHITE
     mGraphiteShapingEnabled = UNINITIALIZED_VALUE;
 #endif
@@ -261,13 +234,12 @@ gfxPlatform::Init()
     }
     gEverInitialized = true;
 
-    gfxAtoms::RegisterAtoms();
-
 #ifdef PR_LOGGING
     sFontlistLog = PR_NewLogModule("fontlist");;
     sFontInitLog = PR_NewLogModule("fontinit");;
     sTextrunLog = PR_NewLogModule("textrun");;
     sTextrunuiLog = PR_NewLogModule("textrunui");;
+    sCmapDataLog = PR_NewLogModule("cmapdata");;
 #endif
 
 
@@ -296,6 +268,10 @@ gfxPlatform::Init()
     gPlatform = new gfxAndroidPlatform;
 #else
     #error "No gfxPlatform implementation available"
+#endif
+
+#ifdef DEBUG
+    mozilla::gl::GLContext::StaticInit();
 #endif
 
     nsresult rv;
@@ -328,6 +304,8 @@ gfxPlatform::Init()
 
     gPlatform->mFontPrefsObserver = new FontPrefsObserver();
     Preferences::AddStrongObservers(gPlatform->mFontPrefsObserver, kObservedPrefs);
+
+    gPlatform->mWorkAroundDriverBugs = Preferences::GetBool("gfx.work-around-driver-bugs", true);
 
     // Force registration of the gfx component, thus arranging for
     // ::Shutdown to be called.
@@ -640,6 +618,16 @@ gfxPlatform::CreateOffscreenDrawTarget(const IntSize& aSize, SurfaceFormat aForm
   }
 }
 
+RefPtr<DrawTarget>
+gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize, int32_t aStride, SurfaceFormat aFormat)
+{
+  BackendType backend;
+  if (!SupportsAzure(backend)) {
+    return NULL;
+  }
+  return Factory::CreateDrawTargetForData(backend, aData, aSize, aStride, aFormat); 
+}
+
 nsresult
 gfxPlatform::GetFontList(nsIAtom *aLangGroup,
                          const nsACString& aGenericFamily,
@@ -674,6 +662,17 @@ gfxPlatform::SanitizeDownloadedFonts()
     }
 
     return mDownloadableFontsSanitize;
+}
+
+bool
+gfxPlatform::UseCmapsDuringSystemFallback()
+{
+    if (mFallbackUsesCmaps == UNINITIALIZED_VALUE) {
+        mFallbackUsesCmaps =
+            Preferences::GetBool(GFX_PREF_FALLBACK_USE_CMAPS, false);
+    }
+
+    return mFallbackUsesCmaps;
 }
 
 #ifdef MOZ_GRAPHITE
@@ -766,7 +765,7 @@ gfxPlatform::GetPrefFonts(nsIAtom *aLanguage, nsString& aFonts, bool aAppendUnic
 
     AppendGenericFontFromPref(aFonts, aLanguage, nsnull);
     if (aAppendUnicode)
-        AppendGenericFontFromPref(aFonts, gfxAtoms::x_unicode, nsnull);
+        AppendGenericFontFromPref(aFonts, nsGkAtoms::Unicode, nsnull);
 }
 
 bool gfxPlatform::ForEachPrefFont(eFontPrefLang aLangArray[], PRUint32 aLangArrayLen, PrefFontCallback aCallback,
@@ -1354,6 +1353,8 @@ gfxPlatform::FontsPrefsChanged(const char *aPref)
         mAllowDownloadableFonts = UNINITIALIZED_VALUE;
     } else if (!strcmp(GFX_DOWNLOADABLE_FONTS_SANITIZE, aPref)) {
         mDownloadableFontsSanitize = UNINITIALIZED_VALUE;
+    } else if (!strcmp(GFX_PREF_FALLBACK_USE_CMAPS, aPref)) {
+        mFallbackUsesCmaps = UNINITIALIZED_VALUE;
 #ifdef MOZ_GRAPHITE
     } else if (!strcmp(GFX_PREF_GRAPHITE_SHAPING, aPref)) {
         mGraphiteShapingEnabled = UNINITIALIZED_VALUE;
@@ -1393,6 +1394,9 @@ gfxPlatform::GetLog(eGfxLog aWhichLog)
     case eGfxLog_textrunui:
         return sTextrunuiLog;
         break;
+    case eGfxLog_cmapdata:
+        return sCmapDataLog;
+        break;
     default:
         break;
     }
@@ -1401,4 +1405,11 @@ gfxPlatform::GetLog(eGfxLog aWhichLog)
 #else
     return nsnull;
 #endif
+}
+
+int
+gfxPlatform::GetScreenDepth() const
+{
+    MOZ_ASSERT(false, "Not implemented on this platform");
+    return 0;
 }

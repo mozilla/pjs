@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009-2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "prtypes.h"
 #include "nsAlgorithm.h"
@@ -53,7 +20,7 @@
 #include "nsUnicodeScriptCodes.h"
 #include "nsUnicodeNormalizer.h"
 
-#include "harfbuzz/hb-unicode.h"
+#include "harfbuzz/hb.h"
 #include "harfbuzz/hb-ot.h"
 
 #include "cairo.h"
@@ -117,8 +84,14 @@ HBGetTable(hb_face_t *face, hb_tag_t aTag, void *aUserData)
     // bug 589682 - ignore the GDEF table in buggy fonts (applies to
     // Italic and BoldItalic faces of Times New Roman)
     if (aTag == TRUETYPE_TAG('G','D','E','F') &&
-        font->GetFontEntry()->IgnoreGDEF())
-    {
+        font->GetFontEntry()->IgnoreGDEF()) {
+        return nsnull;
+    }
+
+    // bug 721719 - ignore the GSUB table in buggy fonts (applies to Roboto,
+    // at least on some Android ICS devices; set in gfxFT2FontList.cpp)
+    if (aTag == TRUETYPE_TAG('G','S','U','B') &&
+        font->GetFontEntry()->IgnoreGSUB()) {
         return nsnull;
     }
 
@@ -836,6 +809,18 @@ HBUnicodeDecompose(hb_unicode_funcs_t *ufuncs,
     return nsUnicodeNormalizer::DecomposeNonRecursively(ab, a, b);
 }
 
+static PLDHashOperator
+AddFeature(const PRUint32& aTag, PRUint32& aValue, void *aUserArg)
+{
+    nsTArray<hb_feature_t>* features = static_cast<nsTArray<hb_feature_t>*> (aUserArg);
+
+    hb_feature_t feat = { 0, 0, 0, UINT_MAX };
+    feat.tag = aTag;
+    feat.value = aValue;
+    features->AppendElement(feat);
+    return PL_DHASH_NEXT;
+}
+
 /*
  * gfxFontShaper override to initialize the text run using HarfBuzz
  */
@@ -849,7 +834,9 @@ gfxHarfBuzzShaper::ShapeWord(gfxContext      *aContext,
                              const PRUnichar *aText)
 {
     // some font back-ends require this in order to get proper hinted metrics
-    mFont->SetupCairoFont(aContext);
+    if (!mFont->SetupCairoFont(aContext)) {
+        return false;
+    }
 
     if (!mHBFace) {
 
@@ -965,35 +952,16 @@ gfxHarfBuzzShaper::ShapeWord(gfxContext      *aContext,
 
     nsAutoTArray<hb_feature_t,20> features;
 
-    // Ligature features are enabled by default in the generic shaper,
-    // so we explicitly turn them off if necessary (for letter-spacing)
-    if (aShapedWord->DisableLigatures()) {
-        hb_feature_t ligaOff = { HB_TAG('l','i','g','a'), 0, 0, UINT_MAX };
-        hb_feature_t cligOff = { HB_TAG('c','l','i','g'), 0, 0, UINT_MAX };
-        features.AppendElement(ligaOff);
-        features.AppendElement(cligOff);
-    }
-
-    // css features need to be merged with the existing ones, if any
     gfxFontEntry *entry = mFont->GetFontEntry();
     const gfxFontStyle *style = mFont->GetStyle();
-    const nsTArray<gfxFontFeature> *cssFeatures = &style->featureSettings;
-    if (cssFeatures->IsEmpty()) {
-        cssFeatures = &entry->mFeatureSettings;
-    }
-    for (PRUint32 i = 0; i < cssFeatures->Length(); ++i) {
-        PRUint32 j;
-        for (j = 0; j < features.Length(); ++j) {
-            if (cssFeatures->ElementAt(i).mTag == features[j].tag) {
-                features[j].value = cssFeatures->ElementAt(i).mValue;
-                break;
-            }
-        }
-        if (j == features.Length()) {
-            const gfxFontFeature& f = cssFeatures->ElementAt(i);
-            hb_feature_t hbf = { f.mTag, f.mValue, 0, UINT_MAX };
-            features.AppendElement(hbf);
-        }
+
+    nsDataHashtable<nsUint32HashKey,PRUint32> mergedFeatures;
+
+    if (MergeFontFeatures(style->featureSettings,
+                      mFont->GetFontEntry()->mFeatureSettings,
+                      aShapedWord->DisableLigatures(), mergedFeatures)) {
+        // enumerate result and insert into hb_feature array
+        mergedFeatures.Enumerate(AddFeature, &features);
     }
 
     bool isRightToLeft = aShapedWord->IsRightToLeft();
@@ -1186,7 +1154,6 @@ gfxHarfBuzzShaper::SetGlyphsFromRun(gfxContext *aContext,
 
     while (glyphStart < PRInt32(numGlyphs)) {
 
-        bool inOrder = true;
         PRInt32 charEnd = ginfo[glyphStart].cluster;
         PRInt32 glyphEnd = glyphStart;
         PRInt32 charLimit = wordLength;
@@ -1230,9 +1197,6 @@ gfxHarfBuzzShaper::SetGlyphsFromRun(gfxContext *aContext,
                 if (glyphCharIndex < charStart || glyphCharIndex >= charEnd) {
                     allGlyphsAreWithinCluster = false;
                     break;
-                }
-                if (glyphCharIndex <= prevGlyphCharIndex) {
-                    inOrder = false;
                 }
                 prevGlyphCharIndex = glyphCharIndex;
             }
@@ -1368,8 +1332,7 @@ gfxHarfBuzzShaper::SetGlyphsFromRun(gfxContext *aContext,
         while (++baseCharIndex != endCharIndex &&
                baseCharIndex < PRInt32(wordLength)) {
             gfxTextRun::CompressedGlyph g;
-            g.SetComplex(inOrder &&
-                         aShapedWord->IsClusterStart(baseCharIndex),
+            g.SetComplex(aShapedWord->IsClusterStart(baseCharIndex),
                          false, 0);
             aShapedWord->SetGlyphs(baseCharIndex, g, nsnull);
         }

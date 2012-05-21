@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsHttpHandler_h__
 #define nsHttpHandler_h__
@@ -61,6 +28,7 @@
 #include "nsIIDNService.h"
 #include "nsITimer.h"
 #include "nsIStrictTransportSecurityService.h"
+#include "nsISpeculativeConnect.h"
 
 class nsHttpConnectionInfo;
 class nsHttpHeaderArray;
@@ -76,6 +44,7 @@ class nsIPrefBranch;
 class nsHttpHandler : public nsIHttpProtocolHandler
                     , public nsIObserver
                     , public nsSupportsWeakReference
+                    , public nsISpeculativeConnect
 {
 public:
     NS_DECL_ISUPPORTS
@@ -83,6 +52,7 @@ public:
     NS_DECL_NSIPROXIEDPROTOCOLHANDLER
     NS_DECL_NSIHTTPPROTOCOLHANDLER
     NS_DECL_NSIOBSERVER
+    NS_DECL_NSISPECULATIVECONNECT
 
     nsHttpHandler();
     virtual ~nsHttpHandler();
@@ -110,8 +80,11 @@ public:
     PRUint16       GetIdleSynTimeout()       { return mIdleSynTimeout; }
     bool           FastFallbackToIPv4()      { return mFastFallbackToIPv4; }
     PRUint32       MaxSocketCount();
+    bool           EnforceAssocReq()         { return mEnforceAssocReq; }
 
     bool           IsPersistentHttpsCachingEnabled() { return mEnablePersistentHttpsCaching; }
+    bool           IsTelemetryEnabled() { return mTelemetryEnabled; }
+    bool           AllowExperiments() { return mTelemetryEnabled && mAllowExperiments; }
 
     bool           IsSpdyEnabled() { return mEnableSpdy; }
     bool           CoalesceSpdy() { return mCoalesceSpdy; }
@@ -179,6 +152,13 @@ public:
         return mConnMgr->GetSocketThreadTarget(target);
     }
 
+    nsresult SpeculativeConnect(nsHttpConnectionInfo *ci,
+                                nsIInterfaceRequestor *callbacks,
+                                nsIEventTarget *target)
+    {
+        return mConnMgr->SpeculativeConnect(ci, callbacks, target);
+    }
+
     // for anything that wants to know if we're in private browsing mode.
     bool InPrivateBrowsingMode();
 
@@ -190,6 +170,9 @@ public:
     nsresult GetIOService(nsIIOService** service);
     nsICookieService * GetCookieService(); // not addrefed
     nsIStrictTransportSecurityService * GetSTSService();
+
+    // callable from socket thread only
+    PRUint32 Get32BitsOfPseudoRandom();
 
     // Called by the channel before writing a request
     void OnModifyRequest(nsIHttpChannel *chan)
@@ -225,6 +208,29 @@ public:
     // CONNECT line for proxies. This handles IPv6 literals correctly.
     static nsresult GenerateHostPort(const nsCString& host, PRInt32 port,
                                      nsCString& hostLine);
+
+    bool GetPipelineAggressive()     { return mPipelineAggressive; }
+    void GetMaxPipelineObjectSize(PRInt64 *outVal)
+    {
+        *outVal = mMaxPipelineObjectSize;
+    }
+
+    bool GetPipelineEnabled()
+    {
+        return mCapabilities & NS_HTTP_ALLOW_PIPELINING;
+    }
+
+    bool GetPipelineRescheduleOnTimeout()
+    {
+        return mPipelineRescheduleOnTimeout;
+    }
+
+    PRIntervalTime GetPipelineRescheduleTimeout()
+    {
+        return mPipelineRescheduleTimeout;
+    }
+    
+    PRIntervalTime GetPipelineTimeout()   { return mPipelineReadTimeout; }
 
 private:
 
@@ -282,7 +288,13 @@ private:
     PRUint8  mMaxConnectionsPerServer;
     PRUint8  mMaxPersistentConnectionsPerServer;
     PRUint8  mMaxPersistentConnectionsPerProxy;
-    PRUint8  mMaxPipelinedRequests;
+    PRUint16 mMaxPipelinedRequests;
+    PRUint16 mMaxOptimisticPipelinedRequests;
+    bool     mPipelineAggressive;
+    PRInt64  mMaxPipelineObjectSize;
+    bool     mPipelineRescheduleOnTimeout;
+    PRIntervalTime mPipelineRescheduleTimeout;
+    PRIntervalTime mPipelineReadTimeout;
 
     PRUint8  mRedirectionLimit;
 
@@ -295,6 +307,7 @@ private:
     PRUint8  mQoSBits;
 
     bool mPipeliningOverSSL;
+    bool mEnforceAssocReq;
 
     // cached value of whether or not the browser is in private browsing mode.
     enum {
@@ -343,6 +356,12 @@ private:
     // For broadcasting the preference to not be tracked
     bool           mDoNotTrackEnabled;
     
+    // Whether telemetry is reported or not
+    bool           mTelemetryEnabled;
+
+    // The value of network.allow-experiments
+    bool           mAllowExperiments;
+
     // Try to use SPDY features instead of HTTP/1.1 over SSL
     bool           mEnableSpdy;
     bool           mCoalesceSpdy;
@@ -363,6 +382,7 @@ extern nsHttpHandler *gHttpHandler;
 
 class nsHttpsHandler : public nsIHttpProtocolHandler
                      , public nsSupportsWeakReference
+                     , public nsISpeculativeConnect
 {
 public:
     // we basically just want to override GetScheme and GetDefaultPort...
@@ -372,6 +392,7 @@ public:
     NS_DECL_NSIPROTOCOLHANDLER
     NS_FORWARD_NSIPROXIEDPROTOCOLHANDLER (gHttpHandler->)
     NS_FORWARD_NSIHTTPPROTOCOLHANDLER    (gHttpHandler->)
+    NS_FORWARD_NSISPECULATIVECONNECT     (gHttpHandler->)
 
     nsHttpsHandler() { }
     virtual ~nsHttpsHandler() { }

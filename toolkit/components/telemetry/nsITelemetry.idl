@@ -1,45 +1,42 @@
 /* -*- Mode: C++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 8 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Firefox.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation <http://www.mozilla.org>.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Taras Glek <tglek@mozilla.com>
- *   Vladan Djeric <vdjeric@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
+#include "nsIFile.idl"
 
-[scriptable, uuid(db854295-478d-4de9-8211-d73ed7d81cd0)]
+[scriptable, uuid(02719ffb-1a87-46cd-b8d3-5583f3267b32)]
+interface nsITelemetrySessionData : nsISupports
+{
+  /**
+   * The UUID of our previous session.
+   */
+  readonly attribute ACString uuid;
+
+  /**
+   * An object containing a snapshot from all registered histograms that had
+   * data recorded in the previous session.
+   * { name1: data1, name2: data2, .... }
+   * where the individual dataN are as nsITelemetry.histogramSnapshots.
+   */
+  [implicit_jscontext]
+  readonly attribute jsval snapshots;
+};
+
+[scriptable, function, uuid(aff36c9d-7e4c-41ab-a9b6-53773bbca0cd)]
+interface nsITelemetryLoadSessionDataCallback : nsISupports
+{
+  void handle(in nsITelemetrySessionData data);
+};
+
+[scriptable, function, uuid(40065f26-afd2-4417-93de-c1de9adb1548)]
+interface nsITelemetrySaveSessionDataCallback : nsISupports
+{
+  void handle(in bool success);
+};
+
+[scriptable, uuid(f23a2c8d-9286-42e9-ab1b-ed287eeade6d)]
 interface nsITelemetry : nsISupports
 {
   /**
@@ -47,10 +44,12 @@ interface nsITelemetry : nsISupports
    * HISTOGRAM_EXPONENTIAL - buckets increase exponentially
    * HISTOGRAM_LINEAR - buckets increase linearly
    * HISTOGRAM_BOOLEAN - For storing 0/1 values
+   * HISTOGRAM_FLAG - For storing a single value; its count is always == 1.
    */
   const unsigned long HISTOGRAM_EXPONENTIAL = 0;
   const unsigned long HISTOGRAM_LINEAR = 1;
   const unsigned long HISTOGRAM_BOOLEAN = 2;
+  const unsigned long HISTOGRAM_FLAG = 3;
 
   /*
    * An object containing a snapshot from all of the currently registered histograms.
@@ -68,7 +67,7 @@ interface nsITelemetry : nsISupports
   readonly attribute jsval histogramSnapshots;
 
   /*
-   * An object containing information about slow SQL prepared statements.
+   * An object containing information about slow SQL statements.
    *
    * {
    *   mainThread: { "sqlString1": [<hit count>, <total time>], "sqlString2": [...], ... },
@@ -78,12 +77,33 @@ interface nsITelemetry : nsISupports
    * where:
    *   mainThread: Slow statements that executed on the main thread
    *   otherThreads: Slow statements that executed on a non-main thread
-   *   sqlString - String of the offending prepared statement
+   *   sqlString - String of the offending statement (see note)
    *   hit count - The number of times this statement required longer than the threshold time to execute
    *   total time - The sum of all execution times above the threshold time for this statement
+   *
+   * Note that dynamic SQL strings and SQL strings executed against addon DBs could contain private information.
+   * This property represents such SQL as aggregate database-level stats and the sqlString contains the database
+   * filename instead.
    */
   [implicit_jscontext]
   readonly attribute jsval slowSQL;
+
+  /*
+   * See slowSQL above.
+   *
+   * An object containing full strings of every slow SQL statement if toolkit.telemetry.debugSlowSql = true
+   * The returned SQL strings may contain private information and should not be reported to Telemetry.
+   */
+  [implicit_jscontext]
+  readonly attribute jsval debugSlowSQL;
+
+  /*
+   * An array of chrome hang reports. Each element is a hang report represented
+   * as an object containing the hang duration, call stack PCs and information
+   * about modules in memory.
+   */
+  [implicit_jscontext]
+  readonly attribute jsval chromeHangs;
 
   /**
    * An object whose properties are the names of histograms defined in
@@ -104,6 +124,7 @@ interface nsITelemetry : nsISupports
    * The returned object has the following functions:
    *   add(int) - Adds an int value to the appropriate bucket
    *   snapshot() - Returns a snapshot of the histogram with the same data fields as in histogramSnapshots()
+   *   clear() - Zeros out the histogram's buckets and sum
    */
   [implicit_jscontext]
   jsval newHistogram(in ACString name, in PRUint32 min, in PRUint32 max, in PRUint32 bucket_count, in unsigned long histogram_type);
@@ -126,6 +147,33 @@ interface nsITelemetry : nsISupports
    */
   [implicit_jscontext]
   jsval getHistogramById(in ACString id);
+
+  /**
+   * Save persistent histograms to the given file.
+   *
+   * @param file - filename for saving
+   * @param uuid - UUID of this session
+   * @param callback - function to be caled when file writing is complete
+   */
+  void saveHistograms(in nsIFile file, in ACString uuid,
+                      in nsITelemetrySaveSessionDataCallback callback,
+                      in bool isSynchronous);
+
+  /* Reconstruct an nsITelemetryDataSession object containing histogram
+   * information from the given file; the file must have been produced
+   * via saveHistograms.
+   *
+   * This method does not modify the histogram information being
+   * collected in the current session.
+   *
+   * The reconstructed object is then passed to the given callback.
+   *
+   * @param file - the file to load histogram information from
+   * @param callback - function to process histogram information
+   */
+  void loadHistograms(in nsIFile file,
+                      in nsITelemetryLoadSessionDataCallback callback,
+                      in bool isSynchronous);
 
   /**
    * Set this to false to disable gathering of telemetry statistics.

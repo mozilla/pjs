@@ -1,56 +1,23 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   John Gaunt (jgaunt@netscape.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Util.h"
+#include "nsAccessibilityService.h"
 
 // NOTE: alphabetically ordered
-#include "nsAccessibilityService.h"
-#include "nsAccessiblePivot.h"
-#include "nsCoreUtils.h"
-#include "nsAccUtils.h"
-#include "nsApplicationAccessibleWrap.h"
-#include "nsARIAGridAccessibleWrap.h"
-#include "nsARIAMap.h"
+#include "Accessible-inl.h"
+#include "ApplicationAccessibleWrap.h"
+#include "ARIAGridAccessibleWrap.h"
+#ifdef MOZ_ACCESSIBILITY_ATK
+#include "AtkSocketAccessible.h"
+#endif
 #include "FocusManager.h"
-
-#include "nsIContentViewer.h"
-#include "nsCURILoader.h"
-#include "nsDocAccessible.h"
+#include "HTMLListAccessible.h"
+#include "nsAccessiblePivot.h"
+#include "nsAccUtils.h"
+#include "nsARIAMap.h"
+#include "nsIAccessibleProvider.h"
 #include "nsHTMLCanvasAccessible.h"
 #include "nsHTMLImageMapAccessible.h"
 #include "nsHTMLLinkAccessible.h"
@@ -58,12 +25,20 @@
 #include "nsHTMLTableAccessibleWrap.h"
 #include "nsHTMLTextAccessible.h"
 #include "nsHyperTextAccessibleWrap.h"
-#include "nsIAccessibilityService.h"
-#include "nsIAccessibleProvider.h"
+#include "nsXFormsFormControlsAccessible.h"
+#include "nsXFormsWidgetsAccessible.h"
+#include "OuterDocAccessible.h"
 #include "Role.h"
+#include "RootAccessibleWrap.h"
 #include "States.h"
 #include "Statistics.h"
+#ifdef XP_WIN
+#include "nsHTMLWin32ObjectAccessible.h"
+#endif
 
+#include "nsCURILoader.h"
+#include "nsEventStates.h"
+#include "nsIContentViewer.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMHTMLAreaElement.h"
 #include "nsIDOMHTMLLegendElement.h"
@@ -79,17 +54,17 @@
 #include "nsNPAPIPluginInstance.h"
 #include "nsISupportsUtils.h"
 #include "nsObjectFrame.h"
-#include "nsOuterDocAccessible.h"
-#include "nsRootAccessibleWrap.h"
 #include "nsTextFragment.h"
+#include "mozilla/FunctionTimer.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/Services.h"
-#include "nsEventStates.h"
+#include "mozilla/Util.h"
 
 #ifdef MOZ_XUL
 #include "nsXULAlertAccessible.h"
 #include "nsXULColorPickerAccessible.h"
 #include "nsXULComboboxAccessible.h"
-#include "nsXULFormControlAccessible.h"
+#include "XULFormControlAccessible.h"
 #include "nsXULListboxAccessibleWrap.h"
 #include "nsXULMenuAccessibleWrap.h"
 #include "nsXULSliderAccessible.h"
@@ -97,22 +72,6 @@
 #include "nsXULTextAccessible.h"
 #include "nsXULTreeGridAccessibleWrap.h"
 #endif
-
-// For native window support for object/embed/applet tags
-#ifdef XP_WIN
-#include "nsHTMLWin32ObjectAccessible.h"
-#endif
-
-// For embedding plugin accessibles
-#ifdef MOZ_ACCESSIBILITY_ATK
-#include "AtkSocketAccessible.h"
-#endif
-
-#include "nsXFormsFormControlsAccessible.h"
-#include "nsXFormsWidgetsAccessible.h"
-
-#include "mozilla/FunctionTimer.h"
-#include "mozilla/dom/Element.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -210,9 +169,8 @@ already_AddRefed<nsAccessible>
 nsAccessibilityService::CreateOuterDocAccessible(nsIContent* aContent,
                                                  nsIPresShell* aPresShell)
 {
-  nsAccessible* accessible = 
-    new nsOuterDocAccessible(aContent, 
-                             nsAccUtils::GetDocAccessibleFor(aPresShell));
+  nsAccessible* accessible =
+    new OuterDocAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -222,8 +180,7 @@ nsAccessibilityService::CreateHTMLButtonAccessible(nsIContent* aContent,
                                                    nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLButtonAccessible(aContent, 
-                               nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLButtonAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -233,8 +190,7 @@ nsAccessibilityService::CreateHTMLLIAccessible(nsIContent* aContent,
                                                nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLLIAccessible(aContent, 
-                           nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLLIAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -244,8 +200,7 @@ nsAccessibilityService::CreateHyperTextAccessible(nsIContent* aContent,
                                                   nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHyperTextAccessibleWrap(aContent, 
-                                  nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHyperTextAccessibleWrap(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -255,8 +210,7 @@ nsAccessibilityService::CreateHTMLCheckboxAccessible(nsIContent* aContent,
                                                      nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLCheckboxAccessible(aContent, 
-                                 nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLCheckboxAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -266,8 +220,7 @@ nsAccessibilityService::CreateHTMLComboboxAccessible(nsIContent* aContent,
                                                      nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLComboboxAccessible(aContent, 
-                                 nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLComboboxAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -277,8 +230,7 @@ nsAccessibilityService::CreateHTMLCanvasAccessible(nsIContent* aContent,
                                                    nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLCanvasAccessible(aContent, 
-                               nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLCanvasAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -288,8 +240,7 @@ nsAccessibilityService::CreateHTMLFileInputAccessible(nsIContent* aContent,
                                                       nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLFileInputAccessible(aContent, 
-                                  nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLFileInputAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -298,19 +249,18 @@ already_AddRefed<nsAccessible>
 nsAccessibilityService::CreateHTMLImageAccessible(nsIContent* aContent,
                                                   nsIPresShell* aPresShell)
 {
-  nsAutoString mapElmName;
-  aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::usemap, mapElmName);
-  nsCOMPtr<nsIDOMHTMLMapElement> mapElm;
-  if (nsIDocument* document = aContent->GetCurrentDoc()) {
-    mapElm = do_QueryInterface(document->FindImageMap(mapElmName));
-  }
+  nsAccessible* accessible =
+    new nsHTMLImageAccessibleWrap(aContent, GetDocAccessible(aPresShell));
+  NS_ADDREF(accessible);
+  return accessible;
+}
 
-  nsAccessible* accessible = mapElm ?
-    new nsHTMLImageMapAccessible(aContent, 
-                                 nsAccUtils::GetDocAccessibleFor(aPresShell), 
-                                 mapElm) :
-    new nsHTMLImageAccessibleWrap(aContent, 
-                                  nsAccUtils::GetDocAccessibleFor(aPresShell));
+already_AddRefed<nsAccessible>
+nsAccessibilityService::CreateHTMLImageMapAccessible(nsIContent* aContent,
+                                                     nsIPresShell* aPresShell)
+{
+  nsAccessible* accessible =
+    new nsHTMLImageMapAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -320,8 +270,7 @@ nsAccessibilityService::CreateHTMLGroupboxAccessible(nsIContent* aContent,
                                                      nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLGroupboxAccessible(aContent, 
-                                 nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLGroupboxAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -331,8 +280,7 @@ nsAccessibilityService::CreateHTMLListboxAccessible(nsIContent* aContent,
                                                     nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLSelectListAccessible(aContent, 
-                                   nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLSelectListAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -342,8 +290,7 @@ nsAccessibilityService::CreateHTMLMediaAccessible(nsIContent* aContent,
                                                   nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsEnumRoleAccessible(aContent, 
-                             nsAccUtils::GetDocAccessibleFor(aPresShell),
+    new nsEnumRoleAccessible(aContent, GetDocAccessible(aPresShell),
                              roles::GROUPING);
   NS_ADDREF(accessible);
   return accessible;
@@ -387,7 +334,7 @@ nsAccessibilityService::CreateHTMLObjectFrameAccessible(nsObjectFrame* aFrame,
 
     nsAccessible* accessible = 
       new nsHTMLWin32ObjectOwnerAccessible(aContent,
-                                           nsAccUtils::GetDocAccessibleFor(aPresShell),
+                                           GetDocAccessible(aPresShell),
                                            pluginPort);
     NS_ADDREF(accessible);
     return accessible;
@@ -401,8 +348,7 @@ nsAccessibilityService::CreateHTMLObjectFrameAccessible(nsObjectFrame* aFrame,
       NPPVpluginNativeAccessibleAtkPlugId, &plugId);
     if (NS_SUCCEEDED(rv) && !plugId.IsEmpty()) {
       AtkSocketAccessible* socketAccessible =
-        new AtkSocketAccessible(aContent, 
-                                nsAccUtils::GetDocAccessibleFor(aPresShell), 
+        new AtkSocketAccessible(aContent, GetDocAccessible(aPresShell),
                                 plugId);
 
       NS_ADDREF(socketAccessible);
@@ -423,8 +369,7 @@ nsAccessibilityService::CreateHTMLRadioButtonAccessible(nsIContent* aContent,
                                                         nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLRadioButtonAccessible(aContent, 
-                                    nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLRadioButtonAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -434,8 +379,7 @@ nsAccessibilityService::CreateHTMLTableAccessible(nsIContent* aContent,
                                                   nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLTableAccessibleWrap(aContent, 
-                                  nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLTableAccessibleWrap(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -445,8 +389,17 @@ nsAccessibilityService::CreateHTMLTableCellAccessible(nsIContent* aContent,
                                                       nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLTableCellAccessibleWrap(aContent,
-                                      nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLTableCellAccessibleWrap(aContent, GetDocAccessible(aPresShell));
+  NS_ADDREF(accessible);
+  return accessible;
+}
+
+already_AddRefed<nsAccessible>
+nsAccessibilityService::CreateHTMLTableRowAccessible(nsIContent* aContent,
+                                                     nsIPresShell* aPresShell)
+{
+  nsAccessible* accessible =
+    new nsEnumRoleAccessible(aContent, GetDocAccessible(aPresShell), roles::ROW);
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -456,8 +409,7 @@ nsAccessibilityService::CreateHTMLTextAccessible(nsIContent* aContent,
                                                  nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLTextAccessible(aContent, 
-                             nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLTextAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -467,8 +419,7 @@ nsAccessibilityService::CreateHTMLTextFieldAccessible(nsIContent* aContent,
                                                       nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLTextFieldAccessible(aContent, 
-                                  nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new HTMLTextFieldAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -478,8 +429,7 @@ nsAccessibilityService::CreateHTMLLabelAccessible(nsIContent* aContent,
                                                   nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLLabelAccessible(aContent, 
-                              nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLLabelAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -489,8 +439,7 @@ nsAccessibilityService::CreateHTMLHRAccessible(nsIContent* aContent,
                                                nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLHRAccessible(aContent, 
-                           nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLHRAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -500,8 +449,7 @@ nsAccessibilityService::CreateHTMLBRAccessible(nsIContent* aContent,
                                                nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLBRAccessible(aContent, 
-                           nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLBRAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -511,8 +459,7 @@ nsAccessibilityService::CreateHTMLCaptionAccessible(nsIContent* aContent,
                                                     nsIPresShell* aPresShell)
 {
   nsAccessible* accessible = 
-    new nsHTMLCaptionAccessible(aContent, 
-                                nsAccUtils::GetDocAccessibleFor(aPresShell));
+    new nsHTMLCaptionAccessible(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -547,7 +494,7 @@ nsAccessibilityService::ContentRangeInserted(nsIPresShell* aPresShell,
          NS_ConvertUTF16toUTF8(ctag).get(), cid.get(), aEndChild);
 #endif
 
-  nsDocAccessible* docAccessible = GetDocAccessible(aPresShell->GetDocument());
+  nsDocAccessible* docAccessible = GetDocAccessible(aPresShell);
   if (docAccessible)
     docAccessible->ContentInserted(aContainer, aStartChild, aEndChild);
 }
@@ -581,7 +528,7 @@ nsAccessibilityService::ContentRemoved(nsIPresShell* aPresShell,
            NS_ConvertUTF16toUTF8(ctag).get(), cid.get());
 #endif
 
-  nsDocAccessible* docAccessible = GetDocAccessible(aPresShell->GetDocument());
+  nsDocAccessible* docAccessible = GetDocAccessible(aPresShell);
   if (docAccessible)
     docAccessible->ContentRemoved(aContainer, aChild);
 }
@@ -590,9 +537,25 @@ void
 nsAccessibilityService::UpdateText(nsIPresShell* aPresShell,
                                    nsIContent* aContent)
 {
-  nsDocAccessible* document = GetDocAccessible(aPresShell->GetDocument());
+  nsDocAccessible* document = GetDocAccessible(aPresShell);
   if (document)
     document->UpdateText(aContent);
+}
+
+void
+nsAccessibilityService::TreeViewChanged(nsIPresShell* aPresShell,
+                                        nsIContent* aContent,
+                                        nsITreeView* aView)
+{
+  nsDocAccessible* document = GetDocAccessible(aPresShell);
+  if (document) {
+    nsAccessible* accessible = document->GetAccessible(aContent);
+    if (accessible) {
+      nsXULTreeAccessible* treeAcc = accessible->AsXULTree();
+      if (treeAcc) 
+        treeAcc->TreeViewChanged(aView);
+    }
+  }
 }
 
 void
@@ -600,13 +563,35 @@ nsAccessibilityService::UpdateListBullet(nsIPresShell* aPresShell,
                                          nsIContent* aHTMLListItemContent,
                                          bool aHasBullet)
 {
-  nsDocAccessible* document = GetDocAccessible(aPresShell->GetDocument());
+  nsDocAccessible* document = GetDocAccessible(aPresShell);
   if (document) {
     nsAccessible* accessible = document->GetAccessible(aHTMLListItemContent);
     if (accessible) {
-      nsHTMLLIAccessible* listItem = accessible->AsHTMLListItem();
+      HTMLLIAccessible* listItem = accessible->AsHTMLListItem();
       if (listItem)
         listItem->UpdateBullet(aHasBullet);
+    }
+  }
+}
+
+void
+nsAccessibilityService::UpdateImageMap(nsImageFrame* aImageFrame)
+{
+  nsIPresShell* presShell = aImageFrame->PresContext()->PresShell();
+  nsDocAccessible* document = GetDocAccessible(presShell);
+  if (document) {
+    nsAccessible* accessible =
+      document->GetAccessible(aImageFrame->GetContent());
+    if (accessible) {
+      nsHTMLImageMapAccessible* imageMap = accessible->AsImageMap();
+      if (imageMap) {
+        imageMap->UpdateChildAreas();
+        return;
+      }
+
+      // If image map was initialized after we created an accessible (that'll
+      // be an image accessible) then recreate it.
+      RecreateAccessible(presShell, aImageFrame->GetContent());
     }
   }
 }
@@ -640,7 +625,7 @@ nsAccessibilityService::PresShellActivated(nsIPresShell* aPresShell)
   if (DOMDoc) {
     nsDocAccessible* document = GetDocAccessibleFromCache(DOMDoc);
     if (document) {
-      nsRootAccessible* rootDocument = document->RootAccessible();
+      RootAccessible* rootDocument = document->RootAccessible();
       NS_ASSERTION(rootDocument, "Entirely broken tree: no root document!");
       if (rootDocument)
         rootDocument->DocumentActivated(document);
@@ -652,18 +637,16 @@ void
 nsAccessibilityService::RecreateAccessible(nsIPresShell* aPresShell,
                                            nsIContent* aContent)
 {
-  nsDocAccessible* document = GetDocAccessible(aPresShell->GetDocument());
-  if (document) {
-    document->HandleNotification<nsDocAccessible, nsIContent>
-      (document, &nsDocAccessible::RecreateAccessible, aContent);
-  }
+  nsDocAccessible* document = GetDocAccessible(aPresShell);
+  if (document)
+    document->RecreateAccessible(aContent);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsIAccessibleRetrieval
 
 NS_IMETHODIMP
-nsAccessibilityService::GetApplicationAccessible(nsIAccessible **aAccessibleApplication)
+nsAccessibilityService::GetApplicationAccessible(nsIAccessible** aAccessibleApplication)
 {
   NS_ENSURE_ARG_POINTER(aAccessibleApplication);
 
@@ -691,13 +674,19 @@ nsAccessibilityService::GetAccessibleFor(nsIDOMNode *aNode,
 NS_IMETHODIMP
 nsAccessibilityService::GetStringRole(PRUint32 aRole, nsAString& aString)
 {
-  if ( aRole >= ArrayLength(kRoleNames)) {
-    aString.AssignLiteral("unknown");
+#define ROLE(geckoRole, stringRole, atkRole, macRole, msaaRole, ia2Role) \
+  case roles::geckoRole: \
+    CopyUTF8toUTF16(stringRole, aString); \
     return NS_OK;
+
+  switch (aRole) {
+#include "RoleMap.h"
+    default:
+      aString.AssignLiteral("unknown");
+      return NS_OK;
   }
 
-  CopyUTF8toUTF16(kRoleNames[aRole], aString);
-  return NS_OK;
+#undef ROLE
 }
 
 NS_IMETHODIMP
@@ -1047,12 +1036,12 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
     }
 
     newAcc = new nsHyperTextAccessibleWrap(content, docAcc);
-    if (docAcc->BindToDocument(newAcc, nsAccUtils::GetRoleMapEntry(aNode)))
+    if (docAcc->BindToDocument(newAcc, aria::GetRoleMap(aNode)))
       return newAcc;
     return nsnull;
   }
 
-  nsRoleMapEntry *roleMapEntry = nsAccUtils::GetRoleMapEntry(aNode);
+  nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aNode);
   if (roleMapEntry && !nsCRT::strcmp(roleMapEntry->roleString, "presentation")) {
     // Ignore presentation role if element is focusable (focus event shouldn't
     // be ever lost and should be sensible).
@@ -1099,8 +1088,7 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
           }
 
 #ifdef DEBUG
-          nsRoleMapEntry *tableRoleMapEntry =
-            nsAccUtils::GetRoleMapEntry(tableContent);
+          nsRoleMapEntry* tableRoleMapEntry = aria::GetRoleMap(tableContent);
           NS_ASSERTION(tableRoleMapEntry &&
                        !nsCRT::strcmp(tableRoleMapEntry->roleString, "presentation"),
                        "No accessible for parent table and it didn't have role of presentation");
@@ -1139,12 +1127,12 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
 
         if (roleMapEntry->role == roles::TABLE ||
             roleMapEntry->role == roles::TREE_TABLE) {
-          newAcc = new nsARIAGridAccessibleWrap(content, docAcc);
+          newAcc = new ARIAGridAccessibleWrap(content, docAcc);
 
         } else if (roleMapEntry->role == roles::GRID_CELL ||
             roleMapEntry->role == roles::ROWHEADER ||
             roleMapEntry->role == roles::COLUMNHEADER) {
-          newAcc = new nsARIAGridCellAccessibleWrap(content, docAcc);
+          newAcc = new ARIAGridCellAccessibleWrap(content, docAcc);
         }
       }
     }
@@ -1251,6 +1239,9 @@ nsAccessibilityService::Init()
 
   observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
 
+  static const PRUnichar kInitIndicator[] = { '1', 0 };
+  observerService->NotifyObservers(nsnull, "a11y-init-or-shutdown", kInitIndicator);
+
   // Initialize accessibility.
   nsAccessNodeWrap::InitAccessibility();
 
@@ -1264,8 +1255,12 @@ nsAccessibilityService::Shutdown()
   // Remove observers.
   nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();
-  if (observerService)
+  if (observerService) {
     observerService->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID);
+
+    static const PRUnichar kShutdownIndicator[] = { '0', 0 };
+    observerService->NotifyObservers(nsnull, "a11y-init-or-shutdown", kShutdownIndicator);
+  }
 
   // Stop accessible document loader.
   nsAccDocManager::Shutdown();
@@ -1319,7 +1314,7 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
     return nsnull;
 
   if (type == nsIAccessibleProvider::OuterDoc) {
-    nsAccessible* accessible = new nsOuterDocAccessible(aContent, aDoc);
+    nsAccessible* accessible = new OuterDocAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
@@ -1337,11 +1332,11 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULButton:
-      accessible = new nsXULButtonAccessible(aContent, aDoc);
+      accessible = new XULButtonAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULCheckbox:
-      accessible = new nsXULCheckboxAccessible(aContent, aDoc);
+      accessible = new XULCheckboxAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULColorPicker:
@@ -1357,11 +1352,11 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULDropmarker:
-      accessible = new nsXULDropmarkerAccessible(aContent, aDoc);
+      accessible = new XULDropmarkerAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULGroupbox:
-      accessible = new nsXULGroupboxAccessible(aContent, aDoc);
+      accessible = new XULGroupboxAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULImage:
@@ -1438,7 +1433,7 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULStatusBar:
-      accessible = new nsXULStatusBarAccessible(aContent, aDoc);
+      accessible = new XULStatusBarAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULScale:
@@ -1446,11 +1441,11 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULRadioButton:
-      accessible = new nsXULRadioButtonAccessible(aContent, aDoc);
+      accessible = new XULRadioButtonAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULRadioGroup:
-      accessible = new nsXULRadioGroupAccessible(aContent, aDoc);
+      accessible = new XULRadioGroupAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULTab:
@@ -1470,7 +1465,7 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULTextBox:
-      accessible = new nsXULTextFieldAccessible(aContent, aDoc);
+      accessible = new XULTextFieldAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULThumb:
@@ -1489,11 +1484,11 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULToolbar:
-      accessible = new nsXULToolbarAccessible(aContent, aDoc);
+      accessible = new XULToolbarAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULToolbarSeparator:
-      accessible = new nsXULToolbarSeparatorAccessible(aContent, aDoc);
+      accessible = new XULToolbarSeparatorAccessible(aContent, aDoc);
       break;
 
     case nsIAccessibleProvider::XULTooltip:
@@ -1501,7 +1496,7 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
       break;
 
     case nsIAccessibleProvider::XULToolbarButton:
-      accessible = new nsXULToolbarButtonAccessible(aContent, aDoc);
+      accessible = new XULToolbarButtonAccessible(aContent, aDoc);
       break;
 
 #endif // MOZ_XUL
@@ -1599,20 +1594,19 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
   // This method assumes we're in an HTML namespace.
   nsIAtom* tag = aContent->Tag();
   if (tag == nsGkAtoms::figcaption) {
-    nsAccessible* accessible =
-      new nsHTMLFigcaptionAccessible(aContent, aDoc);
+    nsAccessible* accessible = new HTMLFigcaptionAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
 
   if (tag == nsGkAtoms::figure) {
-    nsAccessible* accessible = new nsHTMLFigureAccessible(aContent, aDoc);
+    nsAccessible* accessible = new HTMLFigureAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
 
   if (tag == nsGkAtoms::legend) {
-    nsAccessible* accessible = new nsHTMLLegendAccessible(aContent, aDoc);
+    nsAccessible* accessible = new HTMLLegendAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
@@ -1632,7 +1626,7 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
 
   if (tag == nsGkAtoms::ul || tag == nsGkAtoms::ol ||
       tag == nsGkAtoms::dl) {
-    nsAccessible* accessible = new nsHTMLListAccessible(aContent, aDoc);
+    nsAccessible* accessible = new HTMLListAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
@@ -1640,7 +1634,7 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
   if (tag == nsGkAtoms::a) {
     // Only some roles truly enjoy life as nsHTMLLinkAccessibles, for details
     // see closed bug 494807.
-    nsRoleMapEntry *roleMapEntry = nsAccUtils::GetRoleMapEntry(aContent);
+    nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aContent);
     if (roleMapEntry && roleMapEntry->role != roles::NOTHING &&
         roleMapEntry->role != roles::LINK) {
       nsAccessible* accessible = new nsHyperTextAccessibleWrap(aContent, aDoc);
@@ -1659,7 +1653,7 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
     // Normally for li, it is created by the list item frame (in nsBlockFrame)
     // which knows about the bullet frame; however, in this case the list item
     // must have been styled using display: foo
-    nsAccessible* accessible = new nsHTMLLIAccessible(aContent, aDoc);
+    nsAccessible* accessible = new HTMLLIAccessible(aContent, aDoc);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
@@ -1677,13 +1671,6 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
       tag == nsGkAtoms::h6 ||
       tag == nsGkAtoms::q) {
     nsAccessible* accessible = new nsHyperTextAccessibleWrap(aContent, aDoc);
-    NS_IF_ADDREF(accessible);
-    return accessible;
-  }
-
-  if (tag == nsGkAtoms::tr) {
-    nsAccessible* accessible = new nsEnumRoleAccessible(aContent, aDoc,
-                                                        roles::ROW);
     NS_IF_ADDREF(accessible);
     return accessible;
   }
@@ -1716,15 +1703,15 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
 
 nsAccessible*
 nsAccessibilityService::AddNativeRootAccessible(void* aAtkAccessible)
- {
+{
 #ifdef MOZ_ACCESSIBILITY_ATK
-  nsApplicationAccessible* applicationAcc =
+  ApplicationAccessible* applicationAcc =
     nsAccessNode::GetApplicationAccessible();
   if (!applicationAcc)
     return nsnull;
 
-  nsRefPtr<nsNativeRootAccessibleWrap> nativeRootAcc =
-     new nsNativeRootAccessibleWrap((AtkObject*)aAtkAccessible);
+  nsRefPtr<NativeRootAccessibleWrap> nativeRootAcc =
+    new NativeRootAccessibleWrap(static_cast<AtkObject*>(aAtkAccessible));
   if (!nativeRootAcc)
     return nsnull;
 
@@ -1733,13 +1720,13 @@ nsAccessibilityService::AddNativeRootAccessible(void* aAtkAccessible)
 #endif
 
   return nsnull;
- }
+}
 
 void
 nsAccessibilityService::RemoveNativeRootAccessible(nsAccessible* aAccessible)
 {
 #ifdef MOZ_ACCESSIBILITY_ATK
-  nsApplicationAccessible* applicationAcc =
+  ApplicationAccessible* applicationAcc =
     nsAccessNode::GetApplicationAccessible();
 
   if (applicationAcc)

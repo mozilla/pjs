@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=78: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* the caret is the text cursor used, e.g., when editing */
 
@@ -451,6 +417,22 @@ void nsCaret::SetVisibilityDuringSelection(bool aVisibility)
   mShowDuringSelection = aVisibility;
 }
 
+static
+nsFrameSelection::HINT GetHintForPosition(nsIDOMNode* aNode, PRInt32 aOffset)
+{
+  nsFrameSelection::HINT hint = nsFrameSelection::HINTLEFT;
+  nsCOMPtr<nsIContent> node = do_QueryInterface(aNode);
+  if (!node || aOffset < 1) {
+    return hint;
+  }
+  const nsTextFragment* text = node->GetText();
+  if (text && text->CharAt(aOffset - 1) == '\n') {
+    // Attach the caret to the next line if needed
+    hint = nsFrameSelection::HINTRIGHT;
+  }
+  return hint;
+}
+
 nsresult nsCaret::DrawAtPosition(nsIDOMNode* aNode, PRInt32 aOffset)
 {
   NS_ENSURE_ARG(aNode);
@@ -466,9 +448,8 @@ nsresult nsCaret::DrawAtPosition(nsIDOMNode* aNode, PRInt32 aOffset)
   // ourselves, our consumer will take care of that.
   mBlinkRate = 0;
 
-  // XXX we need to do more work here to get the correct hint.
   nsresult rv = DrawAtPositionWithHint(aNode, aOffset,
-                                       nsFrameSelection::HINTLEFT,
+                                       GetHintForPosition(aNode, aOffset),
                                        bidiLevel, true)
     ?  NS_OK : NS_ERROR_FAILURE;
   ToggleDrawnStatus();
@@ -841,8 +822,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsIContent*             aContentNode,
                 PRUint8 baseLevel = NS_GET_BASE_LEVEL(frameAfter);
                 if (baseLevel != levelAfter)
                 {
-                  nsPeekOffsetStruct pos;
-                  pos.SetData(eSelectBeginLine, eDirPrevious, 0, 0, false, true, false, true);
+                  nsPeekOffsetStruct pos(eSelectBeginLine, eDirPrevious, 0, 0, false, true, false, true);
                   if (NS_SUCCEEDED(frameAfter->PeekOffset(&pos))) {
                     theFrame = pos.mResultFrame;
                     theFrameOffset = pos.mContentOffset;
@@ -873,8 +853,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsIContent*             aContentNode,
                 PRUint8 baseLevel = NS_GET_BASE_LEVEL(frameBefore);
                 if (baseLevel != levelBefore)
                 {
-                  nsPeekOffsetStruct pos;
-                  pos.SetData(eSelectEndLine, eDirNext, 0, 0, false, true, false, true);
+                  nsPeekOffsetStruct pos(eSelectEndLine, eDirNext, 0, 0, false, true, false, true);
                   if (NS_SUCCEEDED(frameBefore->PeekOffset(&pos))) {
                     theFrame = pos.mResultFrame;
                     theFrameOffset = pos.mContentOffset;

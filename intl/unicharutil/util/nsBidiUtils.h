@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * IBM Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2000
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Maha Abou El Rous <mahar@eg.ibm.com>
- *   Lina Kemmel <lkemmel@il.ibm.com>
- *   Simon Montagu <smontagu@netscape.com>
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsBidiUtils_h__
 #define nsBidiUtils_h__
@@ -49,34 +13,9 @@
     *  section BIDIRECTIONAL PROPERTIES
     *  for the detailed definition of the following categories
     *
-    *  The values here must match the equivalents in %map in
-    * mozilla/intl/unicharutil/tools/genbidicattable.pl
+    *  The values here must match the equivalents in %bidicategorycode in
+    *  mozilla/intl/unicharutil/tools/genUnicodePropertyData.pl
     */
-
-typedef enum {
-  eBidiCat_Undefined,
-  eBidiCat_L,          /* Left-to-Right               */
-  eBidiCat_R,          /* Right-to-Left               */
-  eBidiCat_AL,         /* Right-to-Left Arabic        */
-  eBidiCat_AN,         /* Arabic Number               */
-  eBidiCat_EN,         /* European Number             */
-  eBidiCat_ES,         /* European Number Separator   */
-  eBidiCat_ET,         /* European Number Terminator  */
-  eBidiCat_CS,         /* Common Number Separator     */
-  eBidiCat_ON,         /* Other Neutrals              */
-  eBidiCat_NSM,        /* Non-Spacing Mark            */
-  eBidiCat_BN,         /* Boundary Neutral            */
-  eBidiCat_B,          /* Paragraph Separator         */
-  eBidiCat_S,          /* Segment Separator           */
-  eBidiCat_WS,         /* Whitespace                  */
-  eBidiCat_CC = 0xf,   /* Control Code                */
-                       /* (internal use only - will never be outputed) */
-  eBidiCat_LRE = 0x2a, /* Left-to-Right Embedding     */
-  eBidiCat_RLE = 0x2b, /* Right-to-Left Embedding     */
-  eBidiCat_PDF = 0x2c, /* Pop Directional Formatting  */
-  eBidiCat_LRO = 0x2d, /* Left-to-Right Override      */
-  eBidiCat_RLO = 0x2e  /* Right-to-Left Override      */
-} eBidiCategory;
 
 enum nsCharType   { 
   eCharType_LeftToRight              = 0, 
@@ -140,11 +79,6 @@ typedef enum nsCharType nsCharType;
    *        IBMBIDI_NUMERAL_HINDICONTEXT: convert numbers in Arabic text to Hindi, otherwise to Arabic
    */
   nsresult HandleNumbers(PRUnichar* aBuffer, PRUint32 aSize, PRUint32  aNumFlag);
-
-  /**
-   * Give a UTF-32 codepoint, return a nsCharType (compatible with ICU)
-   */
-  nsCharType GetCharType(PRUint32 aChar);
 
   /**
    * Give a UTF-32 codepoint

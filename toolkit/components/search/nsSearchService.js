@@ -1,48 +1,13 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is the Browser Search Service.
-#
-# The Initial Developer of the Original Code is
-# Google Inc.
-# Portions created by the Initial Developer are Copyright (C) 2005-2006
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Ben Goodger <beng@google.com> (Original author)
-#   Gavin Sharp <gavin@gavinsharp.com>
-#   Joe Hughes  <joe@retrovirus.com>
-#   Pamela Greene <pamg.bugs@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
 const Cr = Components.results;
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 
 const PERMS_FILE      = 0644;
 const PERMS_DIRECTORY = 0755;
@@ -75,6 +40,19 @@ const SEARCH_ENGINE_ADDED        = "engine-added";
 const SEARCH_ENGINE_CHANGED      = "engine-changed";
 const SEARCH_ENGINE_LOADED       = "engine-loaded";
 const SEARCH_ENGINE_CURRENT      = "engine-current";
+
+// The following constants are left undocumented in nsIBrowserSearchService.idl
+// For the moment, they are meant for testing/debugging purposes only.
+
+/**
+ * Topic used for events involving the service itself.
+ */
+const SEARCH_SERVICE_TOPIC       = "browser-search-service";
+
+/**
+ * Sent whenever metadata is fully written to disk.
+ */
+const SEARCH_SERVICE_METADATA_WRITTEN  = "write-metadata-to-disk-complete";
 
 const SEARCH_TYPE_MOZSEARCH      = Ci.nsISearchEngine.TYPE_MOZSEARCH;
 const SEARCH_TYPE_OPENSEARCH     = Ci.nsISearchEngine.TYPE_OPENSEARCH;
@@ -206,16 +184,10 @@ function isUsefulLine(aLine) {
   return !(/^\s*($|#)/i.test(aLine));
 }
 
-__defineGetter__("gObsSvc", function() {
-  delete this.gObsSvc;
-  return this.gObsSvc = Cc["@mozilla.org/observer-service;1"].
-                        getService(Ci.nsIObserverService);
-});
-
-__defineGetter__("gPrefSvc", function() {
-  delete this.gPrefSvc;
-  return this.gPrefSvc = Cc["@mozilla.org/preferences-service;1"].
-                         getService(Ci.nsIPrefBranch);
+__defineGetter__("FileUtils", function() {
+  delete this.FileUtils;
+  Components.utils.import("resource://gre/modules/FileUtils.jsm");
+  return FileUtils;
 });
 
 __defineGetter__("NetUtil", function() {
@@ -240,9 +212,7 @@ const SEARCH_LOG_PREFIX = "*** Search: ";
  */
 function DO_LOG(aText) {
   dump(SEARCH_LOG_PREFIX + aText + "\n");
-  var consoleService = Cc["@mozilla.org/consoleservice;1"].
-                       getService(Ci.nsIConsoleService);
-  consoleService.logStringMessage(aText);
+  Services.console.logStringMessage(aText);
 }
 
 #ifdef DEBUG
@@ -308,6 +278,64 @@ function ENSURE_WARN(assertion, message, resultCode) {
   if (!assertion)
     throw Components.Exception(message, resultCode);
 }
+
+/**
+ * A delayed treatment that may be delayed even further.
+ *
+ * Use this for instance if you write data to a file and you expect
+ * that you may have to rewrite data very soon afterwards. With
+ * |Lazy|, the treatment is delayed by a few milliseconds and,
+ * should a new change to the data occur during this period,
+ * 1/ only the final version of the data is actually written;
+ * 2/ a further grace delay is added to take into account other
+ * changes.
+ *
+ * @constructor
+ * @param {Function} code The code to execute after the delay.
+ * @param {number=} delay An optional delay, in milliseconds.
+ */
+function Lazy(code, delay) {
+  LOG("Lazy: Creating a Lazy");
+  this._callback =
+    (function(){
+       code();
+       this._timer = null;
+     }).bind(this);
+  this._delay = delay || LAZY_SERIALIZE_DELAY;
+  this._timer = null;
+}
+Lazy.prototype = {
+  /**
+   * Start (or postpone) treatment.
+   */
+  go: function Lazy_go() {
+    LOG("Lazy_go: starting");
+    if (this._timer) {
+      LOG("Lazy_go: reusing active timer");
+      this._timer.delay = this._delay;
+    } else {
+      LOG("Lazy_go: creating timer");
+      this._timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      this._timer.
+        initWithCallback(this._callback,
+                         this._delay,
+                         Ci.nsITimer.TYPE_ONE_SHOT);
+    }
+  },
+  /**
+   * Perform any postponed treatment immediately.
+   */
+  flush: function Lazy_flush() {
+    LOG("Lazy_flush: starting");
+    if (!this._timer) {
+      return;
+    }
+    this._timer.cancel();
+    this._timer = null;
+    this._callback();
+  }
+};
+
 
 function loadListener(aChannel, aEngine, aCallback) {
   this._channel = aChannel;
@@ -461,15 +489,11 @@ function makeURI(aURLSpec, aCharset) {
  * @param aKey
  *        The directory service key indicating the directory to get.
  */
-let _dirSvc = null;
 function getDir(aKey, aIFace) {
   if (!aKey)
     FAIL("getDir requires a directory key!");
 
-  if (!_dirSvc)
-    _dirSvc = Cc["@mozilla.org/file/directory_service;1"].
-               getService(Ci.nsIProperties);
-  return _dirSvc.get(aKey, aIFace || Ci.nsIFile);
+  return Services.dirsvc.get(aKey, aIFace || Ci.nsIFile);
 }
 
 /**
@@ -607,7 +631,7 @@ function getLocale() {
     return locale;
 
   // Not localized
-  return gPrefSvc.getCharPref(localePref);
+  return Services.prefs.getCharPref(localePref);
 }
 
 /**
@@ -619,7 +643,7 @@ function getLocale() {
 function getLocalizedPref(aPrefName, aDefault) {
   const nsIPLS = Ci.nsIPrefLocalizedString;
   try {
-    return gPrefSvc.getComplexValue(aPrefName, nsIPLS).data;
+    return Services.prefs.getComplexValue(aPrefName, nsIPLS).data;
   } catch (ex) {}
 
   return aDefault;
@@ -636,7 +660,7 @@ function setLocalizedPref(aPrefName, aValue) {
     var pls = Components.classes["@mozilla.org/pref-localizedstring;1"]
                         .createInstance(Ci.nsIPrefLocalizedString);
     pls.data = aValue;
-    gPrefSvc.setComplexValue(aPrefName, nsIPLS, pls);
+    Services.prefs.setComplexValue(aPrefName, nsIPLS, pls);
   } catch (ex) {}
 }
 
@@ -648,7 +672,7 @@ function setLocalizedPref(aPrefName, aValue) {
  */
 function getBoolPref(aName, aDefault) {
   try {
-    return gPrefSvc.getBoolPref(aName);
+    return Services.prefs.getBoolPref(aName);
   } catch (ex) {
     return aDefault;
   }
@@ -697,7 +721,7 @@ function sanitizeName(aName) {
  *        The name of the pref.
  **/
 function getMozParamPref(prefName)
-  gPrefSvc.getCharPref(BROWSER_SEARCH_PREF + "param." + prefName);
+  Services.prefs.getCharPref(BROWSER_SEARCH_PREF + "param." + prefName);
 
 /**
  * Notifies watchers of SEARCH_ENGINE_TOPIC about changes to an engine or to
@@ -714,8 +738,14 @@ let gEnginesLoaded = false;
 function notifyAction(aEngine, aVerb) {
   if (gEnginesLoaded) {
     LOG("NOTIFY: Engine: \"" + aEngine.name + "\"; Verb: \"" + aVerb + "\"");
-    gObsSvc.notifyObservers(aEngine, SEARCH_ENGINE_TOPIC, aVerb);
+    Services.obs.notifyObservers(aEngine, SEARCH_ENGINE_TOPIC, aVerb);
   }
+}
+
+function  parseJsonFromStream(aInputStream) {
+  const json = Cc["@mozilla.org/dom/json;1"].createInstance(Ci.nsIJSON);
+  const data = json.decodeFromStream(aInputStream, aInputStream.available());
+  return data;
 }
 
 /**
@@ -749,7 +779,7 @@ function ParamSubstitution(aParamValue, aSearchTerms, aEngine) {
 
   var distributionID = MOZ_DISTRIBUTION_ID;
   try {
-    distributionID = gPrefSvc.getCharPref(BROWSER_SEARCH_PREF + "distributionID");
+    distributionID = Services.prefs.getCharPref(BROWSER_SEARCH_PREF + "distributionID");
   }
   catch (ex) { }
 
@@ -1207,9 +1237,7 @@ Engine.prototype = {
   },
 
   _confirmAddEngine: function SRCH_SVC_confirmAddEngine() {
-    var sbs = Cc["@mozilla.org/intl/stringbundle;1"].
-              getService(Ci.nsIStringBundleService);
-    var stringBundle = sbs.createBundle(SEARCH_BUNDLE);
+    var stringBundle = Services.strings.createBundle(SEARCH_BUNDLE);
     var titleMessage = stringBundle.GetStringFromName("addEngineConfirmTitle");
 
     // Display only the hostname portion of the URL.
@@ -1223,8 +1251,7 @@ Engine.prototype = {
     var addButtonLabel =
         stringBundle.GetStringFromName("addEngineAddButtonLabel");
 
-    var ps = Cc["@mozilla.org/embedcomp/prompt-service;1"].
-             getService(Ci.nsIPromptService);
+    var ps = Services.prompt;
     var buttonFlags = (ps.BUTTON_TITLE_IS_STRING * ps.BUTTON_POS_0) +
                       (ps.BUTTON_TITLE_CANCEL    * ps.BUTTON_POS_1) +
                        ps.BUTTON_POS_0_DEFAULT;
@@ -1260,13 +1287,10 @@ Engine.prototype = {
         LOG("updating " + aEngine._engineToUpdate.name + " failed");
         return;
       }
-      var sbs = Cc["@mozilla.org/intl/stringbundle;1"].
-                getService(Ci.nsIStringBundleService);
-
-      var brandBundle = sbs.createBundle(BRAND_BUNDLE);
+      var brandBundle = Services.strings.createBundle(BRAND_BUNDLE);
       var brandName = brandBundle.GetStringFromName("brandShortName");
 
-      var searchBundle = sbs.createBundle(SEARCH_BUNDLE);
+      var searchBundle = Services.strings.createBundle(SEARCH_BUNDLE);
       var msgStringName = aErrorString || "error_loading_engine_msg2";
       var titleStringName = aTitleString || "error_loading_engine_title";
       var title = searchBundle.GetStringFromName(titleStringName);
@@ -1274,9 +1298,7 @@ Engine.prototype = {
                                                    [brandName, aEngine._location],
                                                    2);
 
-      var ww = Cc["@mozilla.org/embedcomp/window-watcher;1"].
-               getService(Ci.nsIWindowWatcher);
-      ww.getNewPrompter(null).alert(title, text);
+      Services.ww.getNewPrompter(null).alert(title, text);
     }
 
     if (!aBytes) {
@@ -1322,9 +1344,7 @@ Engine.prototype = {
     // engine load, then we display a "this is a duplicate engine" prompt,
     // otherwise we fail silently.
     if (!engineToUpdate) {
-      var ss = Cc["@mozilla.org/browser/search-service;1"].
-               getService(Ci.nsIBrowserSearchService);
-      if (ss.getEngineByName(aEngine.name)) {
+      if (Services.search.getEngineByName(aEngine.name)) {
         if (aEngine._confirm)
           onError("error_duplicate_engine_msg", "error_invalid_engine_title");
 
@@ -1614,8 +1634,7 @@ Engine.prototype = {
   },
 
   _isDefaultEngine: function SRCH_ENG__isDefaultEngine() {
-    let defaultPrefB = gPrefSvc.QueryInterface(Ci.nsIPrefService)
-                               .getDefaultBranch(BROWSER_SEARCH_PREF);
+    let defaultPrefB = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF);
     let nsIPLS = Ci.nsIPrefLocalizedString;
     let defaultEngine;
     try {
@@ -2493,8 +2512,7 @@ SearchService.prototype = {
 
     let cache = {};
     let locale = getLocale();
-    let buildID = Cc["@mozilla.org/xre/app-info;1"].
-                  getService(Ci.nsIXULAppInfo).platformBuildID;
+    let buildID = Services.appinfo.platformBuildID;
 
     // Allows us to force a cache refresh should the cache format change.
     cache.version = CACHE_VERSION;
@@ -2576,6 +2594,7 @@ SearchService.prototype = {
   },
 
   _loadEngines: function SRCH_SVC__loadEngines() {
+    LOG("_loadEngines: start");
     // See if we have a cache file so we don't have to parse a bunch of XML.
     let cache = {};
     let cacheEnabled = getBoolPref(BROWSER_SEARCH_PREF + "cache.enabled", true);
@@ -2610,8 +2629,7 @@ SearchService.prototype = {
     function notInToLoad(aCachePath, aIndex)
       aCachePath != toLoad[aIndex].path;
 
-    let buildID = Cc["@mozilla.org/xre/app-info;1"].
-                  getService(Ci.nsIXULAppInfo).platformBuildID;
+    let buildID = Services.appinfo.platformBuildID;
     let cachePaths = [path for (path in cache.directories)];
 
     let rebuildCache = !cache.directories ||
@@ -2633,8 +2651,11 @@ SearchService.prototype = {
       return;
     }
 
+    LOG("_loadEngines: loading from cache directories");
     for each (let dir in cache.directories)
       this._loadEnginesFromCache(dir);
+
+    LOG("_loadEngines: done");
   },
 
   _readCacheFile: function SRCH_SVC__readCacheFile(aFile) {
@@ -2810,7 +2831,7 @@ SearchService.prototype = {
           try {
             this._convertSherlockFile(addedEngine, fileURL.fileBaseName);
           } catch (ex) {
-            LOG("_loadEnginesFromDir: Failed to convert: " + fileURL.path + "\n" + ex);
+            LOG("_loadEnginesFromDir: Failed to convert: " + fileURL.path + "\n" + ex + "\n" + ex.stack);
             // The engine couldn't be converted, mark it as read-only
             addedEngine._readOnly = true;
           }
@@ -2849,7 +2870,7 @@ SearchService.prototype = {
 
     let rootURIPref = ""
     try {
-      rootURIPref = gPrefSvc.getCharPref(BROWSER_SEARCH_PREF + "jarURIs");
+      rootURIPref = Services.prefs.getCharPref(BROWSER_SEARCH_PREF + "jarURIs");
     } catch (ex) {}
 
     if (!rootURIPref) {
@@ -2907,23 +2928,29 @@ SearchService.prototype = {
 
   _saveSortedEngineList: function SRCH_SVC_saveSortedEngineList() {
     // We only need to write the prefs. if something has changed.
+    LOG("SRCH_SVC_saveSortedEngineList: starting");
     if (!this._needToSetOrderPrefs)
       return;
 
+    LOG("SRCH_SVC_saveSortedEngineList: something to do");
+
     // Set the useDB pref to indicate that from now on we should use the order
     // information stored in the database.
-    gPrefSvc.setBoolPref(BROWSER_SEARCH_PREF + "useDBForOrder", true);
+    Services.prefs.setBoolPref(BROWSER_SEARCH_PREF + "useDBForOrder", true);
 
     var engines = this._getSortedEngines(true);
-    var values = [];
-    var names = [];
 
+    let instructions = [];
     for (var i = 0; i < engines.length; ++i) {
-      names[i] = "order";
-      values[i] = i + 1;
+      instructions.push(
+        {key: "order",
+         value: i+1,
+         engine: engines[i]
+        });
     }
 
-    engineMetadataService.setAttrs(engines, names, values);
+    engineMetadataService.setAttrs(instructions);
+    LOG("SRCH_SVC_saveSortedEngineList: done");
   },
 
   _buildSortedEngineList: function SRCH_SVC_buildSortedEngineList() {
@@ -2936,6 +2963,7 @@ SearchService.prototype = {
     // information from the engineMetadataService instead of the default
     // prefs.
     if (getBoolPref(BROWSER_SEARCH_PREF + "useDBForOrder", false)) {
+      LOG("_buildSortedEngineList: using db for order");
       for each (engine in this._engines) {
         var orderNumber = engineMetadataService.getAttr(engine, "order");
 
@@ -2967,10 +2995,10 @@ SearchService.prototype = {
 
       try {
         var extras =
-          gPrefSvc.getChildList(BROWSER_SEARCH_PREF + "order.extra.");
+          Services.prefs.getChildList(BROWSER_SEARCH_PREF + "order.extra.");
 
         for each (prefName in extras) {
-          engineName = gPrefSvc.getCharPref(prefName);
+          engineName = Services.prefs.getCharPref(prefName);
 
           engine = this._engines[engineName];
           if (!engine || engine.name in addedEngines)
@@ -3165,10 +3193,10 @@ SearchService.prototype = {
 
     // First, look at the "browser.search.order.extra" branch.
     try {
-      var extras = gPrefSvc.getChildList(BROWSER_SEARCH_PREF + "order.extra.");
+      var extras = Services.prefs.getChildList(BROWSER_SEARCH_PREF + "order.extra.");
 
       for each (var prefName in extras) {
-        engineName = gPrefSvc.getCharPref(prefName);
+        engineName = Services.prefs.getCharPref(prefName);
 
         if (!(engineName in engineOrder))
           engineOrder[engineName] = i++;
@@ -3394,7 +3422,7 @@ SearchService.prototype = {
     var currentEnginePref = BROWSER_SEARCH_PREF + "selectedEngine";
 
     if (this._currentEngine == this.defaultEngine) {
-      gPrefSvc.clearUserPref(currentEnginePref);
+      Services.prefs.clearUserPref(currentEnginePref);
     }
     else {
       setLocalizedPref(currentEnginePref, this._currentEngine.name);
@@ -3434,7 +3462,7 @@ SearchService.prototype = {
           this._batchTimer.cancel();
           this._buildCache();
         }
-        engineMetadataService.closeDB();
+        engineMetadataService.flush();
         break;
     }
   },
@@ -3479,13 +3507,13 @@ SearchService.prototype = {
   },
 
   _addObservers: function SRCH_SVC_addObservers() {
-    gObsSvc.addObserver(this, SEARCH_ENGINE_TOPIC, false);
-    gObsSvc.addObserver(this, QUIT_APPLICATION_TOPIC, false);
+    Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC, false);
+    Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC, false);
   },
 
   _removeObservers: function SRCH_SVC_removeObservers() {
-    gObsSvc.removeObserver(this, SEARCH_ENGINE_TOPIC);
-    gObsSvc.removeObserver(this, QUIT_APPLICATION_TOPIC);
+    Services.obs.removeObserver(this, SEARCH_ENGINE_TOPIC);
+    Services.obs.removeObserver(this, QUIT_APPLICATION_TOPIC);
   },
 
   QueryInterface: function SRCH_SVC_QI(aIID) {
@@ -3499,135 +3527,217 @@ SearchService.prototype = {
 };
 
 var engineMetadataService = {
-  get mDB() {
-    var engineDataTable = "id INTEGER PRIMARY KEY, engineid STRING, name STRING, value STRING";
-    var file = getDir(NS_APP_USER_PROFILE_50_DIR);
-    file.append("search.sqlite");
-    var dbService = Cc["@mozilla.org/storage/service;1"].
-                    getService(Ci.mozIStorageService);
-    var db;
-    try {
-      db = dbService.openDatabase(file);
-    } catch (ex) {
-      if (ex.result == 0x8052000b) { /* NS_ERROR_FILE_CORRUPTED */
-        // delete and try again
-        file.remove(false);
-        db = dbService.openDatabase(file);
-      } else {
-        throw ex;
+  /**
+   * @type {nsIFile|null} The file holding the metadata.
+   */
+  get _jsonFile() {
+    delete this._jsonFile;
+    return this._jsonFile = FileUtils.getFile(NS_APP_USER_PROFILE_50_DIR,
+                                              ["search-metadata.json"]);
+  },
+
+  /**
+   * Lazy getter for the file containing json data.
+   */
+  get _store() {
+    delete this._store;
+    return this._store = this._loadStore();
+  },
+
+  // Perform loading the first time |_store| is accessed.
+  _loadStore: function() {
+    let jsonFile = this._jsonFile;
+    if (!jsonFile.exists()) {
+      LOG("loadStore: search-metadata.json does not exist");
+
+      // First check to see whether there's an existing SQLite DB to migrate
+      let store = this._migrateOldDB();
+      if (store) {
+        // Commit the migrated store to disk immediately
+        LOG("Committing the migrated store to disk");
+        this._commit(store);
+        return store;
       }
+
+       // Migration failed, or this is a first-run - just use an empty store
+      return {};
     }
 
+    LOG("loadStore: attempting to load store from JSON file");
     try {
-      db.createTable("engine_data", engineDataTable);
-    } catch (ex) {
-      // Fails if the table already exists, which is fine
+      return parseJsonFromStream(NetUtil.newChannel(jsonFile).open());
+    } catch (x) {
+      LOG("loadStore failed to load file: "+x);
+      return {};
     }
-
-    delete this.mDB;
-    return this.mDB = db;
-  },
-
-  get mGetData() {
-    delete this.mGetData;
-    return this.mGetData = this.mDB.createStatement(
-      "SELECT value FROM engine_data WHERE engineid = :engineid AND name = :name");
-  },
-  get mDeleteData() {
-    delete this.mDeleteData;
-    return this.mDeleteData = this.mDB.createStatement(
-      "DELETE FROM engine_data WHERE engineid = :engineid AND name = :name");
-  },
-  get mInsertData() {
-    delete this.mInsertData;
-    return this.mInsertData = this.mDB.createStatement(
-      "INSERT INTO engine_data (engineid, name, value) " +
-      "VALUES (:engineid, :name, :value)");
   },
 
   getAttr: function epsGetAttr(engine, name) {
-    // attr names must be lower case
-    name = name.toLowerCase();
-
-    var stmt = this.mGetData;
-    stmt.reset();
-    var pp = stmt.params;
-    pp.engineid = engine._id;
-    pp.name = name;
-
-    var value = null;
-    if (stmt.executeStep())
-      value = stmt.row.value;
-    stmt.reset();
-    return value;
-  },
-
-  setAttr: function epsSetAttr(engine, name, value) {
-    // attr names must be lower case
-    name = name.toLowerCase();
-
-    this.mDB.beginTransaction();
-
-    var pp = this.mDeleteData.params;
-    pp.engineid = engine._id;
-    pp.name = name;
-    this.mDeleteData.executeStep();
-    this.mDeleteData.reset();
-
-    pp = this.mInsertData.params;
-    pp.engineid = engine._id;
-    pp.name = name;
-    pp.value = value;
-    this.mInsertData.executeStep();
-    this.mInsertData.reset();
-
-    this.mDB.commitTransaction();
-  },
-
-  setAttrs: function epsSetAttrs(engines, names, values) {
-    this.mDB.beginTransaction();
-
-    for (var i = 0; i < engines.length; i++) {
-      // attr names must be lower case
-      var name = names[i].toLowerCase();
-
-      var pp = this.mDeleteData.params;
-      pp.engineid = engines[i]._id;
-      pp.name = names[i];
-      this.mDeleteData.executeStep();
-      this.mDeleteData.reset();
-
-      pp = this.mInsertData.params;
-      pp.engineid = engines[i]._id;
-      pp.name = names[i];
-      pp.value = values[i];
-      this.mInsertData.executeStep();
-      this.mInsertData.reset();
+    let record = this._store[engine._id];
+    if (!record) {
+      return null;
     }
 
-    this.mDB.commitTransaction();
+    // attr names must be lower case
+    return record[name.toLowerCase()];
   },
 
-  deleteEngineData: function epsDelData(engine, name) {
+  _setAttr: function epsSetAttr(engine, name, value) {
     // attr names must be lower case
     name = name.toLowerCase();
-
-    var pp = this.mDeleteData.params;
-    pp.engineid = engine._id;
-    pp.name = name;
-    this.mDeleteData.executeStep();
-    this.mDeleteData.reset();
+    let db = this._store;
+    let record = db[engine._id];
+    if (!record) {
+      record = db[engine._id] = {};
+    }
+    if (record[name] != value) {
+      record[name] = value;
+      return true;
+    }
+    return false;
   },
 
-  closeDB: function epsCloseDB() {
-    ["mInsertData", "mDeleteData", "mGetData"].forEach(function(aStmt) {
-      if (Object.getOwnPropertyDescriptor(this, aStmt).value !== undefined)
-        this[aStmt].finalize();
-    }, this);
-    if (Object.getOwnPropertyDescriptor(this, "mDB").value !== undefined)
-      this.mDB.close();
-  }
-}
+  /**
+   * Set one metadata attribute for an engine.
+   *
+   * If an actual change has taken place, the attribute is committed
+   * automatically (and lazily), using this._commit.
+   *
+   * @param {nsISearchEngine} engine The engine to update.
+   * @param {string} key The name of the attribute. Case-insensitive. In
+   * the current implementation, this _must not_ conflict with properties
+   * of |Object|.
+   * @param {*} value A value to store.
+   */
+  setAttr: function epsSetAttr(engine, key, value) {
+    if (this._setAttr(engine, key, value)) {
+      this._commit();
+    }
+  },
+
+  /**
+   * Bulk set metadata attributes for a number of engines.
+   *
+   * If actual changes have taken place, the store is committed
+   * automatically (and lazily), using this._commit.
+   *
+   * @param {Array.<{engine: nsISearchEngine, key: string, value: *}>} changes
+   * The list of changes to effect. See |setAttr| for the documentation of
+   * |engine|, |key|, |value|.
+   */
+  setAttrs: function epsSetAttrs(changes) {
+    let self = this;
+    let changed = false;
+    changes.forEach(function(change) {
+      changed |= self._setAttr(change.engine, change.key, change.value);
+    });
+    if (changed) {
+      this._commit();
+    }
+  },
+
+  /**
+   * Flush any waiting write.
+   */
+  flush: function epsFlush() {
+    if (this._lazyWriter) {
+      this._lazyWriter.flush();
+    }
+  },
+
+  /**
+   * Migrate search.sqlite
+   *
+   * Notes:
+   * - we do not remove search.sqlite after migration, so as to allow
+   * downgrading and forensics;
+   */
+  _migrateOldDB: function SRCH_SVC_EMS_migrate() {
+    LOG("SRCH_SVC_EMS_migrate start");
+    let sqliteFile = FileUtils.getFile(NS_APP_USER_PROFILE_50_DIR,
+                                       ["search.sqlite"]);
+    if (!sqliteFile.exists()) {
+      LOG("SRCH_SVC_EMS_migrate search.sqlite does not exist");
+      return null;
+    }
+    let store = {};
+    try {
+      LOG("SRCH_SVC_EMS_migrate Migrating data from SQL");
+      const sqliteDb = Services.storage.openDatabase(sqliteFile);
+      const statement = sqliteDb.createStatement("SELECT * from engine_data");
+      while (statement.executeStep()) {
+        let row = statement.row;
+        let engine = row.engineid;
+        let name   = row.name;
+        let value  = row.value;
+        if (!store[engine]) {
+          store[engine] = {};
+        }
+        store[engine][name] = value;
+      }
+      statement.finalize();
+      sqliteDb.close();
+    } catch (ex) {
+      LOG("SRCH_SVC_EMS_migrate failed: " + ex);
+      return null;
+    }
+    return store;
+  },
+
+  /**
+   * Commit changes to disk, asynchronously.
+   *
+   * Calls to this function are actually delayed by LAZY_SERIALIZE_DELAY
+   * (= 100ms). If the function is called again before the expiration of
+   * the delay, commits are merged and the function is again delayed by
+   * the same amount of time.
+   *
+   * @param aStore is an optional parameter specifying the object to serialize.
+   *               If not specified, this._store is used.
+   */
+  _commit: function epsCommit(aStore) {
+    LOG("epsCommit: start");
+
+    let store = aStore || this._store;
+    if (!store) {
+      LOG("epsCommit: nothing to do");
+      return;
+    }
+
+    if (!this._lazyWriter) {
+      LOG("epsCommit: initializing lazy writer");
+      let jsonFile = this._jsonFile;
+      function writeCommit() {
+        LOG("epsWriteCommit: start");
+        let ostream = FileUtils.
+          openSafeFileOutputStream(jsonFile,
+                                   MODE_WRONLY | MODE_CREATE | MODE_TRUNCATE);
+
+        // Obtain a converter to convert our data to a UTF-8 encoded input stream.
+        let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
+          createInstance(Ci.nsIScriptableUnicodeConverter);
+        converter.charset = "UTF-8";
+
+        let callback = function(result) {
+          if (Components.isSuccessCode(result)) {
+            ostream.close();
+            Services.obs.notifyObservers(null,
+                                         SEARCH_SERVICE_TOPIC,
+                                         SEARCH_SERVICE_METADATA_WRITTEN);
+          }
+          LOG("epsWriteCommit: done " + result);
+        };
+        // Asynchronously copy the data to the file.
+        let istream = converter.convertToInputStream(JSON.stringify(store));
+        NetUtil.asyncCopy(istream, ostream, callback);
+      }
+      this._lazyWriter = new Lazy(writeCommit);
+    }
+    LOG("epsCommit: (re)setting timer");
+    this._lazyWriter.go();
+  },
+  _lazyWriter: null,
+};
 
 const SEARCH_UPDATE_LOG_PREFIX = "*** Search update: ";
 
@@ -3638,9 +3748,7 @@ const SEARCH_UPDATE_LOG_PREFIX = "*** Search update: ";
 function ULOG(aText) {
   if (getBoolPref(BROWSER_SEARCH_PREF + "update.log", false)) {
     dump(SEARCH_UPDATE_LOG_PREFIX + aText + "\n");
-    var consoleService = Cc["@mozilla.org/consoleservice;1"].
-                         getService(Ci.nsIConsoleService);
-    consoleService.logStringMessage(aText);
+    Services.console.logStringMessage(aText);
   }
 }
 

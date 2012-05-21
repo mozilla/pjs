@@ -1,44 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:cindent:tabstop=2:expandtab:shiftwidth=2:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>
- *   Daniel Glazman <glazman@netscape.com>
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *   Rob Arnold <robarnold@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * style rule processor for CSS style sheets, responsible for selector
@@ -60,7 +24,6 @@
 #include "pldhash.h"
 #include "nsHashtable.h"
 #include "nsICSSPseudoComparator.h"
-#include "nsCSSRuleProcessor.h"
 #include "mozilla/css/StyleRule.h"
 #include "mozilla/css/GroupRule.h"
 #include "nsIDocument.h"
@@ -89,7 +52,6 @@
 #include "nsStyleSet.h"
 #include "prlog.h"
 #include "nsIObserverService.h"
-#include "nsIPrivateBrowsingService.h"
 #include "nsNetCID.h"
 #include "mozilla/Services.h"
 #include "mozilla/dom/Element.h"
@@ -125,17 +87,85 @@ struct RuleSelectorPair {
   nsCSSSelector*    mSelector; // which of |mRule|'s selectors
 };
 
+#define NS_IS_ANCESTOR_OPERATOR(ch) \
+  ((ch) == PRUnichar(' ') || (ch) == PRUnichar('>'))
+
 /**
  * A struct representing a particular rule in an ordered list of rules
  * (the ordering depending on the weight of mSelector and the order of
  * our rules to start with).
  */
 struct RuleValue : RuleSelectorPair {
-  RuleValue(const RuleSelectorPair& aRuleSelectorPair, PRInt32 aIndex) :
+  enum {
+    eMaxAncestorHashes = 4
+  };
+
+  RuleValue(const RuleSelectorPair& aRuleSelectorPair, PRInt32 aIndex,
+            bool aQuirksMode) :
     RuleSelectorPair(aRuleSelectorPair),
     mIndex(aIndex)
-  {}
+  {
+    CollectAncestorHashes(aQuirksMode);
+  }
+
   PRInt32 mIndex; // High index means high weight/order.
+  uint32_t mAncestorSelectorHashes[eMaxAncestorHashes];
+
+private:
+  void CollectAncestorHashes(bool aQuirksMode) {
+    // Collect up our mAncestorSelectorHashes.  It's not clear whether it's
+    // better to stop once we've found eMaxAncestorHashes of them or to keep
+    // going and preferentially collect information from selectors higher up the
+    // chain...  Let's do the former for now.
+    size_t hashIndex = 0;
+    for (nsCSSSelector* sel = mSelector->mNext; sel; sel = sel->mNext) {
+      if (!NS_IS_ANCESTOR_OPERATOR(sel->mOperator)) {
+        // |sel| is going to select something that's not actually one of our
+        // ancestors, so don't add it to mAncestorSelectorHashes.  But keep
+        // going, because it'll select a sibling of one of our ancestors, so its
+        // ancestors would be our ancestors too.
+        continue;
+      }
+
+      // Now sel is supposed to select one of our ancestors.  Grab
+      // whatever info we can from it into mAncestorSelectorHashes.
+      // But in qurks mode, don't grab IDs and classes because those
+      // need to be matched case-insensitively.
+      if (!aQuirksMode) {
+        nsAtomList* ids = sel->mIDList;
+        while (ids) {
+          mAncestorSelectorHashes[hashIndex++] = ids->mAtom->hash();
+          if (hashIndex == eMaxAncestorHashes) {
+            return;
+          }
+          ids = ids->mNext;
+        }
+
+        nsAtomList* classes = sel->mClassList;
+        while (classes) {
+          mAncestorSelectorHashes[hashIndex++] = classes->mAtom->hash();
+          if (hashIndex == eMaxAncestorHashes) {
+            return;
+          }
+          classes = classes->mNext;
+        }
+      }
+
+      // Only put in the tag name if it's all-lowercase.  Otherwise we run into
+      // trouble because we may test the wrong one of mLowercaseTag and
+      // mCasedTag against the filter.
+      if (sel->mLowercaseTag && sel->mCasedTag == sel->mLowercaseTag) {
+        mAncestorSelectorHashes[hashIndex++] = sel->mLowercaseTag->hash();
+        if (hashIndex == eMaxAncestorHashes) {
+          return;
+        }
+      }
+    }
+
+    while (hashIndex != eMaxAncestorHashes) {
+      mAncestorSelectorHashes[hashIndex++] = 0;
+    }
+  }
 };
 
 // ------------------------------
@@ -566,7 +596,7 @@ void RuleHash::AppendRuleToTable(PLDHashTable* aTable, const void* aKey,
                                          (PL_DHashTableOperate(aTable, aKey, PL_DHASH_ADD));
   if (!entry)
     return;
-  entry->mRules.AppendElement(RuleValue(aRuleInfo, mRuleCount++));
+  entry->mRules.AppendElement(RuleValue(aRuleInfo, mRuleCount++, mQuirksMode));
 }
 
 static void
@@ -584,7 +614,7 @@ AppendRuleToTagTable(PLDHashTable* aTable, nsIAtom* aKey,
 
 void RuleHash::AppendUniversalRule(const RuleSelectorPair& aRuleInfo)
 {
-  mUniversalRules.AppendElement(RuleValue(aRuleInfo, mRuleCount++));
+  mUniversalRules.AppendElement(RuleValue(aRuleInfo, mRuleCount++, mQuirksMode));
 }
 
 void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
@@ -611,7 +641,7 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
     RULE_HASH_STAT_INCREMENT(mClassSelectors);
   }
   else if (selector->mLowercaseTag) {
-    RuleValue ruleValue(aRuleInfo, mRuleCount++);
+    RuleValue ruleValue(aRuleInfo, mRuleCount++, mQuirksMode);
     if (!mTagTable.ops) {
       PL_DHashTableInit(&mTagTable, &RuleHash_TagTable_Ops, nsnull,
                         sizeof(RuleHashTagTableEntry), 16);
@@ -651,8 +681,9 @@ void RuleHash::AppendRule(const RuleSelectorPair& aRuleInfo)
 #endif
 
 static inline
-void ContentEnumFunc(css::StyleRule* aRule, nsCSSSelector* aSelector,
-                     RuleProcessorData* data, NodeMatchContext& nodeContext);
+void ContentEnumFunc(const RuleValue &value, nsCSSSelector* selector,
+                     RuleProcessorData* data, NodeMatchContext& nodeContext,
+                     AncestorFilter *ancestorFilter);
 
 void RuleHash::EnumerateAllRules(Element* aElement, RuleProcessorData* aData,
                                  NodeMatchContext& aNodeContext)
@@ -723,6 +754,14 @@ void RuleHash::EnumerateAllRules(Element* aElement, RuleProcessorData* aData,
   NS_ASSERTION(valueCount <= testCount, "values exceeded list size");
 
   if (valueCount > 0) {
+    AncestorFilter *filter =
+      aData->mTreeMatchContext.mAncestorFilter.HasFilter() ?
+        &aData->mTreeMatchContext.mAncestorFilter : nsnull;
+#ifdef DEBUG
+    if (filter) {
+      filter->AssertHasAllAncestors(aElement);
+    }
+#endif
     // Merge the lists while there are still multiple lists to merge.
     while (valueCount > 1) {
       PRInt32 valueIndex = 0;
@@ -735,7 +774,7 @@ void RuleHash::EnumerateAllRules(Element* aElement, RuleProcessorData* aData,
         }
       }
       const RuleValue *cur = mEnumList[valueIndex].mCurValue;
-      ContentEnumFunc(cur->mRule, cur->mSelector, aData, aNodeContext);
+      ContentEnumFunc(*cur, cur->mSelector, aData, aNodeContext, filter);
       cur++;
       if (cur == mEnumList[valueIndex].mEnd) {
         mEnumList[valueIndex] = mEnumList[--valueCount];
@@ -748,7 +787,7 @@ void RuleHash::EnumerateAllRules(Element* aElement, RuleProcessorData* aData,
     for (const RuleValue *value = mEnumList[0].mCurValue,
                          *end = mEnumList[0].mEnd;
          value != end; ++value) {
-      ContentEnumFunc(value->mRule, value->mSelector, aData, aNodeContext);
+      ContentEnumFunc(*value, value->mSelector, aData, aNodeContext, filter);
     }
   }
 }
@@ -1004,63 +1043,6 @@ RuleCascadeData::AttributeListFor(nsIAtom* aAttribute)
   return &entry->mSelectors;
 }
 
-class nsPrivateBrowsingObserver : nsIObserver,
-                                  nsSupportsWeakReference
-{
-public:
-  nsPrivateBrowsingObserver();
-
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIOBSERVER
-
-  void Init();
-  bool InPrivateBrowsing() const { return mInPrivateBrowsing; }
-
-private:
-  bool mInPrivateBrowsing;
-};
-
-NS_IMPL_ISUPPORTS2(nsPrivateBrowsingObserver, nsIObserver, nsISupportsWeakReference)
-
-nsPrivateBrowsingObserver::nsPrivateBrowsingObserver()
-  : mInPrivateBrowsing(false)
-{
-}
-
-void
-nsPrivateBrowsingObserver::Init()
-{
-  nsCOMPtr<nsIObserverService> observerService =
-    mozilla::services::GetObserverService();
-  if (observerService) {
-    observerService->AddObserver(this, "profile-after-change", true);
-    observerService->AddObserver(this, NS_PRIVATE_BROWSING_SWITCH_TOPIC, true);
-  }
-}
-
-nsresult
-nsPrivateBrowsingObserver::Observe(nsISupports *aSubject,
-                                   const char *aTopic,
-                                   const PRUnichar *aData)
-{
-  if (!strcmp(aTopic, NS_PRIVATE_BROWSING_SWITCH_TOPIC)) {
-    if (!nsCRT::strcmp(aData, NS_LITERAL_STRING(NS_PRIVATE_BROWSING_ENTER).get())) {
-      mInPrivateBrowsing = true;
-    } else {
-      mInPrivateBrowsing = false;
-    }
-  }
-  else if (!strcmp(aTopic, "profile-after-change")) {
-    nsCOMPtr<nsIPrivateBrowsingService> pbService =
-      do_GetService(NS_PRIVATE_BROWSING_SERVICE_CONTRACTID);
-    if (pbService)
-      pbService->GetPrivateBrowsingEnabled(&mInPrivateBrowsing);
-  }
-  return NS_OK;
-}
-
-static nsPrivateBrowsingObserver *gPrivateBrowsingObserver = nsnull;
-
 // -------------------------------
 // CSS Style rule processor implementation
 //
@@ -1093,11 +1075,6 @@ nsCSSRuleProcessor::Startup()
 {
   Preferences::AddBoolVarCache(&gSupportVisitedPseudo, VISITED_PSEUDO_PREF,
                                true);
-
-  gPrivateBrowsingObserver = new nsPrivateBrowsingObserver();
-  NS_ENSURE_TRUE(gPrivateBrowsingObserver, NS_ERROR_OUT_OF_MEMORY);
-  NS_ADDREF(gPrivateBrowsingObserver);
-  gPrivateBrowsingObserver->Init();
 
   return NS_OK;
 }
@@ -1235,8 +1212,6 @@ nsCSSRuleProcessor::FreeSystemMetrics()
 nsCSSRuleProcessor::Shutdown()
 {
   FreeSystemMetrics();
-  // Make sure we don't crash if Shutdown is called before Init
-  NS_IF_RELEASE(gPrivateBrowsingObserver);
 }
 
 /* static */ bool
@@ -1260,7 +1235,7 @@ nsCSSRuleProcessor::GetWindowsThemeIdentifier()
 
 /* static */
 nsEventStates
-nsCSSRuleProcessor::GetContentState(Element* aElement)
+nsCSSRuleProcessor::GetContentState(Element* aElement, const TreeMatchContext& aTreeMatchContext)
 {
   nsEventStates state = aElement->StyleState();
 
@@ -1271,7 +1246,7 @@ nsCSSRuleProcessor::GetContentState(Element* aElement)
   if (state.HasState(NS_EVENT_STATE_VISITED) &&
       (!gSupportVisitedPseudo ||
        aElement->OwnerDoc()->IsBeingUsedAsImage() ||
-       gPrivateBrowsingObserver->InPrivateBrowsing())) {
+       aTreeMatchContext.mUsingPrivateBrowsing)) {
     state &= ~NS_EVENT_STATE_VISITED;
     state |= NS_EVENT_STATE_UNVISITED;
   }
@@ -1290,10 +1265,11 @@ nsCSSRuleProcessor::IsLink(Element* aElement)
 nsEventStates
 nsCSSRuleProcessor::GetContentStateForVisitedHandling(
                      Element* aElement,
+                     const TreeMatchContext& aTreeMatchContext,
                      nsRuleWalker::VisitedHandlingType aVisitedHandling,
                      bool aIsRelevantLink)
 {
-  nsEventStates contentState = GetContentState(aElement);
+  nsEventStates contentState = GetContentState(aElement, aTreeMatchContext);
   if (contentState.HasAtLeastOneOfStates(NS_EVENT_STATE_VISITED | NS_EVENT_STATE_UNVISITED)) {
     NS_ABORT_IF_FALSE(IsLink(aElement), "IsLink() should match state");
     contentState &= ~(NS_EVENT_STATE_VISITED | NS_EVENT_STATE_UNVISITED);
@@ -2043,6 +2019,11 @@ static bool SelectorMatches(Element* aElement,
         // selectors ":hover" and ":active".
         return false;
       } else {
+        if (aTreeMatchContext.mForStyling &&
+            statesToCheck.HasAtLeastOneOfStates(NS_EVENT_STATE_HOVER)) {
+          // Mark the element as having :hover-dependent style
+          aElement->SetFlags(NODE_HAS_RELEVANT_HOVER_RULES);
+        }
         if (aNodeMatchContext.mStateMask.HasAtLeastOneOfStates(statesToCheck)) {
           if (aDependence)
             *aDependence = true;
@@ -2050,6 +2031,7 @@ static bool SelectorMatches(Element* aElement,
           nsEventStates contentState =
             nsCSSRuleProcessor::GetContentStateForVisitedHandling(
                                          aElement,
+                                         aTreeMatchContext,
                                          aTreeMatchContext.VisitedHandling(),
                                          aNodeMatchContext.mIsRelevantLink);
           if (!contentState.HasAtLeastOneOfStates(statesToCheck)) {
@@ -2236,8 +2218,7 @@ static bool SelectorMatchesTree(Element* aPrevElement,
           selector->mNext &&
           selector->mNext->mOperator != selector->mOperator &&
           !(selector->mOperator == '~' &&
-            (selector->mNext->mOperator == PRUnichar(' ') ||
-             selector->mNext->mOperator == PRUnichar('>')))) {
+            NS_IS_ANCESTOR_OPERATOR(selector->mNext->mOperator))) {
 
         // pretend the selector didn't match, and step through content
         // while testing the same selector
@@ -2266,11 +2247,18 @@ static bool SelectorMatchesTree(Element* aPrevElement,
 }
 
 static inline
-void ContentEnumFunc(css::StyleRule* aRule, nsCSSSelector* aSelector,
-                     RuleProcessorData* data, NodeMatchContext& nodeContext)
+void ContentEnumFunc(const RuleValue& value, nsCSSSelector* aSelector,
+                     RuleProcessorData* data, NodeMatchContext& nodeContext,
+                     AncestorFilter *ancestorFilter)
 {
   if (nodeContext.mIsRelevantLink) {
     data->mTreeMatchContext.SetHaveRelevantLink();
+  }
+  if (ancestorFilter &&
+      !ancestorFilter->MightHaveMatchingAncestor<RuleValue::eMaxAncestorHashes>(
+          value.mAncestorSelectorHashes)) {
+    // We won't match; nothing else to do here
+    return;
   }
   if (SelectorMatches(data->mElement, aSelector, nodeContext,
                       data->mTreeMatchContext)) {
@@ -2278,8 +2266,9 @@ void ContentEnumFunc(css::StyleRule* aRule, nsCSSSelector* aSelector,
     if (!next || SelectorMatchesTree(data->mElement, next,
                                      data->mTreeMatchContext,
                                      !nodeContext.mIsRelevantLink)) {
-      aRule->RuleMatched();
-      data->mRuleWalker->Forward(aRule);
+      css::StyleRule *rule = value.mRule;
+      rule->RuleMatched();
+      data->mRuleWalker->Forward(rule);
       // nsStyleSet will deal with the !important rule
     }
   }
@@ -2349,8 +2338,8 @@ nsCSSRuleProcessor::RulesMatching(XULTreeRuleProcessorData* aData)
       for (RuleValue *value = rules.Elements(), *end = value + rules.Length();
            value != end; ++value) {
         if (aData->mComparator->PseudoMatches(value->mSelector)) {
-          ContentEnumFunc(value->mRule, value->mSelector->mNext, aData,
-                          nodeContext);
+          ContentEnumFunc(*value, value->mSelector->mNext, aData, nodeContext,
+                          nsnull);
         }
       }
     }
@@ -2821,7 +2810,7 @@ AddRule(RuleSelectorPair* aRuleInfo, RuleCascadeData* aCascade)
     // rules in order; just pass 0.
     AppendRuleToTagTable(&cascade->mAnonBoxRules,
                          aRuleInfo->mSelector->mLowercaseTag,
-                         RuleValue(*aRuleInfo, 0));
+                         RuleValue(*aRuleInfo, 0, aCascade->mQuirksMode));
   } else {
 #ifdef MOZ_XUL
     NS_ASSERTION(pseudoType == nsCSSPseudoElements::ePseudo_XULTree,
@@ -2830,7 +2819,7 @@ AddRule(RuleSelectorPair* aRuleInfo, RuleCascadeData* aCascade)
     // rules in order; just pass 0.
     AppendRuleToTagTable(&cascade->mXULTreeRules,
                          aRuleInfo->mSelector->mLowercaseTag,
-                         RuleValue(*aRuleInfo, 0));
+                         RuleValue(*aRuleInfo, 0, aCascade->mQuirksMode));
 #else
     NS_NOTREACHED("Unexpected pseudo type");
 #endif
@@ -3181,3 +3170,99 @@ nsCSSRuleProcessor::SelectorListMatches(Element* aElement,
 
   return false;
 }
+
+// AncestorFilter out of line methods
+void
+AncestorFilter::Init(Element *aElement)
+{
+  MOZ_ASSERT(!mFilter);
+  MOZ_ASSERT(mHashes.IsEmpty());
+
+  mFilter = new Filter();
+
+  if (NS_LIKELY(aElement)) {
+    MOZ_ASSERT(aElement->IsInDoc(),
+               "aElement must be in the document for the assumption that "
+               "GetNodeParent() is non-null on all element ancestors of "
+               "aElement to be true");
+    // Collect up the ancestors
+    nsAutoTArray<Element*, 50> ancestors;
+    Element* cur = aElement;
+    do {
+      ancestors.AppendElement(cur);
+      nsINode* parent = cur->GetNodeParent();
+      if (!parent->IsElement()) {
+        break;
+      }
+      cur = parent->AsElement();
+    } while (true);
+
+    // Now push them in reverse order.
+    for (PRUint32 i = ancestors.Length(); i-- != 0; ) {
+      PushAncestor(ancestors[i]);
+    }
+  }
+}
+
+void
+AncestorFilter::PushAncestor(Element *aElement)
+{
+  MOZ_ASSERT(mFilter);
+
+  PRUint32 oldLength = mHashes.Length();
+
+  mPopTargets.AppendElement(oldLength);
+#ifdef DEBUG
+  mElements.AppendElement(aElement);
+#endif
+  mHashes.AppendElement(aElement->Tag()->hash());
+  nsIAtom *id = aElement->GetID();
+  if (id) {
+    mHashes.AppendElement(id->hash());
+  }
+  const nsAttrValue *classes = aElement->GetClasses();
+  if (classes) {
+    PRUint32 classCount = classes->GetAtomCount();
+    for (PRUint32 i = 0; i < classCount; ++i) {
+      mHashes.AppendElement(classes->AtomAt(i)->hash());
+    }
+  }
+
+  PRUint32 newLength = mHashes.Length();
+  for (PRUint32 i = oldLength; i < newLength; ++i) {
+    mFilter->add(mHashes[i]);
+  }
+}
+
+void
+AncestorFilter::PopAncestor()
+{
+  MOZ_ASSERT(!mPopTargets.IsEmpty());
+  MOZ_ASSERT(mPopTargets.Length() == mElements.Length());
+
+  PRUint32 popTargetLength = mPopTargets.Length();
+  PRUint32 newLength = mPopTargets[popTargetLength-1];
+
+  mPopTargets.TruncateLength(popTargetLength-1);
+#ifdef DEBUG
+  mElements.TruncateLength(popTargetLength-1);
+#endif
+
+  PRUint32 oldLength = mHashes.Length();
+  for (PRUint32 i = newLength; i < oldLength; ++i) {
+    mFilter->remove(mHashes[i]);
+  }
+  mHashes.TruncateLength(newLength);
+}
+
+#ifdef DEBUG
+void
+AncestorFilter::AssertHasAllAncestors(Element *aElement) const
+{
+  nsINode* cur = aElement->GetNodeParent();
+  while (cur && cur->IsElement()) {
+    MOZ_ASSERT(mElements.Contains(cur));
+    cur = cur->GetNodeParent();
+  }
+}
+#endif

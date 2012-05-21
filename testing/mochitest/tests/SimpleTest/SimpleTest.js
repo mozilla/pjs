@@ -252,6 +252,16 @@ SimpleTest.isnot = function (a, b, name) {
     SimpleTest.ok(pass, name, diag);
 };
 
+/**
+ * Roughly equivalent to ok(a===b, name)
+**/
+SimpleTest.ise = function (a, b, name) {
+    var pass = (a === b);
+    var diag = pass ? repr(a) + " should strictly equal " + repr(b)
+                    : "got " + repr(a) + ", strictly expected " + repr(b)
+    SimpleTest.ok(pass, name, diag);
+};
+
 //  --------------- Test.Builder/Test.More todo() -----------------
 
 SimpleTest.todo = function(condition, name, diag) {
@@ -314,11 +324,6 @@ SimpleTest.report = function () {
     var passed = 0;
     var failed = 0;
     var todo = 0;
-
-    // Report tests which did not actually check anything.
-    if (SimpleTest._tests.length == 0)
-      // ToDo: Do s/todo/ok/ when all the tests are fixed. (Bug 483407)
-      SimpleTest.todo(false, "[SimpleTest.report()] No checks actually run.");
 
     var tallyAndCreateDiv = function (test) {
             var cls, msg, div;
@@ -467,6 +472,7 @@ SimpleTest.requestLongerTimeout = function (factor) {
 SimpleTest.waitForFocus_started = false;
 SimpleTest.waitForFocus_loaded = false;
 SimpleTest.waitForFocus_focused = false;
+SimpleTest._pendingWaitForFocusCount = 0;
 
 /**
  * If the page is not yet loaded, waits for the load event. In addition, if
@@ -487,6 +493,7 @@ SimpleTest.waitForFocus_focused = false;
  *        true if targetWindow.location is 'about:blank'. Defaults to false
  */
 SimpleTest.waitForFocus = function (callback, targetWindow, expectBlankPage) {
+    SimpleTest._pendingWaitForFocusCount++;
     if (!targetWindow)
       targetWindow = window;
 
@@ -508,6 +515,7 @@ SimpleTest.waitForFocus = function (callback, targetWindow, expectBlankPage) {
         if (SimpleTest.waitForFocus_loaded &&
             SimpleTest.waitForFocus_focused &&
             !SimpleTest.waitForFocus_started) {
+            SimpleTest._pendingWaitForFocusCount--;
             SimpleTest.waitForFocus_started = true;
             setTimeout(callback, 0, targetWindow);
         }
@@ -675,6 +683,22 @@ SimpleTest.finish = function () {
     if (SimpleTest._expectingUncaughtException) {
         SimpleTest.ok(false, "expectUncaughtException was called but no uncaught exception was detected!");
     }
+    if (SimpleTest._pendingWaitForFocusCount != 0) {
+        SimpleTest.is(SimpleTest._pendingWaitForFocusCount, 0,
+                      "[SimpleTest.finish()] waitForFocus() was called a "
+                      + "different number of times from the number of "
+                      + "callbacks run.  Maybe the test terminated "
+                      + "prematurely -- be sure to use "
+                      + "SimpleTest.waitForExplicitFinish().");
+    }
+    if (SimpleTest._tests.length == 0) {
+        SimpleTest.ok(false, "[SimpleTest.finish()] No checks actually run. "
+                           + "(You need to call ok(), is(), or similar "
+                           + "functions at least once.  Make sure you use "
+                           + "SimpleTest.waitForExplicitFinish() if you need "
+                           + "it.)");
+    }
+
     if (parentRunner) {
         /* We're running in an iframe, and the parent has a TestRunner */
         parentRunner.testFinished(SimpleTest._tests);
@@ -947,6 +971,7 @@ SimpleTest.isa = function (object, clas) {
 var ok = SimpleTest.ok;
 var is = SimpleTest.is;
 var isnot = SimpleTest.isnot;
+var ise = SimpleTest.ise;
 var todo = SimpleTest.todo;
 var todo_is = SimpleTest.todo_is;
 var todo_isnot = SimpleTest.todo_isnot;

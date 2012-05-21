@@ -1,59 +1,22 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #if !defined(nsMediaDecoder_h_)
 #define nsMediaDecoder_h_
 
-#include "mozilla/XPCOM.h"
-
-#include "nsIPrincipal.h"
-#include "nsSize.h"
-#include "prlog.h"
-#include "gfxContext.h"
-#include "gfxRect.h"
-#include "nsITimer.h"
 #include "ImageLayers.h"
 #include "mozilla/ReentrantMonitor.h"
-#include "nsIMemoryReporter.h"
 #include "VideoFrameContainer.h"
+#include "MediaStreamGraph.h"
 
 class nsHTMLMediaElement;
 class nsIStreamListener;
 class nsTimeRanges;
+class nsIMemoryReporter;
+class nsIPrincipal;
+class nsITimer;
 
 namespace mozilla {
 class MediaResource;
@@ -75,13 +38,14 @@ static const PRUint32 FRAMEBUFFER_LENGTH_MAX = 16384;
 class nsMediaDecoder : public nsIObserver
 {
 public:
+  typedef mozilla::layers::Image Image;
+  typedef mozilla::layers::ImageContainer ImageContainer;
   typedef mozilla::MediaResource MediaResource;
   typedef mozilla::ReentrantMonitor ReentrantMonitor;
+  typedef mozilla::SourceMediaStream SourceMediaStream;
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
   typedef mozilla::VideoFrameContainer VideoFrameContainer;
-  typedef mozilla::layers::Image Image;
-  typedef mozilla::layers::ImageContainer ImageContainer;
 
   nsMediaDecoder();
   virtual ~nsMediaDecoder();
@@ -134,6 +98,13 @@ public:
 
   // Set the audio volume. It should be a value from 0 to 1.0.
   virtual void SetVolume(double aVolume) = 0;
+
+  // Sets whether audio is being captured. If it is, we won't play any
+  // of our audio.
+  virtual void SetAudioCaptured(bool aCaptured) = 0;
+
+  // Add an output stream. All decoder output will be sent to the stream.
+  virtual void AddOutputStream(SourceMediaStream* aStream, bool aFinishWhenEnded) = 0;
 
   // Start playback of a video. 'Load' must have previously been
   // called.
@@ -336,6 +307,10 @@ public:
   // download has ended. Called on the main thread only. aStatus is
   // the result from OnStopRequest.
   virtual void NotifyDownloadEnded(nsresult aStatus) = 0;
+
+  // Called by MediaResource when the principal of the resource has
+  // changed. Called on main thread only.
+  virtual void NotifyPrincipalChanged() = 0;
 
   // Called as data arrives on the stream and is read into the cache.  Called
   // on the main thread only.

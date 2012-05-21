@@ -1,44 +1,7 @@
 /* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places.
- *
- * The Initial Developer of the Original Code is
- * Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brian Ryner <bryner@brianryner.com> (original author)
- *   Joe Hughes <joe@retrovirus.com>
- *   Dietrich Ayala <dietrich@mozilla.com>
- *   Asaf Romano <mano@mozilla.com>
- *   Marco Bonardo <mak77@bonardo.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
@@ -281,7 +244,7 @@ interface nsINavBookmarkObserver : nsISupports
  * folders.  A URI in history can be contained in one or more such folders.
  */
 
-[scriptable, uuid(5398fdee-72d8-4100-9863-6bb7f88274e0)]
+[scriptable, uuid(2299598b-8d83-4b67-9b13-b6d4707dcf7b)]
 interface nsINavBookmarksService : nsISupports
 {
   /**
@@ -426,36 +389,6 @@ interface nsINavBookmarksService : nsISupports
   long long getIdForItemAt(in long long aParentId, in long aIndex);
 
   /**
-   * Get a globally unique identifier for an item, meant to be used in
-   * sync scenarios.  Even if their contents are exactly the same
-   * (including an item in a different profile with the same ItemId),
-   * the GUID would be different.
-   *  @param   aItemId
-   *           The ID of the item to get the GUID for
-   *  @return The GUID string.
-   */
-  [deprecated] AString getItemGUID(in long long aItemId);
-
-  /**
-   * Set a globally unique identifier.  This can be useful when a sync
-   * algorithm deems two independently created items (on different
-   * profiles) to be the same item.
-   *  @param   aItemId
-   *           The id of the item to set the GUID of
-   *  @param   aGUID
-   *           The GUID string
-   */
-  [deprecated] void setItemGUID(in long long aItemId, in AString aGUID);
-
-  /**
-   * Get the ID of the item with the given GUID.
-   * @param   aGUID
-   *          The GUID string of the item to search for
-   * @return The item ID, or -1 if not found.
-   */
-  [deprecated] long long getItemIdForGUID(in AString aGUID);
-
-  /**
    * Set the title for an item.
    *  @param aItemId
    *         The id of the item whose title should be updated.
@@ -576,8 +509,8 @@ interface nsINavBookmarksService : nsISupports
    *
    * If there is no bookmarked page found, it will return NULL.
    *
-   * @note The function will only return bookmarks in the first 3 levels of
-   *       redirection (1 -> 2 -> 3 -> aURI).
+   * @note The function will only return bookmarks in the first 2 levels of
+   *       redirection (1 -> 2 -> aURI).
    */
   nsIURI getBookmarkedURIFor(in nsIURI aURI);
 

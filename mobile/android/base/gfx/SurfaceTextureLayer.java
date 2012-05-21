@@ -1,39 +1,7 @@
 /* -*- Mode: Java; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009-2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   James Willcox <jwillcox@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 package org.mozilla.gecko.gfx;
 
@@ -43,18 +11,13 @@ import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
-import android.opengl.GLES11;
-import android.opengl.GLES11Ext;
-import android.opengl.Matrix;
+import android.opengl.GLES20;
 import android.util.Log;
 import android.view.Surface;
-import javax.microedition.khronos.opengles.GL10;
-import javax.microedition.khronos.opengles.GL11Ext;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import android.hardware.Camera;
 
 public class SurfaceTextureLayer extends Layer implements SurfaceTexture.OnFrameAvailableListener {
     private static final String LOGTAG = "SurfaceTextureLayer";
@@ -64,22 +27,71 @@ public class SurfaceTextureLayer extends Layer implements SurfaceTexture.OnFrame
     private final Surface mSurface;
     private int mTextureId;
     private boolean mHaveFrame;
+    private float[] mTextureTransform = new float[16];
 
-    private IntSize mSize;
-    private IntSize mNewSize;
+    private Rect mPageRect;
 
     private boolean mInverted;
     private boolean mNewInverted;
     private boolean mBlend;
     private boolean mNewBlend;
 
-	private FloatBuffer textureBuffer;
-    private FloatBuffer textureBufferInverted;
+    private static int mProgram;
+    private static int mPositionHandle;
+    private static int mTextureHandle;
+    private static int mSampleHandle;
+    private static int mProjectionMatrixHandle;
+    private static int mTextureMatrixHandle;
 
-    public SurfaceTextureLayer(int textureId) {
+    private static final float[] PROJECTION_MATRIX = {
+        2.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 2.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 2.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f, 1.0f
+    };
+
+    private static final String VERTEX_SHADER =
+        "uniform mat4 projectionMatrix;\n" +
+        "uniform mat4 textureMatrix;\n" +
+        "attribute vec4 vPosition;\n" +
+        "attribute vec4 aTexCoord;\n" +
+        "varying vec2 vTexCoord;\n" +
+        "void main() {\n" +
+        "  gl_Position = projectionMatrix * vPosition;\n" +
+        "  vTexCoord = (textureMatrix * vec4(aTexCoord.x, aTexCoord.y, 0.0, 1.0)).xy;\n" +
+        "}\n";
+
+    private static String FRAGMENT_SHADER_OES =
+        "#extension GL_OES_EGL_image_external : require\n" +
+        "precision mediump float;\n" +
+        "varying vec2 vTexCoord; \n" +
+        "uniform samplerExternalOES sTexture; \n" +
+        "void main() {\n" +
+        "  gl_FragColor = texture2D(sTexture, vTexCoord); \n" +
+        "}\n";
+  
+
+    private static final float TEXTURE_MAP[] = {
+                0.0f, 1.0f, // top left
+                0.0f, 0.0f, // bottom left
+                1.0f, 1.0f, // top right
+                1.0f, 0.0f, // bottom right
+    };
+
+    private static final float TEXTURE_MAP_INVERTED[] = {
+                0.0f, 0.0f, // bottom left
+                0.0f, 1.0f, // top left
+                1.0f, 0.0f, // bottom right
+                1.0f, 1.0f, // top right
+    };
+
+    private SurfaceTextureLayer(int textureId) {
         mTextureId = textureId;
         mHaveFrame = true;
         mInverted = false;
+
+        // We have our own special shaders necessary for rendering the SurfaceTexture
+        this.mUsesDefaultProgram = false;
 
         mSurfaceTexture = new SurfaceTexture(mTextureId);
         mSurfaceTexture.setOnFrameAvailableListener(this);
@@ -92,24 +104,6 @@ public class SurfaceTextureLayer extends Layer implements SurfaceTexture.OnFrame
         }
 
         mSurface = tmp;
-
-        float textureMap[] = {
-                0.0f, 1.0f,	// top left
-                0.0f, 0.0f,	// bottom left
-                1.0f, 1.0f,	// top right
-                1.0f, 0.0f,	// bottom right
-        };
-
-        textureBuffer = createBuffer(textureMap);
-
-        float textureMapInverted[] = {
-                0.0f, 0.0f,	// bottom left
-                0.0f, 1.0f,	// top left
-                1.0f, 0.0f,	// bottom right
-                1.0f, 1.0f,	// top right
-        };
-
-        textureBufferInverted = createBuffer(textureMapInverted);
     }
 
     public static SurfaceTextureLayer create() {
@@ -122,30 +116,15 @@ public class SurfaceTextureLayer extends Layer implements SurfaceTexture.OnFrame
 
     // For SurfaceTexture.OnFrameAvailableListener
     public void onFrameAvailable(SurfaceTexture texture) {
-        // FIXME: for some reason this doesn't get called
         mHaveFrame = true;
         GeckoApp.mAppContext.requestRender();
     }
 
-    private FloatBuffer createBuffer(float[] input) {
-        // a float has 4 bytes so we allocate for each coordinate 4 bytes
-		ByteBuffer byteBuffer = ByteBuffer.allocateDirect(input.length * 4);
-		byteBuffer.order(ByteOrder.nativeOrder());
+    public void update(Rect rect, boolean inverted, boolean blend) {
+        beginTransaction();
 
-        FloatBuffer floatBuffer = byteBuffer.asFloatBuffer();
-        floatBuffer.put(input);
-		floatBuffer.position(0);
+        setPosition(rect);
 
-        return floatBuffer;
-    }
-
-    public void update(Point origin, IntSize size, float resolution, boolean inverted, boolean blend) {
-        beginTransaction(null);
-
-        setOrigin(origin);
-        setResolution(resolution);
-
-        mNewSize = size;
         mNewInverted = inverted;
         mNewBlend = blend;
 
@@ -153,114 +132,151 @@ public class SurfaceTextureLayer extends Layer implements SurfaceTexture.OnFrame
     }
 
     @Override
-    public IntSize getSize() { return mSize; }
-
-    @Override
     protected void finalize() throws Throwable {
-        if (mSurfaceTexture != null) {
-            try {
-                SurfaceTexture.class.getDeclaredMethod("release").invoke(mSurfaceTexture);
-            } catch (NoSuchMethodException nsme) {
-                Log.e(LOGTAG, "error finding release method on mSurfaceTexture", nsme);
-            } catch (IllegalAccessException iae) {
-                Log.e(LOGTAG, "error invoking release method on mSurfaceTexture", iae);
-            } catch (Exception e) {
-                Log.e(LOGTAG, "some other exception while invoking release method on mSurfaceTexture", e);
+        try {
+            if (mSurfaceTexture != null) {
+                try {
+                    SurfaceTexture.class.getDeclaredMethod("release").invoke(mSurfaceTexture);
+                } catch (NoSuchMethodException nsme) {
+                    Log.e(LOGTAG, "error finding release method on mSurfaceTexture", nsme);
+                } catch (IllegalAccessException iae) {
+                    Log.e(LOGTAG, "error invoking release method on mSurfaceTexture", iae);
+                } catch (Exception e) {
+                    Log.e(LOGTAG, "some other exception while invoking release method on mSurfaceTexture", e);
+                }
             }
+            if (mTextureId > 0)
+                TextureReaper.get().add(mTextureId);
+        } finally {
+            super.finalize();
         }
-        if (mTextureId > 0)
-            TextureReaper.get().add(mTextureId);
     }
 
     @Override
-    protected boolean performUpdates(GL10 gl, RenderContext context) {
-        super.performUpdates(gl, context);
-
-        if (mNewSize != null) {
-            mSize = mNewSize;
-            mNewSize = null;
-        }
+    protected void performUpdates(RenderContext context) {
+        super.performUpdates(context);
 
         mInverted = mNewInverted;
         mBlend = mNewBlend;
-
-        gl.glEnable(LOCAL_GL_TEXTURE_EXTERNAL_OES);
-        gl.glBindTexture(LOCAL_GL_TEXTURE_EXTERNAL_OES, mTextureId);
-        mSurfaceTexture.updateTexImage();
-        gl.glDisable(LOCAL_GL_TEXTURE_EXTERNAL_OES);
-
-        // FIXME: we should return true and rely on onFrameAvailable, but
-        // that isn't working for some reason
-        return false;
     }
 
-    private float mapToGLCoords(float input, float viewport, boolean flip) {
-        if (flip) input = viewport - input;
-        return ((input / viewport) * 2.0f) - 1.0f;
+    private static boolean ensureProgram() {
+        if (mProgram != 0)
+            return true;
+
+        int vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER);
+        int fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER_OES);
+
+        mProgram = GLES20.glCreateProgram();
+        GLES20.glAttachShader(mProgram, vertexShader);
+        GLES20.glAttachShader(mProgram, fragmentShader);
+        GLES20.glLinkProgram(mProgram);
+
+        mPositionHandle = GLES20.glGetAttribLocation(mProgram, "vPosition");
+        mTextureHandle = GLES20.glGetAttribLocation(mProgram, "aTexCoord");
+        mSampleHandle = GLES20.glGetUniformLocation(mProgram, "sTexture");
+        mProjectionMatrixHandle = GLES20.glGetUniformLocation(mProgram, "projectionMatrix");
+        mTextureMatrixHandle = GLES20.glGetUniformLocation(mProgram, "textureMatrix");
+
+        return mProgram != 0;
+    }
+
+    private static int loadShader(int type, String shaderCode) {
+        int shader = GLES20.glCreateShader(type);
+        GLES20.glShaderSource(shader, shaderCode);
+        GLES20.glCompileShader(shader);
+        return shader;
+    }
+
+    private static void activateProgram() {
+        GLES20.glUseProgram(mProgram);
+    }
+
+    public static void deactivateProgram() {
+        GLES20.glDisableVertexAttribArray(mTextureHandle);
+        GLES20.glDisableVertexAttribArray(mPositionHandle);
+        GLES20.glUseProgram(0);
     }
 
     @Override
     public void draw(RenderContext context) {
+        if (!ensureProgram() || !mHaveFrame)
+            return;
 
-        // Enable GL_TEXTURE_EXTERNAL_OES and bind our texture
-        GLES11.glEnable(LOCAL_GL_TEXTURE_EXTERNAL_OES);
-        GLES11.glBindTexture(LOCAL_GL_TEXTURE_EXTERNAL_OES, mTextureId);
-
-        // Enable vertex and texture coordinate buffers
-        GLES11.glEnableClientState(GL10.GL_VERTEX_ARRAY);
-        GLES11.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
-
-        // Load whatever texture transform the SurfaceMatrix needs
-        float[] matrix = new float[16];
-        mSurfaceTexture.getTransformMatrix(matrix);
-        GLES11.glMatrixMode(GLES11.GL_TEXTURE);
-        GLES11.glLoadMatrixf(matrix, 0);
-
-        // Figure out vertices to put the texture in the right spot on the screen
-        IntSize size = getSize();
-        RectF bounds = getBounds(context, new FloatSize(size));
+        RectF rect = getBounds(context);
         RectF viewport = context.viewport;
-        bounds.offset(-viewport.left, -viewport.top);
+        rect.offset(-viewport.left, -viewport.top);
 
-        float vertices[] = new float[8];
+        float viewWidth = viewport.width();
+        float viewHeight = viewport.height();
 
-        // Bottom left
-        vertices[0] = mapToGLCoords(bounds.left, viewport.width(), false);
-        vertices[1] = mapToGLCoords(bounds.bottom, viewport.height(), true);
+        float top = viewHeight - rect.top;
+        float bot = viewHeight - rect.bottom;
 
-        // Top left
-        vertices[2] = mapToGLCoords(bounds.left, viewport.width(), false);
-        vertices[3] = mapToGLCoords(bounds.top, viewport.height(), true);
+        float[] textureCoords = mInverted ? TEXTURE_MAP_INVERTED : TEXTURE_MAP;
 
-        // Bottom right
-        vertices[4] = mapToGLCoords(bounds.right, viewport.width(), false);
-        vertices[5] = mapToGLCoords(bounds.bottom, viewport.height(), true);
+        float[] coords = {
+            // x, y, z, texture_x, texture_y
+            rect.left/viewWidth, bot/viewHeight, 0,
+            textureCoords[0], textureCoords[1],
 
-        // Top right
-        vertices[6] = mapToGLCoords(bounds.right, viewport.width(), false);
-        vertices[7] = mapToGLCoords(bounds.top, viewport.height(), true);
+            rect.left/viewWidth, (bot+rect.height())/viewHeight, 0,
+            textureCoords[2], textureCoords[3],
 
-        // Set texture and vertex buffers
-        GLES11.glVertexPointer(2, GL10.GL_FLOAT, 0, createBuffer(vertices));
-        GLES11.glTexCoordPointer(2, GL10.GL_FLOAT, 0, mInverted ? textureBufferInverted : textureBuffer);
+            (rect.left+rect.width())/viewWidth, bot/viewHeight, 0,
+            textureCoords[4], textureCoords[5],
+
+            (rect.left+rect.width())/viewWidth, (bot+rect.height())/viewHeight, 0,
+            textureCoords[6], textureCoords[7]
+        };
+
+        FloatBuffer coordBuffer = context.coordBuffer;
+        coordBuffer.position(0);
+        coordBuffer.put(coords);
+
+        activateProgram();
+
+        // Set the transformation matrix
+        GLES20.glUniformMatrix4fv(mProjectionMatrixHandle, 1, false, PROJECTION_MATRIX, 0);
+
+        // Enable the arrays from which we get the vertex and texture coordinates
+        GLES20.glEnableVertexAttribArray(mPositionHandle);
+        GLES20.glEnableVertexAttribArray(mTextureHandle);
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glUniform1i(mSampleHandle, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+        GLES20.glBindTexture(LOCAL_GL_TEXTURE_EXTERNAL_OES, mTextureId);
+      
+        mSurfaceTexture.updateTexImage();
+        mSurfaceTexture.getTransformMatrix(mTextureTransform);
+
+        GLES20.glUniformMatrix4fv(mTextureMatrixHandle, 1, false, mTextureTransform, 0);
+
+        // Unbind any the current array buffer so we can use client side buffers
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+        
+        // Vertex coordinates are x,y,z starting at position 0 into the buffer.
+        coordBuffer.position(0);
+        GLES20.glVertexAttribPointer(mPositionHandle, 3, GLES20.GL_FLOAT, false, 20,
+                coordBuffer);
+
+        // Texture coordinates are texture_x, texture_y starting at position 3 into the buffer.
+        coordBuffer.position(3);
+        GLES20.glVertexAttribPointer(mTextureHandle, 2, GLES20.GL_FLOAT, false, 20,
+                coordBuffer);
 
         if (mBlend) {
-            GLES11.glEnable(GL10.GL_BLEND);
-            GLES11.glBlendFunc(GL10.GL_ONE, GL10.GL_ONE_MINUS_SRC_ALPHA);
+            GLES20.glEnable(GLES20.GL_BLEND);
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA);
         }
+        
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-        // Draw the vertices as triangle strip
-        GLES11.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, vertices.length / 2);
-
-        // Clean up
-        GLES11.glDisableClientState(GL10.GL_VERTEX_ARRAY);
-        GLES11.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
-        GLES11.glDisable(LOCAL_GL_TEXTURE_EXTERNAL_OES);
-        GLES11.glLoadIdentity();
-
-        if (mBlend) {
-            GLES11.glDisable(GL10.GL_BLEND);
-        }
+        if (mBlend)
+            GLES20.glDisable(GLES20.GL_BLEND);
+        
+        deactivateProgram();
     }
 
     public SurfaceTexture getSurfaceTexture() {

@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jason Orendorff <jorendorff@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -116,102 +83,22 @@ LookupInterfaceOrAncestor(PRUint32 tableSize, const xpc_qsHashEntry *table,
     return entry;
 }
 
-// Apply |op| to |obj|, |id|, and |vp|. If |op| is a setter, treat the assignment as lenient.
-template<typename Op>
-static inline JSBool ApplyPropertyOp(JSContext *cx, Op op, JSObject *obj, jsid id, jsval *vp);
-
-template<>
-inline JSBool
-ApplyPropertyOp<JSPropertyOp>(JSContext *cx, JSPropertyOp op, JSObject *obj, jsid id, jsval *vp)
-{
-    return op(cx, obj, id, vp);
-}
-
-template<>
-inline JSBool
-ApplyPropertyOp<JSStrictPropertyOp>(JSContext *cx, JSStrictPropertyOp op, JSObject *obj,
-                                    jsid id, jsval *vp)
-{
-    return op(cx, obj, id, true, vp);
-}
-
-template<typename Op>
-static JSBool
-PropertyOpForwarder(JSContext *cx, uintN argc, jsval *vp)
-{
-    // Layout:
-    //   this = our this
-    //   property op to call = callee reserved slot 0
-    //   name of the property = callee reserved slot 1
-
-    JSObject *callee = JSVAL_TO_OBJECT(JS_CALLEE(cx, vp));
-    JSObject *obj = JS_THIS_OBJECT(cx, vp);
-    if (!obj)
-        return false;
-
-    jsval v = js::GetFunctionNativeReserved(callee, 0);
-
-    JSObject *ptrobj = JSVAL_TO_OBJECT(v);
-    Op *popp = static_cast<Op *>(JS_GetPrivate(ptrobj));
-
-    v = js::GetFunctionNativeReserved(callee, 1);
-
-    jsval argval = (argc > 0) ? JS_ARGV(cx, vp)[0] : JSVAL_VOID;
-    jsid id;
-    if (!JS_ValueToId(cx, argval, &id))
-        return false;
-    JS_SET_RVAL(cx, vp, argval);
-    return ApplyPropertyOp<Op>(cx, *popp, obj, id, vp);
-}
-
 static void
-PointerFinalize(JSContext *cx, JSObject *obj)
+PointerFinalize(JSFreeOp *fop, JSObject *obj)
 {
     JSPropertyOp *popp = static_cast<JSPropertyOp *>(JS_GetPrivate(obj));
     delete popp;
 }
 
-static JSClass
+JSClass
 PointerHolderClass = {
     "Pointer", JSCLASS_HAS_PRIVATE,
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, PointerFinalize,
-    JSCLASS_NO_OPTIONAL_MEMBERS
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, PointerFinalize
 };
 
-template<typename Op>
-static JSObject *
-GeneratePropertyOp(JSContext *cx, JSObject *obj, jsid id, uintN argc, Op pop)
-{
-    // The JS engine provides two reserved slots on function objects for
-    // XPConnect to use. Use them to stick the necessary info here.
-    JSFunction *fun =
-        js::NewFunctionByIdWithReserved(cx, PropertyOpForwarder<Op>, argc, 0, obj, id);
-    if (!fun)
-        return nsnull;
-
-    JSObject *funobj = JS_GetFunctionObject(fun);
-
-    JS::AutoObjectRooter tvr(cx, funobj);
-
-    // Unfortunately, we cannot guarantee that Op is aligned. Use a
-    // second object to work around this.
-    JSObject *ptrobj = JS_NewObject(cx, &PointerHolderClass, nsnull, funobj);
-    if (!ptrobj)
-        return nsnull;
-    Op *popp = new Op;
-    if (!popp)
-        return nsnull;
-    *popp = pop;
-    JS_SetPrivate(ptrobj, popp);
-
-    js::SetFunctionNativeReserved(funobj, 0, OBJECT_TO_JSVAL(ptrobj));
-    js::SetFunctionNativeReserved(funobj, 1, js::IdToJsval(id));
-    return funobj;
-}
-
 static JSBool
-ReifyPropertyOps(JSContext *cx, JSObject *obj, jsid id, uintN orig_attrs,
+ReifyPropertyOps(JSContext *cx, JSObject *obj, jsid id, unsigned orig_attrs,
                  JSPropertyOp getter, JSStrictPropertyOp setter,
                  JSObject **getterobjp, JSObject **setterobjp)
 {
@@ -219,7 +106,7 @@ ReifyPropertyOps(JSContext *cx, JSObject *obj, jsid id, uintN orig_attrs,
     jsval roots[2] = { JSVAL_NULL, JSVAL_NULL };
     JS::AutoArrayRooter tvr(cx, ArrayLength(roots), roots);
 
-    uintN attrs = JSPROP_SHARED | (orig_attrs & JSPROP_ENUMERATE);
+    unsigned attrs = JSPROP_SHARED | (orig_attrs & JSPROP_ENUMERATE);
     JSObject *getterobj;
     if (getter) {
         getterobj = GeneratePropertyOp(cx, obj, id, 0, getter);
@@ -251,7 +138,7 @@ ReifyPropertyOps(JSContext *cx, JSObject *obj, jsid id, uintN orig_attrs,
 }
 
 static JSBool
-LookupGetterOrSetter(JSContext *cx, JSBool wantGetter, uintN argc, jsval *vp)
+LookupGetterOrSetter(JSContext *cx, JSBool wantGetter, unsigned argc, jsval *vp)
 {
     XPC_QS_ASSERT_CONTEXT_OK(cx);
 
@@ -319,21 +206,21 @@ LookupGetterOrSetter(JSContext *cx, JSBool wantGetter, uintN argc, jsval *vp)
 }
 
 static JSBool
-SharedLookupGetter(JSContext *cx, uintN argc, jsval *vp)
+SharedLookupGetter(JSContext *cx, unsigned argc, jsval *vp)
 {
     return LookupGetterOrSetter(cx, true, argc, vp);
 }
 
 static JSBool
-SharedLookupSetter(JSContext *cx, uintN argc, jsval *vp)
+SharedLookupSetter(JSContext *cx, unsigned argc, jsval *vp)
 {
     return LookupGetterOrSetter(cx, false, argc, vp);
 }
 
 static JSBool
-DefineGetterOrSetter(JSContext *cx, uintN argc, JSBool wantGetter, jsval *vp)
+DefineGetterOrSetter(JSContext *cx, unsigned argc, JSBool wantGetter, jsval *vp)
 {
-    uintN attrs;
+    unsigned attrs;
     JSBool found;
     JSPropertyOp getter;
     JSStrictPropertyOp setter;
@@ -374,20 +261,20 @@ DefineGetterOrSetter(JSContext *cx, uintN argc, JSBool wantGetter, jsval *vp)
 }
 
 static JSBool
-SharedDefineGetter(JSContext *cx, uintN argc, jsval *vp)
+SharedDefineGetter(JSContext *cx, unsigned argc, jsval *vp)
 {
     return DefineGetterOrSetter(cx, argc, true, vp);
 }
 
 static JSBool
-SharedDefineSetter(JSContext *cx, uintN argc, jsval *vp)
+SharedDefineSetter(JSContext *cx, unsigned argc, jsval *vp)
 {
     return DefineGetterOrSetter(cx, argc, false, vp);
 }
 
 
 JSBool
-xpc_qsDefineQuickStubs(JSContext *cx, JSObject *proto, uintN flags,
+xpc_qsDefineQuickStubs(JSContext *cx, JSObject *proto, unsigned flags,
                        PRUint32 ifacec, const nsIID **interfaces,
                        PRUint32 tableSize, const xpc_qsHashEntry *table,
                        const xpc_qsPropertySpec *propspecs,
@@ -602,7 +489,7 @@ xpc_qsThrowMethodFailedWithDetails(JSContext *cx, nsresult rv,
 
 static void
 ThrowBadArg(JSContext *cx, nsresult rv, const char *ifaceName,
-            jsid memberId, const char *memberName, uintN paramnum)
+            jsid memberId, const char *memberName, unsigned paramnum)
 {
     /* Only one memberId or memberName should be given. */
     JS_ASSERT(JSID_IS_VOID(memberId) != !memberName);
@@ -630,7 +517,7 @@ ThrowBadArg(JSContext *cx, nsresult rv, const char *ifaceName,
 }
 
 void
-xpc_qsThrowBadArg(JSContext *cx, nsresult rv, jsval *vp, uintN paramnum)
+xpc_qsThrowBadArg(JSContext *cx, nsresult rv, jsval *vp, unsigned paramnum)
 {
     const char *ifaceName;
     jsid memberId;
@@ -639,13 +526,13 @@ xpc_qsThrowBadArg(JSContext *cx, nsresult rv, jsval *vp, uintN paramnum)
 }
 
 void
-xpc_qsThrowBadArgWithCcx(XPCCallContext &ccx, nsresult rv, uintN paramnum)
+xpc_qsThrowBadArgWithCcx(XPCCallContext &ccx, nsresult rv, unsigned paramnum)
 {
     XPCThrower::ThrowBadParam(rv, paramnum, ccx);
 }
 
 void
-xpc_qsThrowBadArgWithDetails(JSContext *cx, nsresult rv, uintN paramnum,
+xpc_qsThrowBadArgWithDetails(JSContext *cx, nsresult rv, unsigned paramnum,
                              const char *ifaceName, const char *memberName)
 {
     ThrowBadArg(cx, rv, ifaceName, JSID_VOID, memberName, paramnum);
@@ -661,7 +548,7 @@ xpc_qsThrowBadSetterValue(JSContext *cx, nsresult rv,
 }
 
 JSBool
-xpc_qsGetterOnlyPropertyStub(JSContext *cx, JSObject *obj, jsid id, JSBool strict, jsval *vp)
+xpc_qsGetterOnlyPropertyStub(JSContext *cx, JSHandleObject obj, JSHandleId id, JSBool strict, jsval *vp)
 {
     return JS_ReportErrorFlagsAndNumber(cx,
                                         JSREPORT_WARNING | JSREPORT_STRICT |
@@ -901,24 +788,24 @@ xpc_qsUnwrapThisFromCcxImpl(XPCCallContext &ccx,
 }
 
 JSObject*
-xpc_qsUnwrapObj(jsval v, nsISupports **ppArgRef, nsresult *rv)
+xpc_qsUnwrapObj(JS::Value v, nsISupports **ppArgRef, nsresult *rv)
 {
-    if (JSVAL_IS_VOID(v) || JSVAL_IS_NULL(v)) {
+    if (v.isNullOrUndefined()) {
         *ppArgRef = nsnull;
         *rv = NS_OK;
         return nsnull;
     }
 
-    if (!JSVAL_IS_OBJECT(v)) {
+    if (!v.isObject()) {
         *ppArgRef = nsnull;
-        *rv = ((JSVAL_IS_INT(v) && JSVAL_TO_INT(v) == 0)
+        *rv = ((v.isInt32() && v.toInt32() == 0)
                ? NS_ERROR_XPC_BAD_CONVERT_JS_ZERO_ISNOT_NULL
                : NS_ERROR_XPC_BAD_CONVERT_JS);
         return nsnull;
     }
 
     *rv = NS_OK;
-    return JSVAL_TO_OBJECT(v);
+    return &v.toObject();
 }
 
 nsresult
@@ -1061,7 +948,6 @@ StringToJsval(JSContext *cx, nsAString &str, JS::Value *rval)
 bool
 NonVoidStringToJsval(JSContext *cx, nsAString &str, JS::Value *rval)
 {
-    MOZ_ASSERT(!str.IsVoid());
     nsStringBuffer* sharedBuffer;
     jsval jsstr = XPCStringConvert::ReadableToJSVal(cx, str, &sharedBuffer);
     if (JSVAL_IS_NULL(jsstr))
@@ -1111,16 +997,10 @@ xpc_qsXPCOMObjectToJsval(XPCLazyCallContext &lccx, qsObjectHelper &aHelper,
 
     JSContext *cx = lccx.GetJSContext();
 
-    // XXX The OBJ_IS_NOT_GLOBAL here is not really right. In
-    // fact, this code is depending on the fact that the
-    // global object will not have been collected, and
-    // therefore this NativeInterface2JSObject will not end up
-    // creating a new XPCNativeScriptableShared.
-
     nsresult rv;
     if (!XPCConvert::NativeInterface2JSObject(lccx, rval, nsnull,
                                               aHelper, iid, iface,
-                                              true, OBJ_IS_NOT_GLOBAL, &rv)) {
+                                              true, &rv)) {
         // I can't tell if NativeInterface2JSObject throws JS exceptions
         // or not.  This is a sloppy stab at the right semantics; the
         // method really ought to be fixed to behave consistently.

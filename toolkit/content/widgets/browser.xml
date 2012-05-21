@@ -1,45 +1,8 @@
 <?xml version="1.0"?>
 
-<!-- ***** BEGIN LICENSE BLOCK *****
-   - Version: MPL 1.1/GPL 2.0/LGPL 2.1
-   -
-   - The contents of this file are subject to the Mozilla Public License Version
-   - 1.1 (the "License"); you may not use this file except in compliance with
-   - the License. You may obtain a copy of the License at
-   - http://www.mozilla.org/MPL/
-   -
-   - Software distributed under the License is distributed on an "AS IS" basis,
-   - WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-   - for the specific language governing rights and limitations under the
-   - License.
-   -
-   - The Original Code is this file as it was released on March 28, 2001.
-   -
-   - The Initial Developer of the Original Code is
-   - Peter Annema.
-   - Portions created by the Initial Developer are Copyright (C) 2001
-   - the Initial Developer. All Rights Reserved.
-   -
-   - Contributor(s):
-   -   Peter Annema <disttsc@bart.nl> (Original Author of <browser>)
-   -   Peter Parente <parente@cs.unc.edu>
-   -   Christopher Thomas <cst@yecc.com>
-   -   Michael Ventnor <m.ventnor@gmail.com>
-   -   Arpad Borsos <arpad.borsos@googlemail.com>
-   -
-   - Alternatively, the contents of this file may be used under the terms of
-   - either the GNU General Public License Version 2 or later (the "GPL"), or
-   - the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-   - in which case the provisions of the GPL or the LGPL are applicable instead
-   - of those above. If you wish to allow use of your version of this file only
-   - under the terms of either the GPL or the LGPL, and not to allow others to
-   - use your version of this file under the terms of the MPL, indicate your
-   - decision by deleting the provisions above and replace them with the notice
-   - and other provisions required by the GPL or the LGPL. If you do not delete
-   - the provisions above, a recipient may use your version of this file under
-   - the terms of any one of the MPL, the GPL or the LGPL.
-   -
-   - ***** END LICENSE BLOCK ***** -->
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
 <!DOCTYPE bindings [
   <!ENTITY % findBarDTD SYSTEM "chrome://global/locale/findbar.dtd" >
@@ -68,14 +31,14 @@
           <![CDATA[
             if (this.getAttribute("autoscroll") == "false")
               return false;
-            
+
             var enabled = true;
             try {
               enabled = this.mPrefs.getBoolPref("general.autoScroll");
             }
             catch(ex) {
             }
-            
+
             return enabled;
           ]]>
         </getter>
@@ -179,7 +142,7 @@
               aURI = "about:blank";
 
             if (aCharset) {
-              try { 
+              try {
                 this.docShell.parentCharset = this.mAtomService.getAtom(aCharset);
               }
               catch (e) {
@@ -252,7 +215,7 @@
                 readonly="true"/>
 
       <property name="preferences"
-                onget="return Components.classes['@mozilla.org/preferences-service;1'].getService(Components.interfaces.nsIPrefService);"
+                onget="return this.mPrefs.QueryInterface(Components.interfaces.nsIPrefService);"
                 readonly="true"/>
 
       <field name="_docShell">null</field>
@@ -404,14 +367,14 @@
               return null;
 
             this._fastFind = Components.classes["@mozilla.org/typeaheadfind;1"]
-                                       .createInstance(Components.interfaces.nsITypeAheadFind);                                
+                                       .createInstance(Components.interfaces.nsITypeAheadFind);
             this._fastFind.init(this.docShell);
           }
           return this._fastFind;
         ]]>
         </getter>
       </property>
-      
+
       <property name="webProgress"
                 readonly="true"
                 onget="return this.docShell.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIWebProgress);"/>
@@ -458,8 +421,7 @@
 
       <field name="mPrefs" readonly="true">
         Components.classes['@mozilla.org/preferences-service;1']
-                  .getService(Components.interfaces.nsIPrefService)
-                  .getBranch(null);
+                  .getService(Components.interfaces.nsIPrefBranch);
       </field>
 
       <field name="mAtomService" readonly="true">
@@ -527,13 +489,13 @@
             var controller = Components.classes["@mozilla.org/satchel/form-fill-controller;1"].
                                getService(Components.interfaces.nsIFormFillController);
             controller.detachFromBrowser(this.docShell);
-            
+
             this.mFormFillAttached = false;
           }
           ]]>
         </body>
       </method>
-      
+
       <method name="findChildShell">
         <parameter name="aDocShell"/>
         <parameter name="aSoughtURI"/>
@@ -598,7 +560,6 @@
             if (!tabBrowser || tabBrowser.mCurrentBrowser == this)
               this.fastFind.setDocShell(this.docShell);
 
-            
             if (this._scrollable) {
               var doc =
                 this._scrollable.ownerDocument || this._scrollable.document;
@@ -639,7 +600,7 @@
             this.pageReport.push(obj);
             this.pageReport.reported = false;
             this.updatePageReport();
-          ]]> 
+          ]]>
         </body>
       </method>
 
@@ -657,7 +618,7 @@
                 securityUI.init(this.contentWindow);
               }
             }
-            
+
             return this.docShell.securityUI;
           ]]>
         </getter>
@@ -722,7 +683,7 @@
       <field name="mFormFillAttached">
         false
       </field>
-      
+
       <field name="isShowingMessage">
         false
       </field>
@@ -746,7 +707,7 @@
                                  .getService(Components.interfaces.nsIObserverService);
               os.addObserver(this, "browser:purge-session-history", false);
               // wire up session history
-              this.webNavigation.sessionHistory = 
+              this.webNavigation.sessionHistory =
                       Components.classes["@mozilla.org/browser/shistory;1"]
                                 .createInstance(Components.interfaces.nsISHistory);
               // enable global history
@@ -769,7 +730,7 @@
           this.addEventListener("DOMPopupBlocked", this.onPopupBlocked, true);
         ]]>
       </constructor>
-      
+
       <destructor>
         <![CDATA[
           this.destroy();
@@ -796,10 +757,10 @@
           }
 
           this.detachFormFill();
-          
+
           this._fastFind = null;
           this._webBrowserFind = null;
-          
+
           // The feeds cache can keep the document inside this browser alive.
           this.feeds = null;
 
@@ -816,7 +777,7 @@
           ]]>
         </body>
       </method>
-      
+
       <method name="observe">
         <parameter name="aSubject"/>
         <parameter name="aTopic"/>
@@ -825,7 +786,7 @@
           <![CDATA[
             if (aTopic != "browser:purge-session-history" || !this.sessionHistory)
               return;
-              
+
             // place the entry at current index at the end of the history list, so it won't get removed
             if (this.sessionHistory.index < this.sessionHistory.count - 1) {
               var indexEntry = this.sessionHistory.getEntryAtIndex(this.sessionHistory.index, false);
@@ -833,11 +794,11 @@
               indexEntry.QueryInterface(Components.interfaces.nsISHEntry);
               this.sessionHistory.addEntry(indexEntry, true);
             }
-            
+
             var purge = this.sessionHistory.count;
             if (this.currentURI != "about:blank")
               --purge; // Don't remove the page the user's staring at from shistory
-            
+
             if (purge > 0)
               this.sessionHistory.PurgeHistory(purge);
           ]]>
@@ -881,7 +842,7 @@
           ]]>
         </body>
       </method>
-     
+
       <method name="startScroll">
         <parameter name="event"/>
         <body>
@@ -1127,7 +1088,7 @@
 
                 var x = this._screenX - this._startX;
                 var y = this._screenY - this._startY;
-        
+
                 if ((x > this._AUTOSCROLL_SNAP || x < -this._AUTOSCROLL_SNAP) ||
                     (y > this._AUTOSCROLL_SNAP || y < -this._AUTOSCROLL_SNAP))
                   this._ignoreMouseEvents = false;
@@ -1232,10 +1193,11 @@
           }
           if (warn && !browseWithCaretOn) {
             var checkValue = {value:false};
-            promptService = Components.classes["@mozilla.org/embedcomp/prompt-service;1"].getService(Components.interfaces.nsIPromptService);
+            var promptService = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
+                                          .getService(Components.interfaces.nsIPromptService);
 
-            var buttonPressed = promptService.confirmEx(window, 
-              this.mStrBundle.GetStringFromName('browsewithcaret.checkWindowTitle'), 
+            var buttonPressed = promptService.confirmEx(window,
+              this.mStrBundle.GetStringFromName('browsewithcaret.checkWindowTitle'),
               this.mStrBundle.GetStringFromName('browsewithcaret.checkLabel'),
               promptService.STD_YES_NO_BUTTONS,
               null, null, null, this.mStrBundle.GetStringFromName('browsewithcaret.checkMsg'),

@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Plugin App.
- *
- * The Initial Developer of the Original Code is
- *   Chris Jones <jones.chris.g@gmail.com>
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jim Mathies <jmathies@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if defined(MOZ_WIDGET_QT) && (MOZ_PLATFORM_MAEMO == 6)
 #include <QEvent>
@@ -54,6 +21,7 @@
 #include "PluginProcessChild.h"
 #include "gfxASurface.h"
 #include "gfxContext.h"
+#include "nsNPAPIPluginInstance.h"
 #ifdef MOZ_X11
 #include "gfxXlibSurface.h"
 #endif
@@ -74,6 +42,7 @@ using mozilla::gfx::SharedDIBSurface;
 using namespace mozilla;
 using mozilla::ipc::ProcessChild;
 using namespace mozilla::plugins;
+using namespace std;
 
 #ifdef MOZ_WIDGET_GTK2
 
@@ -83,7 +52,6 @@ using namespace mozilla::plugins;
 #include "gtk2xtbin.h"
 
 #elif defined(MOZ_WIDGET_QT)
-#include <QX11Info>
 #undef KeyPress
 #undef KeyRelease
 #elif defined(OS_WIN)
@@ -131,6 +99,10 @@ struct RunnableMethodTraits<PluginInstanceChild>
 
 PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface)
     : mPluginIface(aPluginIface)
+    , mDrawingModel(kDefaultDrawingModel)
+    , mCurrentAsyncSurface(0)
+    , mAsyncInvalidateMutex("PluginInstanceChild::mAsyncInvalidateMutex")
+    , mAsyncInvalidateTask(0)
     , mCachedWindowActor(nsnull)
     , mCachedElementActor(nsnull)
 #if defined(OS_WIN)
@@ -149,7 +121,6 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface)
 #endif
     , mShColorSpace(nsnull)
     , mShContext(nsnull)
-    , mDrawingModel(NPDrawingModelCoreGraphics)
     , mCGLayer(nsnull)
     , mCurrentEvent(nsnull)
 #endif
@@ -174,6 +145,7 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface)
     memset(&mWindow, 0, sizeof(mWindow));
     mData.ndata = (void*) this;
     mData.pdata = nsnull;
+    mAsyncBitmaps.Init();
 #if defined(MOZ_X11) && defined(XP_UNIX) && !defined(XP_MACOSX)
     mWindow.ws_info = &mWsInfo;
     memset(&mWsInfo, 0, sizeof(mWsInfo));
@@ -414,6 +386,16 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
 #endif
     }
 
+    case NPNVsupportsAsyncBitmapSurfaceBool: {
+#ifdef XP_WIN
+        *((NPBool*)aValue) = PluginModuleChild::current()->AsyncDrawingAllowed();
+#else
+        // We do not support non-windows yet.
+        *((NPBool*)aValue) = false;
+#endif
+        return NPERR_NO_ERROR;
+    }
+
 #ifdef XP_MACOSX
    case NPNVsupportsCoreGraphicsBool: {
         *((NPBool*)aValue) = true;
@@ -519,18 +501,35 @@ PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
         return rv;
     }
 
-#ifdef XP_MACOSX
     case NPPVpluginDrawingModel: {
         NPError rv;
         int drawingModel = (int16) (intptr_t) aValue;
 
-        if (!CallNPN_SetValue_NPPVpluginDrawingModel(drawingModel, &rv))
+        if (!PluginModuleChild::current()->AsyncDrawingAllowed() &&
+            IsDrawingModelAsync(drawingModel)) {
             return NPERR_GENERIC_ERROR;
+        }              
+
+        CrossProcessMutexHandle handle;
+        OptionalShmem optionalShmem;
+        if (!CallNPN_SetValue_NPPVpluginDrawingModel(drawingModel, &optionalShmem, &handle, &rv))
+            return NPERR_GENERIC_ERROR;
+
+        if (drawingModel == NPDrawingModelAsyncBitmapSurface) {
+            if (optionalShmem.type() != OptionalShmem::TShmem) {
+                return NPERR_GENERIC_ERROR;
+            }
+            mRemoteImageDataShmem = optionalShmem.get_Shmem();
+            mRemoteImageData = mRemoteImageDataShmem.get<RemoteImageData>();
+            mRemoteImageDataMutex = new CrossProcessMutex(handle);
+        }
         mDrawingModel = drawingModel;
 
+#ifdef XP_MACOSX
         if (drawingModel == NPDrawingModelCoreAnimation) {
             mCARefreshTimer = ScheduleTimer(DEFAULT_REFRESH_MS, true, CAUpdate);
         }
+#endif
 
         PLUGIN_LOG_DEBUG(("  Plugin requested drawing model id  #%i\n",
             mDrawingModel));
@@ -538,6 +537,7 @@ PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
         return rv;
     }
 
+#ifdef XP_MACOSX
     case NPPVpluginEventModel: {
         NPError rv;
         int eventModel = (int16) (intptr_t) aValue;
@@ -591,11 +591,11 @@ PluginInstanceChild::AnswerNPP_GetValue_NPPVpluginNeedsXEmbed(
     // The documentation on the types for many variables in NP(N|P)_GetValue
     // is vague.  Often boolean values are NPBool (1 byte), but
     // https://developer.mozilla.org/en/XEmbed_Extension_for_Mozilla_Plugins
-    // treats NPPVpluginNeedsXEmbed as bool (int), and
+    // treats NPPVpluginNeedsXEmbed as PRBool (int), and
     // on x86/32-bit, flash stores to this using |movl 0x1,&needsXEmbed|.
     // thus we can't use NPBool for needsXEmbed, or the three bytes above
     // it on the stack would get clobbered. so protect with the larger bool.
-    PRUint32 needsXEmbed = 0;
+    int needsXEmbed = 0;
     if (!mPluginIface->getvalue) {
         *rv = NPERR_GENERIC_ERROR;
     }
@@ -2061,6 +2061,15 @@ PluginInstanceChild::AnswerUpdateWindow()
 #endif
 }
 
+bool
+PluginInstanceChild::RecvNPP_DidComposite()
+{
+  if (mPluginIface->didComposite) {
+    mPluginIface->didComposite(GetNPP());
+  }
+  return true;
+}
+
 PPluginScriptableObjectChild*
 PluginInstanceChild::AllocPPluginScriptableObject()
 {
@@ -2314,6 +2323,172 @@ PluginInstanceChild::NPN_URLRedirectResponse(void* notifyData, NPBool allow)
     NS_ASSERTION(false, "Couldn't find stream for redirect response!");
 }
 
+NPError
+PluginInstanceChild::DeallocateAsyncBitmapSurface(NPAsyncSurface *aSurface)
+{
+    AsyncBitmapData* data;
+    
+    if (!mAsyncBitmaps.Get(aSurface, &data)) {
+        return NPERR_INVALID_PARAM;
+    }
+
+    DeallocShmem(data->mShmem);
+    aSurface->bitmap.data = nsnull;
+
+    mAsyncBitmaps.Remove(aSurface);
+    return NPERR_NO_ERROR;
+}
+
+bool
+PluginInstanceChild::IsAsyncDrawing()
+{
+    return IsDrawingModelAsync(mDrawingModel);
+}
+
+NPError
+PluginInstanceChild::NPN_InitAsyncSurface(NPSize *size, NPImageFormat format,
+                                          void *initData, NPAsyncSurface *surface)
+{
+    AssertPluginThread();
+
+    surface->bitmap.data = NULL;
+
+    if (!IsAsyncDrawing()) {
+        return NPERR_GENERIC_ERROR;
+    }
+
+    switch (mDrawingModel) {
+    case NPDrawingModelAsyncBitmapSurface: {
+            if (mAsyncBitmaps.Get(surface, nsnull)) {
+                return NPERR_INVALID_PARAM;
+            }
+
+            if (size->width < 0 || size->height < 0) {
+                return NPERR_INVALID_PARAM;
+            }
+
+
+            bool result;
+            NPRemoteAsyncSurface remote;
+
+            if (!CallNPN_InitAsyncSurface(gfxIntSize(size->width, size->height), format, &remote, &result) || !result) {
+                return NPERR_OUT_OF_MEMORY_ERROR;
+            }
+
+            NS_ABORT_IF_FALSE(remote.data().get_Shmem().IsWritable(),
+                "Failed to create writable shared memory.");
+            
+            AsyncBitmapData *data = new AsyncBitmapData;
+            mAsyncBitmaps.Put(surface, data);
+
+            data->mRemotePtr = (void*)remote.hostPtr();
+            data->mShmem = remote.data().get_Shmem();
+
+            surface->bitmap.data = data->mShmem.get<unsigned char>();
+            surface->bitmap.stride = remote.stride();
+            surface->format = remote.format();
+            surface->size.width = remote.size().width;
+            surface->size.height = remote.size().height;
+
+            return NPERR_NO_ERROR;
+        }
+    }
+
+    return NPERR_GENERIC_ERROR;
+}
+
+NPError
+PluginInstanceChild::NPN_FinalizeAsyncSurface(NPAsyncSurface *surface)
+{
+    AssertPluginThread();
+
+    if (!IsAsyncDrawing()) {
+        return NPERR_GENERIC_ERROR;
+    }
+
+    switch (mDrawingModel) {
+    case NPDrawingModelAsyncBitmapSurface: {
+            AsyncBitmapData *bitmapData;
+
+            if (!mAsyncBitmaps.Get(surface, &bitmapData)) {
+                return NPERR_GENERIC_ERROR;
+            }
+
+            {
+                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
+                RemoteImageData *data = mRemoteImageData;
+                if (data->mBitmap.mData == bitmapData->mRemotePtr) {
+                    data->mBitmap.mData = NULL;
+                    data->mSize = gfxIntSize(0, 0);
+                    data->mWasUpdated = true;
+                }
+            }
+
+            return DeallocateAsyncBitmapSurface(surface);
+        }
+    }
+
+    return NPERR_GENERIC_ERROR;
+}
+
+void
+PluginInstanceChild::NPN_SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed)
+{
+    if (!IsAsyncDrawing()) {
+        return;
+    }
+
+    RemoteImageData *data = mRemoteImageData;
+
+    if (!surface) {
+        CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
+        data->mBitmap.mData = NULL;
+        data->mSize = gfxIntSize(0, 0);
+        data->mWasUpdated = true;
+    } else {
+        switch (mDrawingModel) {
+        case NPDrawingModelAsyncBitmapSurface:
+            {
+                AsyncBitmapData *bitmapData;
+        
+                if (!mAsyncBitmaps.Get(surface, &bitmapData)) {
+                    return;
+                }
+              
+                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
+                data->mBitmap.mData = (unsigned char*)bitmapData->mRemotePtr;
+                data->mSize = gfxIntSize(surface->size.width, surface->size.height);
+                data->mFormat = surface->format == NPImageFormatBGRX32 ?
+                                RemoteImageData::BGRX32 : RemoteImageData::BGRA32;
+                data->mBitmap.mStride = surface->bitmap.stride;
+                data->mWasUpdated = true;
+                break;
+            }
+        }
+    }
+
+    {
+        MutexAutoLock autoLock(mAsyncInvalidateMutex);
+        if (!mAsyncInvalidateTask) {
+            mAsyncInvalidateTask = 
+                NewRunnableMethod<PluginInstanceChild, void (PluginInstanceChild::*)()>
+                    (this, &PluginInstanceChild::DoAsyncRedraw);
+            ProcessChild::message_loop()->PostTask(FROM_HERE, mAsyncInvalidateTask);
+        }
+    }
+}
+
+void
+PluginInstanceChild::DoAsyncRedraw()
+{
+    {
+        MutexAutoLock autoLock(mAsyncInvalidateMutex);
+        mAsyncInvalidateTask = NULL;
+    }
+
+    SendRedrawPlugin();
+}
+
 bool
 PluginInstanceChild::RecvAsyncSetWindow(const gfxSurfaceType& aSurfaceType,
                                         const NPRemoteWindow& aWindow)
@@ -2350,13 +2525,13 @@ PluginInstanceChild::AnswerHandleKeyEvent(const nsKeyEvent& aKeyEvent,
     AssertPluginThread();
 #if defined(MOZ_WIDGET_QT) && (MOZ_PLATFORM_MAEMO == 6)
     Qt::KeyboardModifiers modifier;
-    if (aKeyEvent.isShift)
+    if (aKeyEvent.IsShift())
         modifier |= Qt::ShiftModifier;
-    if (aKeyEvent.isControl)
+    if (aKeyEvent.IsControl())
         modifier |= Qt::ControlModifier;
-    if (aKeyEvent.isAlt)
+    if (aKeyEvent.IsAlt())
         modifier |= Qt::AltModifier;
-    if (aKeyEvent.isMeta)
+    if (aKeyEvent.IsMeta())
         modifier |= Qt::MetaModifier;
 
     QEvent::Type type;
@@ -3665,6 +3840,16 @@ PluginInstanceChild::ClearAllSurfaces()
 #endif
 }
 
+PLDHashOperator
+PluginInstanceChild::DeleteSurface(NPAsyncSurface* surf, nsAutoPtr<AsyncBitmapData> &data, void* userArg)
+{
+    PluginInstanceChild *inst = static_cast<PluginInstanceChild*>(userArg);
+
+    inst->DeallocShmem(data->mShmem);
+
+    return PL_DHASH_REMOVE;
+}
+
 bool
 PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
 {
@@ -3705,6 +3890,13 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
         mCurrentAsyncSetWindowTask->Cancel();
         mCurrentAsyncSetWindowTask = nsnull;
     }
+    {
+        MutexAutoLock autoLock(mAsyncInvalidateMutex);
+        if (mAsyncInvalidateTask) {
+            mAsyncInvalidateTask->Cancel();
+            mAsyncInvalidateTask = nsnull;
+        }
+    }
 
     ClearAllSurfaces();
 
@@ -3733,6 +3925,11 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
         mPendingAsyncCalls[i]->Cancel();
 
     mPendingAsyncCalls.Clear();
+    
+    if (mAsyncBitmaps.Count()) {
+        NS_ERROR("Not all AsyncBitmaps were finalized by a plugin!");
+        mAsyncBitmaps.Enumerate(DeleteSurface, this);
+    }
 
     return true;
 }

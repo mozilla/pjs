@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:set ts=4 sw=4 sts=4 et cin: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com> (original author)
- *   Andreas M. Schneider <clarence@clarence.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "base/basictypes.h"
 
@@ -63,6 +29,8 @@
 #include "nsIHttpActivityObserver.h"
 
 #include "mozilla/FunctionTimer.h"
+
+using namespace mozilla;
 
 //-----------------------------------------------------------------------------
 
@@ -119,6 +87,8 @@ nsHttpTransaction::nsHttpTransaction()
     , mPriority(0)
     , mRestartCount(0)
     , mCaps(0)
+    , mClassification(CLASS_GENERAL)
+    , mPipelinePosition(0)
     , mClosed(false)
     , mConnected(false)
     , mHaveStatusLine(false)
@@ -134,8 +104,13 @@ nsHttpTransaction::nsHttpTransaction()
     , mSSLConnectFailed(false)
     , mHttpResponseMatched(false)
     , mPreserveStream(false)
+    , mReportedStart(false)
+    , mReportedResponseHeader(false)
+    , mForTakeResponseHead(nsnull)
+    , mResponseHeadTaken(false)
 {
     LOG(("Creating nsHttpTransaction @%x\n", this));
+    gHttpHandler->GetMaxPipelineObjectSize(&mMaxPipelineObjectSize);
 }
 
 nsHttpTransaction::~nsHttpTransaction()
@@ -146,7 +121,42 @@ nsHttpTransaction::~nsHttpTransaction()
     NS_IF_RELEASE(mConnInfo);
 
     delete mResponseHead;
+    delete mForTakeResponseHead;
     delete mChunkedDecoder;
+}
+
+nsHttpTransaction::Classifier
+nsHttpTransaction::Classify()
+{
+    if (!(mCaps & NS_HTTP_ALLOW_PIPELINING))
+        return (mClassification = CLASS_SOLO);
+
+    if (mRequestHead->PeekHeader(nsHttp::If_Modified_Since) ||
+        mRequestHead->PeekHeader(nsHttp::If_None_Match))
+        return (mClassification = CLASS_REVALIDATION);
+
+    const char *accept = mRequestHead->PeekHeader(nsHttp::Accept);
+    if (accept && !PL_strncmp(accept, "image/", 6))
+        return (mClassification = CLASS_IMAGE);
+
+    if (accept && !PL_strncmp(accept, "text/css", 8))
+        return (mClassification = CLASS_SCRIPT);
+
+    mClassification = CLASS_GENERAL;
+
+    PRInt32 queryPos = mRequestHead->RequestURI().FindChar('?');
+    if (queryPos == kNotFound) {
+        if (StringEndsWith(mRequestHead->RequestURI(),
+                           NS_LITERAL_CSTRING(".js")))
+            mClassification = CLASS_SCRIPT;
+    }
+    else if (queryPos >= 3 &&
+             Substring(mRequestHead->RequestURI(), queryPos - 3, 3).
+             EqualsLiteral(".js")) {
+        mClassification = CLASS_SCRIPT;
+    }
+
+    return mClassification;
 }
 
 nsresult
@@ -300,6 +310,8 @@ nsHttpTransaction::Init(PRUint8 caps,
                      nsIOService::gDefaultSegmentCount);
     if (NS_FAILED(rv)) return rv;
 
+    Classify();
+
     NS_ADDREF(*responseBody = mPipeIn);
     return NS_OK;
 }
@@ -313,12 +325,30 @@ nsHttpTransaction::Connection()
 nsHttpResponseHead *
 nsHttpTransaction::TakeResponseHead()
 {
+    NS_ABORT_IF_FALSE(!mResponseHeadTaken, "TakeResponseHead called 2x");
+
+    // Lock RestartInProgress() and TakeResponseHead() against main thread
+    MutexAutoLock lock(*nsHttp::GetLock());
+
+    mResponseHeadTaken = true;
+
+    // Prefer mForTakeResponseHead over mResponseHead. It is always a complete
+    // set of headers.
+    nsHttpResponseHead *head;
+    if (mForTakeResponseHead) {
+        head = mForTakeResponseHead;
+        mForTakeResponseHead = nsnull;
+        return head;
+    }
+    
+    // Even in OnStartRequest() the headers won't be available if we were
+    // canceled
     if (!mHaveAllHeaders) {
         NS_WARNING("response headers not available or incomplete");
         return nsnull;
     }
 
-    nsHttpResponseHead *head = mResponseHead;
+    head = mResponseHead;
     mResponseHead = nsnull;
     return head;
 }
@@ -405,13 +435,14 @@ nsHttpTransaction::OnTransportStatus(nsITransport* transport,
                 PR_Now(), LL_ZERO, EmptyCString());
 
         // report the status and progress
-        mActivityDistributor->ObserveActivity(
-            mChannel,
-            NS_HTTP_ACTIVITY_TYPE_SOCKET_TRANSPORT,
-            static_cast<PRUint32>(status),
-            PR_Now(),
-            progress,
-            EmptyCString());
+        if (!mRestartInProgressVerifier.IsDiscardingContent())
+            mActivityDistributor->ObserveActivity(
+                mChannel,
+                NS_HTTP_ACTIVITY_TYPE_SOCKET_TRANSPORT,
+                static_cast<PRUint32>(status),
+                PR_Now(),
+                progress,
+                EmptyCString());
     }
 
     // nsHttpChannel synthesizes progress events in OnDataAvailable
@@ -454,6 +485,12 @@ nsresult
 nsHttpTransaction::Status()
 {
     return mStatus;
+}
+
+PRUint8
+nsHttpTransaction::Caps()
+{ 
+    return mCaps;
 }
 
 PRUint32
@@ -654,16 +691,55 @@ nsHttpTransaction::Close(nsresult reason)
     // mReceivedData == FALSE.  (see bug 203057 for more info.)
     //
     if (reason == NS_ERROR_NET_RESET || reason == NS_OK) {
-        if (!mReceivedData && (!mSentData || connReused)) {
+
+        // reallySentData is meant to separate the instances where data has
+        // been sent by this transaction but buffered at a higher level while
+        // a TLS session (perhaps via a tunnel) is setup.
+        bool reallySentData =
+            mSentData && (!mConnection || mConnection->BytesWritten());
+        
+        if (!mReceivedData &&
+            (!reallySentData || connReused || mPipelinePosition)) {
             // if restarting fails, then we must proceed to close the pipe,
             // which will notify the channel that the transaction failed.
+            
+            if (mPipelinePosition) {
+                gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                    mConnInfo, nsHttpConnectionMgr::RedCanceledPipeline,
+                    nsnull, 0);
+            }
             if (NS_SUCCEEDED(Restart()))
+                return;
+        }
+        else if (!mResponseIsComplete && mPipelinePosition &&
+                 reason == NS_ERROR_NET_RESET) {
+            // due to unhandled rst on a pipeline - safe to
+            // restart as only idempotent is found there
+
+            gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                mConnInfo, nsHttpConnectionMgr::RedCorruptedContent, nsnull, 0);
+            if (NS_SUCCEEDED(RestartInProgress()))
                 return;
         }
     }
 
     bool relConn = true;
     if (NS_SUCCEEDED(reason)) {
+        if (!mResponseIsComplete) {
+            // The response has not been delimited with a high-confidence
+            // algorithm like Content-Length or Chunked Encoding. We
+            // need to use a strong framing mechanism to pipeline.
+            gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                mConnInfo, nsHttpConnectionMgr::BadInsufficientFraming,
+                nsnull, mClassification);
+        }
+        else if (mPipelinePosition) {
+            // report this success as feedback
+            gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                mConnInfo, nsHttpConnectionMgr::GoodCompletedOK,
+                nsnull, mPipelinePosition);
+        }
+
         // the server has not sent the final \r\n terminating the header
         // section, and there may still be a header line unparsed.  let's make
         // sure we parse the remaining header line, and then hopefully, the
@@ -704,9 +780,95 @@ nsHttpTransaction::Close(nsresult reason)
     mPipeOut->CloseWithStatus(reason);
 }
 
+nsresult
+nsHttpTransaction::AddTransaction(nsAHttpTransaction *trans)
+{
+    return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+PRUint32
+nsHttpTransaction::PipelineDepth()
+{
+    return IsDone() ? 0 : 1;
+}
+
+nsresult
+nsHttpTransaction::SetPipelinePosition(PRInt32 position)
+{
+    mPipelinePosition = position;
+    return NS_OK;
+}
+ 
+PRInt32
+nsHttpTransaction::PipelinePosition()
+{
+    return mPipelinePosition;
+}
+
 //-----------------------------------------------------------------------------
 // nsHttpTransaction <private>
 //-----------------------------------------------------------------------------
+
+nsresult
+nsHttpTransaction::RestartInProgress()
+{
+    NS_ASSERTION(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+    
+    if ((mRestartCount + 1) >= gHttpHandler->MaxRequestAttempts()) {
+        LOG(("nsHttpTransaction::RestartInProgress() "
+             "reached max request attempts, failing transaction %p\n", this));
+        return NS_ERROR_NET_RESET;
+    }
+
+    // Lock RestartInProgress() and TakeResponseHead() against main thread
+    MutexAutoLock lock(*nsHttp::GetLock());
+
+    // Don't try and RestartInProgress() things that haven't gotten a response
+    // header yet. Those should be handled under the normal restart() path if
+    // they are eligible.
+    if (!mHaveAllHeaders)
+        return NS_ERROR_NET_RESET;
+
+    // don't try and restart 0.9 or non 200/Get HTTP/1
+    if (!mRestartInProgressVerifier.IsSetup())
+        return NS_ERROR_NET_RESET;
+
+    LOG(("Will restart transaction %p and skip first %lld bytes, "
+         "old Content-Length %lld",
+         this, mContentRead, mContentLength));
+
+    mRestartInProgressVerifier.SetAlreadyProcessed(
+        PR_MAX(mRestartInProgressVerifier.AlreadyProcessed(), mContentRead));
+
+    if (!mResponseHeadTaken && !mForTakeResponseHead) {
+        // TakeResponseHeader() has not been called yet and this
+        // is the first restart. Store the resp headers exclusively
+        // for TakeResponseHead() which is called from the main thread and
+        // could happen at any time - so we can't continue to modify those
+        // headers (which restarting will effectively do)
+        mForTakeResponseHead = mResponseHead;
+        mResponseHead = nsnull;
+    }
+
+    if (mResponseHead) {
+        mResponseHead->Reset();
+    }
+
+    mContentRead = 0;
+    mContentLength = -1;
+    delete mChunkedDecoder;
+    mChunkedDecoder = nsnull;
+    mHaveStatusLine = false;
+    mHaveAllHeaders = false;
+    mHttpResponseMatched = false;
+    mResponseIsComplete = false;
+    mDidContentStart = false;
+    mNoContent = false;
+    mSentData = false;
+    mReceivedData = false;
+
+    return Restart();
+}
 
 nsresult
 nsHttpTransaction::Restart()
@@ -839,6 +1001,9 @@ nsHttpTransaction::ParseLineSegment(char *segment, PRUint32 len)
             nsresult rv = ParseLine(mLineBuf.BeginWriting());
             mLineBuf.Truncate();
             if (NS_FAILED(rv)) {
+                gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                    mConnInfo, nsHttpConnectionMgr::RedCorruptedContent,
+                    nsnull, 0);
                 return rv;
             }
         }
@@ -887,12 +1052,14 @@ nsHttpTransaction::ParseHead(char *buf,
             return NS_ERROR_OUT_OF_MEMORY;
 
         // report that we have a least some of the response
-        if (mActivityDistributor)
+        if (mActivityDistributor && !mReportedStart) {
+            mReportedStart = true;
             mActivityDistributor->ObserveActivity(
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_RESPONSE_START,
                 PR_Now(), LL_ZERO, EmptyCString());
+        }
     }
 
     if (!mHttpResponseMatched) {
@@ -1006,7 +1173,8 @@ nsHttpTransaction::HandleContentStart()
 #endif
         // notify the connection, give it a chance to cause a reset.
         bool reset = false;
-        mConnection->OnHeadersAvailable(this, mRequestHead, mResponseHead, &reset);
+        if (!mRestartInProgressVerifier.IsSetup())
+            mConnection->OnHeadersAvailable(this, mRequestHead, mResponseHead, &reset);
 
         // looks like we should ignore this response, resetting...
         if (reset) {
@@ -1032,7 +1200,17 @@ nsHttpTransaction::HandleContentStart()
             LOG(("this response should not contain a body.\n"));
             break;
         }
+        
+        if (mResponseHead->Status() == 200 &&
+            mConnection->IsProxyConnectInProgress()) {
+            // successful CONNECTs do not have response bodies
+            mNoContent = true;
+        }
         mConnection->SetLastTransactionExpectedNoContent(mNoContent);
+        if (mInvalidResponseBytesRead)
+            gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+                mConnInfo, nsHttpConnectionMgr::BadInsufficientFraming,
+                nsnull, mClassification);
 
         if (mNoContent)
             mContentLength = 0;
@@ -1040,6 +1218,10 @@ nsHttpTransaction::HandleContentStart()
             // grab the content-length from the response headers
             mContentLength = mResponseHead->ContentLength();
 
+            if ((mClassification != CLASS_SOLO) &&
+                (mContentLength > mMaxPipelineObjectSize))
+                CancelPipeline(nsHttpConnectionMgr::BadUnexpectedLarge);
+            
             // handle chunked encoding here, so we'll know immediately when
             // we're done with the socket.  please note that _all_ other
             // decoding is done when the channel receives the content data
@@ -1060,9 +1242,20 @@ nsHttpTransaction::HandleContentStart()
                 LOG(("waiting for the server to close the connection.\n"));
 #endif
         }
+        if (mRestartInProgressVerifier.IsSetup() &&
+            !mRestartInProgressVerifier.Verify(mContentLength, mResponseHead)) {
+            LOG(("Restart in progress subsequent transaction failed to match"));
+            return NS_ERROR_ABORT;
+        }
     }
 
     mDidContentStart = true;
+
+    // The verifier only initializes itself once (from the first iteration of
+    // a transaction that gets far enough to have response headers)
+    if (mRequestHead->Method() == nsHttp::Get)
+        mRestartInProgressVerifier.Set(mContentLength, mResponseHead);
+
     return NS_OK;
 }
 
@@ -1121,6 +1314,21 @@ nsHttpTransaction::HandleContent(char *buf,
         // (no explicit content-length given)
         *contentRead = count;
     }
+    
+    PRInt64 toReadBeforeRestart =
+        mRestartInProgressVerifier.ToReadBeforeRestart();
+
+    if (toReadBeforeRestart && *contentRead) {
+        PRUint32 ignore =
+            PR_MIN(toReadBeforeRestart, PR_UINT32_MAX);
+        ignore = PR_MIN(*contentRead, ignore);
+        LOG(("Due To Restart ignoring %d of remaining %ld",
+             ignore, toReadBeforeRestart));
+        *contentRead -= ignore;
+        mContentRead += ignore;
+        mRestartInProgressVerifier.HaveReadBeforeRestart(ignore);
+        memmove(buf, buf + ignore, *contentRead + *contentRemaining);
+    }
 
     if (*contentRead) {
         // update count of content bytes read and report progress...
@@ -1133,6 +1341,15 @@ nsHttpTransaction::HandleContent(char *buf,
 
     LOG(("nsHttpTransaction::HandleContent [this=%x count=%u read=%u mContentRead=%lld mContentLength=%lld]\n",
         this, count, *contentRead, mContentRead, mContentLength));
+
+    // Check the size of chunked responses. If we exceed the max pipeline size
+    // for this response reschedule the pipeline
+    if ((mClassification != CLASS_SOLO) &&
+        mChunkedDecoder &&
+        ((mContentRead + mChunkedDecoder->GetChunkRemaining()) >
+         mMaxPipelineObjectSize)) {
+        CancelPipeline(nsHttpConnectionMgr::BadUnexpectedLarge);
+    }
 
     // check for end-of-file
     if ((mContentRead == mContentLength) ||
@@ -1189,7 +1406,9 @@ nsHttpTransaction::ProcessData(char *buf, PRUint32 count, PRUint32 *countRead)
             memmove(buf, buf + bytesConsumed, count);
 
         // report the completed response header
-        if (mActivityDistributor && mResponseHead && mHaveAllHeaders) {
+        if (mActivityDistributor && mResponseHead && mHaveAllHeaders &&
+            !mReportedResponseHeader) {
+            mReportedResponseHeader = true;
             nsCAutoString completeResponseHeaders;
             mResponseHead->Flatten(completeResponseHeaders, false);
             completeResponseHeaders.AppendLiteral("\r\n");
@@ -1231,6 +1450,23 @@ nsHttpTransaction::ProcessData(char *buf, PRUint32 count, PRUint32 *countRead)
     }
 
     return NS_OK;
+}
+
+void
+nsHttpTransaction::CancelPipeline(PRUint32 reason)
+{
+    // reason is casted through a uint to avoid compiler header deps
+    gHttpHandler->ConnMgr()->PipelineFeedbackInfo(
+        mConnInfo,
+        static_cast<nsHttpConnectionMgr::PipelineFeedbackInfoType>(reason),
+        nsnull, mClassification);
+
+    mConnection->CancelPipeline(NS_ERROR_ABORT);
+
+    // Avoid pipelining this transaction on restart by classifying it as solo.
+    // This also prevents BadUnexpectedLarge from being reported more
+    // than one time per transaction.
+    mClassification = CLASS_SOLO;
 }
 
 //-----------------------------------------------------------------------------
@@ -1327,4 +1563,93 @@ nsHttpTransaction::OnOutputStreamReady(nsIAsyncOutputStream *out)
             NS_ERROR("ResumeRecv failed");
     }
     return NS_OK;
+}
+
+// nsHttpTransaction::RestartVerifier
+
+static bool
+matchOld(nsHttpResponseHead *newHead, nsCString &old,
+         nsHttpAtom headerAtom)
+{
+    const char *val;
+    
+    val = newHead->PeekHeader(headerAtom);
+    if (val && old.IsEmpty())
+        return false;
+    if (!val && !old.IsEmpty())
+        return false;
+    if (val && !old.Equals(val))
+        return false;
+    return true;
+}
+
+bool
+nsHttpTransaction::RestartVerifier::Verify(PRInt64 contentLength,
+                                           nsHttpResponseHead *newHead)
+{
+    if (mContentLength != contentLength)
+        return false;
+
+    if (newHead->Status() != 200)
+        return false;
+
+    if (!matchOld(newHead, mContentRange, nsHttp::Content_Range))
+        return false;
+
+    if (!matchOld(newHead, mLastModified, nsHttp::Last_Modified))
+        return false;
+
+    if (!matchOld(newHead, mETag, nsHttp::ETag))
+        return false;
+
+    if (!matchOld(newHead, mContentEncoding, nsHttp::Content_Encoding))
+        return false;
+
+    if (!matchOld(newHead, mTransferEncoding, nsHttp::Transfer_Encoding))
+        return false;
+    
+    return true;
+}
+
+void
+nsHttpTransaction::RestartVerifier::Set(PRInt64 contentLength,
+                                        nsHttpResponseHead *head)
+{
+    if (mSetup)
+        return;
+
+    // If mSetup does not transition to true RestartInPogress() is later
+    // forbidden
+
+    // Only RestartInProgress with 200 response code
+    if (head->Status() != 200)
+        return;
+
+    mContentLength = contentLength;
+    
+    if (head) {
+        const char *val;
+        val = head->PeekHeader(nsHttp::ETag);
+        if (val)
+            mETag.Assign(val);
+        val = head->PeekHeader(nsHttp::Last_Modified);
+        if (val)
+            mLastModified.Assign(val);
+        val = head->PeekHeader(nsHttp::Content_Range);
+        if (val)
+            mContentRange.Assign(val);
+        val = head->PeekHeader(nsHttp::Content_Encoding);
+        if (val)
+            mContentEncoding.Assign(val);
+        val = head->PeekHeader(nsHttp::Transfer_Encoding);
+        if (val)
+            mTransferEncoding.Assign(val);
+
+        // We can only restart with any confidence if we have a stored etag or
+        // last-modified header
+        if (mETag.IsEmpty() && mLastModified.IsEmpty())
+            return;
+
+        mSetup = true;
+    }
 }

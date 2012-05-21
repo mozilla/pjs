@@ -1,39 +1,7 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "base/basictypes.h"
 
@@ -78,11 +46,9 @@
 #include "nsIDocShell.h"
 #include "nsIDOMWindow.h"
 #include "nsPIDOMWindow.h"
-#include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShellTreeNode.h"
 #include "nsIXPConnect.h"
-#include "jsapi.h"
 #include "nsDisplayList.h"
 
 #include "nsTArray.h"
@@ -108,13 +74,19 @@
 #include "CanvasImageCache.h"
 
 #include <algorithm>
-#include "mozilla/dom/ContentParent.h"
-#include "mozilla/ipc/PDocumentRendererParent.h"
-#include "mozilla/dom/PBrowserParent.h"
-#include "mozilla/ipc/DocumentRendererParent.h"
 
+#include "jsapi.h"
+#include "jsfriendapi.h"
+
+#include "mozilla/Assertions.h"
+#include "mozilla/CheckedInt.h"
+#include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/ImageData.h"
+#include "mozilla/dom/PBrowserParent.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/ipc/DocumentRendererParent.h"
+#include "mozilla/ipc/PDocumentRendererParent.h"
 #include "mozilla/Preferences.h"
 
 #ifdef XP_WIN
@@ -402,7 +374,9 @@ public:
   NS_IMETHOD InitializeWithSurface(nsIDocShell *shell, gfxASurface *surface, PRInt32 width, PRInt32 height)
   { return NS_ERROR_NOT_IMPLEMENTED; }
 
-  NS_IMETHOD Render(gfxContext *ctx, gfxPattern::GraphicsFilter aFilter);
+  NS_IMETHOD Render(gfxContext *ctx,
+                    gfxPattern::GraphicsFilter aFilter,
+                    PRUint32 aFlags = RenderFlagPremultAlpha);
   NS_IMETHOD GetInputStream(const char* aMimeType,
                             const PRUnichar* aEncoderOptions,
                             nsIInputStream **aStream);
@@ -443,6 +417,10 @@ public:
   nsresult BezierTo(const Point& aCP1, const Point& aCP2, const Point& aCP3);
 
 protected:
+  nsresult GetImageDataArray(JSContext* aCx, int32_t aX, int32_t aY,
+                             uint32_t aWidth, uint32_t aHeight,
+                             JSObject** aRetval);
+
   nsresult InitializeWithTarget(DrawTarget *surface, PRInt32 width, PRInt32 height);
 
   /**
@@ -690,7 +668,7 @@ protected:
             dash(other.dash),
             dashOffset(other.dashOffset),
             op(other.op),
-            fillRule(FILL_WINDING),
+            fillRule(other.fillRule),
             lineCap(other.lineCap),
             lineJoin(other.lineJoin),
             imageSmoothingEnabled(other.imageSmoothingEnabled)
@@ -1136,13 +1114,13 @@ nsCanvasRenderingContext2DAzure::StyleColorToString(const nscolor& aColor, nsASt
   // We can't reuse the normal CSS color stringification code,
   // because the spec calls for a different algorithm for canvas.
   if (NS_GET_A(aColor) == 255) {
-    CopyUTF8toUTF16(nsPrintfCString(100, "#%02x%02x%02x",
+    CopyUTF8toUTF16(nsPrintfCString("#%02x%02x%02x",
                                     NS_GET_R(aColor),
                                     NS_GET_G(aColor),
                                     NS_GET_B(aColor)),
                     aStr);
   } else {
-    CopyUTF8toUTF16(nsPrintfCString(100, "rgba(%d, %d, %d, ",
+    CopyUTF8toUTF16(nsPrintfCString("rgba(%d, %d, %d, ",
                                     NS_GET_R(aColor),
                                     NS_GET_G(aColor),
                                     NS_GET_B(aColor)),
@@ -1306,6 +1284,10 @@ nsCanvasRenderingContext2DAzure::InitializeWithTarget(DrawTarget *target, PRInt3
     mTarget = target;
   } else {
     mValid = false;
+    // Create a dummy target in the hopes that it will help us deal with users
+    // calling into us after having changed the size where the size resulted
+    // in an inability to create a correct DrawTarget.
+    mTarget = gfxPlatform::GetPlatform()->CreateOffscreenDrawTarget(IntSize(1, 1), FORMAT_B8G8R8A8);
   }
 
   mResetLayer = true;
@@ -1370,7 +1352,7 @@ nsCanvasRenderingContext2DAzure::SetIsIPC(bool isIPC)
 }
 
 NS_IMETHODIMP
-nsCanvasRenderingContext2DAzure::Render(gfxContext *ctx, gfxPattern::GraphicsFilter aFilter)
+nsCanvasRenderingContext2DAzure::Render(gfxContext *ctx, gfxPattern::GraphicsFilter aFilter, PRUint32 aFlags)
 {
   nsresult rv = NS_OK;
 
@@ -1401,6 +1383,14 @@ nsCanvasRenderingContext2DAzure::Render(gfxContext *ctx, gfxPattern::GraphicsFil
 
   if (mOpaque)
       ctx->SetOperator(op);
+
+  if (!(aFlags & RenderFlagPremultAlpha)) {
+      nsRefPtr<gfxASurface> curSurface = ctx->CurrentSurface();
+      nsRefPtr<gfxImageSurface> gis = curSurface->GetAsImageSurface();
+      NS_ABORT_IF_FALSE(gis, "If non-premult alpha, must be able to get image surface!");
+
+      gfxUtils::UnpremultiplyImageSurface(gis);
+  }
 
   return rv;
 }
@@ -1951,7 +1941,7 @@ nsCanvasRenderingContext2DAzure::CreatePattern(nsIDOMHTMLElement *image,
   }
 
   // Ignore nsnull cairo surfaces! See bug 666312.
-  if (!res.mSurface->CairoSurface()) {
+  if (!res.mSurface->CairoSurface() || res.mSurface->CairoStatus()) {
     return NS_OK;
   }
 
@@ -2537,6 +2527,7 @@ nsCanvasRenderingContext2DAzure::EnsureWritablePath()
   } else {
     mDSPathBuilder =
       mPath->TransformedCopyToBuilder(mPathToDS, fillRule);
+    mPathTransformWillUpdate = false;
   }
 }
 
@@ -2775,8 +2766,9 @@ nsCanvasRenderingContext2DAzure::SetFont(const nsAString& font)
                       fontStyle->mFont.sizeAdjust,
                       fontStyle->mFont.systemFont,
                       printerFont,
-                      fontStyle->mFont.featureSettings,
                       fontStyle->mFont.languageOverride);
+
+  fontStyle->mFont.AddFontFeaturesToStyle(&style);
 
   CurrentState().fontGroup =
       gfxPlatform::GetPlatform()->CreateFontGroup(fontStyle->mFont.name,
@@ -2948,6 +2940,7 @@ struct NS_STACK_CLASS nsCanvasBidiProcessorAzure : public nsBidiPresUtils::BidiP
 
   virtual void SetText(const PRUnichar* text, PRInt32 length, nsBidiDirection direction)
   {
+    mFontgrp->UpdateFontList(); // ensure user font generation is current
     mTextRun = mFontgrp->MakeTextRun(text,
                                      length,
                                      mThebes,
@@ -3257,6 +3250,7 @@ nsCanvasRenderingContext2DAzure::DrawOrMeasureText(const nsAString& aRawText,
   processor.mPt.x -= anchorX * totalWidth;
 
   // offset pt.y based on text baseline
+  processor.mFontgrp->UpdateFontList(); // ensure user font generation is current
   NS_ASSERTION(processor.mFontgrp->FontListLength()>0, "font group contains no fonts");
   const gfxFont::Metrics& fontMetrics = processor.mFontgrp->GetFontAt(0)->GetMetrics();
 
@@ -3988,15 +3982,10 @@ nsCanvasRenderingContext2DAzure::EnsureUnpremultiplyTable() {
 
 
 NS_IMETHODIMP
-nsCanvasRenderingContext2DAzure::GetImageData()
-{
-  /* Should never be called -- GetImageData_explicit is the QS entry point */
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-nsCanvasRenderingContext2DAzure::GetImageData_explicit(PRInt32 x, PRInt32 y, PRUint32 w, PRUint32 h,
-                                                       PRUint8 *aData, PRUint32 aDataLen)
+nsCanvasRenderingContext2DAzure::GetImageData(double aSx, double aSy,
+                                              double aSw, double aSh,
+                                              JSContext* aCx,
+                                              nsIDOMImageData** aRetval)
 {
   if (!mValid)
     return NS_ERROR_FAILURE;
@@ -4016,33 +4005,96 @@ nsCanvasRenderingContext2DAzure::GetImageData_explicit(PRInt32 x, PRInt32 y, PRU
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
-  if (w == 0 || h == 0 || aDataLen != w * h * 4)
-    return NS_ERROR_DOM_SYNTAX_ERR;
+  if (!NS_finite(aSx) || !NS_finite(aSy) ||
+      !NS_finite(aSw) || !NS_finite(aSh)) {
+    return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+  }
 
-  CheckedInt32 rightMost = CheckedInt32(x) + w;
-  CheckedInt32 bottomMost = CheckedInt32(y) + h;
+  if (!aSw || !aSh) {
+    return NS_ERROR_DOM_INDEX_SIZE_ERR;
+  }
 
-  if (!rightMost.valid() || !bottomMost.valid())
+  int32_t x = JS_DoubleToInt32(aSx);
+  int32_t y = JS_DoubleToInt32(aSy);
+  int32_t wi = JS_DoubleToInt32(aSw);
+  int32_t hi = JS_DoubleToInt32(aSh);
+
+  // Handle negative width and height by flipping the rectangle over in the
+  // relevant direction.
+  uint32_t w, h;
+  if (aSw < 0) {
+    w = -wi;
+    x -= w;
+  } else {
+    w = wi;
+  }
+  if (aSh < 0) {
+    h = -hi;
+    y -= h;
+  } else {
+    h = hi;
+  }
+
+  if (w == 0) {
+    w = 1;
+  }
+  if (h == 0) {
+    h = 1;
+  }
+
+  JSObject* array;
+  nsresult rv = GetImageDataArray(aCx, x, y, w, h, &array);
+  NS_ENSURE_SUCCESS(rv, rv);
+  MOZ_ASSERT(array);
+
+  nsRefPtr<ImageData> imageData = new ImageData(w, h, *array);
+  imageData.forget(aRetval);
+  return NS_OK;
+}
+
+nsresult
+nsCanvasRenderingContext2DAzure::GetImageDataArray(JSContext* aCx,
+                                                   int32_t aX,
+                                                   int32_t aY,
+                                                   uint32_t aWidth,
+                                                   uint32_t aHeight,
+                                                   JSObject** aRetval)
+{
+  MOZ_ASSERT(aWidth && aHeight);
+
+  CheckedInt<uint32_t> len = CheckedInt<uint32_t>(aWidth) * aHeight * 4;
+  if (!len.isValid()) {
+    return NS_ERROR_DOM_INDEX_SIZE_ERR;
+  }
+
+  CheckedInt<int32_t> rightMost = CheckedInt<int32_t>(aX) + aWidth;
+  CheckedInt<int32_t> bottomMost = CheckedInt<int32_t>(aY) + aHeight;
+
+  if (!rightMost.isValid() || !bottomMost.isValid()) {
     return NS_ERROR_DOM_SYNTAX_ERR;
+  }
+
+  JSObject* darray = JS_NewUint8ClampedArray(aCx, len.value());
+  if (!darray) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
 
   if (mZero) {
+    *aRetval = darray;
     return NS_OK;
   }
 
-  IntRect srcRect(0, 0, mWidth, mHeight);
-  IntRect destRect(x, y, w, h);
+  uint8_t* data = JS_GetUint8ClampedArrayData(darray, aCx);
 
-  if (!srcRect.Contains(destRect)) {
-    // Some data is outside the canvas surface, clear the destination.
-    memset(aData, 0, aDataLen);
-  }
+  IntRect srcRect(0, 0, mWidth, mHeight);
+  IntRect destRect(aX, aY, aWidth, aHeight);
 
   IntRect srcReadRect = srcRect.Intersect(destRect);
   IntRect dstWriteRect = srcReadRect;
-  dstWriteRect.MoveBy(-x, -y);
+  dstWriteRect.MoveBy(-aX, -aY);
 
-  PRUint8 *src = aData;
-  PRUint32 srcStride = w * 4;
+  uint8_t* src = data;
+  uint32_t srcStride = aWidth * 4;
   
   RefPtr<DataSourceSurface> readback;
   if (!srcReadRect.IsEmpty()) {
@@ -4059,10 +4111,10 @@ nsCanvasRenderingContext2DAzure::GetImageData_explicit(PRInt32 x, PRInt32 y, PRU
 
   // NOTE! dst is the same as src, and this relies on reading
   // from src and advancing that ptr before writing to dst.
-  PRUint8 *dst = aData + dstWriteRect.y * (w * 4) + dstWriteRect.x * 4;
+  uint8_t* dst = data + dstWriteRect.y * (aWidth * 4) + dstWriteRect.x * 4;
 
-  for (int j = 0; j < dstWriteRect.height; j++) {
-    for (int i = 0; i < dstWriteRect.width; i++) {
+  for (int32_t j = 0; j < dstWriteRect.height; ++j) {
+    for (int32_t i = 0; i < dstWriteRect.width; ++i) {
       // XXX Is there some useful swizzle MMX we can use here?
 #ifdef IS_LITTLE_ENDIAN
       PRUint8 b = *src++;
@@ -4082,8 +4134,10 @@ nsCanvasRenderingContext2DAzure::GetImageData_explicit(PRInt32 x, PRInt32 y, PRU
       *dst++ = a;
     }
     src += srcStride - (dstWriteRect.width * 4);
-    dst += (w * 4) - (dstWriteRect.width * 4);
+    dst += (aWidth * 4) - (dstWriteRect.width * 4);
   }
+
+  *aRetval = darray;
   return NS_OK;
 }
 
@@ -4147,7 +4201,7 @@ nsCanvasRenderingContext2DAzure::PutImageData_explicit(PRInt32 x, PRInt32 y, PRU
 
       CheckedInt32 checkedDirtyX = CheckedInt32(dirtyX) + dirtyWidth;
 
-      if (!checkedDirtyX.valid())
+      if (!checkedDirtyX.isValid())
           return NS_ERROR_DOM_INDEX_SIZE_ERR;
 
       dirtyX = checkedDirtyX.value();
@@ -4159,7 +4213,7 @@ nsCanvasRenderingContext2DAzure::PutImageData_explicit(PRInt32 x, PRInt32 y, PRU
 
       CheckedInt32 checkedDirtyY = CheckedInt32(dirtyY) + dirtyHeight;
 
-      if (!checkedDirtyY.valid())
+      if (!checkedDirtyY.isValid())
           return NS_ERROR_DOM_INDEX_SIZE_ERR;
 
       dirtyY = checkedDirtyY.value();

@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
                 android:layout_width="fill_parent"
                 android:layout_height="wrap_content"
@@ -13,12 +17,24 @@
                android:minHeight="32dip"
                android:scaleType="fitCenter"/>
 
+    <ImageView android:id="@+id/bookmark_star"
+               android:layout_width="wrap_content"
+               android:layout_height="wrap_content"
+               android:layout_marginLeft="10dip"
+               android:layout_centerVertical="true"
+               android:layout_alignParentRight="true"
+               android:visibility="gone"
+               android:minHeight="32dip"
+               android:src="@drawable/ic_awesomebar_star"
+               android:scaleType="fitStart"/>
+
     <TextView android:id="@+id/title"
               android:layout_width="wrap_content"
               android:layout_height="wrap_content"
               android:textAppearance="?android:attr/textAppearanceMedium"
               android:textColor="?android:attr/textColorPrimary"
               android:layout_toRightOf="@id/favicon"
+              android:layout_toLeftOf="@id/bookmark_star"
               android:singleLine="true"
               android:ellipsize="middle"/>
 
@@ -30,6 +46,7 @@
               android:layout_marginTop="2dip"
               android:layout_below="@id/title"
               android:layout_alignLeft="@id/title"
+              android:layout_toLeftOf="@id/bookmark_star"
               android:includeFontPadding="false"
               android:singleLine="true"
               android:ellipsize="middle"/>

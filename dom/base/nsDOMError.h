@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsDOMError_h__
 #define nsDOMError_h__
@@ -46,11 +14,9 @@
 /* Standard DOM error codes: http://dvcs.w3.org/hg/domcore/raw-file/tip/Overview.html */
 
 #define NS_ERROR_DOM_INDEX_SIZE_ERR              NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,1)
-#define NS_ERROR_DOM_DOMSTRING_SIZE_ERR          NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,2)
 #define NS_ERROR_DOM_HIERARCHY_REQUEST_ERR       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,3)
 #define NS_ERROR_DOM_WRONG_DOCUMENT_ERR          NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,4)
 #define NS_ERROR_DOM_INVALID_CHARACTER_ERR       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,5)
-#define NS_ERROR_DOM_NO_DATA_ALLOWED_ERR         NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,6)
 #define NS_ERROR_DOM_NO_MODIFICATION_ALLOWED_ERR NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,7)
 #define NS_ERROR_DOM_NOT_FOUND_ERR               NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,8)
 #define NS_ERROR_DOM_NOT_SUPPORTED_ERR           NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,9)
@@ -60,7 +26,6 @@
 #define NS_ERROR_DOM_INVALID_MODIFICATION_ERR    NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,13)
 #define NS_ERROR_DOM_NAMESPACE_ERR               NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,14)
 #define NS_ERROR_DOM_INVALID_ACCESS_ERR          NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,15)
-#define NS_ERROR_DOM_VALIDATION_ERR              NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,16)
 #define NS_ERROR_DOM_TYPE_MISMATCH_ERR           NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,17)
 #define NS_ERROR_DOM_SECURITY_ERR                NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,18)
 #define NS_ERROR_DOM_NETWORK_ERR                 NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,19)
@@ -71,10 +36,9 @@
 #define NS_ERROR_DOM_INVALID_NODE_TYPE_ERR       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,24)
 #define NS_ERROR_DOM_DATA_CLONE_ERR              NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,25)
 
-/* DOM error codes from http://www.w3.org/TR/DOM-Level-2/range.html */
+/* XXX Should be JavaScript native TypeError */
 
-#define NS_ERROR_DOM_RANGE_BAD_BOUNDARYPOINTS_ERR NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_RANGE, 1)
-#define NS_ERROR_DOM_RANGE_INVALID_NODE_TYPE_ERR  NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_RANGE, 2)
+#define NS_ERROR_TYPE_ERR                        NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM,26)
 
 /* SVG DOM error codes from http://www.w3.org/TR/SVG11/svgdom.html */
 
@@ -90,7 +54,6 @@
 /* IndexedDB error codes http://dvcs.w3.org/hg/IndexedDB/raw-file/tip/Overview.html */
 
 #define NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,1)
-#define NS_ERROR_DOM_INDEXEDDB_NON_TRANSIENT_ERR NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,2)
 #define NS_ERROR_DOM_INDEXEDDB_NOT_FOUND_ERR     NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,3)
 #define NS_ERROR_DOM_INDEXEDDB_CONSTRAINT_ERR    NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,4)
 #define NS_ERROR_DOM_INDEXEDDB_DATA_ERR          NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,5)
@@ -104,7 +67,6 @@
 #define NS_ERROR_DOM_INDEXEDDB_VERSION_ERR       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,12)
 
 #define NS_ERROR_DOM_INDEXEDDB_RECOVERABLE_ERR   NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,1001)
-#define NS_ERROR_DOM_INDEXEDDB_DEADLOCK_ERR   NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_INDEXEDDB,1002)
 
 /* DOM error codes defined by us */
 

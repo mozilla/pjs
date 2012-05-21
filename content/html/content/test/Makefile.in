@@ -1,39 +1,7 @@
 #
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is mozilla.org code.
-#
-# The Initial Developer of the Original Code is
-# Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2007
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either of the GNU General Public License Version 2 or later (the "GPL"),
-# or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DEPTH          = ../../../..
 topsrcdir      = @top_srcdir@
@@ -137,7 +105,6 @@ _TEST_FILES = \
 		test_bug401160.xhtml \
 		test_bug405242.html \
 		test_bug406596.html \
-		test_bug408231.html \
 		test_bug417760.html \
 		file_bug417760.png \
 		test_formSubmission.html \
@@ -202,10 +169,6 @@ _TEST_FILES = \
 		test_bug558788-1.html \
 		test_bug558788-2.html \
 		test_bug561634.html \
-		test_bug588683-1.html \
-		test_bug588683-2.html \
-		test_bug588683-3.html \
-		test_bug588683-4.html \
 		test_bug590353-1.html \
 		test_bug590353-2.html \
 		test_bug593689.html \
@@ -256,7 +219,6 @@ _TEST_FILES = \
 		test_bug641219.html \
 		test_bug643051.html \
 		test_bug583514.html \
-		test_bug514437.html \
 		test_bug560112.html \
 		test_bug586786.html \
 		test_bug646157.html \
@@ -272,6 +234,7 @@ _TEST_FILES = \
 		test_bug674558.html \
 		test_bug583533.html \
 		test_restore_from_parser_fragment.html \
+		test_bug615595.html \
 		test_bug617528.html \
 		test_bug660959-1.html \
 		test_bug660959-2.html \
@@ -292,11 +255,15 @@ _TEST_FILES = \
 		file_fullscreen-esc-exit.html \
 		file_fullscreen-esc-exit-inner.html \
 		file_fullscreen-rollback.html \
+		file_fullscreen-svg-element.html \
 		test_li_attributes_reflection.html \
 		test_ol_attributes_reflection.html \
 		test_bug651956.html \
 		test_bug694503.html \
 		test_object_plugin_nav.html \
+		test_bug742030.html \
+		test_bug742549.html \
+		test_bug745685.html \
 		$(NULL)
 
 _BROWSER_TEST_FILES = \

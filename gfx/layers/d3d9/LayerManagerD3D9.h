@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_LAYERMANAGERD3D9_H
 #define GFX_LAYERMANAGERD3D9_H
@@ -103,7 +71,7 @@ public:
    *
    * \return True is initialization was succesful, false when it was not.
    */
-  bool Initialize();
+  bool Initialize(bool force = false);
 
   /*
    * Sets the clipping region for this layer manager. This is important on
@@ -180,8 +148,9 @@ public:
    */
   void SetClippingEnabled(bool aEnabled);
 
-  void SetShaderMode(DeviceManagerD3D9::ShaderMode aMode)
-    { mDeviceManager->SetShaderMode(aMode); }
+  void SetShaderMode(DeviceManagerD3D9::ShaderMode aMode,
+                     Layer* aMask, bool aIs2D = true)
+    { mDeviceManager->SetShaderMode(aMode, aMask, aIs2D); }
 
   IDirect3DDevice9 *device() const { return mDeviceManager->device(); }
   DeviceManagerD3D9 *deviceManager() const { return mDeviceManager; }
@@ -195,6 +164,9 @@ public:
     if(aDeviceManager == mDefaultDeviceManager)
       mDefaultDeviceManager = nsnull;
   }
+
+  virtual gfxASurface::gfxImageFormat MaskImageFormat() 
+  { return gfxASurface::ImageFormatARGB32; }
 
 #ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const { return "D3D9"; }
@@ -297,6 +269,22 @@ public:
     device()->SetPixelShaderConstantF(CBfLayerOpacity, opacity, 1);
   }
 
+  /*
+   * Returns a texture containing the contents of this
+   * layer. Will try to return an existing texture if possible, or a temporary
+   * one if not. It is the callee's responsibility to release the shader
+   * resource view. Will return null if a texture could not be constructed.
+   * The texture will not be transformed, i.e., it will be in the same coord
+   * space as this.
+   * Any layer that can be used as a mask layer should override this method.
+   * If aSize is non-null and a texture is successfully returned, aSize will
+   * contain the size of the texture.
+   */
+  virtual already_AddRefed<IDirect3DTexture9> GetAsTexture(gfxIntSize* aSize)
+  {
+    return nsnull;
+  }
+ 
 protected:
   LayerManagerD3D9 *mD3DManager;
 };

@@ -2,7 +2,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const TEST_URI = "data:text/html,<p>test for bug 642615";
+const TEST_URI = "data:text/html;charset=utf-8,<p>test for bug 642615";
 
 XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                    "@mozilla.org/widget/clipboardhelper;1",
@@ -76,12 +76,7 @@ function tabLoad(aEvent) {
   EventUtils.synthesizeKey("u", {});
 }
 
-registerCleanupFunction(function() {
-  Services.prefs.clearUserPref("devtools.gcli.enable");
-});
-
 function test() {
-  Services.prefs.setBoolPref("devtools.gcli.enable", false);
   addTab(TEST_URI);
   browser.addEventListener("load", tabLoad, true);
 }

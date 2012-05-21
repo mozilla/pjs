@@ -4,7 +4,7 @@
 let tmp = {};
 Cu.import("resource:///modules/PageThumbs.jsm", tmp);
 let PageThumbs = tmp.PageThumbs;
-let PageThumbsCache = tmp.PageThumbsCache;
+let PageThumbsStorage = tmp.PageThumbsStorage;
 
 registerCleanupFunction(function () {
   while (gBrowser.tabs.length > 1)
@@ -29,9 +29,12 @@ let TestRunner = {
    */
   run: function () {
     waitForExplicitFinish();
-
     this._iter = runTests();
-    this.next();
+
+    if (this._iter)
+      this.next();
+    else
+      finish();
   },
 
   /**
@@ -98,54 +101,38 @@ function captureAndCheckColor(aRed, aGreen, aBlue, aMessage) {
 
   // Capture the screenshot.
   PageThumbs.captureAndStore(browser, function () {
-    let width = 100, height = 100;
-    let thumb = PageThumbs.getThumbnailURL(browser.currentURI.spec, width, height);
-
-    getXULDocument(function (aDocument) {
-      let htmlns = "http://www.w3.org/1999/xhtml";
-      let img = aDocument.createElementNS(htmlns, "img");
-      img.setAttribute("src", thumb);
-
-      whenLoaded(img, function () {
-        let canvas = aDocument.createElementNS(htmlns, "canvas");
-        canvas.setAttribute("width", width);
-        canvas.setAttribute("height", height);
-
-        // Draw the image to a canvas and compare the pixel color values.
-        let ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-        checkCanvasColor(ctx, aRed, aGreen, aBlue, aMessage);
-
-        next();
-      });
-    });
+    checkThumbnailColor(browser.currentURI.spec, aRed, aGreen, aBlue, aMessage);
   });
 }
 
 /**
- * Passes a XUL document (created if necessary) to the given callback.
- * @param aCallback The function to be called when the XUL document has been
- *                  created. The first argument will be the document.
+ * Retrieve a thumbnail from the cache and compare its pixel color values.
+ * @param aURL The URL of the thumbnail's page.
+ * @param aRed The red component's intensity.
+ * @param aGreen The green component's intensity.
+ * @param aBlue The blue component's intensity.
+ * @param aMessage The info message to print when comparing the pixel color.
  */
-function getXULDocument(aCallback) {
-  let hiddenWindow = Services.appShell.hiddenDOMWindow;
-  let doc = cachedXULDocument || hiddenWindow.document;
+function checkThumbnailColor(aURL, aRed, aGreen, aBlue, aMessage) {
+  let width = 100, height = 100;
+  let thumb = PageThumbs.getThumbnailURL(aURL, width, height);
 
-  if (doc instanceof XULDocument) {
-    aCallback(cachedXULDocument = doc);
-    return;
-  }
+  let htmlns = "http://www.w3.org/1999/xhtml";
+  let img = document.createElementNS(htmlns, "img");
+  img.setAttribute("src", thumb);
 
-  let iframe = doc.createElement("iframe");
-  iframe.setAttribute("src", "chrome://global/content/mozilla.xhtml");
+  whenLoaded(img, function () {
+    let canvas = document.createElementNS(htmlns, "canvas");
+    canvas.setAttribute("width", width);
+    canvas.setAttribute("height", height);
 
-  iframe.addEventListener("DOMContentLoaded", function onLoad() {
-    iframe.removeEventListener("DOMContentLoaded", onLoad, false);
-    aCallback(cachedXULDocument = iframe.contentDocument);
-  }, false);
+    // Draw the image to a canvas and compare the pixel color values.
+    let ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, width, height);
+    checkCanvasColor(ctx, aRed, aGreen, aBlue, aMessage);
 
-  doc.body.appendChild(iframe);
-  registerCleanupFunction(function () { doc.body.removeChild(iframe); });
+    next();
+  });
 }
 
 /**

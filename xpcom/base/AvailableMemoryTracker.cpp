@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 ci et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.org code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * 
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Justin Lebar <justin.lebar@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/AvailableMemoryTracker.h"
 #include "nsThread.h"
@@ -141,17 +108,22 @@ void safe_write(PRUint64 x)
 #endif
 
 PRUint32 sLowVirtualMemoryThreshold = 0;
+PRUint32 sLowCommitSpaceThreshold = 0;
 PRUint32 sLowPhysicalMemoryThreshold = 0;
-PRUint32 sLowPhysicalMemoryNotificationIntervalMS = 0;
+PRUint32 sLowMemoryNotificationIntervalMS = 0;
 
 PRUint32 sNumLowVirtualMemEvents = 0;
+PRUint32 sNumLowCommitSpaceEvents = 0;
 PRUint32 sNumLowPhysicalMemEvents = 0;
 
 WindowsDllInterceptor sKernel32Intercept;
 WindowsDllInterceptor sGdi32Intercept;
 
-// Have we installed the kernel intercepts above?
-bool sHooksInstalled = false;
+// Has Init() been called?
+bool sInitialized = false;
+
+// Has Activate() been called?  The hooks don't do anything until this happens.
+bool sHooksActive = false;
 
 // Alas, we'd like to use mozilla::TimeStamp, but we can't, because it acquires
 // a lock!
@@ -173,8 +145,43 @@ HBITMAP (WINAPI *sCreateDIBSectionOrig)
    UINT aUsage, VOID **aBits,
    HANDLE aSection, DWORD aOffset);
 
+/**
+ * Fire a memory pressure event if it's been long enough since the last one we
+ * fired.
+ */
+bool MaybeScheduleMemoryPressureEvent()
+{
+  // If this interval rolls over, we may fire an extra memory pressure
+  // event, but that's not a big deal.
+  PRIntervalTime interval = PR_IntervalNow() - sLastLowMemoryNotificationTime;
+  if (sHasScheduledOneLowMemoryNotification &&
+      PR_IntervalToMilliseconds(interval) < sLowMemoryNotificationIntervalMS) {
+
+    LOG("Not scheduling low physical memory notification, "
+        "because not enough time has elapsed since last one.");
+    return false;
+  }
+
+  // There's a bit of a race condition here, since an interval may be a
+  // 64-bit number, and 64-bit writes aren't atomic on x86-32.  But let's
+  // not worry about it -- the races only happen when we're already
+  // experiencing memory pressure and firing notifications, so the worst
+  // thing that can happen is that we fire two notifications when we
+  // should have fired only one.
+  sHasScheduledOneLowMemoryNotification = true;
+  sLastLowMemoryNotificationTime = PR_IntervalNow();
+
+  LOG("Scheduling memory pressure notification.");
+  ScheduleMemoryPressureEvent();
+  return true;
+}
+
 void CheckMemAvailable()
 {
+  if (!sHooksActive) {
+    return;
+  }
+
   MEMORYSTATUSEX stat;
   stat.dwLength = sizeof(stat);
   bool success = GlobalMemoryStatusEx(&stat);
@@ -185,42 +192,23 @@ void CheckMemAvailable()
   {
     // sLowVirtualMemoryThreshold is in MB, but ullAvailVirtual is in bytes.
     if (stat.ullAvailVirtual < sLowVirtualMemoryThreshold * 1024 * 1024) {
-      // If we're running low on virtual memory, schedule the notification.
-      // We'll probably crash if we run out of virtual memory, so don't worry
-      // about firing this notification too often.
+      // If we're running low on virtual memory, unconditionally schedule the
+      // notification.  We'll probably crash if we run out of virtual memory,
+      // so don't worry about firing this notification too often.
       LOG("Detected low virtual memory.");
       PR_ATOMIC_INCREMENT(&sNumLowVirtualMemEvents);
       ScheduleMemoryPressureEvent();
     }
+    else if (stat.ullAvailPageFile < sLowCommitSpaceThreshold * 1024 * 1024) {
+      LOG("Detected low available page file space.");
+      if (MaybeScheduleMemoryPressureEvent()) {
+        PR_ATOMIC_INCREMENT(&sNumLowCommitSpaceEvents);
+      }
+    }
     else if (stat.ullAvailPhys < sLowPhysicalMemoryThreshold * 1024 * 1024) {
       LOG("Detected low physical memory.");
-      // If the machine is running low on physical memory and it's been long
-      // enough since we last fired a low-memory notification, fire a
-      // notification.
-      //
-      // If this interval rolls over, we may fire an extra memory pressure
-      // event, but that's not a big deal.
-      PRIntervalTime interval = PR_IntervalNow() - sLastLowMemoryNotificationTime;
-      if (!sHasScheduledOneLowMemoryNotification ||
-          PR_IntervalToMilliseconds(interval) >=
-            sLowPhysicalMemoryNotificationIntervalMS) {
-
-        // There's a bit of a race condition here, since an interval may be a
-        // 64-bit number, and 64-bit writes aren't atomic on x86-32.  But let's
-        // not worry about it -- the races only happen when we're already
-        // experiencing memory pressure and firing notifications, so the worst
-        // thing that can happen is that we fire two notifications when we
-        // should have fired only one.
-        sHasScheduledOneLowMemoryNotification = true;
-        sLastLowMemoryNotificationTime = PR_IntervalNow();
-
-        LOG("Scheduling memory pressure notification.");
+      if (MaybeScheduleMemoryPressureEvent()) {
         PR_ATOMIC_INCREMENT(&sNumLowPhysicalMemEvents);
-        ScheduleMemoryPressureEvent();
-      }
-      else {
-        LOG("Not scheduling low physical memory notification, "
-            "because not enough time has elapsed since last one.");
       }
     }
   }
@@ -249,7 +237,7 @@ VirtualAllocHook(LPVOID aAddress, SIZE_T aSize,
   // virtual memory.  Similarly, don't call CheckMemAvailable for MEM_COMMIT if
   // we're not tracking low physical memory.
   if ((sLowVirtualMemoryThreshold != 0 && aAllocationType & MEM_RESERVE) ||
-      (sLowPhysicalMemoryThreshold != 0 &&  aAllocationType & MEM_COMMIT)) {
+      (sLowPhysicalMemoryThreshold != 0 && aAllocationType & MEM_COMMIT)) {
     LOG3("VirtualAllocHook(size=", aSize, ")");
     CheckMemAvailable();
   }
@@ -285,8 +273,8 @@ CreateDIBSectionHook(HDC aDC,
   // a small amount of memory.
 
   // If aSection is non-null, CreateDIBSection won't allocate any new memory.
-  PRBool doCheck = PR_FALSE;
-  if (!aSection && aBitmapInfo) {
+  bool doCheck = false;
+  if (sHooksActive && !aSection && aBitmapInfo) {
     PRUint16 bitCount = aBitmapInfo->bmiHeader.biBitCount;
     if (bitCount == 0) {
       // MSDN says bitCount == 0 means that it figures out how many bits each
@@ -307,7 +295,7 @@ CreateDIBSectionHook(HDC aDC,
     // the allocation.
     if (size > 1024 * 1024 * 8) {
       LOG3("CreateDIBSectionHook: Large allocation (size=", size, ")");
-      doCheck = PR_TRUE;
+      doCheck = true;
     }
   }
 
@@ -368,15 +356,14 @@ public:
     aDescription.AssignLiteral(
       "Number of low-virtual-memory events fired since startup. ");
 
-    if (sLowVirtualMemoryThreshold == 0 || !sHooksInstalled) {
-      aDescription.Append(nsPrintfCString(1024,
+    if (sLowVirtualMemoryThreshold == 0) {
+      aDescription.AppendLiteral(
         "Tracking low-virtual-memory events is disabled, but you can enable it "
         "by giving the memory.low_virtual_mem_threshold_mb pref a non-zero "
-        "value%s.",
-        sHooksInstalled ? "" : " and restarting"));
+        "value.");
     }
     else {
-      aDescription.Append(nsPrintfCString(1024,
+      aDescription.Append(nsPrintfCString(
         "We fire such an event if we notice there is less than %d MB of virtual "
         "address space available (controlled by the "
         "'memory.low_virtual_mem_threshold_mb' pref).  We'll likely crash if "
@@ -388,6 +375,48 @@ public:
 };
 
 NS_IMPL_ISUPPORTS1(NumLowVirtualMemoryEventsMemoryReporter, nsIMemoryReporter)
+
+class NumLowCommitSpaceEventsMemoryReporter : public NumLowMemoryEventsReporter
+{
+public:
+  NS_DECL_ISUPPORTS
+
+  NS_IMETHOD GetPath(nsACString &aPath)
+  {
+    aPath.AssignLiteral("low-commit-space-events");
+    return NS_OK;
+  }
+
+  NS_IMETHOD GetAmount(PRInt64 *aAmount)
+  {
+    *aAmount = sNumLowCommitSpaceEvents;
+    return NS_OK;
+  }
+
+  NS_IMETHOD GetDescription(nsACString &aDescription)
+  {
+    aDescription.AssignLiteral(
+      "Number of low-commit-space events fired since startup. ");
+
+    if (sLowCommitSpaceThreshold == 0) {
+      aDescription.Append(
+        "Tracking low-commit-space events is disabled, but you can enable it "
+        "by giving the memory.low_commit_space_threshold_mb pref a non-zero "
+        "value.");
+    }
+    else {
+      aDescription.Append(nsPrintfCString(
+        "We fire such an event if we notice there is less than %d MB of "
+        "available commit space (controlled by the "
+        "'memory.low_commit_space_threshold_mb' pref).  Windows will likely "
+        "kill us if we run out of commit space, so this event is somewhat dire.",
+        sLowCommitSpaceThreshold));
+    }
+    return NS_OK;
+  }
+};
+
+NS_IMPL_ISUPPORTS1(NumLowCommitSpaceEventsMemoryReporter, nsIMemoryReporter)
 
 class NumLowPhysicalMemoryEventsMemoryReporter : public NumLowMemoryEventsReporter
 {
@@ -411,15 +440,14 @@ public:
     aDescription.AssignLiteral(
       "Number of low-physical-memory events fired since startup. ");
 
-    if (sLowPhysicalMemoryThreshold == 0 || !sHooksInstalled) {
-      aDescription.Append(nsPrintfCString(1024,
+    if (sLowPhysicalMemoryThreshold == 0) {
+      aDescription.Append(
         "Tracking low-physical-memory events is disabled, but you can enable it "
         "by giving the memory.low_physical_memory_threshold_mb pref a non-zero "
-        "value%s.",
-        sHooksInstalled ? "" : " and restarting"));
+        "value.");
     }
     else {
-      aDescription.Append(nsPrintfCString(1024,
+      aDescription.Append(nsPrintfCString(
         "We fire such an event if we notice there is less than %d MB of "
         "available physical memory (controlled by the "
         "'memory.low_physical_memory_threshold_mb' pref).  The machine will start "
@@ -438,8 +466,12 @@ NS_IMPL_ISUPPORTS1(NumLowPhysicalMemoryEventsMemoryReporter, nsIMemoryReporter)
 namespace mozilla {
 namespace AvailableMemoryTracker {
 
-void Init()
+void Activate()
 {
+#if defined(_M_IX86)
+  MOZ_ASSERT(sInitialized);
+  MOZ_ASSERT(!sHooksActive);
+
   // On 64-bit systems, hardcode sLowVirtualMemoryThreshold to 0 -- we assume
   // we're not going to run out of virtual memory!
   if (sizeof(void*) > 4) {
@@ -452,17 +484,37 @@ void Init()
 
   Preferences::AddUintVarCache(&sLowPhysicalMemoryThreshold,
       "memory.low_physical_memory_threshold_mb", 0);
-  Preferences::AddUintVarCache(&sLowPhysicalMemoryNotificationIntervalMS,
-      "memory.low_physical_memory_notification_interval_ms", 10000);
+  Preferences::AddUintVarCache(&sLowCommitSpaceThreshold,
+      "memory.low_commit_space_threshold_mb", 128);
+  Preferences::AddUintVarCache(&sLowMemoryNotificationIntervalMS,
+      "memory.low_memory_notification_interval_ms", 10000);
 
-  // Don't register the hooks if we're a build instrumented for PGO or if both
-  // thresholds are 0.  (If we're an instrumented build, the compiler adds
-  // function calls all over the place which may call VirtualAlloc; this makes
-  // it hard to prevent VirtualAllocHook from reentering itself.)
+  NS_RegisterMemoryReporter(new NumLowCommitSpaceEventsMemoryReporter());
+  NS_RegisterMemoryReporter(new NumLowPhysicalMemoryEventsMemoryReporter());
+  if (sizeof(void*) == 4) {
+    NS_RegisterMemoryReporter(new NumLowVirtualMemoryEventsMemoryReporter());
+  }
+  sHooksActive = true;
+#endif
+}
 
-  if (!PR_GetEnv("MOZ_PGO_INSTRUMENTED") &&
-      (sLowVirtualMemoryThreshold != 0 || sLowPhysicalMemoryThreshold != 0)) {
-    sHooksInstalled = true;
+void Init()
+{
+  // Do nothing on x86-64, because nsWindowsDllInterceptor is not thread-safe
+  // on 64-bit.  (On 32-bit, it's probably thread-safe.)  Even if we run Init()
+  // before any other of our threads are running, another process may have
+  // started a remote thread which could call VirtualAlloc!
+  //
+  // Moreover, the benefit of this code is less clear when we're a 64-bit
+  // process, because we aren't going to run out of virtual memory, and the
+  // system is likely to have a fair bit of physical memory.
+
+#if defined(_M_IX86)
+  // Don't register the hooks if we're a build instrumented for PGO: If we're
+  // an instrumented build, the compiler adds function calls all over the place
+  // which may call VirtualAlloc; this makes it hard to prevent
+  // VirtualAllocHook from reentering itself.
+  if (!PR_GetEnv("MOZ_PGO_INSTRUMENTED")) {
     sKernel32Intercept.Init("Kernel32.dll");
     sKernel32Intercept.AddHook("VirtualAlloc",
       reinterpret_cast<intptr_t>(VirtualAllocHook),
@@ -476,14 +528,9 @@ void Init()
       reinterpret_cast<intptr_t>(CreateDIBSectionHook),
       (void**) &sCreateDIBSectionOrig);
   }
-  else {
-    sHooksInstalled = false;
-  }
 
-  NS_RegisterMemoryReporter(new NumLowPhysicalMemoryEventsMemoryReporter());
-  if (sizeof(void*) == 4) {
-    NS_RegisterMemoryReporter(new NumLowVirtualMemoryEventsMemoryReporter());
-  }
+  sInitialized = true;
+#endif
 }
 
 } // namespace AvailableMemoryTracker

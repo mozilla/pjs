@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Original Author: Aaron Leventhal (aaronl@netscape.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef _nsDocAccessible_H_
 #define _nsDocAccessible_H_
@@ -64,14 +31,6 @@ class nsAccessiblePivot;
 
 const PRUint32 kDefaultCacheSize = 256;
 
-#define NS_DOCACCESSIBLE_IMPL_CID                       \
-{  /* 5641921c-a093-4292-9dca-0b51813db57d */           \
-  0x5641921c,                                           \
-  0xa093,                                               \
-  0x4292,                                               \
-  { 0x9d, 0xca, 0x0b, 0x51, 0x81, 0x3d, 0xb5, 0x7d }    \
-}
-
 class nsDocAccessible : public nsHyperTextAccessibleWrap,
                         public nsIAccessibleDocument,
                         public nsIDocumentObserver,
@@ -85,7 +44,6 @@ class nsDocAccessible : public nsHyperTextAccessibleWrap,
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsDocAccessible, nsAccessible)
 
   NS_DECL_NSIACCESSIBLEDOCUMENT
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_DOCACCESSIBLE_IMPL_CID)
 
   NS_DECL_NSIOBSERVER
 
@@ -101,7 +59,6 @@ public:
   virtual ~nsDocAccessible();
 
   // nsIAccessible
-  NS_IMETHOD GetName(nsAString& aName);
   NS_IMETHOD GetAttributes(nsIPersistentProperties **aAttributes);
   NS_IMETHOD TakeFocus(void);
 
@@ -116,16 +73,16 @@ public:
   virtual bool Init();
   virtual void Shutdown();
   virtual nsIFrame* GetFrame() const;
-  virtual bool IsDefunct() const;
   virtual nsINode* GetNode() const { return mDocument; }
   virtual nsIDocument* GetDocumentNode() const { return mDocument; }
 
   // nsAccessible
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName);
   virtual void Description(nsString& aDescription);
   virtual nsAccessible* FocusedChild();
   virtual mozilla::a11y::role NativeRole();
   virtual PRUint64 NativeState();
-  virtual void ApplyARIAState(PRUint64* aState);
+  virtual void ApplyARIAState(PRUint64* aState) const;
 
   virtual void SetRoleMapEntry(nsRoleMapEntry* aRoleMapEntry);
 
@@ -133,8 +90,10 @@ public:
   virtual nsresult HandleAccEvent(AccEvent* aAccEvent);
 #endif
 
-  // nsIAccessibleText
-  NS_IMETHOD GetAssociatedEditor(nsIEditor **aEditor);
+  virtual void GetBoundsRect(nsRect& aRect, nsIFrame** aRelativeFrame);
+
+  // nsHyperTextAccessible
+  virtual already_AddRefed<nsIEditor> GetEditor() const;
 
   // nsDocAccessible
 
@@ -143,6 +102,11 @@ public:
    */
   nsIPresShell* PresShell() const { return mPresShell; }
 
+  /**
+   * Return the presentation shell's context.
+   */
+  nsPresContext* PresContext() const { return mPresShell->GetPresContext(); }
+    
   /**
    * Return true if associated DOM document was loaded and isn't unloading.
    */
@@ -389,7 +353,6 @@ protected:
   virtual void CacheChildren();
 
   // nsDocAccessible
-    virtual void GetBoundsRect(nsRect& aRect, nsIFrame** aRelativeFrame);
     virtual nsresult AddEventListeners();
     virtual nsresult RemoveEventListeners();
 
@@ -666,9 +629,6 @@ private:
 
   nsIPresShell* mPresShell;
 };
-
-NS_DEFINE_STATIC_IID_ACCESSOR(nsDocAccessible,
-                              NS_DOCACCESSIBLE_IMPL_CID)
 
 inline nsDocAccessible*
 nsAccessible::AsDoc()

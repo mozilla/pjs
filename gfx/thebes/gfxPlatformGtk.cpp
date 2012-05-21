@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   Karl Tomlinson <karlt+@karlt.net>, Mozilla Corporation
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_PANGO
 #define PANGO_ENABLE_BACKEND
@@ -45,6 +11,7 @@
 #include "gfxPlatformGtk.h"
 
 #include "nsUnicharUtils.h"
+#include "nsUnicodeProperties.h"
 #include "gfxFontconfigUtils.h"
 #ifdef MOZ_PANGO
 #include "gfxPangoFonts.h"
@@ -66,6 +33,7 @@
 #include <gdk/gdkx.h>
 #include "gfxXlibSurface.h"
 #include "cairo-xlib.h"
+#include "mozilla/Preferences.h"
 
 /* Undefine the Status from Xlib since it will conflict with system headers on OSX */
 #if defined(__APPLE__) && defined(Status)
@@ -80,13 +48,9 @@
 
 #define GDK_PIXMAP_SIZE_MAX 32767
 
-#ifndef MOZ_PANGO
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#endif
-
 using namespace mozilla;
 using namespace mozilla::gfx;
+using namespace mozilla::unicode;
 
 gfxFontconfigUtils *gfxPlatformGtk::sFontconfigUtils = nsnull;
 
@@ -107,14 +71,20 @@ static void do_gdk_drawable_unref (void *data)
     g_object_unref (d);
 }
 
+#ifdef MOZ_X11
+    bool gfxPlatformGtk::sUseXRender = true;
+#endif
+
 gfxPlatformGtk::gfxPlatformGtk()
 {
     if (!sFontconfigUtils)
         sFontconfigUtils = gfxFontconfigUtils::GetFontconfigUtils();
+#ifdef MOZ_X11
+    sUseXRender = mozilla::Preferences::GetBool("gfx.xrender.enabled");
+#endif
 
 #ifndef MOZ_PANGO
     FT_Init_FreeType(&gPlatformFTLibrary);
-
     gPlatformFonts = new FontTable();
     gPlatformFonts->Init(100);
     gPlatformFontAliases = new FontTable();
@@ -181,7 +151,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const gfxIntSize& size,
             imageFormat = GetOffscreenFormat();
         }
 
-        if (UseClientSideRendering()) {
+        if (!UseXRender()) {
             // We're not going to use XRender, so we don't need to
             // search for a render format
             newSurface = new gfxImageSurface(size, imageFormat);
@@ -673,7 +643,7 @@ FindFontForCharProc(nsStringHashKey::KeyType aKey,
                     nsRefPtr<FontFamily>& aFontFamily,
                     void* aUserArg)
 {
-    FontSearch *data = (FontSearch*)aUserArg;
+    GlobalFontMatch *data = (GlobalFontMatch*)aUserArg;
     aFontFamily->FindFontForChar(data);
     return PL_DHASH_NEXT;
 }
@@ -689,7 +659,8 @@ gfxPlatformGtk::FindFontForChar(PRUint32 aCh, gfxFont *aFont)
         return nsnull;
     }
 
-    FontSearch data(aCh, aFont);
+    GlobalFontMatch data(aCh, GetScriptCode(aCh),
+                         (aFont ? aFont->GetStyle() : nsnull));
 
     // find fonts that support the character
     gPlatformFonts->Enumerate(FindFontForCharProc, &data);

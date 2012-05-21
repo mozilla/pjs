@@ -276,6 +276,7 @@ class Histogram {
     HISTOGRAM,
     LINEAR_HISTOGRAM,
     BOOLEAN_HISTOGRAM,
+    FLAG_HISTOGRAM,
     CUSTOM_HISTOGRAM,
     NOT_VALID_IN_RENDERER
   };
@@ -335,6 +336,7 @@ class Histogram {
     Count TotalCount() const;
     int64 sum() const { return sum_; }
     int64 redundant_count() const { return redundant_count_; }
+    size_t size() const { return counts_.size(); }
 
     // Arithmetic manipulation of corresponding elements of the set.
     void Add(const SampleSet& other);
@@ -391,7 +393,9 @@ class Histogram {
     Add(static_cast<int>(time.InMilliseconds()));
   }
 
-  void AddSampleSet(const SampleSet& sample);
+  virtual void AddSampleSet(const SampleSet& sample);
+
+  void Clear();
 
   // This method is an interface, used only by LinearHistogram.
   virtual void SetRangeDescriptions(const DescriptionPair descriptions[]);
@@ -642,10 +646,31 @@ class BooleanHistogram : public LinearHistogram {
 
   virtual void AddBoolean(bool value);
 
- private:
+ protected:
   explicit BooleanHistogram(const std::string& name);
 
   DISALLOW_COPY_AND_ASSIGN(BooleanHistogram);
+};
+
+//------------------------------------------------------------------------------
+
+// FlagHistogram is like boolean histogram, but only allows a single off/on value.
+class FlagHistogram : public BooleanHistogram
+{
+public:
+  static Histogram *FactoryGet(const std::string &name, Flags flags);
+
+  virtual ClassType histogram_type() const;
+
+  virtual void Accumulate(Sample value, Count count, size_t index);
+
+  virtual void AddSampleSet(const SampleSet& sample);
+
+private:
+  explicit FlagHistogram(const std::string &name);
+  bool mSwitched;
+
+  DISALLOW_COPY_AND_ASSIGN(FlagHistogram);
 };
 
 //------------------------------------------------------------------------------

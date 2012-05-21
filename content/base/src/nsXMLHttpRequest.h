@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsXMLHttpRequest_h__
 #define nsXMLHttpRequest_h__
@@ -67,15 +35,37 @@
 #include "nsContentUtils.h"
 #include "nsDOMFile.h"
 #include "nsDOMBlobBuilder.h"
+#include "nsIPrincipal.h"
+#include "nsIScriptObjectPrincipal.h"
+#include "mozilla/dom/XMLHttpRequestBinding.h"
+#include "mozilla/dom/XMLHttpRequestUploadBinding.h"
+
+#include "mozilla/Assertions.h"
 
 class nsILoadGroup;
 class AsyncVerifyRedirectCallbackForwarder;
 class nsIUnicodeDecoder;
+class nsIDOMFormData;
+
+#define IMPL_EVENT_HANDLER(_lowercase, _capitalized)                    \
+  JSObject* GetOn##_lowercase()                                         \
+  {                                                                     \
+    return GetListenerAsJSObject(mOn##_capitalized##Listener);          \
+  }                                                                     \
+  void SetOn##_lowercase(JSContext* aCx, JSObject* aCallback, ErrorResult& aRv) \
+  {                                                                     \
+    aRv = SetJSObjectListener(aCx, NS_LITERAL_STRING(#_lowercase),      \
+                              mOn##_capitalized##Listener,              \
+                              aCallback);                               \
+  }
 
 class nsXHREventTarget : public nsDOMEventTargetHelper,
                          public nsIXMLHttpRequestEventTarget
 {
 public:
+  typedef mozilla::dom::XMLHttpRequestResponseType
+          XMLHttpRequestResponseType;
+
   virtual ~nsXHREventTarget() {}
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsXHREventTarget,
@@ -83,7 +73,45 @@ public:
   NS_DECL_NSIXMLHTTPREQUESTEVENTTARGET
   NS_FORWARD_NSIDOMEVENTTARGET(nsDOMEventTargetHelper::)
 
+  IMPL_EVENT_HANDLER(loadstart, LoadStart)
+  IMPL_EVENT_HANDLER(progress, Progress)
+  IMPL_EVENT_HANDLER(abort, Abort)
+  IMPL_EVENT_HANDLER(error, Error)
+  IMPL_EVENT_HANDLER(load, Load)
+  IMPL_EVENT_HANDLER(timeout, Timeout)
+  IMPL_EVENT_HANDLER(loadend, Loadend)
+  
+  virtual void DisconnectFromOwner();
 protected:
+  static inline JSObject* GetListenerAsJSObject(nsDOMEventListenerWrapper* aWrapper)
+  {
+    if (!aWrapper) {
+      return nsnull;
+    }
+
+    nsCOMPtr<nsIXPConnectJSObjectHolder> holder =
+        do_QueryInterface(aWrapper->GetInner());
+    JSObject* obj;
+    return holder && NS_SUCCEEDED(holder->GetJSObject(&obj)) ? obj : nsnull;
+  }
+  inline nsresult SetJSObjectListener(JSContext* aCx,
+                                      const nsAString& aType,
+                                      nsRefPtr<nsDOMEventListenerWrapper>& aWrapper,
+                                      JSObject* aCallback)
+  {
+    nsCOMPtr<nsIDOMEventListener> listener;
+    if (aCallback) {
+      nsresult rv =
+        nsContentUtils::XPConnect()->WrapJS(aCx,
+                                            aCallback,
+                                            NS_GET_IID(nsIDOMEventListener),
+                                            getter_AddRefs(listener));
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+
+    return RemoveAddEventListener(aType, aWrapper, listener);
+  }
+
   nsRefPtr<nsDOMEventListenerWrapper> mOnLoadListener;
   nsRefPtr<nsDOMEventListenerWrapper> mOnErrorListener;
   nsRefPtr<nsDOMEventListenerWrapper> mOnAbortListener;
@@ -97,16 +125,25 @@ class nsXMLHttpRequestUpload : public nsXHREventTarget,
                                public nsIXMLHttpRequestUpload
 {
 public:
-  nsXMLHttpRequestUpload(nsPIDOMWindow* aOwner,
-                         nsIScriptContext* aScriptContext)
+  nsXMLHttpRequestUpload(nsDOMEventTargetHelper* aOwner)
   {
-    mOwner = aOwner;
-    mScriptContext = aScriptContext;
-  }
+    BindToOwner(aOwner);
+    SetIsDOMBinding();
+  }                                         
   NS_DECL_ISUPPORTS_INHERITED
   NS_FORWARD_NSIXMLHTTPREQUESTEVENTTARGET(nsXHREventTarget::)
   NS_FORWARD_NSIDOMEVENTTARGET(nsXHREventTarget::)
   NS_DECL_NSIXMLHTTPREQUESTUPLOAD
+
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
+                               bool *triedToWrap)
+  {
+    return mozilla::dom::XMLHttpRequestUploadBinding::Wrap(cx, scope, this, triedToWrap);
+  }
+  nsISupports* GetParentObject()
+  {
+    return GetOwner();
+  }
 
   bool HasListeners()
   {
@@ -129,6 +166,43 @@ class nsXMLHttpRequest : public nsXHREventTarget,
 public:
   nsXMLHttpRequest();
   virtual ~nsXMLHttpRequest();
+
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
+                               bool *triedToWrap)
+  {
+    return mozilla::dom::XMLHttpRequestBinding::Wrap(cx, scope, this, triedToWrap);
+  }
+  nsISupports* GetParentObject()
+  {
+    return GetOwner();
+  }
+
+  // The WebIDL parser converts constructors into methods called _Constructor.
+  static already_AddRefed<nsXMLHttpRequest>
+  _Constructor(nsISupports* aGlobal, ErrorResult& aRv)
+  {
+    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal);
+    nsCOMPtr<nsIScriptObjectPrincipal> principal = do_QueryInterface(aGlobal);
+    if (!window || ! principal) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return NULL;
+    }
+
+    nsRefPtr<nsXMLHttpRequest> req = new nsXMLHttpRequest();
+    req->Construct(principal->GetPrincipal(), window);
+    return req.forget();
+  }
+
+  void Construct(nsIPrincipal* aPrincipal,
+                 nsPIDOMWindow* aOwnerWindow,
+                 nsIURI* aBaseURI = NULL)
+  {
+    MOZ_ASSERT(aPrincipal);
+    MOZ_ASSERT_IF(aOwnerWindow, aOwnerWindow->IsInnerWindow());
+    mPrincipal = aPrincipal;
+    BindToOwner(aOwnerWindow);
+    mBaseURI = aBaseURI;
+  }
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -164,6 +238,213 @@ public:
                        PRUint32 argc, jsval* argv);
 
   NS_FORWARD_NSIDOMEVENTTARGET(nsXHREventTarget::)
+
+#ifdef DEBUG
+  void StaticAssertions();
+#endif
+
+  // event handler
+  IMPL_EVENT_HANDLER(readystatechange, Readystatechange)
+
+  // states
+  uint16_t GetReadyState();
+
+  // request
+  void Open(const nsAString& aMethod, const nsAString& aUrl, bool aAsync,
+            const nsAString& aUser, const nsAString& aPassword, ErrorResult& aRv)
+  {
+    aRv = Open(NS_ConvertUTF16toUTF8(aMethod), NS_ConvertUTF16toUTF8(aUrl),
+               aAsync, aUser, aPassword);
+  }
+  void SetRequestHeader(const nsAString& aHeader, const nsAString& aValue,
+                        ErrorResult& aRv)
+  {
+    aRv = SetRequestHeader(NS_ConvertUTF16toUTF8(aHeader),
+                           NS_ConvertUTF16toUTF8(aValue));
+  }
+  uint32_t GetTimeout()
+  {
+    return mTimeoutMilliseconds;
+  }
+  void SetTimeout(uint32_t aTimeout, ErrorResult& aRv);
+  bool GetWithCredentials();
+  void SetWithCredentials(bool aWithCredentials, nsresult& aRv);
+  nsXMLHttpRequestUpload* GetUpload();
+
+private:
+  class RequestBody
+  {
+  public:
+    RequestBody() : mType(Uninitialized)
+    {
+    }
+    RequestBody(JSObject* aArrayBuffer) : mType(ArrayBuffer)
+    {
+      mValue.mArrayBuffer = aArrayBuffer;
+    }
+    RequestBody(nsIDOMBlob* aBlob) : mType(Blob)
+    {
+      mValue.mBlob = aBlob;
+    }
+    RequestBody(nsIDocument* aDocument) : mType(Document)
+    {
+      mValue.mDocument = aDocument;
+    }
+    RequestBody(const nsAString& aString) : mType(DOMString)
+    {
+      mValue.mString = &aString;
+    }
+    RequestBody(nsIDOMFormData* aFormData) : mType(FormData)
+    {
+      mValue.mFormData = aFormData;
+    }
+    RequestBody(nsIInputStream* aStream) : mType(InputStream)
+    {
+      mValue.mStream = aStream;
+    }
+
+    enum Type {
+      Uninitialized,
+      ArrayBuffer,
+      Blob,
+      Document,
+      DOMString,
+      FormData,
+      InputStream
+    };
+    union Value {
+      JSObject* mArrayBuffer;
+      nsIDOMBlob* mBlob;
+      nsIDocument* mDocument;
+      const nsAString* mString;
+      nsIDOMFormData* mFormData;
+      nsIInputStream* mStream;
+    };
+
+    Type GetType() const
+    {
+      MOZ_ASSERT(mType != Uninitialized);
+      return mType;
+    }
+    Value GetValue() const
+    {
+      MOZ_ASSERT(mType != Uninitialized);
+      return mValue;
+    }
+
+  private:
+    Type mType;
+    Value mValue;
+  };
+
+  static nsresult GetRequestBody(nsIVariant* aVariant,
+                                 JSContext* aCx,
+                                 const Nullable<RequestBody>& aBody,
+                                 nsIInputStream** aResult,
+                                 nsACString& aContentType,
+                                 nsACString& aCharset);
+
+  nsresult Send(JSContext *aCx, nsIVariant* aVariant, const Nullable<RequestBody>& aBody);
+  nsresult Send(JSContext *aCx, const Nullable<RequestBody>& aBody)
+  {
+    return Send(aCx, nsnull, aBody);
+  }
+  nsresult Send(JSContext *aCx, const RequestBody& aBody)
+  {
+    return Send(aCx, Nullable<RequestBody>(aBody));
+  }
+
+public:
+  void Send(JSContext *aCx, ErrorResult& aRv)
+  {
+    aRv = Send(aCx, Nullable<RequestBody>());
+  }
+  void Send(JSContext *aCx, JSObject* aArrayBuffer, ErrorResult& aRv)
+  {
+    NS_ASSERTION(aArrayBuffer, "Null should go to string version");
+    aRv = Send(aCx, RequestBody(aArrayBuffer));
+  }
+  void Send(JSContext *aCx, nsIDOMBlob* aBlob, ErrorResult& aRv)
+  {
+    NS_ASSERTION(aBlob, "Null should go to string version");
+    aRv = Send(aCx, RequestBody(aBlob));
+  }
+  void Send(JSContext *aCx, nsIDocument* aDoc, ErrorResult& aRv)
+  {
+    NS_ASSERTION(aDoc, "Null should go to string version");
+    aRv = Send(aCx, RequestBody(aDoc));
+  }
+  void Send(JSContext *aCx, const nsAString& aString, ErrorResult& aRv)
+  {
+    if (DOMStringIsNull(aString)) {
+      Send(aCx, aRv);
+    }
+    else {
+      aRv = Send(aCx, RequestBody(aString));
+    }
+  }
+  void Send(JSContext *aCx, nsIDOMFormData* aFormData, ErrorResult& aRv)
+  {
+    NS_ASSERTION(aFormData, "Null should go to string version");
+    aRv = Send(aCx, RequestBody(aFormData));
+  }
+  void Send(JSContext *aCx, nsIInputStream* aStream, ErrorResult& aRv)
+  {
+    NS_ASSERTION(aStream, "Null should go to string version");
+    aRv = Send(aCx, RequestBody(aStream));
+  }
+  void SendAsBinary(JSContext *aCx, const nsAString& aBody, ErrorResult& aRv);
+
+  void Abort();
+
+  // response
+  uint32_t GetStatus();
+  void GetStatusText(nsString& aStatusText);
+  void GetResponseHeader(const nsACString& aHeader, nsACString& aResult,
+                         ErrorResult& aRv);
+  void GetResponseHeader(const nsAString& aHeader, nsString& aResult,
+                         ErrorResult& aRv)
+  {
+    nsCString result;
+    GetResponseHeader(NS_ConvertUTF16toUTF8(aHeader), result, aRv);
+    if (result.IsVoid()) {
+      aResult.SetIsVoid(true);
+    }
+    else {
+      // We use UTF8ToNewUnicode here because it truncates after invalid UTF-8
+      // characters, CopyUTF8toUTF16 just doesn't copy in that case.
+      PRUint32 length;
+      PRUnichar* chars = UTF8ToNewUnicode(result, &length);
+      aResult.Adopt(chars, length);
+    }
+  }
+  void GetAllResponseHeaders(nsString& aResponseHeaders);
+  void OverrideMimeType(const nsAString& aMimeType)
+  {
+    // XXX Should we do some validation here?
+    mOverrideMimeType = aMimeType;
+  }
+  XMLHttpRequestResponseType GetResponseType()
+  {
+    return XMLHttpRequestResponseType(mResponseType);
+  }
+  void SetResponseType(XMLHttpRequestResponseType aType, ErrorResult& aRv);
+  JS::Value GetResponse(JSContext* aCx, ErrorResult& aRv);
+  void GetResponseText(nsString& aResponseText, ErrorResult& aRv);
+  nsIDocument* GetResponseXML(ErrorResult& aRv);
+
+  bool GetMozBackgroundRequest();
+  void SetMozBackgroundRequest(bool aMozBackgroundRequest, nsresult& aRv);
+  bool GetMultipart();
+  void SetMultipart(bool aMultipart, nsresult& aRv);
+
+  nsIChannel* GetChannel()
+  {
+    return mChannel;
+  }
+
+  // We need a GetInterface callable from JS for chrome JS
+  JS::Value GetInterface(JSContext* aCx, nsIJSIID* aIID, ErrorResult& aRv);
 
   // This creates a trusted readystatechange event, which is not cancelable and
   // doesn't bubble.
@@ -206,7 +487,8 @@ public:
                                                                    nsXHREventTarget)
   bool AllowUploadProgress();
   void RootResultArrayBuffer();
-  
+
+  virtual void DisconnectFromOwner();
 protected:
   friend class nsMultipartProxyListener;
 
@@ -253,12 +535,15 @@ protected:
   friend class AsyncVerifyRedirectCallbackForwarder;
   void OnRedirectVerifyCallback(nsresult result);
 
+  nsresult Open(const nsACString& method, const nsACString& url, bool async,
+                const nsAString& user, const nsAString& password);
+
   nsCOMPtr<nsISupports> mContext;
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsCOMPtr<nsIChannel> mChannel;
   // mReadRequest is different from mChannel for multipart requests
   nsCOMPtr<nsIRequest> mReadRequest;
-  nsCOMPtr<nsIDOMDocument> mResponseXML;
+  nsCOMPtr<nsIDocument> mResponseXML;
   nsCOMPtr<nsIChannel> mCORSPreflightChannel;
   nsTArray<nsCString> mCORSUnsafeHeaders;
 
@@ -304,17 +589,21 @@ protected:
 
   nsCString mResponseCharset;
 
-  enum {
+  enum ResponseType {
     XML_HTTP_RESPONSE_TYPE_DEFAULT,
     XML_HTTP_RESPONSE_TYPE_ARRAYBUFFER,
     XML_HTTP_RESPONSE_TYPE_BLOB,
     XML_HTTP_RESPONSE_TYPE_DOCUMENT,
-    XML_HTTP_RESPONSE_TYPE_TEXT,
     XML_HTTP_RESPONSE_TYPE_JSON,
+    XML_HTTP_RESPONSE_TYPE_TEXT,
     XML_HTTP_RESPONSE_TYPE_CHUNKED_TEXT,
     XML_HTTP_RESPONSE_TYPE_CHUNKED_ARRAYBUFFER,
     XML_HTTP_RESPONSE_TYPE_MOZ_BLOB
-  } mResponseType;
+  };
+
+  void SetResponseType(nsXMLHttpRequest::ResponseType aType, ErrorResult& aRv);
+
+  ResponseType mResponseType;
 
   // It is either a cached blob-response from the last call to GetResponse,
   // but is also explicitly set in OnStopRequest.
@@ -327,7 +616,7 @@ protected:
   // and mDOMFile is null.
   nsRefPtr<nsDOMBlobBuilder> mBuilder;
 
-  nsCString mOverrideMimeType;
+  nsString mOverrideMimeType;
 
   /**
    * The notification callbacks the channel had when Send() was
@@ -405,6 +694,8 @@ protected:
   };
   nsTArray<RequestHeader> mModifiedRequestHeaders;
 };
+
+#undef IMPL_EVENT_HANDLER
 
 // helper class to expose a progress DOM Event
 

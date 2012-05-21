@@ -1,42 +1,9 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Luke Wagner <lw@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsinterpinlines_h__
 #define jsinterpinlines_h__
@@ -60,21 +27,6 @@
 #include "vm/Stack-inl.h"
 
 namespace js {
-
-class AutoPreserveEnumerators {
-    JSContext *cx;
-    JSObject *enumerators;
-
-  public:
-    AutoPreserveEnumerators(JSContext *cx) : cx(cx), enumerators(cx->enumerators)
-    {
-    }
-
-    ~AutoPreserveEnumerators()
-    {
-        cx->enumerators = enumerators;
-    }
-};
 
 /*
  * Compute the implicit |this| parameter for a call expression where the callee
@@ -146,7 +98,7 @@ ComputeThis(JSContext *cx, StackFrame *fp)
  * This helps us implement the custom [[Get]] method that ES5's GetValue
  * algorithm uses for primitive values, without actually constructing the
  * temporary object that the specification does.
- * 
+ *
  * For objects, return the object itself. For string, boolean, and number
  * primitive values, return the appropriate constructor's prototype. For
  * undefined and null, throw an error and return NULL, attributing the
@@ -158,7 +110,7 @@ ValuePropertyBearer(JSContext *cx, StackFrame *fp, const Value &v, int spindex)
     if (v.isObject())
         return &v.toObject();
 
-    GlobalObject &global = fp->scopeChain().global();
+    GlobalObject &global = fp->global();
 
     if (v.isString())
         return global.getOrCreateStringPrototype(cx);
@@ -173,7 +125,7 @@ ValuePropertyBearer(JSContext *cx, StackFrame *fp, const Value &v, int spindex)
 }
 
 inline bool
-NativeGet(JSContext *cx, JSObject *obj, JSObject *pobj, const Shape *shape, uintN getHow, Value *vp)
+NativeGet(JSContext *cx, JSObject *obj, JSObject *pobj, const Shape *shape, unsigned getHow, Value *vp)
 {
     if (shape->isDataDescriptor() && shape->hasDefaultGetter()) {
         /* Fast path for Object instance properties. */
@@ -186,7 +138,7 @@ NativeGet(JSContext *cx, JSObject *obj, JSObject *pobj, const Shape *shape, uint
     return true;
 }
 
-#if defined(DEBUG) && !defined(JS_THREADSAFE)
+#if defined(DEBUG) && !defined(JS_THREADSAFE) && !defined(JSGC_ROOT_ANALYSIS)
 extern void
 AssertValidPropertyCacheHit(JSContext *cx, JSObject *start, JSObject *found,
                             PropertyCacheEntry *entry);
@@ -198,7 +150,7 @@ AssertValidPropertyCacheHit(JSContext *cx, JSObject *start, JSObject *found,
 #endif
 
 inline bool
-GetPropertyGenericMaybeCallXML(JSContext *cx, JSOp op, JSObject *obj, jsid id, Value *vp)
+GetPropertyGenericMaybeCallXML(JSContext *cx, JSOp op, HandleObject obj, HandleId id, Value *vp)
 {
     /*
      * Various XML properties behave differently when accessed in a
@@ -225,14 +177,14 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
             *vp = Int32Value(lval.toString()->length());
             return true;
         }
-        if (lval.isMagic(JS_LAZY_ARGUMENTS)) {
+        if (lval.isMagic(JS_OPTIMIZED_ARGUMENTS)) {
             *vp = Int32Value(cx->fp()->numActualArgs());
             return true;
         }
         if (lval.isObject()) {
             JSObject *obj = &lval.toObject();
             if (obj->isArray()) {
-                jsuint length = obj->getArrayLength();
+                uint32_t length = obj->getArrayLength();
                 *vp = NumberValue(length);
                 return true;
             }
@@ -247,21 +199,16 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
                 }
             }
 
-            if (js_IsTypedArray(obj)) {
-                JSObject *tarray = TypedArray::getTypedArray(obj);
-                *vp = Int32Value(TypedArray::getLength(tarray));
+            if (obj->isTypedArray()) {
+                *vp = Int32Value(TypedArray::getLength(obj));
                 return true;
             }
         }
     }
 
-    JSObject *obj = ValueToObjectOrPrototype(cx, lval);
+    JSObject *obj = ValueToObject(cx, lval);
     if (!obj)
         return false;
-
-    uintN flags = (op == JSOP_CALLPROP)
-                  ? JSGET_CACHE_RESULT | JSGET_NO_METHOD_BARRIER
-                  : JSGET_CACHE_RESULT | JSGET_METHOD_BARRIER;
 
     PropertyCacheEntry *entry;
     JSObject *obj2;
@@ -269,18 +216,19 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
     JS_PROPERTY_CACHE(cx).test(cx, pc, obj, obj2, entry, name);
     if (!name) {
         AssertValidPropertyCacheHit(cx, obj, obj2, entry);
-        if (!NativeGet(cx, obj, obj2, entry->prop, flags, vp))
+        if (!NativeGet(cx, obj, obj2, entry->prop, JSGET_CACHE_RESULT, vp))
             return false;
         return true;
     }
 
-    jsid id = ATOM_TO_JSID(name);
+    RootObject objRoot(cx, &obj);
+    RootedVarId id(cx, NameToId(name));
 
     if (obj->getOps()->getProperty) {
-        if (!GetPropertyGenericMaybeCallXML(cx, op, obj, id, vp))
+        if (!GetPropertyGenericMaybeCallXML(cx, op, objRoot, id, vp))
             return false;
     } else {
-        if (!GetPropertyHelper(cx, obj, id, flags, vp))
+        if (!GetPropertyHelper(cx, objRoot, id, JSGET_CACHE_RESULT, vp))
             return false;
     }
 
@@ -289,7 +237,7 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
         JS_UNLIKELY(vp->isPrimitive()) &&
         lval.isObject())
     {
-        if (!OnUnknownMethod(cx, obj, IdToValue(id), vp))
+        if (!OnUnknownMethod(cx, objRoot, IdToValue(id), vp))
             return false;
     }
 #endif
@@ -304,9 +252,8 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
     if (!obj)
         return false;
 
-    JS_ASSERT_IF(*pc == JSOP_SETMETHOD, IsFunctionObject(rval));
     JS_ASSERT_IF(*pc == JSOP_SETNAME || *pc == JSOP_SETGNAME, lval.isObject());
-    JS_ASSERT_IF(*pc == JSOP_SETGNAME, obj == &cx->fp()->scopeChain().global());
+    JS_ASSERT_IF(*pc == JSOP_SETGNAME, obj == &cx->fp()->global());
 
     PropertyCacheEntry *entry;
     JSObject *obj2;
@@ -328,16 +275,16 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
             ((obj2 = obj->getProto()) && obj2->lastProperty() == entry->pshape)) {
 #ifdef DEBUG
             if (entry->isOwnPropertyHit()) {
-                JS_ASSERT(obj->nativeContains(cx, *shape));
+                JS_ASSERT(obj->nativeLookupNoAllocation(cx, shape->propid()) == shape);
             } else {
-                JS_ASSERT(obj2->nativeContains(cx, *shape));
+                JS_ASSERT(obj2->nativeLookupNoAllocation(cx, shape->propid()) == shape);
                 JS_ASSERT(entry->isPrototypePropertyHit());
                 JS_ASSERT(entry->kshape != entry->pshape);
                 JS_ASSERT(!shape->hasSlot());
             }
 #endif
 
-            if (shape->hasDefaultSetter() && shape->hasSlot() && !shape->isMethod()) {
+            if (shape->hasDefaultSetter() && shape->hasSlot()) {
                 /* Fast path for, e.g., plain Object instance properties. */
                 obj->nativeSetSlotWithType(cx, shape, rval);
             } else {
@@ -353,23 +300,21 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
     }
 
     bool strict = cx->stack.currentScript()->strictModeCode;
-    Value rref = rval;
+    RootedVarValue rref(cx, rval);
 
     JSOp op = JSOp(*pc);
 
-    jsid id = ATOM_TO_JSID(name);
+    RootObject objRoot(cx, &obj);
+
+    RootedVarId id(cx, NameToId(name));
     if (JS_LIKELY(!obj->getOps()->setProperty)) {
-        uintN defineHow;
-        if (op == JSOP_SETMETHOD)
-            defineHow = DNP_CACHE_RESULT | DNP_SET_METHOD;
-        else if (op == JSOP_SETNAME)
-            defineHow = DNP_CACHE_RESULT | DNP_UNQUALIFIED;
-        else
-            defineHow = DNP_CACHE_RESULT;
-        if (!js_SetPropertyHelper(cx, obj, id, defineHow, &rref, strict))
+        unsigned defineHow = (op == JSOP_SETNAME)
+                             ? DNP_CACHE_RESULT | DNP_UNQUALIFIED
+                             : DNP_CACHE_RESULT;
+        if (!baseops::SetPropertyHelper(cx, objRoot, id, defineHow, rref.address(), strict))
             return false;
     } else {
-        if (!obj->setGeneric(cx, id, &rref, strict))
+        if (!obj->setGeneric(cx, id, rref.address(), strict))
             return false;
     }
 
@@ -399,15 +344,18 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
     JS_PROPERTY_CACHE(cx).test(cx, pc, obj, obj2, entry, name);
     if (!name) {
         AssertValidPropertyCacheHit(cx, obj, obj2, entry);
-        if (!NativeGet(cx, obj, obj2, entry->prop, JSGET_METHOD_BARRIER, vp))
+        if (!NativeGet(cx, obj, obj2, entry->prop, 0, vp))
             return false;
         return true;
     }
 
-    jsid id = ATOM_TO_JSID(name);
+    jsid id = NameToId(name);
+
+    RootPropertyName nameRoot(cx, &name);
+    RootObject objRoot(cx, &obj);
 
     JSProperty *prop;
-    if (!FindPropertyHelper(cx, name, true, obj, &obj, &obj2, &prop))
+    if (!FindPropertyHelper(cx, nameRoot, true, objRoot, &obj, &obj2, &prop))
         return false;
     if (!prop) {
         /* Kludge to allow (typeof foo == "undefined") tests. */
@@ -424,14 +372,14 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
 
     /* Take the slow path if prop was not found in a native object. */
     if (!obj->isNative() || !obj2->isNative()) {
-        if (!obj->getGeneric(cx, id, vp))
+        if (!obj->getGeneric(cx, RootedVarId(cx, id), vp))
             return false;
     } else {
         Shape *shape = (Shape *)prop;
         JSObject *normalized = obj;
         if (normalized->getClass() == &WithClass && !shape->hasDefaultGetter())
             normalized = &normalized->asWith().object();
-        if (!NativeGet(cx, normalized, obj2, shape, JSGET_METHOD_BARRIER, vp))
+        if (!NativeGet(cx, normalized, obj2, shape, 0, vp))
             return false;
     }
 
@@ -439,21 +387,20 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
 }
 
 inline bool
-DefVarOrConstOperation(JSContext *cx, JSObject &varobj, PropertyName *dn, uintN attrs)
+DefVarOrConstOperation(JSContext *cx, HandleObject varobj, PropertyName *dn, unsigned attrs)
 {
-    JS_ASSERT(varobj.isVarObj());
-    JS_ASSERT(!varobj.getOps()->defineProperty);
+    JS_ASSERT(varobj->isVarObj());
+    JS_ASSERT(!varobj->getOps()->defineProperty || varobj->isDebugScope());
 
     JSProperty *prop;
     JSObject *obj2;
-    if (!varobj.lookupProperty(cx, dn, &obj2, &prop))
+    if (!varobj->lookupProperty(cx, dn, &obj2, &prop))
         return false;
 
     /* Steps 8c, 8d. */
-    if (!prop || (obj2 != &varobj && varobj.isGlobal())) {
-        if (!DefineNativeProperty(cx, &varobj, dn, UndefinedValue(),
-                                  JS_PropertyStub, JS_StrictPropertyStub, attrs, 0, 0))
-        {
+    if (!prop || (obj2 != varobj && varobj->isGlobal())) {
+        if (!varobj->defineProperty(cx, dn, UndefinedValue(), JS_PropertyStub,
+                                    JS_StrictPropertyStub, attrs)) {
             return false;
         }
     } else {
@@ -461,8 +408,8 @@ DefVarOrConstOperation(JSContext *cx, JSObject &varobj, PropertyName *dn, uintN 
          * Extension: ordinarily we'd be done here -- but for |const|.  If we
          * see a redeclaration that's |const|, we consider it a conflict.
          */
-        uintN oldAttrs;
-        if (!varobj.getPropertyAttributes(cx, dn, &oldAttrs))
+        unsigned oldAttrs;
+        if (!varobj->getPropertyAttributes(cx, dn, &oldAttrs))
             return false;
         if (attrs & JSPROP_READONLY) {
             JSAutoByteString bytes;
@@ -502,7 +449,7 @@ ScriptPrologue(JSContext *cx, StackFrame *fp, bool newType)
     JS_ASSERT_IF(fp->isNonEvalFunctionFrame() && fp->fun()->isHeavyweight(), fp->hasCallObj());
 
     if (fp->isConstructing()) {
-        JSObject *obj = js_CreateThisForFunction(cx, &fp->callee(), newType);
+        JSObject *obj = js_CreateThisForFunction(cx, RootedVarObject(cx, &fp->callee()), newType);
         if (!obj)
             return false;
         fp->functionThis().setObject(*obj);
@@ -553,14 +500,54 @@ InterpreterFrames::enableInterruptsIfRunning(JSScript *script)
         enabler.enableInterrupts();
 }
 
+inline void
+AssertValidEvalFrameScopeChainAtExit(StackFrame *fp)
+{
+#ifdef DEBUG
+    JS_ASSERT(fp->isEvalFrame());
+
+    JS_ASSERT(!fp->hasBlockChain());
+    JSObject &scope = *fp->scopeChain();
+
+    if (fp->isStrictEvalFrame())
+        JS_ASSERT(scope.asCall().maybeStackFrame() == fp);
+    else if (fp->isDebuggerFrame())
+        JS_ASSERT(!scope.isScope());
+    else if (fp->isDirectEvalFrame())
+        JS_ASSERT(scope == *fp->prev()->scopeChain());
+    else
+        JS_ASSERT(scope.isGlobal());
+#endif
+}
+
+inline void
+AssertValidFunctionScopeChainAtExit(StackFrame *fp)
+{
+#ifdef DEBUG
+    JS_ASSERT(fp->isFunctionFrame());
+    if (fp->isGeneratorFrame() || fp->isYielding())
+        return;
+
+    if (fp->isEvalFrame()) {
+        AssertValidEvalFrameScopeChainAtExit(fp);
+        return;
+    }
+
+    JS_ASSERT(!fp->hasBlockChain());
+    JSObject &scope = *fp->scopeChain();
+
+    if (fp->fun()->isHeavyweight())
+        JS_ASSERT(scope.asCall().maybeStackFrame() == fp);
+    else if (scope.isCall() || scope.isBlock())
+        JS_ASSERT(scope.asScope().maybeStackFrame() != fp);
+#endif
+}
+
 static JS_ALWAYS_INLINE bool
 AddOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
 {
-    Value lval = lhs;
-    Value rval = rhs;
-
-    if (lval.isInt32() && rval.isInt32()) {
-        int32_t l = lval.toInt32(), r = rval.toInt32();
+    if (lhs.isInt32() && rhs.isInt32()) {
+        int32_t l = lhs.toInt32(), r = rhs.toInt32();
         int32_t sum = l + r;
         if (JS_UNLIKELY(bool((l ^ sum) & (r ^ sum) & 0x80000000))) {
             res->setDouble(double(l) + double(r));
@@ -570,13 +557,18 @@ AddOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
         }
     } else
 #if JS_HAS_XML_SUPPORT
-    if (IsXML(lval) && IsXML(rval)) {
-        if (!js_ConcatenateXML(cx, &lval.toObject(), &rval.toObject(), res))
+    if (IsXML(lhs) && IsXML(rhs)) {
+        if (!js_ConcatenateXML(cx, &lhs.toObject(), &rhs.toObject(), res))
             return false;
         types::TypeScript::MonitorUnknown(cx);
     } else
 #endif
     {
+        RootedVarValue lval_(cx, lhs);
+        RootedVarValue rval_(cx, rhs);
+        Value &lval = lval_.reference();
+        Value &rval = rval_.reference();
+
         /*
          * If either operand is an object, any non-integer result must be
          * reported to inference.
@@ -589,22 +581,22 @@ AddOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
             return false;
         bool lIsString, rIsString;
         if ((lIsString = lval.isString()) | (rIsString = rval.isString())) {
-            js::AutoStringRooter lstr(cx), rstr(cx);
+            RootedVarString lstr(cx), rstr(cx);
             if (lIsString) {
-                lstr.setString(lval.toString());
+                lstr = lval.toString();
             } else {
-                lstr.setString(ToString(cx, lval));
-                if (!lstr.string())
+                lstr = ToString(cx, lval);
+                if (!lstr)
                     return false;
             }
             if (rIsString) {
-                rstr.setString(rval.toString());
+                rstr = rval.toString();
             } else {
-                rstr.setString(ToString(cx, rval));
-                if (!rstr.string())
+                rstr = ToString(cx, rval);
+                if (!rstr)
                     return false;
             }
-            JSString *str = js_ConcatStrings(cx, lstr.string(), rstr.string());
+            JSString *str = js_ConcatStrings(cx, lstr, rstr);
             if (!str)
                 return false;
             if (lIsObject || rIsObject)
@@ -625,48 +617,48 @@ AddOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
 }
 
 static JS_ALWAYS_INLINE bool
-SubOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
+SubOperation(JSContext *cx, HandleValue lhs, HandleValue rhs, Value *res)
 {
     double d1, d2;
     if (!ToNumber(cx, lhs, &d1) || !ToNumber(cx, rhs, &d2))
         return false;
     double d = d1 - d2;
-    if (!res->setNumber(d) && !(lhs.isDouble() || rhs.isDouble()))
+    if (!res->setNumber(d) && !(lhs.value().isDouble() || rhs.value().isDouble()))
         types::TypeScript::MonitorOverflow(cx);
     return true;
 }
 
 static JS_ALWAYS_INLINE bool
-MulOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
+MulOperation(JSContext *cx, HandleValue lhs, HandleValue rhs, Value *res)
 {
     double d1, d2;
     if (!ToNumber(cx, lhs, &d1) || !ToNumber(cx, rhs, &d2))
         return false;
     double d = d1 * d2;
-    if (!res->setNumber(d) && !(lhs.isDouble() || rhs.isDouble()))
+    if (!res->setNumber(d) && !(lhs.value().isDouble() || rhs.value().isDouble()))
         types::TypeScript::MonitorOverflow(cx);
     return true;
 }
 
 static JS_ALWAYS_INLINE bool
-DivOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
+DivOperation(JSContext *cx, HandleValue lhs, HandleValue rhs, Value *res)
 {
     double d1, d2;
     if (!ToNumber(cx, lhs, &d1) || !ToNumber(cx, rhs, &d2))
         return false;
     res->setNumber(NumberDiv(d1, d2));
 
-    if (d2 == 0 || (res->isDouble() && !(lhs.isDouble() || rhs.isDouble())))
+    if (d2 == 0 || (res->isDouble() && !(lhs.value().isDouble() || rhs.value().isDouble())))
         types::TypeScript::MonitorOverflow(cx);
     return true;
 }
 
 static JS_ALWAYS_INLINE bool
-ModOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
+ModOperation(JSContext *cx, HandleValue lhs, HandleValue rhs, Value *res)
 {
     int32_t l, r;
-    if (lhs.isInt32() && rhs.isInt32() &&
-        (l = lhs.toInt32()) >= 0 && (r = rhs.toInt32()) > 0) {
+    if (lhs.value().isInt32() && rhs.value().isInt32() &&
+        (l = lhs.value().toInt32()) >= 0 && (r = rhs.value().toInt32()) > 0) {
         int32_t mod = l % r;
         res->setInt32(mod);
         return true;
@@ -685,14 +677,14 @@ ModOperation(JSContext *cx, const Value &lhs, const Value &rhs, Value *res)
 }
 
 static inline bool
-FetchElementId(JSContext *cx, JSObject *obj, const Value &idval, jsid &id, Value *vp)
+FetchElementId(JSContext *cx, JSObject *obj, const Value &idval, jsid *idp, Value *vp)
 {
     int32_t i_;
     if (ValueFitsInInt32(idval, &i_) && INT_FITS_IN_JSID(i_)) {
-        id = INT_TO_JSID(i_);
+        *idp = INT_TO_JSID(i_);
         return true;
     }
-    return !!js_InternNonIntElementId(cx, obj, idval, &id, vp);
+    return !!InternNonIntElementId(cx, obj, idval, idp, vp);
 }
 
 static JS_ALWAYS_INLINE bool
@@ -708,7 +700,7 @@ ToIdOperation(JSContext *cx, const Value &objval, const Value &idval, Value *res
         return false;
 
     jsid dummy;
-    if (!js_InternNonIntElementId(cx, obj, idval, &dummy, res))
+    if (!InternNonIntElementId(cx, obj, idval, &dummy, res))
         return false;
 
     if (!res->isInt32())
@@ -717,8 +709,17 @@ ToIdOperation(JSContext *cx, const Value &objval, const Value &idval, Value *res
 }
 
 static JS_ALWAYS_INLINE bool
-GetObjectElementOperation(JSContext *cx, JSObject *obj, const Value &rref, Value *res)
+GetObjectElementOperation(JSContext *cx, JSOp op, HandleObject obj, const Value &rref, Value *res)
 {
+#if JS_HAS_XML_SUPPORT
+    if (op == JSOP_CALLELEM && JS_UNLIKELY(obj->isXML())) {
+        jsid id;
+        if (!FetchElementId(cx, obj, rref, &id, res))
+            return false;
+        return js_GetXMLMethod(cx, obj, id, res);
+    }
+#endif
+
     uint32_t index;
     if (IsDefinitelyIndex(rref, &index)) {
         do {
@@ -768,8 +769,10 @@ GetObjectElementOperation(JSContext *cx, JSObject *obj, const Value &rref, Value
 }
 
 static JS_ALWAYS_INLINE bool
-GetElementOperation(JSContext *cx, const Value &lref, const Value &rref, Value *res)
+GetElementOperation(JSContext *cx, JSOp op, const Value &lref, const Value &rref, Value *res)
 {
+    JS_ASSERT(op == JSOP_GETELEM || op == JSOP_CALLELEM);
+
     if (lref.isString() && rref.isInt32()) {
         JSString *str = lref.toString();
         int32_t i = rref.toInt32();
@@ -782,51 +785,56 @@ GetElementOperation(JSContext *cx, const Value &lref, const Value &rref, Value *
         }
     }
 
-    if (lref.isMagic(JS_LAZY_ARGUMENTS)) {
-        if (rref.isInt32() && size_t(rref.toInt32()) < cx->regs().fp()->numActualArgs()) {
-            *res = cx->regs().fp()->canonicalActualArg(rref.toInt32());
-            return true;
-        }
-        types::MarkArgumentsCreated(cx, cx->fp()->script());
-        JS_ASSERT(!lref.isMagic(JS_LAZY_ARGUMENTS));
-    }
+    if (lref.isMagic(JS_OPTIMIZED_ARGUMENTS))
+        return NormalArgumentsObject::optimizedGetElem(cx, cx->fp(), rref, res);
 
-    JSObject *obj = ValueToObject(cx, lref);
+    bool isObject = lref.isObject();
+    RootedVarObject obj(cx, ValueToObject(cx, lref));
     if (!obj)
         return false;
-    return GetObjectElementOperation(cx, obj, rref, res);
+    if (!GetObjectElementOperation(cx, op, obj, rref, res))
+        return false;
+
+#if JS_HAS_NO_SUCH_METHOD
+    if (op == JSOP_CALLELEM && JS_UNLIKELY(res->isPrimitive()) && isObject) {
+        if (!OnUnknownMethod(cx, obj, rref, res))
+            return false;
+    }
+#endif
+    return true;
 }
 
 static JS_ALWAYS_INLINE bool
-SetObjectElementOperation(JSContext *cx, JSObject *obj, jsid id, const Value &value)
+SetObjectElementOperation(JSContext *cx, JSObject *obj, HandleId id, const Value &value, bool strict)
 {
-    JSScript *script;
-    jsbytecode *pc;
-    types::TypeScript::GetPcScript(cx, &script, &pc);
-    types::TypeScript::MonitorAssign(cx, script, pc, obj, id, value);
+    types::TypeScript::MonitorAssign(cx, obj, id);
 
     do {
         if (obj->isDenseArray() && JSID_IS_INT(id)) {
-            jsuint length = obj->getDenseArrayInitializedLength();
-            jsint i = JSID_TO_INT(id);
-            if ((jsuint)i < length) {
+            uint32_t length = obj->getDenseArrayInitializedLength();
+            int32_t i = JSID_TO_INT(id);
+            if ((uint32_t)i < length) {
                 if (obj->getDenseArrayElement(i).isMagic(JS_ARRAY_HOLE)) {
                     if (js_PrototypeHasIndexedProperties(cx, obj))
                         break;
-                    if ((jsuint)i >= obj->getArrayLength())
+                    if ((uint32_t)i >= obj->getArrayLength())
                         obj->setArrayLength(cx, i + 1);
                 }
                 obj->setDenseArrayElementWithType(cx, i, value);
                 return true;
             } else {
+                JSScript *script;
+                jsbytecode *pc;
+                types::TypeScript::GetPcScript(cx, &script, &pc);
+
                 if (script->hasAnalysis())
                     script->analysis()->getCode(pc).arrayWriteHole = true;
             }
         }
     } while (0);
 
-    Value tmp = value;
-    return obj->setGeneric(cx, id, &tmp, script->strictModeCode);
+    RootedVarValue tmp(cx, value);
+    return obj->setGeneric(cx, id, tmp.address(), strict);
 }
 
 #define RELATIONAL_OP(OP)                                                     \
@@ -837,6 +845,7 @@ SetObjectElementOperation(JSContext *cx, JSObject *obj, jsid id, const Value &va
         if (lval.isInt32() && rval.isInt32()) {                               \
             *res = lval.toInt32() OP rval.toInt32();                          \
         } else {                                                              \
+            RootValue lvalRoot(cx, &lval), rvalRoot(cx, &rval);               \
             if (!ToPrimitive(cx, JSTYPE_NUMBER, &lval))                       \
                 return false;                                                 \
             if (!ToPrimitive(cx, JSTYPE_NUMBER, &rval))                       \
@@ -878,6 +887,20 @@ GreaterThanOrEqualOperation(JSContext *cx, const Value &lhs, const Value &rhs, b
 }
 
 #undef RELATIONAL_OP
+
+static inline bool
+GuardFunApplySpeculation(JSContext *cx, FrameRegs &regs)
+{
+    if (regs.sp[-1].isMagic(JS_OPTIMIZED_ARGUMENTS)) {
+        CallArgs args = CallArgsFromSp(GET_ARGC(regs.pc), regs.sp);
+        if (!IsNativeFunction(args.calleev(), js_fun_apply)) {
+            if (!JSScript::applySpeculationFailed(cx, regs.fp()->script()))
+                return false;
+            args[1] = ObjectValue(regs.fp()->argsObj());
+        }
+    }
+    return true;
+}
 
 }  /* namespace js */
 

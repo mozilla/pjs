@@ -7,6 +7,7 @@ Components.utils.import("resource:///modules/devtools/TiltGL.jsm", tempScope);
 Components.utils.import("resource:///modules/devtools/TiltMath.jsm", tempScope);
 Components.utils.import("resource:///modules/devtools/TiltUtils.jsm", tempScope);
 Components.utils.import("resource:///modules/devtools/TiltVisualizer.jsm", tempScope);
+Components.utils.import("resource:///modules/devtools/LayoutHelpers.jsm", tempScope);
 let TiltGL = tempScope.TiltGL;
 let EPSILON = tempScope.EPSILON;
 let TiltMath = tempScope.TiltMath;
@@ -16,12 +17,14 @@ let mat4 = tempScope.mat4;
 let quat4 = tempScope.quat4;
 let TiltUtils = tempScope.TiltUtils;
 let TiltVisualizer = tempScope.TiltVisualizer;
+let LayoutHelpers = tempScope.LayoutHelpers;
 
 
 const DEFAULT_HTML = "data:text/html," +
   "<DOCTYPE html>" +
   "<html>" +
     "<head>" +
+      "<meta charset='utf-8'/>" +
       "<title>Three Laws</title>" +
     "</head>" +
     "<body>" +
@@ -191,4 +194,17 @@ function createTilt(callbacks, close) {
       }
     });
   }
+}
+
+function getPickablePoint(presenter) {
+  let vertices = presenter._meshStacks[0].vertices.components;
+
+  let topLeft = vec3.create([vertices[0], vertices[1], vertices[2]]);
+  let bottomRight = vec3.create([vertices[6], vertices[7], vertices[8]]);
+  let center = vec3.lerp(topLeft, bottomRight, 0.5, []);
+
+  let renderer = presenter._renderer;
+  let viewport = [0, 0, renderer.width, renderer.height];
+
+  return vec3.project(center, viewport, renderer.mvMatrix, renderer.projMatrix);
 }

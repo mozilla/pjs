@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Steve Clark (buster@netscape.com)
- *   Ilya Konstantinov (mozilla-code@future.shiny.co.il)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsDOMKeyboardEvent.h"
 #include "nsContentUtils.h"
@@ -78,7 +44,7 @@ NS_IMETHODIMP
 nsDOMKeyboardEvent::GetAltKey(bool* aIsDown)
 {
   NS_ENSURE_ARG_POINTER(aIsDown);
-  *aIsDown = ((nsInputEvent*)mEvent)->isAlt;
+  *aIsDown = static_cast<nsInputEvent*>(mEvent)->IsAlt();
   return NS_OK;
 }
 
@@ -86,7 +52,7 @@ NS_IMETHODIMP
 nsDOMKeyboardEvent::GetCtrlKey(bool* aIsDown)
 {
   NS_ENSURE_ARG_POINTER(aIsDown);
-  *aIsDown = ((nsInputEvent*)mEvent)->isControl;
+  *aIsDown = static_cast<nsInputEvent*>(mEvent)->IsControl();
   return NS_OK;
 }
 
@@ -94,7 +60,7 @@ NS_IMETHODIMP
 nsDOMKeyboardEvent::GetShiftKey(bool* aIsDown)
 {
   NS_ENSURE_ARG_POINTER(aIsDown);
-  *aIsDown = ((nsInputEvent*)mEvent)->isShift;
+  *aIsDown = static_cast<nsInputEvent*>(mEvent)->IsShift();
   return NS_OK;
 }
 
@@ -102,7 +68,17 @@ NS_IMETHODIMP
 nsDOMKeyboardEvent::GetMetaKey(bool* aIsDown)
 {
   NS_ENSURE_ARG_POINTER(aIsDown);
-  *aIsDown = ((nsInputEvent*)mEvent)->isMeta;
+  *aIsDown = static_cast<nsInputEvent*>(mEvent)->IsMeta();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMKeyboardEvent::GetModifierState(const nsAString& aKey,
+                                     bool* aState)
+{
+  NS_ENSURE_ARG_POINTER(aState);
+
+  *aState = GetModifierStateInternal(aKey);
   return NS_OK;
 }
 
@@ -175,6 +151,15 @@ nsDOMKeyboardEvent::Which(PRUint32* aWhich)
 }
 
 NS_IMETHODIMP
+nsDOMKeyboardEvent::GetLocation(PRUint32* aLocation)
+{
+  NS_ENSURE_ARG_POINTER(aLocation);
+
+  *aLocation = static_cast<nsKeyEvent*>(mEvent)->location;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMKeyboardEvent::InitKeyEvent(const nsAString& aType, bool aCanBubble, bool aCancelable,
                                  nsIDOMWindow* aView, bool aCtrlKey, bool aAltKey,
                                  bool aShiftKey, bool aMetaKey,
@@ -184,10 +169,7 @@ nsDOMKeyboardEvent::InitKeyEvent(const nsAString& aType, bool aCanBubble, bool a
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsKeyEvent* keyEvent = static_cast<nsKeyEvent*>(mEvent);
-  keyEvent->isControl = aCtrlKey;
-  keyEvent->isAlt = aAltKey;
-  keyEvent->isShift = aShiftKey;
-  keyEvent->isMeta = aMetaKey;
+  keyEvent->InitBasicModifiers(aCtrlKey, aAltKey, aShiftKey, aMetaKey);
   keyEvent->keyCode = aKeyCode;
   keyEvent->charCode = aCharCode;
 

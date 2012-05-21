@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsAHttpTransaction_h__
 #define nsAHttpTransaction_h__
@@ -48,6 +15,7 @@ class nsIInterfaceRequestor;
 class nsIEventTarget;
 class nsITransport;
 class nsHttpRequestHead;
+class nsHttpPipeline;
 
 //----------------------------------------------------------------------------
 // Abstract base class for a HTTP transaction:
@@ -63,6 +31,8 @@ class nsAHttpTransaction : public nsISupports
 public:
     // called by the connection when it takes ownership of the transaction.
     virtual void SetConnection(nsAHttpConnection *) = 0;
+
+    // used to obtain the connection associated with this transaction
     virtual nsAHttpConnection *Connection() = 0;
 
     // called by the connection to get security callbacks to set on the
@@ -77,6 +47,7 @@ public:
     // called to check the transaction status.
     virtual bool     IsDone() = 0;
     virtual nsresult Status() = 0;
+    virtual PRUint8  Caps() = 0;
 
     // called to find out how much request data is available for writing.
     virtual PRUint32 Available() = 0;
@@ -114,6 +85,49 @@ public:
     //
     virtual nsresult TakeSubTransactions(
         nsTArray<nsRefPtr<nsAHttpTransaction> > &outTransactions) = 0;
+
+    // called to add a sub-transaction in the case of pipelined transactions
+    // classes that do not implement sub transactions
+    // return NS_ERROR_NOT_IMPLEMENTED
+    virtual nsresult AddTransaction(nsAHttpTransaction *transaction) = 0;
+    
+    // The total length of the outstanding pipeline comprised of transacations
+    // and sub-transactions.
+    virtual PRUint32 PipelineDepth() = 0;
+
+    // Used to inform the connection that it is being used in a pipelined
+    // context. That may influence the handling of some errors.
+    // The value is the pipeline position (> 1).
+    virtual nsresult SetPipelinePosition(PRInt32) = 0;
+    virtual PRInt32  PipelinePosition() = 0;
+
+    // If we used rtti this would be the result of doing
+    // dynamic_cast<nsHttpPipeline *>(this).. i.e. it can be nsnull for
+    // non pipeline implementations of nsAHttpTransaction
+    virtual nsHttpPipeline *QueryPipeline() { return nsnull; }
+    
+    // Every transaction is classified into one of the types below. When using
+    // HTTP pipelines, only transactions with the same type appear on the same
+    // pipeline.
+    enum Classifier  {
+        // Transactions that expect a short 304 (no-content) response
+        CLASS_REVALIDATION,
+
+        // Transactions for content expected to be CSS or JS
+        CLASS_SCRIPT,
+
+        // Transactions for content expected to be an image
+        CLASS_IMAGE,
+
+        // Transactions that cannot involve a pipeline 
+        CLASS_SOLO,
+
+        // Transactions that do not fit any of the other categories. HTML
+        // is normally GENERAL.
+        CLASS_GENERAL,
+
+        CLASS_MAX
+    };
 };
 
 #define NS_DECL_NSAHTTPTRANSACTION \
@@ -125,6 +139,7 @@ public:
                            nsresult status, PRUint64 progress); \
     bool     IsDone(); \
     nsresult Status(); \
+    PRUint8  Caps();   \
     PRUint32 Available(); \
     nsresult ReadSegments(nsAHttpSegmentReader *, PRUint32, PRUint32 *); \
     nsresult WriteSegments(nsAHttpSegmentWriter *, PRUint32, PRUint32 *); \
@@ -132,7 +147,11 @@ public:
     void     SetSSLConnectFailed();                                     \
     nsHttpRequestHead *RequestHead();                                   \
     PRUint32 Http1xTransactionCount();                                  \
-    nsresult TakeSubTransactions(nsTArray<nsRefPtr<nsAHttpTransaction> > &outTransactions);
+    nsresult TakeSubTransactions(nsTArray<nsRefPtr<nsAHttpTransaction> > &outTransactions); \
+    nsresult AddTransaction(nsAHttpTransaction *);                      \
+    PRUint32 PipelineDepth();                                           \
+    nsresult SetPipelinePosition(PRInt32);                              \
+    PRInt32  PipelinePosition();
 
 //-----------------------------------------------------------------------------
 // nsAHttpSegmentReader

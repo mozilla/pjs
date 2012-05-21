@@ -1,43 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is nsDiskCacheDevice.cpp, released
- * February 22, 2001.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Gordon Sheridan <gordon@netscape.com>
- *   Patrick C. Beard <beard@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <limits.h>
 
@@ -405,6 +370,7 @@ nsDiskCacheDevice::nsDiskCacheDevice()
     : mCacheCapacity(0)
     , mMaxEntrySize(-1) // -1 means "no limit"
     , mInitialized(false)
+    , mClearingDiskCache(false)
 {
 }
 
@@ -512,6 +478,7 @@ nsDiskCacheDevice::FindEntry(nsCString * key, bool *collision)
 {
     Telemetry::AutoTimer<Telemetry::CACHE_DISK_SEARCH> timer;
     if (!Initialized())  return nsnull;  // NS_ERROR_NOT_INITIALIZED
+    if (mClearingDiskCache)  return nsnull;
     nsDiskCacheRecord       record;
     nsDiskCacheBinding *    binding = nsnull;
     PLDHashNumber           hashNumber = nsDiskCache::Hash(key->get());
@@ -549,12 +516,17 @@ nsDiskCacheDevice::FindEntry(nsCString * key, bool *collision)
     }
     
     nsCacheEntry * entry = diskEntry->CreateCacheEntry(this);
-    if (!entry)  return nsnull;
-    
-    binding = mBindery.CreateBinding(entry, &record);
-    if (!binding) {
-        delete entry;
-        return nsnull;
+    if (entry) {
+        binding = mBindery.CreateBinding(entry, &record);
+        if (!binding) {
+            delete entry;
+            entry = nsnull;
+        }
+    }
+
+    if (!entry) {
+      (void) mCacheMap.DeleteStorage(&record);
+      (void) mCacheMap.DeleteRecord(&record);
     }
     
     return entry;
@@ -635,6 +607,7 @@ nsresult
 nsDiskCacheDevice::BindEntry(nsCacheEntry * entry)
 {
     if (!Initialized())  return  NS_ERROR_NOT_INITIALIZED;
+    if (mClearingDiskCache)  return NS_ERROR_NOT_AVAILABLE;
     nsresult rv = NS_OK;
     nsDiskCacheRecord record, oldRecord;
     nsDiskCacheBinding *binding;
@@ -1015,15 +988,20 @@ nsDiskCacheDevice::OpenDiskCache()
         // Try opening cache map file.
         rv = mCacheMap.Open(mCacheDirectory);        
         // move "corrupt" caches to trash
-        if (rv == NS_ERROR_FILE_CORRUPTED) {
+        if (NS_SUCCEEDED(rv)) {
+            Telemetry::Accumulate(Telemetry::DISK_CACHE_CORRUPT, 0);
+        } else if (rv == NS_ERROR_FILE_CORRUPTED) {
+            Telemetry::Accumulate(Telemetry::DISK_CACHE_CORRUPT, 1);
             // delay delete by 1 minute to avoid IO thrash at startup
             rv = nsDeleteDir::DeleteDir(mCacheDirectory, true, 60000);
             if (NS_FAILED(rv))
                 return rv;
             exists = false;
-        }
-        else if (NS_FAILED(rv))
+        } else {
+            // don't gather telemetry for "corrupt cache" for new profile
+            // where cache doesn't exist (most likely case if we're here).
             return rv;
+        }
     }
 
     // if we don't have a cache directory, create one and open it
@@ -1050,9 +1028,13 @@ nsDiskCacheDevice::ClearDiskCache()
     if (mBindery.ActiveBindings())
         return NS_ERROR_CACHE_IN_USE;
 
+    mClearingDiskCache = true;
+
     nsresult rv = Shutdown_Private(false);  // false: don't bother flushing
     if (NS_FAILED(rv))
         return rv;
+
+    mClearingDiskCache = false;
 
     // If the disk cache directory is already gone, then it's not an error if
     // we fail to delete it ;-)

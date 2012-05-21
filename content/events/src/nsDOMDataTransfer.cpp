@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Neil Deakin <enndeakin@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -42,6 +10,7 @@
 #include "prlog.h"
 #include "nsString.h"
 #include "nsIServiceManager.h"
+#include "nsIInterfaceRequestorUtils.h"
 #include "nsIVariant.h"
 #include "nsISupportsPrimitives.h"
 #include "nsDOMClassInfoID.h"
@@ -55,10 +24,25 @@
 #include "nsIContent.h"
 #include "nsCRT.h"
 #include "nsIScriptObjectPrincipal.h"
+#include "nsIWebNavigation.h"
+#include "nsIDocShellTreeItem.h"
 
 using namespace mozilla;
 
-NS_IMPL_CYCLE_COLLECTION_2(nsDOMDataTransfer, mDragTarget, mDragImage)
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsDOMDataTransfer)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDOMDataTransfer)
+  if (tmp->mFiles) {
+    tmp->mFiles->Disconnect();
+    NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mFiles)
+  }
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mDragTarget)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mDragImage)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsDOMDataTransfer)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mFiles)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDragTarget)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDragImage)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsDOMDataTransfer)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsDOMDataTransfer)
@@ -84,6 +68,7 @@ nsDOMDataTransfer::nsDOMDataTransfer()
     mReadOnly(false),
     mIsExternal(false),
     mUserCancelled(false),
+    mIsCrossDomainSubFrameDrop(false),
     mDragImageX(0),
     mDragImageY(0)
 {
@@ -97,6 +82,7 @@ nsDOMDataTransfer::nsDOMDataTransfer(PRUint32 aEventType)
     mReadOnly(true),
     mIsExternal(true),
     mUserCancelled(false),
+    mIsCrossDomainSubFrameDrop(false),
     mDragImageX(0),
     mDragImageY(0)
 {
@@ -108,6 +94,7 @@ nsDOMDataTransfer::nsDOMDataTransfer(PRUint32 aEventType,
                                      bool aCursorState,
                                      bool aIsExternal,
                                      bool aUserCancelled,
+                                     bool aIsCrossDomainSubFrameDrop,
                                      nsTArray<nsTArray<TransferItem> >& aItems,
                                      nsIDOMElement* aDragImage,
                                      PRUint32 aDragImageX,
@@ -119,6 +106,7 @@ nsDOMDataTransfer::nsDOMDataTransfer(PRUint32 aEventType,
     mReadOnly(true),
     mIsExternal(aIsExternal),
     mUserCancelled(aUserCancelled),
+    mIsCrossDomainSubFrameDrop(aIsCrossDomainSubFrameDrop),
     mItems(aItems),
     mDragImage(aDragImage),
     mDragImageX(aDragImageX),
@@ -235,7 +223,7 @@ nsDOMDataTransfer::GetFiles(nsIDOMFileList** aFileList)
     return NS_OK;
 
   if (!mFiles) {
-    mFiles = new nsDOMFileList();
+    mFiles = new nsDOMFileList(static_cast<nsIDOMDataTransfer*>(this));
     NS_ENSURE_TRUE(mFiles, NS_ERROR_OUT_OF_MEMORY);
 
     PRUint32 count = mItems.Length();
@@ -317,7 +305,10 @@ nsDOMDataTransfer::GetData(const nsAString& aFormat, nsAString& aData)
     // for the URL type, parse out the first URI from the list. The URIs are
     // separated by newlines
     nsAutoString lowercaseFormat;
-    nsContentUtils::ASCIIToLower(aFormat, lowercaseFormat);
+    rv = nsContentUtils::ASCIIToLower(aFormat, lowercaseFormat);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
     
     if (lowercaseFormat.EqualsLiteral("url")) {
       PRInt32 lastidx = 0, idx;
@@ -450,12 +441,16 @@ nsDOMDataTransfer::MozGetDataAt(const nsAString& aFormat,
 
   nsTArray<TransferItem>& item = mItems[aIndex];
 
-  // allow access to any data in the drop and dragdrop events, or if the
-  // UniversalXPConnect privilege is set, otherwise only allow access to
-  // data from the same principal.
+  // Check if the caller is allowed to access the drag data. Callers with
+  // UniversalXPConnect privileges can always read the data. During the
+  // drop event, allow retrieving the data except in the case where the
+  // source of the drag is in a child frame of the caller. In that case,
+  // we only allow access to data of the same principal. During other events,
+  // only allow access to the data with the same principal.
   nsIPrincipal* principal = nsnull;
-  if (mEventType != NS_DRAGDROP_DROP && mEventType != NS_DRAGDROP_DRAGDROP &&
-      !nsContentUtils::CallerHasUniversalXPConnect()) {
+  if (mIsCrossDomainSubFrameDrop ||
+      (mEventType != NS_DRAGDROP_DROP && mEventType != NS_DRAGDROP_DRAGDROP &&
+       !nsContentUtils::CallerHasUniversalXPConnect())) {
     nsresult rv = NS_OK;
     principal = GetCurrentPrincipal(&rv);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -602,6 +597,11 @@ nsDOMDataTransfer::AddElement(nsIDOMElement* aElement)
 {
   NS_ENSURE_TRUE(aElement, NS_ERROR_NULL_POINTER);
 
+  if (aElement) {
+    nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
+    NS_ENSURE_TRUE(content, NS_ERROR_INVALID_ARG);
+  }
+
   if (mReadOnly)
     return NS_ERROR_DOM_NO_MODIFICATION_ALLOWED_ERR;
 
@@ -612,12 +612,13 @@ nsDOMDataTransfer::AddElement(nsIDOMElement* aElement)
 
 nsresult
 nsDOMDataTransfer::Clone(PRUint32 aEventType, bool aUserCancelled,
+                         bool aIsCrossDomainSubFrameDrop,
                          nsIDOMDataTransfer** aNewDataTransfer)
 {
   nsDOMDataTransfer* newDataTransfer =
     new nsDOMDataTransfer(aEventType, mEffectAllowed, mCursorState,
-                          mIsExternal, aUserCancelled, mItems,
-                          mDragImage, mDragImageX, mDragImageY);
+                          mIsExternal, aUserCancelled, aIsCrossDomainSubFrameDrop,
+                          mItems, mDragImage, mDragImageX, mDragImageY);
   NS_ENSURE_TRUE(newDataTransfer, NS_ERROR_OUT_OF_MEMORY);
 
   *aNewDataTransfer = newDataTransfer;

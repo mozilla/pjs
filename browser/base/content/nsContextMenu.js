@@ -1,66 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is mozilla.org code.
-#
-# The Initial Developer of the Original Code is
-# Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1998
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Blake Ross <blake@cs.stanford.edu>
-#   David Hyatt <hyatt@mozilla.org>
-#   Peter Annema <disttsc@bart.nl>
-#   Dean Tessman <dean_tessman@hotmail.com>
-#   Kevin Puetz <puetzk@iastate.edu>
-#   Ben Goodger <ben@netscape.com>
-#   Pierre Chanial <chanial@noos.fr>
-#   Jason Eager <jce2@po.cwru.edu>
-#   Joe Hewitt <hewitt@netscape.com>
-#   Alec Flett <alecf@netscape.com>
-#   Asaf Romano <mozilla.mano@sent.com>
-#   Jason Barnabe <jason_barnabe@fastmail.fm>
-#   Peter Parente <parente@cs.unc.edu>
-#   Giorgio Maone <g.maone@informaction.com>
-#   Tom Germeau <tom.germeau@epigoon.com>
-#   Jesse Ruderman <jruderman@gmail.com>
-#   Joe Hughes <joe@retrovirus.com>
-#   Pamela Greene <pamg.bugs@gmail.com>
-#   Michael Ventnor <ventnors_dogs234@yahoo.com.au>
-#   Simon Bünzli <zeniko@gmail.com>
-#   Gijs Kruitbosch <gijskruitbosch@gmail.com>
-#   Ehsan Akhgari <ehsan.akhgari@gmail.com>
-#   Dan Mosedale <dmose@mozilla.org>
-#   Justin Dolske <dolske@mozilla.com>
-#   Kathleen Brade <brade@pearlcrescent.com>
-#   Mark Smith <mcs@pearlcrescent.com>
-#   Kailas Patil <patilkr24@gmail.com>
-#   Rob Campbell <rcampbell@mozilla.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 function nsContextMenu(aXulMenu, aBrowser, aIsShift) {
   this.shouldDisplay = true;
@@ -92,6 +32,7 @@ nsContextMenu.prototype = {
     } catch (e) { }
     this.isTextSelected = this.isTextSelection();
     this.isContentSelected = this.isContentSelection();
+    this.onPlainTextLink = false;
 
     // Initialize (disable/remove) menu items.
     this.initItems();
@@ -132,7 +73,6 @@ nsContextMenu.prototype = {
 
     // Time to do some bad things and see if we've highlighted a URL that
     // isn't actually linked.
-    var onPlainTextLink = false;
     if (this.isTextSelected && !this.onLink) {
       // Ok, we have some text, let's figure out if it looks like a URL.
       let selection =  document.commandDispatcher.focusedWindow
@@ -190,14 +130,14 @@ nsContextMenu.prototype = {
       if (uri && uri.host) {
         this.linkURI = uri;
         this.linkURL = this.linkURI.spec;
-        onPlainTextLink = true;
+        this.onPlainTextLink = true;
       }
     }
 
-    var shouldShow = this.onSaveableLink || isMailtoInternal || onPlainTextLink;
+    var shouldShow = this.onSaveableLink || isMailtoInternal || this.onPlainTextLink;
     this.showItem("context-openlink", shouldShow);
     this.showItem("context-openlinkintab", shouldShow);
-    this.showItem("context-openlinkincurrent", onPlainTextLink);
+    this.showItem("context-openlinkincurrent", this.onPlainTextLink);
     this.showItem("context-sep-open", shouldShow);
   },
 
@@ -222,9 +162,9 @@ nsContextMenu.prototype = {
     this.showItem("context-savepage", shouldShow);
     this.showItem("context-sendpage", shouldShow);
 
-    // Save+Send link depends on whether we're in a link.
-    this.showItem("context-savelink", this.onSaveableLink);
-    this.showItem("context-sendlink", this.onSaveableLink);
+    // Save+Send link depends on whether we're in a link, or selected text matches valid URL pattern.
+    this.showItem("context-savelink", this.onSaveableLink || this.onPlainTextLink);
+    this.showItem("context-sendlink", this.onSaveableLink || this.onPlainTextLink);
 
     // Save image depends on having loaded its content, video and audio don't.
     this.showItem("context-saveimage", this.onLoadedImage || this.onCanvas);
@@ -267,7 +207,7 @@ nsContextMenu.prototype = {
     // Only enable Set as Desktop Background if we can get the shell service.
     var shell = getShellService();
     if (shell)
-      haveSetDesktopBackground = true;
+      haveSetDesktopBackground = shell.canSetDesktopBackground;
 #endif
     this.showItem("context-setDesktopBackground",
                   haveSetDesktopBackground && this.onLoadedImage);
@@ -289,9 +229,14 @@ nsContextMenu.prototype = {
     this.showItem("context-viewvideo", this.onVideo && (!this.inSyntheticDoc || this.inFrame));
     this.setItemAttr("context-viewvideo",  "disabled", !this.mediaURL);
 
-    // View background image depends on whether there is one.
-    this.showItem("context-viewbgimage", shouldShow && !this._hasMultipleBGImages);
-    this.showItem("context-sep-viewbgimage", shouldShow && !this._hasMultipleBGImages);
+    // View background image depends on whether there is one, but don't make
+    // background images of a stand-alone media document available.
+    this.showItem("context-viewbgimage", shouldShow &&
+                                         !this._hasMultipleBGImages &&
+                                         !this.inSyntheticDoc);
+    this.showItem("context-sep-viewbgimage", shouldShow &&
+                                             !this._hasMultipleBGImages &&
+                                             !this.inSyntheticDoc);
     document.getElementById("context-viewbgimage")
             .disabled = !this.hasBGImage;
 
@@ -305,7 +250,7 @@ nsContextMenu.prototype = {
     this.showItem("context-bookmarkpage",
                   !(this.isContentSelected || this.onTextInput || this.onLink ||
                     this.onImage || this.onVideo || this.onAudio));
-    this.showItem("context-bookmarklink", this.onLink && !this.onMailtoLink);
+    this.showItem("context-bookmarklink", (this.onLink && !this.onMailtoLink) || this.onPlainTextLink);
     this.showItem("context-searchselect", isTextSelected);
     this.showItem("context-keywordfield",
                   this.onTextInput && this.onKeywordField);
@@ -387,7 +332,9 @@ nsContextMenu.prototype = {
     this.showItem("context-delete", this.onTextInput);
     this.showItem("context-sep-paste", this.onTextInput);
     this.showItem("context-selectall", !(this.onLink || this.onImage ||
-                  this.onVideo || this.onAudio) || this.isDesignMode);
+                                         this.onVideo || this.onAudio ||
+                                         this.inSyntheticDoc) ||
+                                       this.isDesignMode);
     this.showItem("context-sep-selectall", this.isContentSelected );
 
     // XXX dr
@@ -521,8 +468,16 @@ nsContextMenu.prototype = {
         this.onCanvas = true;
       }
       else if (this.target instanceof HTMLVideoElement) {
-        this.onVideo = true;
         this.mediaURL = this.target.currentSrc || this.target.src;
+        // Firefox always creates a HTMLVideoElement when loading an ogg file
+        // directly. If the media is actually audio, be smarter and provide a
+        // context menu with audio operations.
+        if (this.target.readyState >= this.target.HAVE_METADATA &&
+            (this.target.videoWidth == 0 || this.target.videoHeight == 0)) {
+          this.onAudio = true;
+        } else {
+          this.onVideo = true;
+        }
       }
       else if (this.target instanceof HTMLAudioElement) {
         this.onAudio = true;
@@ -760,7 +715,8 @@ nsContextMenu.prototype = {
     urlSecurityCheck(frameURL, this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     var referrer = doc.referrer;
-    this.browser.loadURI(frameURL, referrer ? makeURI(referrer) : null);
+    openUILinkIn(frameURL, "current", { disallowInheritPrincipal: true,
+                                        referrerURI: referrer ? makeURI(referrer) : null });
   },
 
   // View Partial Source
@@ -832,7 +788,8 @@ nsContextMenu.prototype = {
     }
 
     var doc = this.target.ownerDocument;
-    openUILink(viewURL, e, null, null, null, null, doc.documentURIObject );
+    openUILink(viewURL, e, { disallowInheritPrincipal: true,
+                             referrerURI: doc.documentURIObject });
   },
 
   saveVideoFrameAsImage: function () {
@@ -843,7 +800,7 @@ nsContextMenu.prototype = {
       let uri = makeURI(this.mediaURL);
       let url = uri.QueryInterface(Ci.nsIURL);
       if (url.fileBaseName)
-        name = url.fileBaseName + ".jpg";
+        name = decodeURI(url.fileBaseName) + ".jpg";
     } catch (e) { }
     if (!name)
       name = "snapshot.jpg";
@@ -868,7 +825,8 @@ nsContextMenu.prototype = {
                      this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
     var doc = this.target.ownerDocument;
-    openUILink(this.bgImageURL, e, null, null, null, null, doc.documentURIObject );
+    openUILink(this.bgImageURL, e, { disallowInheritPrincipal: true,
+                                     referrerURI: doc.documentURIObject });
   },
 
   disableSetDesktopBackground: function() {
@@ -1066,9 +1024,15 @@ nsContextMenu.prototype = {
   // Save URL of clicked-on link.
   saveLink: function() {
     var doc =  this.target.ownerDocument;
+    var linkText;
+    // If selected text is found to match valid URL pattern.
+    if (this.onPlainTextLink)
+      linkText = document.commandDispatcher.focusedWindow.getSelection().toString().trim();
+    else
+      linkText = this.linkText();
     urlSecurityCheck(this.linkURL, doc.nodePrincipal);
 
-    this.saveHelper(this.linkURL, this.linkText(), null, true, doc);
+    this.saveHelper(this.linkURL, linkText, null, true, doc);
   },
 
   sendLink: function() {
@@ -1383,8 +1347,14 @@ nsContextMenu.prototype = {
   },
 
   bookmarkLink: function CM_bookmarkLink() {
+    var linkText;
+    // If selected text is found to match valid URL pattern.
+    if (this.onPlainTextLink)
+      linkText = document.commandDispatcher.focusedWindow.getSelection().toString().trim();
+    else
+      linkText = this.linkText();
     window.top.PlacesCommandHook.bookmarkLink(PlacesUtils.bookmarksMenuFolderId, this.linkURL,
-                                              this.linkText());
+                                              linkText);
   },
 
   addBookmarkForFrame: function CM_addBookmarkForFrame() {

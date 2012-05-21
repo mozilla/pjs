@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Android SUTAgent code.
- *
- * The Initial Developer of the Original Code is
- * Bob Moss.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Bob Moss <bmoss@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 package com.mozilla.watcher;
 
 import java.io.BufferedReader;
@@ -81,9 +48,11 @@ public class WatcherService extends Service
     String sErrorPrefix = "##Installer Error## ";
     String currentDir = "/";
     String sPingTarget = "";
-    long    lDelay = 60000;
-    long    lPeriod = 300000;
-    int        nMaxStrikes = 3;
+    long lDelay = 60000;
+    long lPeriod = 300000;
+    int nMaxStrikes = 3; // maximum number of tries before we consider network unreachable
+    boolean bStartSUTAgent = true;
+
     Process    pProc;
     Context myContext = null;
     Timer myTimer = null;
@@ -143,6 +112,8 @@ public class WatcherService extends Service
         this.lPeriod = Long.parseLong(sHold.trim());
         sHold = GetIniData("watcher", "strikes", sIniFile,"3");
         this.nMaxStrikes = Integer.parseInt(sHold.trim());
+        sHold = GetIniData("watcher", "StartSUTAgent", sIniFile, "true");
+        this.bStartSUTAgent = Boolean.parseBoolean(sHold.trim());
 
         sHold = GetIniData("watcher", "stayon", sIniFile,"0");
         int nStayOn = Integer.parseInt(sHold.trim());
@@ -495,9 +466,12 @@ public class WatcherService extends Service
         boolean bRet = false;
         ActivityManager aMgr = (ActivityManager) getApplicationContext().getSystemService(Activity.ACTIVITY_SERVICE);
         List <ActivityManager.RunningAppProcessInfo> lProcesses = aMgr.getRunningAppProcesses();
-        int    nProcs = lProcesses.size();
+        int    nProcs = 0;
         int lcv = 0;
         String strProcName = "";
+
+        if (lProcesses != null)
+            nProcs = lProcesses.size();
 
         for (lcv = 0; lcv < nProcs; lcv++)
             {
@@ -554,8 +528,12 @@ public class WatcherService extends Service
         int lcv = 0;
         String strProcName = "";
         int    nPID = 0;
+        int nProcs = 0;
 
-        for (lcv = 0; lcv < lProcesses.size(); lcv++)
+        if (lProcesses != null)
+            nProcs = lProcesses.size();
+
+        for (lcv = 0; lcv < nProcs; lcv++)
             {
             if (lProcesses.get(lcv).processName.contains(sProcName))
                 {
@@ -598,7 +576,10 @@ public class WatcherService extends Service
             {
             sRet = "Successfully killed " + nPID + " " + strProcName + "\n";
             lProcesses = aMgr.getRunningAppProcesses();
-            for (lcv = 0; lcv < lProcesses.size(); lcv++)
+            nProcs = 0;
+            if (lProcesses != null)
+                nProcs = lProcesses.size();
+            for (lcv = 0; lcv < nProcs; lcv++)
                 {
                 if (lProcesses.get(lcv).processName.contains(sProcName))
                     {
@@ -913,34 +894,33 @@ public class WatcherService extends Service
             if (bInstalling)
                 return;
 
-            // See if the network is up, if not after three failures reboot
-            String sRet = SendPing(sPingTarget);
-            if (!sRet.contains("3 received"))
+            // See if the network is up, if not reboot after a configurable
+            // number of tries
+            if (nMaxStrikes > 0)
                 {
-                if (nMaxStrikes > 0)
-                    {
-                    if (++nStrikes >= nMaxStrikes)
-                        RunReboot(null);
-                    }
+                    String sRet = SendPing(sPingTarget);
+                    if (!sRet.contains("3 received") && ++nStrikes >= nMaxStrikes)
+                        {
+                            RunReboot(null);
+                        }
+                    else
+                        {
+                            nStrikes = 0;
+                        }
                 }
-            else
-                {
-                nStrikes = 0;
-                }
-            sRet = null;
 
             String sProgramName = "com.mozilla.SUTAgentAndroid";
-            PackageManager pm = myContext.getPackageManager();
 
 //            Debug.waitForDebugger();
 
-            if (!GetProcessInfo(sProgramName))
+            if (bStartSUTAgent && !GetProcessInfo(sProgramName))
                 {
                 Intent agentIntent = new Intent();
                 agentIntent.setPackage(sProgramName);
                 agentIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 agentIntent.setAction(Intent.ACTION_MAIN);
                 try {
+                    PackageManager pm = myContext.getPackageManager();
                     PackageInfo pi = pm.getPackageInfo(sProgramName, PackageManager.GET_ACTIVITIES | PackageManager.GET_INTENT_FILTERS);
                     ActivityInfo [] ai = pi.activities;
                     for (int i = 0; i < ai.length; i++)

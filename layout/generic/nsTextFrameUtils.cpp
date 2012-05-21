@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Novell code.
- *
- * The Initial Developer of the Original Code is Novell Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   robert@ocallahan.org
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTextFrameUtils.h"
 
@@ -43,6 +10,8 @@
 #include "gfxFont.h"
 #include "nsUnicharUtils.h"
 #include "nsBidiUtils.h"
+#include "nsIContent.h"
+#include "nsStyleStruct.h"
 
 // XXX TODO implement transform of backslash to yen that nsTextTransform does
 // when requested by PresContext->LanguageSpecificTransformType(). Do it with
@@ -246,6 +215,47 @@ nsTextFrameUtils::TransformText(const PRUint8* aText, PRUint32 aLength,
   }
   *aAnalysisFlags = flags;
   return aOutput;
+}
+
+PRUint32
+nsTextFrameUtils::ComputeApproximateLengthWithWhitespaceCompression(
+                    nsIContent *aContent, const nsStyleText *aStyleText)
+{
+  const nsTextFragment *frag = aContent->GetText();
+  // This is an approximation so we don't really need anything
+  // too fancy here.
+  PRUint32 len;
+  if (aStyleText->WhiteSpaceIsSignificant()) {
+    len = frag->GetLength();
+  } else {
+    bool is2b = frag->Is2b();
+    union {
+      const char *s1b;
+      const PRUnichar *s2b;
+    } u;
+    if (is2b) {
+      u.s2b = frag->Get2b();
+    } else {
+      u.s1b = frag->Get1b();
+    }
+    bool prevWS = true; // more important to ignore blocks with
+                        // only whitespace than get inline boundaries
+                        // exactly right
+    len = 0;
+    for (PRUint32 i = 0, i_end = frag->GetLength(); i < i_end; ++i) {
+      PRUnichar c = is2b ? u.s2b[i] : u.s1b[i];
+      if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+        if (!prevWS) {
+          ++len;
+        }
+        prevWS = true;
+      } else {
+        ++len;
+        prevWS = false;
+      }
+    }
+  }
+  return len;
 }
 
 bool nsSkipCharsRunIterator::NextRun() {

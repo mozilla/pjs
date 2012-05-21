@@ -95,8 +95,9 @@ function testSteps()
         ok(false, "continue twice should throw");
       }
       catch (e) {
-        ok(e instanceof IDBDatabaseException, "got a database exception");
-        is(e.code, IDBDatabaseException.NOT_ALLOWED_ERR, "correct code");
+        ok(e instanceof DOMException, "got a database exception");
+        is(e.name, "InvalidStateError", "correct error");
+        is(e.code, DOMException.INVALID_STATE_ERR, "correct code");
       }
 
       is(cursor.key, sortedKeys[keyIndex], "Correct key");
@@ -286,7 +287,7 @@ function testSteps()
   let gotRemoveEvent = false;
   let retval = false;
 
-  request = objectStore.openCursor(null, IDBCursor.NEXT);
+  request = objectStore.openCursor(null, "next");
   request.onerror = errorHandler;
   request.onsuccess = function (event) {
     let cursor = event.target.result;
@@ -331,7 +332,7 @@ function testSteps()
 
   keyIndex = sortedKeys.length - 1;
 
-  request = objectStore.openCursor(null, IDBCursor.PREV);
+  request = objectStore.openCursor(null, "prev");
   request.onerror = errorHandler;
   request.onsuccess = function (event) {
     let cursor = event.target.result;

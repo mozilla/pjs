@@ -1,46 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Robert Churchill <rjc@netscape.com>
- *   David Hyatt <hyatt@netscape.com>
- *   Chris Waterson <waterson@netscape.com>
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Joe Hewitt <hewitt@netscape.com>
- *   Neil Deakin <enndeakin@sympatico.ca>
- *   Laurent Jouanneau <laurent.jouanneau@disruptive-innovations.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
 
@@ -164,6 +125,8 @@ DestroyMatchList(nsISupports* aKey, nsTemplateMatch*& aMatch, void* aContext)
 
 nsXULTemplateBuilder::~nsXULTemplateBuilder(void)
 {
+    Uninit(true);
+
     if (--gRefCnt == 0) {
         NS_IF_RELEASE(gRDFService);
         NS_IF_RELEASE(gRDFContainerUtils);
@@ -171,8 +134,6 @@ nsXULTemplateBuilder::~nsXULTemplateBuilder(void)
         NS_IF_RELEASE(gScriptSecurityManager);
         NS_IF_RELEASE(gObserverService);
     }
-
-    Uninit(true);
 }
 
 
@@ -211,13 +172,30 @@ nsXULTemplateBuilder::InitGlobals()
         gXULTemplateLog = PR_NewLogModule("nsXULTemplateBuilder");
 #endif
 
-    if (!mMatchMap.IsInitialized() && !mMatchMap.Init())
-        return NS_ERROR_OUT_OF_MEMORY;
+    if (!mMatchMap.IsInitialized())
+        mMatchMap.Init();
 
     const size_t bucketsizes[] = { sizeof(nsTemplateMatch) };
     return mPool.Init("nsXULTemplateBuilder", bucketsizes, 1, 256);
 }
 
+void
+nsXULTemplateBuilder::CleanUp(bool aIsFinal)
+{
+    for (PRInt32 q = mQuerySets.Length() - 1; q >= 0; q--) {
+        nsTemplateQuerySet* qs = mQuerySets[q];
+        delete qs;
+    }
+
+    mQuerySets.Clear();
+
+    mMatchMap.Enumerate(DestroyMatchList, &mPool);
+
+    // Setting mQueryProcessor to null will close connections. This would be
+    // handled by the cycle collector, but we want to close them earlier.
+    if (aIsFinal)
+        mQueryProcessor = nsnull;
+}
 
 void
 nsXULTemplateBuilder::Uninit(bool aIsFinal)
@@ -232,14 +210,7 @@ nsXULTemplateBuilder::Uninit(bool aIsFinal)
     if (mQueryProcessor)
         mQueryProcessor->Done();
 
-    for (PRInt32 q = mQuerySets.Length() - 1; q >= 0; q--) {
-        nsTemplateQuerySet* qs = mQuerySets[q];
-        delete qs;
-    }
-
-    mQuerySets.Clear();
-
-    mMatchMap.Enumerate(DestroyMatchList, &mPool);
+    CleanUp(aIsFinal);
 
     mRootResult = nsnull;
     mRefVariable = nsnull;
@@ -284,6 +255,11 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsXULTemplateBuilder)
     tmp->mQuerySets.Clear();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXULTemplateBuilder)
+    if (tmp->mObservedDocument && !cb.WantAllTraces()) {
+        // The global observer service holds us alive.
+        return NS_SUCCESS_INTERRUPTED_TRAVERSE;
+    }
+
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDataSource)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDB)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mCompDB)
@@ -776,8 +752,7 @@ nsXULTemplateBuilder::UpdateResultInContainer(nsIXULTemplateResult* aOldResult,
                 if (oldmatch == firstmatch) {
                     // the match to remove is at the beginning
                     if (oldmatch->mNext) {
-                        if (!mMatchMap.Put(aOldId, oldmatch->mNext))
-                            return NS_ERROR_OUT_OF_MEMORY;
+                        mMatchMap.Put(aOldId, oldmatch->mNext);
                     }
                     else {
                         mMatchMap.Remove(aOldId);
@@ -950,13 +925,7 @@ nsXULTemplateBuilder::UpdateResultInContainer(nsIXULTemplateResult* aOldResult,
 
                 // put the match in the map if there isn't a previous match
                 if (! prevmatch) {
-                    if (!mMatchMap.Put(aNewId, newmatch)) {
-                        // The match may have already matched a rule above, so
-                        // HasBeenRemoved should be called to indicate that it
-                        // is being removed again.
-                        nsTemplateMatch::Destroy(mPool, newmatch, true);
-                        return rv;
-                    }
+                    mMatchMap.Put(aNewId, newmatch);
                 }
             }
 
@@ -985,10 +954,7 @@ nsXULTemplateBuilder::UpdateResultInContainer(nsIXULTemplateResult* aOldResult,
                 acceptedmatch = newmatch;
             }
 
-            if (!mMatchMap.Put(aNewId, newmatch)) {
-                nsTemplateMatch::Destroy(mPool, newmatch, true);
-                return NS_ERROR_OUT_OF_MEMORY;
-            }
+            mMatchMap.Put(aNewId, newmatch);
         }
     }
 
@@ -1182,6 +1148,8 @@ nsXULTemplateBuilder::ContentRemoved(nsIDocument* aDocument,
         nsXULElement *xulcontent = nsXULElement::FromContent(mRoot);
         if (xulcontent)
             xulcontent->ClearTemplateGenerated();
+
+        CleanUp(true);
 
         mDB = nsnull;
         mCompDB = nsnull;

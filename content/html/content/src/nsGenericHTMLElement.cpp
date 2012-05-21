@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *   Ms2ger <ms2ger@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -120,7 +86,7 @@
 #include "nsHTMLMenuElement.h"
 #include "nsAsyncDOMEvent.h"
 #include "nsIScriptError.h"
-
+#include "nsDOMMutationObserver.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/FromParser.h"
 
@@ -314,6 +280,10 @@ nsGenericHTMLElement::CopyInnerTo(nsGenericElement* aDst) const
   for (i = 0; i < count; ++i) {
     const nsAttrName *name = mAttrsAndChildren.AttrNameAt(i);
     const nsAttrValue *value = mAttrsAndChildren.AttrAt(i);
+
+    nsAutoString valStr;
+    value->ToString(valStr);
+
     if (name->Equals(nsGkAtoms::style, kNameSpaceID_None) &&
         value->Type() == nsAttrValue::eCSSStyleRule) {
       // We can't just set this as a string, because that will fail
@@ -323,14 +293,12 @@ nsGenericHTMLElement::CopyInnerTo(nsGenericElement* aDst) const
       nsRefPtr<mozilla::css::StyleRule> styleRule = do_QueryObject(ruleClone);
       NS_ENSURE_TRUE(styleRule, NS_ERROR_UNEXPECTED);
 
-      rv = aDst->SetInlineStyleRule(styleRule, false);
+      rv = aDst->SetInlineStyleRule(styleRule, &valStr, false);
       NS_ENSURE_SUCCESS(rv, rv);
 
       continue;
     }
 
-    nsAutoString valStr;
-    value->ToString(valStr);
     rv = aDst->SetAttr(name->NamespaceID(), name->LocalName(),
                        name->GetPrefix(), valStr, false);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -352,8 +320,10 @@ nsGenericHTMLElement::SetAttribute(const nsAString& aName,
     nsCOMPtr<nsIAtom> nameAtom;
     if (IsInHTMLDocument()) {
       nsAutoString lower;
-      nsContentUtils::ASCIIToLower(aName, lower);
-      nameAtom = do_GetAtom(lower);
+      rv = nsContentUtils::ASCIIToLower(aName, lower);
+      if (NS_SUCCEEDED(rv)) {
+        nameAtom = do_GetAtom(lower);
+      }
     }
     else {
       nameAtom = do_GetAtom(aName);
@@ -693,13 +663,24 @@ nsGenericHTMLElement::GetMarkup(bool aIncludeSelf, nsAString& aMarkup)
 
   NS_ENSURE_TRUE(docEncoder, NS_ERROR_FAILURE);
 
-  nsresult rv = docEncoder->NativeInit(doc, contentType,
-                                       nsIDocumentEncoder::OutputEncodeBasicEntities |
-                                       // Output DOM-standard newlines
-                                       nsIDocumentEncoder::OutputLFLineBreak |
-                                       // Don't do linebreaking that's not present in
-                                       // the source
-                                       nsIDocumentEncoder::OutputRaw);
+  PRUint32 flags = nsIDocumentEncoder::OutputEncodeBasicEntities |
+                   // Output DOM-standard newlines
+                   nsIDocumentEncoder::OutputLFLineBreak |
+                   // Don't do linebreaking that's not present in
+                   // the source
+                   nsIDocumentEncoder::OutputRaw |
+                   // Only check for mozdirty when necessary (bug 599983)
+                   nsIDocumentEncoder::OutputIgnoreMozDirty;
+
+  if (IsEditable()) {
+    nsCOMPtr<nsIEditor> editor;
+    GetEditorInternal(getter_AddRefs(editor));
+    if (editor && editor->OutputsMozDirty()) {
+      flags &= ~nsIDocumentEncoder::OutputIgnoreMozDirty;
+    }
+  }
+
+  nsresult rv = docEncoder->NativeInit(doc, contentType, flags);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (aIncludeSelf) {
@@ -761,9 +742,11 @@ nsGenericHTMLElement::SetInnerHTML(const nsAString& aInnerHTML)
 
   // Remove childnodes.
   PRUint32 childCount = GetChildCount();
+  nsAutoMutationBatch mb(this, true, false);
   for (PRUint32 i = 0; i < childCount; ++i) {
     RemoveChildAt(0, true);
   }
+  mb.RemovalDone();
 
   nsAutoScriptLoaderDisabler sld(doc);
   
@@ -777,6 +760,7 @@ nsGenericHTMLElement::SetInnerHTML(const nsAString& aInnerHTML)
                                            doc->GetCompatibilityMode() ==
                                              eCompatibility_NavQuirks,
                                            true);
+    mb.NodesAdded();
     // HTML5 parser has notified, but not fired mutation events.
     FireMutationEventsForDirectParsing(doc, this, oldChildCount);
   } else {
@@ -792,6 +776,7 @@ nsGenericHTMLElement::SetInnerHTML(const nsAString& aInnerHTML)
       nsAutoScriptBlockerSuppressNodeRemoved scriptBlocker;
 
       static_cast<nsINode*>(this)->AppendChild(fragment, &rv);
+      mb.NodesAdded();
     }
   }
 
@@ -801,7 +786,7 @@ nsGenericHTMLElement::SetInnerHTML(const nsAString& aInnerHTML)
 NS_IMETHODIMP
 nsGenericHTMLElement::SetOuterHTML(const nsAString& aOuterHTML)
 {
-  nsINode* parent = GetNodeParent();
+  nsCOMPtr<nsINode> parent = GetNodeParent();
   if (!parent) {
     return NS_OK;
   }
@@ -814,8 +799,8 @@ nsGenericHTMLElement::SetOuterHTML(const nsAString& aOuterHTML)
     nsIAtom* localName;
     PRInt32 namespaceID;
     if (parent->IsElement()) {
-      localName = static_cast<nsIContent*>(parent)->Tag();
-      namespaceID = static_cast<nsIContent*>(parent)->GetNameSpaceID();
+      localName = static_cast<nsIContent*>(parent.get())->Tag();
+      namespaceID = static_cast<nsIContent*>(parent.get())->GetNameSpaceID();
     } else {
       NS_ASSERTION(parent->NodeType() == nsIDOMNode::DOCUMENT_FRAGMENT_NODE,
         "How come the parent isn't a document, a fragment or an element?");
@@ -834,6 +819,7 @@ nsGenericHTMLElement::SetOuterHTML(const nsAString& aOuterHTML)
                                       OwnerDoc()->GetCompatibilityMode() ==
                                         eCompatibility_NavQuirks,
                                       true);
+    nsAutoMutationBatch mb(parent, true, false);
     parent->ReplaceChild(fragment, this, &rv);
     return rv;
   }
@@ -859,6 +845,7 @@ nsGenericHTMLElement::SetOuterHTML(const nsAString& aOuterHTML)
                                                          getter_AddRefs(df));
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsINode> fragment = do_QueryInterface(df);
+  nsAutoMutationBatch mb(parent, true, false);
   parent->ReplaceChild(fragment, this, &rv);
   return rv;
 }
@@ -908,7 +895,7 @@ nsGenericHTMLElement::InsertAdjacentHTML(const nsAString& aPosition,
 
   nsresult rv;
   // Parse directly into destination if possible
-  if (doc->IsHTML() &&
+  if (doc->IsHTML() && !OwnerDoc()->MayHaveDOMMutationObservers() &&
       (position == eBeforeEnd ||
        (position == eAfterEnd && !GetNextSibling()) ||
        (position == eAfterBegin && !GetFirstChild()))) {
@@ -947,6 +934,7 @@ nsGenericHTMLElement::InsertAdjacentHTML(const nsAString& aPosition,
   // listeners on the fragment that comes from the parser.
   nsAutoScriptBlockerSuppressNodeRemoved scriptBlocker;
 
+  nsAutoMutationBatch mb(destination, true, false);
   switch (position) {
     case eBeforeBegin:
       destination->InsertBefore(fragment, this, &rv);
@@ -959,9 +947,6 @@ nsGenericHTMLElement::InsertAdjacentHTML(const nsAString& aPosition,
       break;
     case eAfterEnd:
       destination->InsertBefore(fragment, GetNextSibling(), &rv);
-      break;
-    default:
-      NS_NOTREACHED("Bad position.");
       break;
   }
   return rv;
@@ -986,11 +971,14 @@ nsGenericHTMLElement::ScrollIntoView(bool aTop, PRUint8 optional_argc)
     aTop = true;
   }
 
-  PRIntn vpercent = aTop ? NS_PRESSHELL_SCROLL_TOP :
-    NS_PRESSHELL_SCROLL_BOTTOM;
+  PRInt16 vpercent = aTop ? nsIPresShell::SCROLL_TOP :
+    nsIPresShell::SCROLL_BOTTOM;
 
-  presShell->ScrollContentIntoView(this, vpercent,
-                                   NS_PRESSHELL_SCROLL_ANYWHERE,
+  presShell->ScrollContentIntoView(this,
+                                   nsIPresShell::ScrollAxis(
+                                     vpercent,
+                                     nsIPresShell::SCROLL_ALWAYS),
+                                   nsIPresShell::ScrollAxis(),
                                    nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
 
   return NS_OK;
@@ -1854,37 +1842,6 @@ nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttribu
   }
 }
 
-void
-nsGenericHTMLFormElement::UpdateEditableFormControlState(bool aNotify)
-{
-  // nsCSSFrameConstructor::MaybeConstructLazily is based on the logic of this
-  // function, so should be kept in sync with that.
-
-  ContentEditableTristate value = GetContentEditableValue();
-  if (value != eInherit) {
-    DoSetEditableFlag(!!value, aNotify);
-    return;
-  }
-
-  nsIContent *parent = GetParent();
-
-  if (parent && parent->HasFlag(NODE_IS_EDITABLE)) {
-    DoSetEditableFlag(true, aNotify);
-    return;
-  }
-
-  if (!IsTextControl(false)) {
-    DoSetEditableFlag(false, aNotify);
-    return;
-  }
-
-  // If not contentEditable we still need to check the readonly attribute.
-  bool roState;
-  GetBoolAttr(nsGkAtoms::readonly, &roState);
-
-  DoSetEditableFlag(!roState, aNotify);
-}
-
 
 /* static */ const nsGenericHTMLElement::MappedAttributeEntry
 nsGenericHTMLElement::sCommonAttributeMap[] = {
@@ -2253,13 +2210,6 @@ nsGenericHTMLElement::MapScrollingAttributeInto(const nsMappedAttributes* aAttri
 //----------------------------------------------------------------------
 
 nsresult
-nsGenericHTMLElement::GetAttrHelper(nsIAtom* aAttr, nsAString& aValue)
-{
-  GetAttr(kNameSpaceID_None, aAttr, aValue);
-  return NS_OK;
-}
-
-nsresult
 nsGenericHTMLElement::SetAttrHelper(nsIAtom* aAttr, const nsAString& aValue)
 {
   return SetAttr(kNameSpaceID_None, aAttr, aValue, true);
@@ -2325,19 +2275,6 @@ nsGenericHTMLElement::SetUnsignedIntAttr(nsIAtom* aAttr, PRUint32 aValue)
   value.AppendInt(aValue);
 
   return SetAttr(kNameSpaceID_None, aAttr, value, true);
-}
-
-nsresult
-nsGenericHTMLElement::GetDoubleAttr(nsIAtom* aAttr, double aDefault, double* aResult)
-{
-  const nsAttrValue* attrVal = mAttrsAndChildren.GetAttr(aAttr);
-  if (attrVal && attrVal->Type() == nsAttrValue::eDoubleValue) {
-    *aResult = attrVal->GetDoubleValue();
-  }
-  else {
-    *aResult = aDefault;
-  }
-  return NS_OK;
 }
 
 nsresult
@@ -2491,24 +2428,25 @@ nsGenericHTMLElement::GetContentEditable(nsAString& aContentEditable)
 nsresult
 nsGenericHTMLElement::SetContentEditable(const nsAString& aContentEditable)
 {
-  nsString contentEditable;
-  ToLowerCase(aContentEditable, contentEditable);
-
-  if (contentEditable.EqualsLiteral("inherit")) {
+  if (nsContentUtils::EqualsLiteralIgnoreASCIICase(aContentEditable, "inherit")) {
     UnsetAttr(kNameSpaceID_None, nsGkAtoms::contenteditable, true);
 
     return NS_OK;
   }
 
-  if (!contentEditable.EqualsLiteral("true") &&
-      !contentEditable.EqualsLiteral("false")) {
-    return NS_ERROR_DOM_SYNTAX_ERR;
+  if (nsContentUtils::EqualsLiteralIgnoreASCIICase(aContentEditable, "true")) {
+    SetAttr(kNameSpaceID_None, nsGkAtoms::contenteditable, NS_LITERAL_STRING("true"), true);
+    
+    return NS_OK;
+  }
+  
+  if (nsContentUtils::EqualsLiteralIgnoreASCIICase(aContentEditable, "false")) {
+    SetAttr(kNameSpaceID_None, nsGkAtoms::contenteditable, NS_LITERAL_STRING("false"), true);
+
+    return NS_OK;
   }
 
-  SetAttr(kNameSpaceID_None, nsGkAtoms::contenteditable, contentEditable,
-          true);
-
-  return NS_OK;
+  return NS_ERROR_DOM_SYNTAX_ERR;
 }
 
 nsresult
@@ -2889,14 +2827,6 @@ nsGenericHTMLFormElement::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
   return nsGenericHTMLElement::PreHandleEvent(aVisitor);
 }
 
-const nsAttrValue::EnumTable nsGenericHTMLElement::kCORSAttributeTable[] = {
-  // Order matters here
-  // See ParseAttribute in nsHTMLImageElement or nsHTMLMediaElement
-  { "anonymous",       nsGenericHTMLElement::CORS_ANONYMOUS       },
-  { "use-credentials", nsGenericHTMLElement::CORS_USE_CREDENTIALS },
-  { 0 }
-};
-
 /* virtual */
 bool
 nsGenericHTMLFormElement::IsDisabled() const
@@ -2921,8 +2851,7 @@ nsGenericHTMLFormElement::CanBeDisabled() const
   return
     type != NS_FORM_LABEL &&
     type != NS_FORM_OBJECT &&
-    type != NS_FORM_OUTPUT &&
-    type != NS_FORM_PROGRESS;
+    type != NS_FORM_OUTPUT;
 }
 
 bool
@@ -2965,6 +2894,18 @@ nsGenericHTMLFormElement::IntrinsicState() const
                    "Default submit element that isn't a submit control.");
       // We are the default submit element (:default)
       state |= NS_EVENT_STATE_DEFAULT;
+  }
+
+  // Make the text controls read-write
+  if (!state.HasState(NS_EVENT_STATE_MOZ_READWRITE) &&
+      IsTextControl(false)) {
+    bool roState;
+    GetBoolAttr(nsGkAtoms::readonly, &roState);
+
+    if (!roState) {
+      state |= NS_EVENT_STATE_MOZ_READWRITE;
+      state &= ~NS_EVENT_STATE_MOZ_READONLY;
+    }
   }
 
   return state;
@@ -3223,32 +3164,6 @@ nsGenericHTMLElement::Focus()
   nsIFocusManager* fm = nsFocusManager::GetFocusManager();
   nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(this);
   return fm ? fm->SetFocus(elem, 0) : NS_OK;
-}
-
-nsresult nsGenericHTMLElement::MozRequestFullScreen()
-{
-  // Only grant full-screen requests if this is called from inside a trusted
-  // event handler (i.e. inside an event handler for a user initiated event).
-  // This stops the full-screen from being abused similar to the popups of old,
-  // and it also makes it harder for bad guys' script to go full-screen and
-  // spoof the browser chrome/window and phish logins etc.
-  if (!nsContentUtils::IsRequestFullScreenAllowed()) {
-    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                    "DOM", OwnerDoc(),
-                                    nsContentUtils::eDOM_PROPERTIES,
-                                    "FullScreenDeniedNotInputDriven");
-    nsRefPtr<nsAsyncDOMEvent> e =
-      new nsAsyncDOMEvent(OwnerDoc(),
-                          NS_LITERAL_STRING("mozfullscreenerror"),
-                          true,
-                          false);
-    e->PostDOMEvent();
-    return NS_OK;
-  }
-
-  OwnerDoc()->AsyncRequestFullScreen(this);
-
-  return NS_OK;
 }
 
 nsresult nsGenericHTMLElement::Click()

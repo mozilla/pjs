@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 var AwesomeScreen = {
   offset: 0.25, // distance the popup will be offset from the left side of the window
   get headers() {
@@ -23,6 +27,7 @@ var AwesomeScreen = {
       document.getElementById("syncsetup-container"),
 #endif
       document.getElementById("urlbar-container"),
+      document.getElementById("tool-app-close"),
       document.getElementById("search-engines-popup"),
       document.getElementById("context-popup")
     ]
@@ -56,7 +61,7 @@ var AwesomeScreen = {
 
     let willShowPanel = (!this._activePanel && aPanel);
     if (willShowPanel) {
-      BrowserUI.pushDialog(this._activePanel);
+      BrowserUI.pushDialog(aPanel);
       BrowserUI._edit.attachController();
       BrowserUI._editURI();
       this.container.hidden = this.headers.hidden = false;

@@ -1,47 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Robert O'Callahan <roc+moz@cs.cmu.edu>
- *   Dean Tessman <dean_tessman@hotmail.com>
- *   Makoto Kato  <m_kato@ga2.so-net.ne.jp>
- *   Dainis Jonitis <Dainis_Jonitis@swh-t.lv>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *   Ningjie Chen <chenn@email.uc.edu>
- *   Jim Mathies <jmathies@mozilla.com>.
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef Window_h__
 #define Window_h__
@@ -90,6 +50,12 @@ class nsIRollupListener;
 class nsIFile;
 class imgIContainer;
 
+namespace mozilla {
+namespace widget {
+class NativeKey;
+} // namespace widget
+} // namespacw mozilla;
+
 /**
  * Native WIN32 window wrapper.
  */
@@ -99,9 +65,8 @@ class nsWindow : public nsBaseWidget
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
   typedef mozilla::widget::WindowHook WindowHook;
-#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_WIN7
   typedef mozilla::widget::TaskbarWindowPreview TaskbarWindowPreview;
-#endif
+  typedef mozilla::widget::NativeKey NativeKey;
 public:
   nsWindow();
   virtual ~nsWindow();
@@ -179,6 +144,17 @@ public:
   virtual nsresult        SynthesizeNativeMouseEvent(nsIntPoint aPoint,
                                                      PRUint32 aNativeMessage,
                                                      PRUint32 aModifierFlags);
+
+  virtual nsresult        SynthesizeNativeMouseMove(nsIntPoint aPoint)
+                          { return SynthesizeNativeMouseEvent(aPoint, MOUSEEVENTF_MOVE, 0); }
+
+  virtual nsresult        SynthesizeNativeMouseScrollEvent(nsIntPoint aPoint,
+                                                           PRUint32 aNativeMessage,
+                                                           double aDeltaX,
+                                                           double aDeltaY,
+                                                           double aDeltaZ,
+                                                           PRUint32 aModifierFlags,
+                                                           PRUint32 aAdditionalFlags);
   NS_IMETHOD              ResetInputState();
   NS_IMETHOD_(void)       SetInputContext(const InputContext& aContext,
                                           const InputContextAction& aAction);
@@ -212,11 +188,11 @@ public:
                                              PRUint16 aInputSource = nsIDOMMouseEvent::MOZ_SOURCE_MOUSE);
   virtual bool            DispatchWindowEvent(nsGUIEvent* event);
   virtual bool            DispatchWindowEvent(nsGUIEvent*event, nsEventStatus &aStatus);
-  virtual bool            DispatchKeyEvent(PRUint32 aEventType, WORD aCharCode,
-                                           const nsTArray<nsAlternativeCharCode>* aAlternativeChars,
-                                           UINT aVirtualCharCode, const MSG *aMsg,
-                                           const nsModifierKeyState &aModKeyState,
-                                           PRUint32 aFlags = 0);
+  void                    InitKeyEvent(nsKeyEvent& aKeyEvent,
+                                       const NativeKey& aNativeKey,
+                                       const nsModifierKeyState &aModKeyState);
+  virtual bool            DispatchKeyEvent(nsKeyEvent& aKeyEvent,
+                                           const MSG *aMsgSentToPlugin);
   void                    DispatchPendingEvents();
   bool                    DispatchPluginEvent(UINT aMessage,
                                               WPARAM aWParam,
@@ -278,7 +254,6 @@ public:
    */
   bool                    AssociateDefaultIMC(bool aAssociate);
 
-#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_WIN7
   bool HasTaskbarIconBeenCreated() { return mHasTaskbarIconBeenCreated; }
   // Called when either the nsWindow or an nsITaskbarTabPreview receives the noticiation that this window
   // has its icon placed on the taskbar.
@@ -290,7 +265,6 @@ public:
     return preview.forget();
   }
   void SetTaskbarPreview(nsITaskbarWindowPreview *preview) { mTaskbarPreview = do_GetWeakReference(preview); }
-#endif
 
   NS_IMETHOD              ReparentNativeWidget(nsIWidget* aNewParent);
 
@@ -299,6 +273,8 @@ public:
   void                    PickerClosed();
 
   bool                    const DestroyCalled() { return mDestroyCalled; }
+
+  static void             SetupKeyModifiersSequence(nsTArray<KeyPair>* aArray, PRUint32 aModifiers);
 protected:
 
   // A magic number to identify the FAKETRACKPOINTSCROLLABLE window created
@@ -338,10 +314,6 @@ protected:
   void                    ResetLayout();
   void                    InvalidateNonClientRegion();
   HRGN                    ExcludeNonClientFromPaintRegion(HRGN aRegion);
-  static void             InitInputWorkaroundPrefDefaults();
-  static bool             GetInputWorkaroundPref(const char* aPrefName, bool aValueIfAutomatic);
-  static bool             UseTrackPointHack();
-  static void             PerformElantechSwipeGestureHack(UINT& aVirtualKeyCode, nsModifierKeyState& aModKeyState);
   static void             GetMainWindowClass(nsAString& aClass);
   bool                    HasGlass() const {
     return mTransparencyMode == eTransparencyGlass ||
@@ -388,7 +360,14 @@ protected:
   virtual void            OnDestroy();
   virtual bool            OnMove(PRInt32 aX, PRInt32 aY);
   virtual bool            OnResize(nsIntRect &aWindowRect);
+  /**
+   * @param aVirtualKeyCode     If caller knows which key exactly caused the
+   *                            aMsg, set the virtual key code.
+   *                            Otherwise, 0.
+   * @param aScanCode           If aVirutalKeyCode isn't 0, set the scan code.
+   */
   LRESULT                 OnChar(const MSG &aMsg,
+                                 const NativeKey& aNativeKey,
                                  nsModifierKeyState &aModKeyState,
                                  bool *aEventDispatched,
                                  PRUint32 aFlags = 0);
@@ -399,27 +378,12 @@ protected:
   LRESULT                 OnKeyUp(const MSG &aMsg,
                                   nsModifierKeyState &aModKeyState,
                                   bool *aEventDispatched);
-  LRESULT                 OnCharRaw(UINT charCode, UINT aScanCode,
-                                    nsModifierKeyState &aModKeyState,
-                                    PRUint32 aFlags = 0,
-                                    const MSG *aMsg = nsnull,
-                                    bool *aEventDispatched = nsnull);
-  bool                    OnScroll(UINT aMsg, WPARAM aWParam, LPARAM aLParam);
-  void                    OnScrollInternal(UINT aMsg, WPARAM aWParam,
-                                           LPARAM aLParam);
   bool                    OnGesture(WPARAM wParam, LPARAM lParam);
-#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_WIN7
   bool                    OnTouch(WPARAM wParam, LPARAM lParam);
-#endif
   bool                    OnHotKey(WPARAM wParam, LPARAM lParam);
   BOOL                    OnInputLangChange(HKL aHKL);
   bool                    OnPaint(HDC aDC, PRUint32 aNestingLevel);
   void                    OnWindowPosChanged(WINDOWPOS *wp, bool& aResult);
-  void                    OnMouseWheel(UINT aMsg, WPARAM aWParam,
-                                       LPARAM aLParam, LRESULT *aRetValue);
-  void                    OnMouseWheelInternal(UINT aMessage, WPARAM aWParam,
-                                               LPARAM aLParam,
-                                               LRESULT *aRetValue);
   void                    OnWindowPosChanging(LPWINDOWPOS& info);
   void                    OnSysColorChanged();
 
@@ -473,10 +437,8 @@ protected:
   /**
    * Misc.
    */
-  UINT                    MapFromNativeToDOM(UINT aNativeKeyCode);
   void                    StopFlashing();
   static bool             IsTopLevelMouseExit(HWND aWnd);
-  static void             SetupKeyModifiersSequence(nsTArray<KeyPair>* aArray, PRUint32 aModifiers);
   nsresult                SetWindowClipRegion(const nsTArray<nsIntRect>& aRects,
                                               bool aIntersectWithExisting);
   nsIntRegion             GetRegionToPaint(bool aForceFullRepaint, 
@@ -513,6 +475,7 @@ protected:
   HKL                   mLastKeyboardLayout;
   nsPopupType           mPopupType;
   nsSizeMode            mOldSizeMode;
+  nsSizeMode            mLastSizeMode;
   WindowHook            mWindowHook;
   DWORD                 mAssumeWheelIsZoomUntil;
   PRUint32              mPickerDisplayCount;
@@ -528,10 +491,7 @@ protected:
   static bool           sJustGotActivate;
   static bool           sIsInMouseCapture;
   static int            sTrimOnMinimize;
-  static bool           sDefaultTrackPointHack;
   static const char*    sDefaultMainWindowClass;
-  static bool           sUseElantechSwipeHack;
-  static bool           sUseElantechPinchHack;
   static bool           sAllowD3D9;
 
   // Always use the helper method to read this property.  See bug 603793.
@@ -600,13 +560,11 @@ protected:
   // Win7 Gesture processing and management
   nsWinGesture          mGesture;
 
-#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_WIN7
   // Weak ref to the nsITaskbarWindowPreview associated with this window
   nsWeakPtr             mTaskbarPreview;
   // True if the taskbar (possibly through the tab preview) tells us that the
   // icon has been created on the taskbar.
   bool                  mHasTaskbarIconBeenCreated;
-#endif
 
   // The point in time at which the last paint completed. We use this to avoid
   //  painting too rapidly in response to frequent input events.
@@ -616,20 +574,8 @@ protected:
   // was reirected to SendInput() API by OnKeyDown().
   static MSG            sRedirectedKeyDown;
 
-  static bool sEnablePixelScrolling;
   static bool sNeedsToInitMouseWheelSettings;
-  static ULONG sMouseWheelScrollLines;
-  static ULONG sMouseWheelScrollChars;
   static void InitMouseWheelScrollData();
-
-  static HWND sLastMouseWheelWnd;
-  static PRInt32 sRemainingDeltaForScroll;
-  static PRInt32 sRemainingDeltaForPixel;
-  static bool sLastMouseWheelDeltaIsPositive;
-  static bool sLastMouseWheelOrientationIsVertical;
-  static bool sLastMouseWheelUnitIsPage;
-  static PRUint32 sLastMouseWheelTime; // in milliseconds
-  static void ResetRemainingWheelDelta();
 
   // If a window receives WM_KEYDOWN message or WM_SYSKEYDOWM message which is
   // redirected message, OnKeyDowm() prevents to dispatch NS_KEY_DOWN event

@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:expandtab:shiftwidth=4:tabstop=4:
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2000
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <pavlov@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <string.h>
 
@@ -106,7 +73,7 @@ struct ScopedCanberraFile {
 
     ~ScopedCanberraFile() {
         if (mFile) {
-            mFile->Remove(PR_FALSE);
+            mFile->Remove(false);
         }
     }
 
@@ -188,7 +155,7 @@ ca_finish_cb(ca_context *c,
 {
     nsILocalFile *file = reinterpret_cast<nsILocalFile *>(userdata);
     if (file) {
-        file->Remove(PR_FALSE);
+        file->Remove(false);
         NS_RELEASE(file);
     }
 }
@@ -293,7 +260,8 @@ NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,
     ScopedCanberraFile canberraFile(tmpFile);
 
     mozilla::AutoFDClose fd;
-    rv = canberraFile->OpenNSPRFileDesc(PR_WRONLY, PR_IRUSR | PR_IWUSR, &fd);
+    rv = canberraFile->OpenNSPRFileDesc(PR_WRONLY, PR_IRUSR | PR_IWUSR,
+                                        &fd.rwget());
     if (NS_FAILED(rv)) {
         return rv;
     }
@@ -358,13 +326,18 @@ NS_METHOD nsSound::Play(nsIURL *aURL)
             return NS_ERROR_OUT_OF_MEMORY;
         }
 
-        nsCAutoString path;
-        rv = aURL->GetPath(path);
+        nsCAutoString spec;
+        rv = aURL->GetSpec(spec);
         if (NS_FAILED(rv)) {
             return rv;
         }
+        gchar *path = g_filename_from_uri(spec.get(), NULL, NULL);
+        if (!path) {
+            return NS_ERROR_FILE_UNRECOGNIZED_PATH;
+        }
 
-        ca_context_play(ctx, 0, "media.filename", path.get(), NULL);
+        ca_context_play(ctx, 0, "media.filename", path, NULL);
+        g_free(path);
     } else {
         nsCOMPtr<nsIStreamLoader> loader;
         rv = NS_NewStreamLoader(getter_AddRefs(loader), aURL, this);

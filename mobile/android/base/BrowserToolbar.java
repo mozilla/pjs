@@ -1,42 +1,7 @@
 /* -*- Mode: Java; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009-2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Matt Brubeck <mbrubeck@mozilla.com>
- *   Vivien Nicolas <vnicolas@mozilla.com>
- *   Lucas Rocha <lucasr@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 package org.mozilla.gecko;
 
@@ -60,12 +25,14 @@ import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RelativeLayout.LayoutParams;
 import android.widget.TextView;
 import android.widget.TextSwitcher;
 import android.widget.ViewSwitcher.ViewFactory;
 
-public class BrowserToolbar extends LinearLayout {
-    private static final String LOGTAG = "GeckoToolbar";    
+public class BrowserToolbar {
+    private static final String LOGTAG = "GeckoToolbar";
+    private LinearLayout mLayout;
     private Button mAwesomeBar;
     private ImageButton mTabs;
     public ImageButton mFavicon;
@@ -90,16 +57,19 @@ public class BrowserToolbar extends LinearLayout {
 
     private int mCount;
 
-    public BrowserToolbar(Context context, AttributeSet attrs) {
-        super(context, attrs);
+    public BrowserToolbar(Context context) {
         mContext = context;
+    }
+
+    public void from(LinearLayout layout) {
+        mLayout = layout;
         mTitleCanExpand = true;
 
         // Get the device's highlight color
         TypedArray typedArray;
 
         if (Build.VERSION.SDK_INT >= 11) {            
-            typedArray = context.obtainStyledAttributes(new int[] { android.R.attr.textColorHighlight });
+            typedArray = mContext.obtainStyledAttributes(new int[] { android.R.attr.textColorHighlight });
         } else {
             ContextThemeWrapper wrapper  = new ContextThemeWrapper(mContext, android.R.style.TextAppearance);
             typedArray = wrapper.getTheme().obtainStyledAttributes(new int[] { android.R.attr.textColorHighlight });
@@ -107,17 +77,14 @@ public class BrowserToolbar extends LinearLayout {
 
         mColor = typedArray.getColor(typedArray.getIndex(0), 0);
         typedArray.recycle();
-    }
-
-    public void init() {
-        mAwesomeBar = (Button) findViewById(R.id.awesome_bar);
+        mAwesomeBar = (Button) mLayout.findViewById(R.id.awesome_bar);
         mAwesomeBar.setOnClickListener(new Button.OnClickListener() {
             public void onClick(View v) {
                 onAwesomeBarSearch();
             }
         });
 
-        Resources resources = getResources();
+        Resources resources = mContext.getResources();
         
         mPadding = new int[] { mAwesomeBar.getPaddingLeft(),
                                mAwesomeBar.getPaddingTop(),
@@ -132,7 +99,7 @@ public class BrowserToolbar extends LinearLayout {
 
         mAwesomeBar.setPadding(mPadding[0], mPadding[1], mPadding[2], mPadding[3]);
 
-        mTabs = (ImageButton) findViewById(R.id.tabs);
+        mTabs = (ImageButton) mLayout.findViewById(R.id.tabs);
         mTabs.setOnClickListener(new Button.OnClickListener() {
             public void onClick(View v) {
                 if (Tabs.getInstance().getCount() > 1)
@@ -145,7 +112,7 @@ public class BrowserToolbar extends LinearLayout {
 
         mCounterColor = 0xFFC7D1DB;
 
-        mTabsCount = (TextSwitcher) findViewById(R.id.tabs_count);
+        mTabsCount = (TextSwitcher) mLayout.findViewById(R.id.tabs_count);
         mTabsCount.removeAllViews();
         mTabsCount.setFactory(new ViewFactory() {
             public View makeView() {
@@ -169,18 +136,32 @@ public class BrowserToolbar extends LinearLayout {
         mTabsCount.setText("0");
         mCount = 0;
 
-        mFavicon = (ImageButton) findViewById(R.id.favicon);
-        mSiteSecurity = (ImageButton) findViewById(R.id.site_security);
-        mProgressSpinner = (AnimationDrawable) resources.getDrawable(R.drawable.progress_spinner);
-        
-        mStop = (ImageButton) findViewById(R.id.stop);
-        mStop.setOnClickListener(new Button.OnClickListener() {
-            public void onClick(View v) {
-                doStop();
+        mFavicon = (ImageButton) mLayout.findViewById(R.id.favicon);
+        mSiteSecurity = (ImageButton) mLayout.findViewById(R.id.site_security);
+        mSiteSecurity.setOnClickListener(new Button.OnClickListener() {
+            public void onClick(View view) {
+                int[] lockLocation = new int[2];
+                view.getLocationOnScreen(lockLocation);
+                LayoutParams lockLayoutParams = (LayoutParams) view.getLayoutParams();
+
+                // Calculate the left margin for the arrow based on the position of the lock icon.
+                int leftMargin = lockLocation[0] - lockLayoutParams.rightMargin;
+                SiteIdentityPopup.getInstance().show(leftMargin);
             }
         });
 
-        mShadow = (ImageView) findViewById(R.id.shadow);
+        mProgressSpinner = (AnimationDrawable) resources.getDrawable(R.drawable.progress_spinner);
+        
+        mStop = (ImageButton) mLayout.findViewById(R.id.stop);
+        mStop.setOnClickListener(new Button.OnClickListener() {
+            public void onClick(View v) {
+                Tab tab = Tabs.getInstance().getSelectedTab();
+                if (tab != null)
+                    tab.doStop();
+            }
+        });
+
+        mShadow = (ImageView) mLayout.findViewById(R.id.shadow);
 
         mHandler = new Handler();
         mSlideUpIn = new TranslateAnimation(0, 0, 40, 0);
@@ -196,7 +177,7 @@ public class BrowserToolbar extends LinearLayout {
     }
 
     private void onAwesomeBarSearch() {
-        GeckoApp.mAppContext.onEditRequested();
+        GeckoApp.mAppContext.onSearchRequested();
     }
 
     private void addTab() {
@@ -205,10 +186,6 @@ public class BrowserToolbar extends LinearLayout {
 
     private void showTabs() {
         GeckoApp.mAppContext.showTabs();
-    }
-
-    private void doStop() {
-        GeckoApp.mAppContext.doStop();
     }
 
     public int getHighlightColor() {
@@ -234,6 +211,7 @@ public class BrowserToolbar extends LinearLayout {
             mTabsCount.setVisibility(View.VISIBLE);
             // Set image to more tabs dropdown "v"
             mTabs.setImageLevel(count);
+            mTabs.setContentDescription(mContext.getString(R.string.num_tabs, count));
         }
 
         mHandler.postDelayed(new Runnable() {
@@ -251,6 +229,7 @@ public class BrowserToolbar extends LinearLayout {
                     // Set image to new tab button "+"
                     mTabs.setImageLevel(1);
                     mTabsCount.setVisibility(View.GONE);
+                    mTabs.setContentDescription(mContext.getString(R.string.new_tab));
                 }
                 ((TextView) mTabsCount.getCurrentView()).setTextColor(mCounterColor);
             }
@@ -260,7 +239,13 @@ public class BrowserToolbar extends LinearLayout {
     public void updateTabCount(int count) {
         mTabsCount.setCurrentText(String.valueOf(count));
         mTabs.setImageLevel(count);
-        mTabsCount.setVisibility(count > 1 ? View.VISIBLE : View.INVISIBLE);
+        if (count > 1) {
+            mTabsCount.setVisibility(View.VISIBLE);
+            mTabs.setContentDescription(mContext.getString(R.string.num_tabs, count));
+        } else {
+            mTabsCount.setVisibility(View.INVISIBLE);
+            mTabs.setContentDescription(mContext.getString(R.string.new_tab));
+        }
     }
 
     public void setProgressVisibility(boolean visible) {
@@ -272,7 +257,9 @@ public class BrowserToolbar extends LinearLayout {
         } else {
             mProgressSpinner.stop();
             setStopVisibility(false);
-            setFavicon(Tabs.getInstance().getSelectedTab().getFavicon());
+            Tab selectedTab = Tabs.getInstance().getSelectedTab();
+            if (selectedTab != null)
+                setFavicon(selectedTab.getFavicon());
             Log.i(LOGTAG, "zerdatime " + SystemClock.uptimeMillis() + " - Throbber stop");
         }
     }
@@ -292,15 +279,22 @@ public class BrowserToolbar extends LinearLayout {
 
     public void setTitle(CharSequence title) {
         Tab tab = Tabs.getInstance().getSelectedTab();
+
+        // We use about:empty as a placeholder for an external page load and
+        // we don't want to change the title
+        if (tab != null && "about:empty".equals(tab.getURL()))
+            return;
+
         // Setting a null title for about:home will ensure we just see
         // the "Enter Search or Address" placeholder text
-        if (tab != null && tab.getURL().equals("about:home"))
+        if (tab != null && "about:home".equals(tab.getURL()))
             title = null;
+
         mAwesomeBar.setText(title);
     }
 
     public void setFavicon(Drawable image) {
-        if (Tabs.getInstance().getSelectedTab().isLoading())
+        if (Tabs.getInstance().getSelectedTab().getState() == Tab.STATE_LOADING)
             return;
 
         if (image != null)
@@ -312,9 +306,9 @@ public class BrowserToolbar extends LinearLayout {
     public void setSecurityMode(String mode) {
         mTitleCanExpand = false;
 
-        if (mode.equals("identified")) {
+        if (mode.equals(SiteIdentityPopup.IDENTIFIED)) {
             mSiteSecurity.setImageLevel(1);
-        } else if (mode.equals("verified")) {
+        } else if (mode.equals(SiteIdentityPopup.VERIFIED)) {
             mSiteSecurity.setImageLevel(2);
         } else {
             mSiteSecurity.setImageLevel(0);
@@ -322,28 +316,37 @@ public class BrowserToolbar extends LinearLayout {
         }
     }
 
+    public void setVisibility(int visibility) {
+        mLayout.setVisibility(visibility);
+    }
+
+    public void requestFocusFromTouch() {
+        mLayout.requestFocusFromTouch();
+    }
+
     public void show() {
         if (Build.VERSION.SDK_INT >= 11)
             GeckoActionBar.show(GeckoApp.mAppContext);
         else
-            setVisibility(View.VISIBLE);
+            mLayout.setVisibility(View.VISIBLE);
     }
 
     public void hide() {
         if (Build.VERSION.SDK_INT >= 11)
             GeckoActionBar.hide(GeckoApp.mAppContext);
         else
-            setVisibility(View.GONE);
+            mLayout.setVisibility(View.GONE);
     }
 
     public void refresh() {
         Tab tab = Tabs.getInstance().getSelectedTab();
         if (tab != null) {
+            String url = tab.getURL();
             setTitle(tab.getDisplayTitle());
             setFavicon(tab.getFavicon());
             setSecurityMode(tab.getSecurityMode());
-            setProgressVisibility(tab.isLoading());
-            setShadowVisibility(!(tab.getURL().startsWith("about:")));
+            setProgressVisibility(tab.getState() == Tab.STATE_LOADING);
+            setShadowVisibility((url == null) || !url.startsWith("about:"));
             updateTabCount(Tabs.getInstance().getCount());
         }
     }

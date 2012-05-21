@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Plugin App.
- *
- * The Initial Developer of the Original Code is
- *   Chris Jones <jones.chris.g@gmail.com>
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef dom_plugins_PluginInstanceChild_h
 #define dom_plugins_PluginInstanceChild_h 1
@@ -43,6 +11,8 @@
 #include "mozilla/plugins/PluginScriptableObjectChild.h"
 #include "mozilla/plugins/StreamNotifyChild.h"
 #include "mozilla/plugins/PPluginSurfaceChild.h"
+#include "mozilla/ipc/CrossProcessMutex.h"
+#include "nsClassHashtable.h"
 #if defined(OS_WIN)
 #include "mozilla/gfx/SharedDIBWin.h"
 #elif defined(MOZ_WIDGET_COCOA)
@@ -63,7 +33,14 @@ using namespace mozilla::plugins::PluginUtilsOSX;
 #include "mozilla/PaintTracker.h"
 #include "gfxASurface.h"
 
+#include <map>
+
 namespace mozilla {
+
+namespace layers {
+struct RemoteImageData;
+}
+
 namespace plugins {
 
 class PBrowserStreamChild;
@@ -209,6 +186,9 @@ protected:
     virtual bool
     AnswerUpdateWindow();
 
+    virtual bool
+    RecvNPP_DidComposite();
+
 public:
     PluginInstanceChild(const NPPluginFuncs* aPluginIface);
 
@@ -249,12 +229,23 @@ public:
 
     void NPN_URLRedirectResponse(void* notifyData, NPBool allow);
 
+    NPError NPN_InitAsyncSurface(NPSize *size, NPImageFormat format,
+                                 void *initData, NPAsyncSurface *surface);
+    NPError NPN_FinalizeAsyncSurface(NPAsyncSurface *surface);
+
+    void NPN_SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed);
+
+    void DoAsyncRedraw();
 private:
     friend class PluginModuleChild;
 
     NPError
     InternalGetNPObjectForValue(NPNVariable aValue,
                                 NPObject** aObject);
+
+    bool IsAsyncDrawing();
+
+    NPError DeallocateAsyncBitmapSurface(NPAsyncSurface *aSurface);
 
     NS_OVERRIDE
     virtual bool RecvUpdateBackground(const SurfaceDescriptor& aBackground,
@@ -360,10 +351,23 @@ private:
     };
 
 #endif
-
     const NPPluginFuncs* mPluginIface;
     NPP_t mData;
     NPWindow mWindow;
+    int16_t               mDrawingModel;
+    NPAsyncSurface* mCurrentAsyncSurface;
+    struct AsyncBitmapData {
+      void *mRemotePtr;
+      Shmem mShmem;
+    };
+
+    static PLDHashOperator DeleteSurface(NPAsyncSurface* surf, nsAutoPtr<AsyncBitmapData> &data, void* userArg);
+    nsClassHashtable<nsPtrHashKey<NPAsyncSurface>, AsyncBitmapData> mAsyncBitmaps;
+    Shmem mRemoteImageDataShmem;
+    mozilla::layers::RemoteImageData *mRemoteImageData;
+    nsAutoPtr<CrossProcessMutex> mRemoteImageDataMutex;
+    mozilla::Mutex mAsyncInvalidateMutex;
+    CancelableTask *mAsyncInvalidateTask;
 
     // Cached scriptable actors to avoid IPC churn
     PluginScriptableObjectChild* mCachedWindowActor;
@@ -426,7 +430,6 @@ private:
 #endif
     CGColorSpaceRef       mShColorSpace;
     CGContextRef          mShContext;
-    int16_t               mDrawingModel;
     nsCARenderer          mCARenderer;
     void                 *mCGLayer;
 

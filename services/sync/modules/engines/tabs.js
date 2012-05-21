@@ -1,40 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Bookmarks Sync.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Myk Melez <myk@mozilla.org>
- *  Jono DiCarlo <jdicarlo@mozilla.com>
- *  Philipp von Weitershausen <philipp@weitershausen.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const EXPORTED_SYMBOLS = ['TabEngine', 'TabSetRecord'];
 
@@ -51,7 +17,7 @@ Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/resource.js");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://services-sync/constants.js");
-Cu.import("resource://services-sync/ext/Preferences.js");
+Cu.import("resource://services-common/preferences.js");
 
 // It is safer to inspect the private browsing preferences rather than
 // the flags of nsIPrivateBrowsingService.  The user may have turned on
@@ -139,12 +105,28 @@ TabStore.prototype = {
     return id == Clients.localID;
   },
 
+  /**
+   * Return the recorded last used time of the provided tab, or
+   * 0 if none is present.
+   * The result will always be an integer value.
+   */
+  tabLastUsed: function tabLastUsed(tab) {
+    // weaveLastUsed will only be set if the tab was ever selected (or
+    // opened after Sync was running).
+    let weaveLastUsed = tab.extData && tab.extData.weaveLastUsed;
+    if (!weaveLastUsed) {
+      return 0;
+    }
+    return parseInt(weaveLastUsed, 10) || 0;
+  },
+
   getAllTabs: function getAllTabs(filter) {
     let filteredUrls = new RegExp(Svc.Prefs.get("engine.tabs.filteredUrls"), "i");
 
     let allTabs = [];
 
     let currentState = JSON.parse(Svc.Session.getBrowserState());
+    let tabLastUsed = this.tabLastUsed;
     currentState.windows.forEach(function(window) {
       window.tabs.forEach(function(tab) {
         // Make sure there are history entries to look at.
@@ -159,15 +141,13 @@ TabStore.prototype = {
         if (!entry.url || filter && filteredUrls.test(entry.url))
           return;
 
-        // weaveLastUsed will only be set if the tab was ever selected (or
-        // opened after Weave was running). So it might not ever be set.
         // I think it's also possible that attributes[.image] might not be set
         // so handle that as well.
         allTabs.push({
           title: entry.title || "",
           urlHistory: [entry.url],
           icon: tab.attributes && tab.attributes.image || "",
-          lastUsed: tab.extData && tab.extData.weaveLastUsed || 0
+          lastUsed: tabLastUsed(tab)
         });
       });
     });

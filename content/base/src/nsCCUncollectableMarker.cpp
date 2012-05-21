@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jonas Sicking <jonas@sicking.cc> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCCUncollectableMarker.h"
 #include "nsIObserverService.h"
@@ -62,6 +30,7 @@
 #include "nsFrameLoader.h"
 #include "nsGenericElement.h"
 #include "xpcpublic.h"
+#include "nsObserverService.h"
 
 static bool sInited = 0;
 PRUint32 nsCCUncollectableMarker::sGeneration = 0;
@@ -316,7 +285,7 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
 
   // JS cleanup can be slow. Do it only if there has been a GC.
   bool cleanupJS =
-    !nsJSContext::CleanupSinceLastGC() &&
+    nsJSContext::CleanupsSinceLastGC() == 0 &&
     !strcmp(aTopic, "cycle-collector-forget-skippable");
 
   bool prepareForCC = !strcmp(aTopic, "cycle-collector-begin");
@@ -362,12 +331,6 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
     }
   }
 
-  if (cleanupJS) {
-    nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments(sGeneration);
-    MarkMessageManagers();
-    xpc_UnmarkSkippableJSHolders();
-  }
-
 #ifdef MOZ_XUL
   nsXULPrototypeCache* xulCache = nsXULPrototypeCache::GetInstance();
   if (xulCache) {
@@ -375,6 +338,51 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
   }
 #endif
 
+  static bool previousWasJSCleanup = false;
+  if (cleanupJS) {
+    nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments(sGeneration);
+    MarkMessageManagers();
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    static_cast<nsObserverService *>(obs.get())->UnmarkGrayStrongObservers();
+
+    previousWasJSCleanup = true;
+  } else if (previousWasJSCleanup) {
+    previousWasJSCleanup = false;
+    if (!prepareForCC) {
+      xpc_UnmarkSkippableJSHolders();
+    }
+  }
+
   return NS_OK;
 }
 
+static PLDHashOperator
+TraceActiveWindowGlobal(const PRUint64& aId, nsGlobalWindow*& aWindow, void* aClosure)
+{
+  if (aWindow->GetDocShell() && aWindow->IsOuterWindow()) {
+    if (JSObject* global = aWindow->FastGetGlobalJSObject()) {
+      JSTracer* trc = static_cast<JSTracer *>(aClosure);
+      JS_CALL_OBJECT_TRACER(trc, global, "active window global");
+    }
+  }
+  return PL_DHASH_NEXT;
+}
+
+void
+mozilla::dom::TraceBlackJS(JSTracer* aTrc)
+{
+  if (!nsCCUncollectableMarker::sGeneration) {
+    return;
+  }
+
+  // Mark globals of active windows black.
+  nsGlobalWindow::WindowByIdTable* windowsById =
+    nsGlobalWindow::GetWindowsTable();
+  if (windowsById) {
+    windowsById->Enumerate(TraceActiveWindowGlobal, aTrc);
+  }
+
+  // Mark the safe context black
+  nsContentUtils::TraceSafeJSContext(aTrc);
+}

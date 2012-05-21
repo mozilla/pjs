@@ -1,46 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is ui.js.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- * Ian Gilman <ian@iangilman.com>
- * Aza Raskin <aza@mozilla.com>
- * Michael Yoshitaka Erlewine <mitcho@mitcho.com>
- * Ehsan Akhgari <ehsan@mozilla.com>
- * Raymond Lee <raymond@appcoast.com>
- * Sean Dunn <seanedunn@yahoo.com>
- * Tim Taubert <tim.taubert@gmx.de>
- * Mihai Sucan <mihai.sucan@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // **********
 // Title: ui.js
@@ -158,14 +118,8 @@ let UI = {
       // initialize the direction of the page
       this._initPageDirection();
 
-      // ___ thumbnail storage
-      ThumbnailStorage.init();
-
       // ___ storage
       Storage.init();
-
-      // ___ storage policy
-      StoragePolicy.init();
 
       if (Storage.readWindowBusyState(gWindow))
         this.storageBusy();
@@ -176,6 +130,8 @@ let UI = {
 
       // ___ search
       Search.init();
+
+      Telemetry.init();
 
       // ___ currentTab
       this._currentTab = gBrowser.selectedTab;
@@ -250,6 +206,9 @@ let UI = {
       TabItems.init();
       TabItems.pausePainting();
 
+      // ___ favicons
+      FavIcons.init();
+
       if (!hasGroupItemsData)
         this.reset();
 
@@ -274,7 +233,6 @@ let UI = {
           GroupItems.removeHiddenGroups();
 
         TabItems.saveAll();
-        TabItems.saveAllThumbnails({synchronously: true});
 
         self._save();
       }, false);
@@ -292,6 +250,9 @@ let UI = {
       let event = document.createEvent("Events");
       event.initEvent("tabviewframeinitialized", true, false);
       dispatchEvent(event);
+
+      // XXX this can be removed when bug 731868 is fixed
+      event = null;
     } catch(e) {
       Utils.log(e);
     } finally {
@@ -311,8 +272,9 @@ let UI = {
     // additional clean up
     TabItems.uninit();
     GroupItems.uninit();
+    FavIcons.uninit();
     Storage.uninit();
-    StoragePolicy.uninit();
+    Telemetry.uninit();
 
     this._removeTabActionHandlers();
     this._currentTab = null;
@@ -710,11 +672,6 @@ let UI = {
         if (data == "enter" || data == "exit") {
           Search.hide();
           self._privateBrowsing.transitionMode = data;
-
-          // make sure to save all thumbnails that haven't been saved yet
-          // before we enter the private browsing mode
-          if (data == "enter")
-            TabItems.saveAllThumbnails({synchronously: true});
         }
       } else if (topic == "private-browsing-transition-complete") {
         // We use .transitionMode here, as aData is empty.
@@ -769,7 +726,7 @@ let UI = {
         if (gBrowser.tabs.length > 1) {
           // Don't return to TabView if there are any app tabs
           for (let a = 0; a < gBrowser._numPinnedTabs; a++) {
-            if (!gBrowser.tabs[a].closing)
+            if (Utils.isValidXULTab(gBrowser.tabs[a]))
               return;
           }
 
@@ -1158,6 +1115,7 @@ let UI = {
 
       let preventDefault = true;
       let activeTab;
+      let activeGroupItem;
       let norm = null;
       switch (event.keyCode) {
         case KeyEvent.DOM_VK_RIGHT:
@@ -1175,7 +1133,7 @@ let UI = {
       }
 
       if (norm != null) {
-        var nextTab = getClosestTabBy(norm);
+        let nextTab = getClosestTabBy(norm);
         if (nextTab) {
           if (nextTab.isStacked && !nextTab.parent.expanded)
             nextTab = nextTab.parent.getChild(0);
@@ -1184,7 +1142,7 @@ let UI = {
       } else {
         switch(event.keyCode) {
           case KeyEvent.DOM_VK_ESCAPE:
-            let activeGroupItem = GroupItems.getActiveGroupItem();
+            activeGroupItem = GroupItems.getActiveGroupItem();
             if (activeGroupItem && activeGroupItem.expanded)
               activeGroupItem.collapse();
             else
@@ -1192,9 +1150,18 @@ let UI = {
             break;
           case KeyEvent.DOM_VK_RETURN:
           case KeyEvent.DOM_VK_ENTER:
-            activeTab = self.getActiveTab();
-            if (activeTab)
-              activeTab.zoomIn();
+            activeGroupItem = GroupItems.getActiveGroupItem();
+            if (activeGroupItem) {
+              activeTab = self.getActiveTab();
+
+              if (!activeTab || activeTab.parent != activeGroupItem)
+                activeTab = activeGroupItem.getActiveTab();
+
+              if (activeTab)
+                activeTab.zoomIn();
+              else
+                activeGroupItem.newTab();
+            }
             break;
           case KeyEvent.DOM_VK_TAB:
             // tab/shift + tab to go to the next tab.
@@ -1604,39 +1571,10 @@ let UI = {
   // ----------
   // Function: _saveAll
   // Saves all data associated with TabView.
-  // TODO: Save info items
   _saveAll: function UI__saveAll() {
     this._save();
     GroupItems.saveAll();
     TabItems.saveAll();
-  },
-
-  // ----------
-  // Function: shouldLoadFavIcon
-  // Takes a xul:browser and checks whether we should display a favicon for it.
-  shouldLoadFavIcon: function UI_shouldLoadFavIcon(browser) {
-    return !(browser.contentDocument instanceof window.ImageDocument) &&
-            (browser.currentURI.schemeIs("about") ||
-             gBrowser.shouldLoadFavIcon(browser.contentDocument.documentURIObject));
-  },
-
-  // ----------
-  // Function: getFavIconUrlForTab
-  // Gets fav icon url for the given xul:tab.
-  getFavIconUrlForTab: function UI_getFavIconUrlForTab(tab) {
-    let url;
-
-    if (tab.image) {
-      // if starts with http/https, fetch icon from favicon service via the moz-anno protocal
-      if (/^https?:/.test(tab.image))
-        url = gFavIconService.getFaviconLinkForIcon(gWindow.makeURI(tab.image)).spec;
-      else
-        url = tab.image;
-    } else {
-      url = gFavIconService.getFaviconImageForPage(tab.linkedBrowser.currentURI).spec;
-    }
-
-    return url;
   },
 
   // ----------

@@ -13,13 +13,8 @@
 // Tests that, when the user types an extraneous closing bracket, no error
 // appears.
 
-registerCleanupFunction(function() {
-  Services.prefs.clearUserPref("devtools.gcli.enable");
-});
-
 function test() {
-  Services.prefs.setBoolPref("devtools.gcli.enable", false);
-  addTab("data:text/html,test for bug 592442");
+  addTab("data:text/html;charset=utf-8,test for bug 592442");
   browser.addEventListener("load", testExtraneousClosingBrackets, true);
 }
 

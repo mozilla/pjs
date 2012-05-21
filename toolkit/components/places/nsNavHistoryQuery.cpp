@@ -1,42 +1,7 @@
 //* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places code
- *
- * The Initial Developer of the Original Code is
- * Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brett Wilson <brettw@gmail.com> (original author)
- *   Shawn Wilsher <me@shawnwilsher.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * This file contains the definitions of nsNavHistoryQuery,
@@ -168,11 +133,9 @@ static void SetOptionsKeyUint32(const nsCString& aValue,
 #define QUERYKEY_EXCLUDE_ITEMS "excludeItems"
 #define QUERYKEY_EXCLUDE_QUERIES "excludeQueries"
 #define QUERYKEY_EXCLUDE_READ_ONLY_FOLDERS "excludeReadOnlyFolders"
-#define QUERYKEY_EXCLUDE_ITEM_IF_PARENT_HAS_ANNOTATION "excludeItemIfParentHasAnnotation"
 #define QUERYKEY_EXPAND_QUERIES "expandQueries"
 #define QUERYKEY_FORCE_ORIGINAL_TITLE "originalTitle"
 #define QUERYKEY_INCLUDE_HIDDEN "includeHidden"
-#define QUERYKEY_REDIRECTS_MODE "redirectsMode"
 #define QUERYKEY_MAX_RESULTS "maxResults"
 #define QUERYKEY_QUERY_TYPE "queryType"
 #define QUERYKEY_TAG "tag"
@@ -583,18 +546,6 @@ nsNavHistory::QueriesToQueryString(nsINavHistoryQuery **aQueries,
     queryString += NS_LITERAL_CSTRING(QUERYKEY_EXCLUDE_READ_ONLY_FOLDERS "=1");
   }
 
-  // exclude item if parent has annotation
-  nsCAutoString parentAnnotationToExclude;
-  if (NS_SUCCEEDED(options->GetExcludeItemIfParentHasAnnotation(parentAnnotationToExclude)) &&
-      !parentAnnotationToExclude.IsEmpty()) {
-    nsCString escaped;
-    if (!NS_Escape(parentAnnotationToExclude, escaped, url_XAlphas))
-      return NS_ERROR_OUT_OF_MEMORY;
-    AppendAmpersandIfNonempty(queryString);
-    queryString += NS_LITERAL_CSTRING(QUERYKEY_EXCLUDE_ITEM_IF_PARENT_HAS_ANNOTATION "=");
-    queryString.Append(escaped);
-  }
-
   // expand queries
   if (!options->ExpandQueries()) {
     AppendAmpersandIfNonempty(queryString);
@@ -605,13 +556,6 @@ nsNavHistory::QueriesToQueryString(nsINavHistoryQuery **aQueries,
   if (options->IncludeHidden()) {
     AppendAmpersandIfNonempty(queryString);
     queryString += NS_LITERAL_CSTRING(QUERYKEY_INCLUDE_HIDDEN "=1");
-  }
-
-  // redirects mode
-  if (options->RedirectsMode() !=  nsINavHistoryQueryOptions::REDIRECTS_MODE_ALL) {
-    AppendAmpersandIfNonempty(queryString);
-    queryString += NS_LITERAL_CSTRING(QUERYKEY_REDIRECTS_MODE "=");
-    AppendInt16(queryString, options->RedirectsMode());
   }
 
   // max results
@@ -804,7 +748,7 @@ nsNavHistory::TokensToQueries(const nsTArray<QueryKeyValuePair>& aTokens,
     } else if (kvp.key.EqualsLiteral(QUERYKEY_TAG)) {
       nsCAutoString unescaped(kvp.value);
       NS_UnescapeURL(unescaped); // modifies input
-      nsString tag = NS_ConvertUTF8toUTF16(unescaped);
+      NS_ConvertUTF8toUTF16 tag(unescaped);
       if (!tags.Contains(tag)) {
         NS_ENSURE_TRUE(tags.AppendElement(tag), NS_ERROR_OUT_OF_MEMORY);
       }
@@ -881,13 +825,6 @@ nsNavHistory::TokensToQueries(const nsTArray<QueryKeyValuePair>& aTokens,
       SetOptionsKeyBool(kvp.value, aOptions,
                         &nsINavHistoryQueryOptions::SetExcludeReadOnlyFolders);
 
-    // exclude item if parent has annotation
-    } else if (kvp.key.EqualsLiteral(QUERYKEY_EXCLUDE_ITEM_IF_PARENT_HAS_ANNOTATION)) {
-      nsCString parentAnnotationToExclude = kvp.value;
-      NS_UnescapeURL(parentAnnotationToExclude);
-      rv = aOptions->SetExcludeItemIfParentHasAnnotation(parentAnnotationToExclude);
-      NS_ENSURE_SUCCESS(rv, rv);
-
     // expand queries
     } else if (kvp.key.EqualsLiteral(QUERYKEY_EXPAND_QUERIES)) {
       SetOptionsKeyBool(kvp.value, aOptions,
@@ -896,10 +833,6 @@ nsNavHistory::TokensToQueries(const nsTArray<QueryKeyValuePair>& aTokens,
     } else if (kvp.key.EqualsLiteral(QUERYKEY_INCLUDE_HIDDEN)) {
       SetOptionsKeyBool(kvp.value, aOptions,
                         &nsINavHistoryQueryOptions::SetIncludeHidden);
-    // query type
-    } else if (kvp.key.EqualsLiteral(QUERYKEY_REDIRECTS_MODE)) {
-      SetOptionsKeyUint16(kvp.value, aOptions,
-                          &nsINavHistoryQueryOptions::SetRedirectsMode);
     // max results
     } else if (kvp.key.EqualsLiteral(QUERYKEY_MAX_RESULTS)) {
       SetOptionsKeyUint32(kvp.value, aOptions,
@@ -1513,19 +1446,6 @@ nsNavHistoryQueryOptions::SetExcludeReadOnlyFolders(bool aExclude)
   return NS_OK;
 }
 
-// excludeItemIfParentHasAnnotation
-NS_IMETHODIMP
-nsNavHistoryQueryOptions::GetExcludeItemIfParentHasAnnotation(nsACString& _result) {
-  _result.Assign(mParentAnnotationToExclude);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsNavHistoryQueryOptions::SetExcludeItemIfParentHasAnnotation(const nsACString& aParentAnnotationToExclude) {
-  mParentAnnotationToExclude.Assign(aParentAnnotationToExclude);
-  return NS_OK;
-}
-
 // expandQueries
 NS_IMETHODIMP
 nsNavHistoryQueryOptions::GetExpandQueries(bool* aExpand)
@@ -1551,20 +1471,6 @@ NS_IMETHODIMP
 nsNavHistoryQueryOptions::SetIncludeHidden(bool aIncludeHidden)
 {
   mIncludeHidden = aIncludeHidden;
-  return NS_OK;
-}
-
-// redirectsMode
-NS_IMETHODIMP
-nsNavHistoryQueryOptions::GetRedirectsMode(PRUint16* _retval)
-{
-  *_retval = mRedirectsMode;
-  return NS_OK;
-}
-NS_IMETHODIMP
-nsNavHistoryQueryOptions::SetRedirectsMode(PRUint16 aRedirectsMode)
-{
-  mRedirectsMode = aRedirectsMode;
   return NS_OK;
 }
 

@@ -6,12 +6,19 @@
   <script type="application/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"/>
   <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"></script>
 
+  <!-- This file uses fake memory reporters to test the presentation of
+       compartment memory reports in about:memory.  test_memoryReporters.xul
+       uses the real memory reporters to test whether the memory reporters
+       are producing sensible results. -->
+
   <!-- test results are displayed in the html:body -->
   <body xmlns="http://www.w3.org/1999/xhtml"></body>
 
   <!-- test code goes here -->
-  <script type="application/javascript;version=1.8">
+  <script type="application/javascript">
   <![CDATA[
+  "use strict";
+
   const Cc = Components.classes;
   const Ci = Components.interfaces;
   let mgr = Cc["@mozilla.org/memory-reporter-manager;1"].
@@ -40,6 +47,7 @@
   const NONHEAP = Ci.nsIMemoryReporter.KIND_NONHEAP;
   const HEAP    = Ci.nsIMemoryReporter.KIND_HEAP;
   const OTHER   = Ci.nsIMemoryReporter.KIND_OTHER;
+  const SUMMARY = Ci.nsIMemoryReporter.KIND_SUMMARY;
 
   const BYTES = Ci.nsIMemoryReporter.UNITS_BYTES;
   const COUNT = Ci.nsIMemoryReporter.UNITS_COUNT;
@@ -64,8 +72,8 @@
     f("", "other2",             OTHER,   COUNT, 888),
 
     f("2nd", "explicit/c",      HEAP,    BYTES, 333 * MB),
-    f("2nd", "compartments/user/child-user-compartment",     OTHER, COUNT, 1),
-    f("2nd", "compartments/system/child-system-compartment", OTHER, COUNT, 1)
+    f("2nd", "compartments/user/child-user-compartment",     SUMMARY, COUNT, 1),
+    f("2nd", "compartments/system/child-system-compartment", SUMMARY, COUNT, 1)
   ];
 
   var fakeMultiReporters = [
@@ -73,7 +81,7 @@
     { name: "fake",
       collectReports: function(aCbObj, aClosure) {
         function f(aP, aK, aU, aA) {
-          aCbObj.callback("", aP, aK, aU, aA, "(desc)", aClosure);
+          aCbObj.callback("", aP, aK, aU, aA, "Desc.", aClosure);
         }
         f("explicit/a/d",     HEAP,    BYTES,  13 * MB);
         f("explicit/b/c",     NONHEAP, BYTES,  10 * MB);
@@ -83,7 +91,7 @@
     { name: "compartments",
       collectReports: function(aCbObj, aClosure) {
         function f(aP) {
-          aCbObj.callback("", aP, OTHER, COUNT, 1, "", aClosure);
+          aCbObj.callback("", aP, SUMMARY, COUNT, 1, "", aClosure);
         }
         f("compartments/user/http:\\\\foo.com\\");
         f("compartments/user/https:\\\\bar.com\\bar?baz");
@@ -99,12 +107,22 @@
       },
       explicitNonHeap: 0
     },
+    { name: "ghost-windows",
+      collectReports: function(aCbObj, aClosure) {
+        function f(aP) {
+          aCbObj.callback("", aP, SUMMARY, COUNT, 1, "", aClosure);
+        }
+        f("ghost-windows/https:\\\\very-long-url.com\\very-long\\oh-so-long\\really-quite-long.html?a=2&b=3&c=4&d=5&e=abcdefghijklmnopqrstuvwxyz&f=123456789123456789123456789");
+        f("ghost-windows/http:\\\\foobar.com\\foo?bar#baz");
+      },
+      explicitNonHeap: 0
+    },
     // These shouldn't show up.
     { name: "smaps",
        collectReports: function(aCbObj, aClosure) {
         // The amounts are given in pages, so multiply here by 4kb.
         function f(aP, aA) {
-          aCbObj.callback("", aP, NONHEAP, BYTES, aA * 4 * KB, "(desc)", aClosure);
+          aCbObj.callback("", aP, NONHEAP, BYTES, aA * 4 * KB, "Desc.", aClosure);
         }
         f("smaps/vsize/a",     24);
         f("smaps/swap/a",       1);
@@ -123,7 +141,8 @@
   </script>
 
   <iframe id="acFrame"  height="400" src="about:compartments"></iframe>
-  <iframe id="acvFrame" height="400" src="about:compartments?verbose"></iframe>
+  <!-- vary the capitalization to make sure that works -->
+  <iframe id="acvFrame" height="400" src="abouT:compartMENTS?veRBOse"></iframe>
 
   <script type="application/javascript">
   <![CDATA[
@@ -141,6 +160,10 @@ System Compartments\n\
 atoms\n\
 moz-nullprincipal:{7ddefdaf-34f1-473f-9b03-50a4568ccb06}\n\
 \n\
+Ghost Windows\n\
+http://foobar.com/foo?bar#baz\n\
+https://very-long-url.com/very-long/oh-so-long/really-quite-long.html?a=2&b=3&c=4&d=5&e=abcdefghijklmnopqrstuvwxyz&f=123456789123456789123456789\n\
+\n\
 2nd Process\n\
 \n\
 User Compartments\n\
@@ -148,6 +171,8 @@ child-user-compartment\n\
 \n\
 System Compartments\n\
 child-system-compartment\n\
+\n\
+Ghost Windows\n\
 \n\
 ";
 
@@ -178,8 +203,9 @@ child-system-compartment\n\
   // expect.  This tests the output in general and also that the cutting and
   // pasting works as expected.
   function test(aFrameId, aExpected, aNext) {
+    ok(document.title === "about:compartments", "document.title is correct");
     let frame = document.getElementById(aFrameId);
-    let handler = function() {
+    SimpleTest.executeSoon(function() {
       frame.focus();
       SimpleTest.waitForClipboard(
         function(aActual) {
@@ -201,11 +227,7 @@ child-system-compartment\n\
           finish();
         }
       );
-    };
-    // about:compartment dispatches a "bodygenerated" event to the document
-    // when it's finished generating its DOM.  If we don't wait for that we end
-    // up copying an empty page.
-    frame.contentDocument.addEventListener("bodygenerated", handler, false);
+    });
   }
 
   SimpleTest.waitForFocus(function() {

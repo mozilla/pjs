@@ -1,41 +1,11 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bas Schouten <bschouten@mozilla.com>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GLContextProvider.h"
 #include "GLContext.h"
+#include "GLLibraryLoader.h"
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include "WGLLibrary.h"
@@ -147,7 +117,7 @@ WGLLibrary::EnsureInitialized()
 
     gUseDoubleBufferedWindows = PR_GetEnv("MOZ_WGL_DB") != nsnull;
 
-    LibrarySymbolLoader::SymLoadStruct earlySymbols[] = {
+    GLLibraryLoader::SymLoadStruct earlySymbols[] = {
         { (PRFuncPtr*) &fCreateContext, { "wglCreateContext", NULL } },
         { (PRFuncPtr*) &fMakeCurrent, { "wglMakeCurrent", NULL } },
         { (PRFuncPtr*) &fGetProcAddress, { "wglGetProcAddress", NULL } },
@@ -158,7 +128,7 @@ WGLLibrary::EnsureInitialized()
         { NULL, { NULL } }
     };
 
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &earlySymbols[0])) {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &earlySymbols[0])) {
         NS_WARNING("Couldn't find required entry points in OpenGL DLL (early init)");
         return false;
     }
@@ -183,7 +153,7 @@ WGLLibrary::EnsureInitialized()
     // Now we can grab all the other symbols that we couldn't without having
     // a context current.
 
-    LibrarySymbolLoader::SymLoadStruct pbufferSymbols[] = {
+    GLLibraryLoader::SymLoadStruct pbufferSymbols[] = {
         { (PRFuncPtr*) &fCreatePbuffer, { "wglCreatePbufferARB", "wglCreatePbufferEXT", NULL } },
         { (PRFuncPtr*) &fDestroyPbuffer, { "wglDestroyPbufferARB", "wglDestroyPbufferEXT", NULL } },
         { (PRFuncPtr*) &fGetPbufferDC, { "wglGetPbufferDCARB", "wglGetPbufferDCEXT", NULL } },
@@ -192,42 +162,42 @@ WGLLibrary::EnsureInitialized()
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct pixFmtSymbols[] = {
+    GLLibraryLoader::SymLoadStruct pixFmtSymbols[] = {
         { (PRFuncPtr*) &fChoosePixelFormat, { "wglChoosePixelFormatARB", "wglChoosePixelFormatEXT", NULL } },
         { (PRFuncPtr*) &fGetPixelFormatAttribiv, { "wglGetPixelFormatAttribivARB", "wglGetPixelFormatAttribivEXT", NULL } },
         { NULL, { NULL } }
     };
 
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &pbufferSymbols[0],
-         (LibrarySymbolLoader::PlatformLookupFunction)fGetProcAddress))
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pbufferSymbols[0],
+         (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress))
     {
         // this isn't an error, just means that pbuffers aren't supported
         fCreatePbuffer = nsnull;
     }
 
-    if (!LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &pixFmtSymbols[0],
-         (LibrarySymbolLoader::PlatformLookupFunction)fGetProcAddress))
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pixFmtSymbols[0],
+         (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress))
     {
         // this isn't an error, just means that we don't have the pixel format extension
         fChoosePixelFormat = nsnull;
     }
 
-    LibrarySymbolLoader::SymLoadStruct extensionsSymbols[] = {
+    GLLibraryLoader::SymLoadStruct extensionsSymbols[] = {
         { (PRFuncPtr *) &fGetExtensionsString, { "wglGetExtensionsStringARB", NULL} },
         { NULL, { NULL } }
     };
 
-    LibrarySymbolLoader::SymLoadStruct robustnessSymbols[] = {
+    GLLibraryLoader::SymLoadStruct robustnessSymbols[] = {
         { (PRFuncPtr *) &fCreateContextAttribs, { "wglCreateContextAttribsARB", NULL} },
         { NULL, { NULL } }
     };
 
-    if (LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &extensionsSymbols[0],
-        (LibrarySymbolLoader::PlatformLookupFunction)fGetProcAddress)) {
+    if (GLLibraryLoader::LoadSymbols(mOGLLibrary, &extensionsSymbols[0],
+        (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress)) {
         const char *wglExts = fGetExtensionsString(gSharedWindowDC);
         if (wglExts && HasExtension(wglExts, "WGL_ARB_create_context")) {
-            LibrarySymbolLoader::LoadSymbols(mOGLLibrary, &robustnessSymbols[0],
-            (LibrarySymbolLoader::PlatformLookupFunction)fGetProcAddress);
+            GLLibraryLoader::LoadSymbols(mOGLLibrary, &robustnessSymbols[0],
+            (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress);
             if (HasExtension(wglExts, "WGL_ARB_create_context_robustness")) {
                 mHasRobustness = true;
             }
@@ -325,7 +295,11 @@ public:
 
         MakeCurrent();
         SetupLookupFunction();
-        return InitWithPrefix("gl", true);
+        if (!InitWithPrefix("gl", true))
+            return false;
+
+        InitFramebuffers();
+        return true;
     }
 
     bool MakeCurrentImpl(bool aForce = false)
@@ -519,10 +493,10 @@ GLContextWGL::ResizeOffscreen(const gfxIntSize& aNewSize)
         MakeCurrent();
         ClearSafely();
 
-        return ResizeOffscreenFBO(aNewSize, false);
+        return ResizeOffscreenFBOs(aNewSize, false);
     }
 
-    return ResizeOffscreenFBO(aNewSize, true);
+    return ResizeOffscreenFBOs(aNewSize, true);
 }
 
 static GLContextWGL *
@@ -746,7 +720,8 @@ CreateWindowOffscreenContext(const ContextFormat& aFormat)
 
 already_AddRefed<GLContext>
 GLContextProviderWGL::CreateOffscreen(const gfxIntSize& aSize,
-                                      const ContextFormat& aFormat)
+                                      const ContextFormat& aFormat,
+                                      const ContextFlags)
 {
     if (!sWGLLibrary.EnsureInitialized()) {
         return nsnull;
@@ -776,7 +751,7 @@ GLContextProviderWGL::CreateOffscreen(const gfxIntSize& aSize,
         return nsnull;
     }
 
-    if (!glContext->ResizeOffscreenFBO(aSize, !glContext->mPBuffer))
+    if (!glContext->ResizeOffscreenFBOs(aSize, !glContext->mPBuffer))
         return nsnull;
 
     glContext->mOffscreenSize = aSize;

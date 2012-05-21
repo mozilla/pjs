@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Makoto Kato  <m_kato@ga2.so-net.ne.jp>
- *   Dean Tessman <dean_tessman@hotmail.com>
- *   Thomas K. Dyas <tdyas@zecador.org> (simple gestures support)
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsGUIEvent_h__
 #define nsGUIEvent_h__
@@ -542,6 +506,9 @@ class nsHashKey;
 #define NS_DEVICE_ORIENTATION_START  4900
 #define NS_DEVICE_ORIENTATION        (NS_DEVICE_ORIENTATION_START)
 #define NS_DEVICE_MOTION             (NS_DEVICE_ORIENTATION_START+1)
+#define NS_DEVICE_PROXIMITY          (NS_DEVICE_ORIENTATION_START+2)
+#define NS_USER_PROXIMITY            (NS_DEVICE_ORIENTATION_START+3)
+#define NS_DEVICE_LIGHT              (NS_DEVICE_ORIENTATION_START+4)
 
 #define NS_SHOW_EVENT                5000
 
@@ -557,6 +524,11 @@ class nsHashKey;
 #define NS_TOUCH_ENTER               (NS_TOUCH_EVENT_START+3)
 #define NS_TOUCH_LEAVE               (NS_TOUCH_EVENT_START+4)
 #define NS_TOUCH_CANCEL              (NS_TOUCH_EVENT_START+5)
+
+// Pointerlock DOM API
+#define NS_POINTERLOCK_START         5300
+#define NS_POINTERLOCKCHANGE         (NS_POINTERLOCK_START)
+#define NS_POINTERLOCKERROR          (NS_POINTERLOCK_START + 1)
 
 /**
  * Return status for event processors, nsEventStatus, is defined in
@@ -583,6 +555,7 @@ protected:
     : eventStructType(structType),
       message(msg),
       refPoint(0, 0),
+      lastRefPoint(0, 0),
       time(0),
       flags(isTrusted ? NS_EVENT_FLAG_TRUSTED : NS_EVENT_FLAG_NONE),
       userType(0)
@@ -599,6 +572,7 @@ public:
     : eventStructType(NS_EVENT),
       message(msg),
       refPoint(0, 0),
+      lastRefPoint(0, 0),
       time(0),
       flags(isTrusted ? NS_EVENT_FLAG_TRUSTED : NS_EVENT_FLAG_NONE),
       userType(0)
@@ -618,6 +592,8 @@ public:
   // Relative to the widget of the event, or if there is no widget then it is
   // in screen coordinates. Not modified by layout code.
   nsIntPoint  refPoint;
+  // The previous refPoint, if known, used to calculate mouse movement deltas.
+  nsIntPoint  lastRefPoint;
   // Elapsed time, in milliseconds, from a platform-specific zero time
   // to the time the message was created
   PRUint64    time;
@@ -812,7 +788,7 @@ protected:
   nsInputEvent(bool isTrusted, PRUint32 msg, nsIWidget *w,
                PRUint8 structType)
     : nsGUIEvent(isTrusted, msg, w, structType),
-      isShift(false), isControl(false), isAlt(false), isMeta(false)
+      modifiers(0)
   {
   }
 
@@ -823,18 +799,91 @@ protected:
 public:
   nsInputEvent(bool isTrusted, PRUint32 msg, nsIWidget *w)
     : nsGUIEvent(isTrusted, msg, w, NS_INPUT_EVENT),
-      isShift(false), isControl(false), isAlt(false), isMeta(false)
+      modifiers(0)
   {
   }
 
-  /// true indicates the shift key is down
-  bool            isShift;        
-  /// true indicates the control key is down
-  bool            isControl;      
-  /// true indicates the alt key is down
-  bool            isAlt;          
-  /// true indicates the meta key is down (or, on Mac, the Command key)
-  bool            isMeta;
+  // true indicates the shift key is down
+  bool IsShift() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_SHIFT) != 0);
+  }
+  // true indicates the control key is down
+  bool IsControl() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_CONTROL) != 0);
+  }
+  // true indicates the alt key is down
+  bool IsAlt() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_ALT) != 0);
+  }
+  // true indicates the meta key is down (or, on Mac, the Command key)
+  bool IsMeta() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_META) != 0);
+  }
+  // true indicates the win key is down (or, on Linux, the Super or Hyper key)
+  bool IsWin() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_WIN) != 0);
+  }
+  // true indicates the alt graph key is down
+  // NOTE: on Mac, the option key press causes both IsAlt() and IsAltGrpah()
+  //       return true.
+  bool IsAltGraph() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_ALTGRAPH) != 0);
+  }
+  // true indeicates the CapLock LED is turn on.
+  bool IsCapsLocked() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_CAPSLOCK) != 0);
+  }
+  // true indeicates the NumLock LED is turn on.
+  bool IsNumLocked() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_NUMLOCK) != 0);
+  }
+  // true indeicates the ScrollLock LED is turn on.
+  bool IsScrollLocked() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_SCROLL) != 0);
+  }
+
+  // true indeicates the Fn key is down, but this is not supported by native
+  // key event on any platform.
+  bool IsFn() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_FN) != 0);
+  }
+  // true indeicates the ScrollLock LED is turn on.
+  bool IsSymbolLocked() const
+  {
+    return ((modifiers & mozilla::widget::MODIFIER_SYMBOLLOCK) != 0);
+  }
+
+  void InitBasicModifiers(bool aCtrlKey,
+                          bool aAltKey,
+                          bool aShiftKey,
+                          bool aMetaKey)
+  {
+    modifiers = 0;
+    if (aCtrlKey) {
+      modifiers |= mozilla::widget::MODIFIER_CONTROL;
+    }
+    if (aAltKey) {
+      modifiers |= mozilla::widget::MODIFIER_ALT;
+    }
+    if (aShiftKey) {
+      modifiers |= mozilla::widget::MODIFIER_SHIFT;
+    }
+    if (aMetaKey) {
+      modifiers |= mozilla::widget::MODIFIER_META;
+    }
+  }
+
+  mozilla::widget::Modifiers modifiers;
 };
 
 /**
@@ -854,13 +903,14 @@ public:
   }
 
   nsMouseEvent_base(bool isTrusted, PRUint32 msg, nsIWidget *w, PRUint8 type)
-    : nsInputEvent(isTrusted, msg, w, type), button(0), pressure(0)
-    , inputSource(nsIDOMMouseEvent::MOZ_SOURCE_MOUSE) {}
+    : nsInputEvent(isTrusted, msg, w, type), button(0), buttons(0),
+      pressure(0), inputSource(nsIDOMMouseEvent::MOZ_SOURCE_MOUSE) {}
 
   /// The possible related target
   nsCOMPtr<nsISupports> relatedTarget;
 
   PRInt16               button;
+  PRInt16               buttons;
 
   // Finger or touch pressure of event
   // ranges between 0.0 and 1.0
@@ -878,6 +928,15 @@ private:
 
 public:
   enum buttonType  { eLeftButton = 0, eMiddleButton = 1, eRightButton = 2 };
+  enum buttonsFlag { eLeftButtonFlag   = 0x01,
+                     eRightButtonFlag  = 0x02,
+                     eMiddleButtonFlag = 0x04,
+                     // typicall, "back" button being left side of 5-button
+                     // mice, see "buttons" attribute document of DOM3 Events.
+                     e4thButtonFlag    = 0x08,
+                     // typicall, "forward" button being right side of 5-button
+                     // mice, see "buttons" attribute document of DOM3 Events.
+                     e5thButtonFlag    = 0x10 };
   enum reasonType  { eReal, eSynthesized };
   enum contextType { eNormal, eContextMenuKey };
   enum exitType    { eChild, eTopLevel };
@@ -1021,7 +1080,8 @@ public:
 
   nsKeyEvent(bool isTrusted, PRUint32 msg, nsIWidget *w)
     : nsInputEvent(isTrusted, msg, w, NS_KEY_EVENT),
-      keyCode(0), charCode(0), isChar(0)
+      keyCode(0), charCode(0),
+      location(nsIDOMKeyEvent::DOM_KEY_LOCATION_STANDARD), isChar(0)
   {
   }
 
@@ -1029,6 +1089,8 @@ public:
   PRUint32        keyCode;   
   /// OS translated Unicode char
   PRUint32        charCode;
+  // One of nsIDOMKeyEvent::DOM_KEY_LOCATION_*
+  PRUint32        location;
   // OS translated Unicode chars which are used for accesskey and accelkey
   // handling. The handlers will try from first character to last character.
   nsTArray<nsAlternativeCharCode> alternativeCharCodes;
@@ -1284,9 +1346,14 @@ public:
     kIsMomentum =   1 << 6, // Marks scroll events that aren't controlled by the
                             // user but fire automatically as the result of a
                             // "momentum" scroll.
-    kAllowSmoothScroll = 1 << 7 // Allow smooth scroll for the pixel scroll
-                                // event.
-  };
+    kAllowSmoothScroll = 1 << 7, // Allow smooth scroll for the pixel scroll
+                                 // event.
+    kFromLines =    1 << 8  // For a pixels scroll event, indicates that it
+                            // originated from a lines scroll event.
+                            // (Only used on windows which generates "faked"
+                            // pixel scroll events even for simple mouse wheel
+                            // scroll)
+};
 
   nsMouseScrollEvent(bool isTrusted, PRUint32 msg, nsIWidget *w)
     : nsMouseEvent_base(isTrusted, msg, w, NS_MOUSE_SCROLL_EVENT),
@@ -1543,12 +1610,14 @@ public:
 class nsTouchEvent : public nsInputEvent
 {
 public:
-  nsTouchEvent(nsTouchEvent *aEvent)
-    :nsInputEvent(aEvent->flags & NS_EVENT_FLAG_TRUSTED ? true : false,
-                 aEvent->message,
-                 aEvent->widget,
-                 NS_TOUCH_EVENT)
+  nsTouchEvent(bool isTrusted, nsTouchEvent *aEvent)
+    : nsInputEvent(isTrusted,
+                   aEvent->message,
+                   aEvent->widget,
+                   NS_TOUCH_EVENT)
   {
+    modifiers = aEvent->modifiers;
+    time = aEvent->time;
     touches.AppendElements(aEvent->touches);
     MOZ_COUNT_CTOR(nsTouchEvent);
   }
@@ -1827,145 +1896,11 @@ enum nsDragDropEventStatus {
  * in favor of the DOM ones, but at least this way they'll be in sync.
  */
 
-#define NS_VK_CANCEL         nsIDOMKeyEvent::DOM_VK_CANCEL
-#define NS_VK_HELP           nsIDOMKeyEvent::DOM_VK_HELP
-#define NS_VK_BACK           nsIDOMKeyEvent::DOM_VK_BACK_SPACE
-#define NS_VK_TAB            nsIDOMKeyEvent::DOM_VK_TAB
-#define NS_VK_CLEAR          nsIDOMKeyEvent::DOM_VK_CLEAR
-#define NS_VK_RETURN         nsIDOMKeyEvent::DOM_VK_RETURN
-#define NS_VK_ENTER          nsIDOMKeyEvent::DOM_VK_ENTER
-#define NS_VK_SHIFT          nsIDOMKeyEvent::DOM_VK_SHIFT
-#define NS_VK_CONTROL        nsIDOMKeyEvent::DOM_VK_CONTROL
-#define NS_VK_ALT            nsIDOMKeyEvent::DOM_VK_ALT
-#define NS_VK_PAUSE          nsIDOMKeyEvent::DOM_VK_PAUSE
-#define NS_VK_CAPS_LOCK      nsIDOMKeyEvent::DOM_VK_CAPS_LOCK
-#define NS_VK_KANA           nsIDOMKeyEvent::DOM_VK_KANA
-#define NS_VK_HANGUL         nsIDOMKeyEvent::DOM_VK_HANGUL
-#define NS_VK_JUNJA          nsIDOMKeyEvent::DOM_VK_JUNJA
-#define NS_VK_FINAL          nsIDOMKeyEvent::DOM_VK_FINAL
-#define NS_VK_HANJA          nsIDOMKeyEvent::DOM_VK_HANJA
-#define NS_VK_KANJI          nsIDOMKeyEvent::DOM_VK_KANJI
-#define NS_VK_ESCAPE         nsIDOMKeyEvent::DOM_VK_ESCAPE
-#define NS_VK_CONVERT        nsIDOMKeyEvent::DOM_VK_CONVERT
-#define NS_VK_NONCONVERT     nsIDOMKeyEvent::DOM_VK_NONCONVERT
-#define NS_VK_ACCEPT         nsIDOMKeyEvent::DOM_VK_ACCEPT
-#define NS_VK_MODECHANGE     nsIDOMKeyEvent::DOM_VK_MODECHANGE
-#define NS_VK_SPACE          nsIDOMKeyEvent::DOM_VK_SPACE
-#define NS_VK_PAGE_UP        nsIDOMKeyEvent::DOM_VK_PAGE_UP
-#define NS_VK_PAGE_DOWN      nsIDOMKeyEvent::DOM_VK_PAGE_DOWN
-#define NS_VK_END            nsIDOMKeyEvent::DOM_VK_END
-#define NS_VK_HOME           nsIDOMKeyEvent::DOM_VK_HOME
-#define NS_VK_LEFT           nsIDOMKeyEvent::DOM_VK_LEFT
-#define NS_VK_UP             nsIDOMKeyEvent::DOM_VK_UP
-#define NS_VK_RIGHT          nsIDOMKeyEvent::DOM_VK_RIGHT
-#define NS_VK_DOWN           nsIDOMKeyEvent::DOM_VK_DOWN
-#define NS_VK_SELECT         nsIDOMKeyEvent::DOM_VK_SELECT
-#define NS_VK_PRINT          nsIDOMKeyEvent::DOM_VK_PRINT
-#define NS_VK_EXECUTE        nsIDOMKeyEvent::DOM_VK_EXECUTE
-#define NS_VK_PRINTSCREEN    nsIDOMKeyEvent::DOM_VK_PRINTSCREEN
-#define NS_VK_INSERT         nsIDOMKeyEvent::DOM_VK_INSERT
-#define NS_VK_DELETE         nsIDOMKeyEvent::DOM_VK_DELETE
-
-// NS_VK_0 - NS_VK_9 match their ascii values
-#define NS_VK_0              nsIDOMKeyEvent::DOM_VK_0
-#define NS_VK_1              nsIDOMKeyEvent::DOM_VK_1
-#define NS_VK_2              nsIDOMKeyEvent::DOM_VK_2
-#define NS_VK_3              nsIDOMKeyEvent::DOM_VK_3
-#define NS_VK_4              nsIDOMKeyEvent::DOM_VK_4
-#define NS_VK_5              nsIDOMKeyEvent::DOM_VK_5
-#define NS_VK_6              nsIDOMKeyEvent::DOM_VK_6
-#define NS_VK_7              nsIDOMKeyEvent::DOM_VK_7
-#define NS_VK_8              nsIDOMKeyEvent::DOM_VK_8
-#define NS_VK_9              nsIDOMKeyEvent::DOM_VK_9
-
-#define NS_VK_SEMICOLON      nsIDOMKeyEvent::DOM_VK_SEMICOLON
-#define NS_VK_EQUALS         nsIDOMKeyEvent::DOM_VK_EQUALS
-
-// NS_VK_A - NS_VK_Z match their ascii values
-#define NS_VK_A              nsIDOMKeyEvent::DOM_VK_A
-#define NS_VK_B              nsIDOMKeyEvent::DOM_VK_B
-#define NS_VK_C              nsIDOMKeyEvent::DOM_VK_C
-#define NS_VK_D              nsIDOMKeyEvent::DOM_VK_D
-#define NS_VK_E              nsIDOMKeyEvent::DOM_VK_E
-#define NS_VK_F              nsIDOMKeyEvent::DOM_VK_F
-#define NS_VK_G              nsIDOMKeyEvent::DOM_VK_G
-#define NS_VK_H              nsIDOMKeyEvent::DOM_VK_H
-#define NS_VK_I              nsIDOMKeyEvent::DOM_VK_I
-#define NS_VK_J              nsIDOMKeyEvent::DOM_VK_J
-#define NS_VK_K              nsIDOMKeyEvent::DOM_VK_K
-#define NS_VK_L              nsIDOMKeyEvent::DOM_VK_L
-#define NS_VK_M              nsIDOMKeyEvent::DOM_VK_M
-#define NS_VK_N              nsIDOMKeyEvent::DOM_VK_N
-#define NS_VK_O              nsIDOMKeyEvent::DOM_VK_O
-#define NS_VK_P              nsIDOMKeyEvent::DOM_VK_P
-#define NS_VK_Q              nsIDOMKeyEvent::DOM_VK_Q
-#define NS_VK_R              nsIDOMKeyEvent::DOM_VK_R
-#define NS_VK_S              nsIDOMKeyEvent::DOM_VK_S
-#define NS_VK_T              nsIDOMKeyEvent::DOM_VK_T
-#define NS_VK_U              nsIDOMKeyEvent::DOM_VK_U
-#define NS_VK_V              nsIDOMKeyEvent::DOM_VK_V
-#define NS_VK_W              nsIDOMKeyEvent::DOM_VK_W
-#define NS_VK_X              nsIDOMKeyEvent::DOM_VK_X
-#define NS_VK_Y              nsIDOMKeyEvent::DOM_VK_Y
-#define NS_VK_Z              nsIDOMKeyEvent::DOM_VK_Z
-
-#define NS_VK_CONTEXT_MENU   nsIDOMKeyEvent::DOM_VK_CONTEXT_MENU
-#define NS_VK_SLEEP          nsIDOMKeyEvent::DOM_VK_SLEEP
-
-#define NS_VK_NUMPAD0        nsIDOMKeyEvent::DOM_VK_NUMPAD0
-#define NS_VK_NUMPAD1        nsIDOMKeyEvent::DOM_VK_NUMPAD1
-#define NS_VK_NUMPAD2        nsIDOMKeyEvent::DOM_VK_NUMPAD2
-#define NS_VK_NUMPAD3        nsIDOMKeyEvent::DOM_VK_NUMPAD3
-#define NS_VK_NUMPAD4        nsIDOMKeyEvent::DOM_VK_NUMPAD4
-#define NS_VK_NUMPAD5        nsIDOMKeyEvent::DOM_VK_NUMPAD5
-#define NS_VK_NUMPAD6        nsIDOMKeyEvent::DOM_VK_NUMPAD6
-#define NS_VK_NUMPAD7        nsIDOMKeyEvent::DOM_VK_NUMPAD7
-#define NS_VK_NUMPAD8        nsIDOMKeyEvent::DOM_VK_NUMPAD8
-#define NS_VK_NUMPAD9        nsIDOMKeyEvent::DOM_VK_NUMPAD9
-#define NS_VK_MULTIPLY       nsIDOMKeyEvent::DOM_VK_MULTIPLY
-#define NS_VK_ADD            nsIDOMKeyEvent::DOM_VK_ADD
-#define NS_VK_SEPARATOR      nsIDOMKeyEvent::DOM_VK_SEPARATOR
-#define NS_VK_SUBTRACT       nsIDOMKeyEvent::DOM_VK_SUBTRACT
-#define NS_VK_DECIMAL        nsIDOMKeyEvent::DOM_VK_DECIMAL
-#define NS_VK_DIVIDE         nsIDOMKeyEvent::DOM_VK_DIVIDE
-#define NS_VK_F1             nsIDOMKeyEvent::DOM_VK_F1
-#define NS_VK_F2             nsIDOMKeyEvent::DOM_VK_F2
-#define NS_VK_F3             nsIDOMKeyEvent::DOM_VK_F3
-#define NS_VK_F4             nsIDOMKeyEvent::DOM_VK_F4
-#define NS_VK_F5             nsIDOMKeyEvent::DOM_VK_F5
-#define NS_VK_F6             nsIDOMKeyEvent::DOM_VK_F6
-#define NS_VK_F7             nsIDOMKeyEvent::DOM_VK_F7
-#define NS_VK_F8             nsIDOMKeyEvent::DOM_VK_F8
-#define NS_VK_F9             nsIDOMKeyEvent::DOM_VK_F9
-#define NS_VK_F10            nsIDOMKeyEvent::DOM_VK_F10
-#define NS_VK_F11            nsIDOMKeyEvent::DOM_VK_F11
-#define NS_VK_F12            nsIDOMKeyEvent::DOM_VK_F12
-#define NS_VK_F13            nsIDOMKeyEvent::DOM_VK_F13
-#define NS_VK_F14            nsIDOMKeyEvent::DOM_VK_F14
-#define NS_VK_F15            nsIDOMKeyEvent::DOM_VK_F15
-#define NS_VK_F16            nsIDOMKeyEvent::DOM_VK_F16
-#define NS_VK_F17            nsIDOMKeyEvent::DOM_VK_F17
-#define NS_VK_F18            nsIDOMKeyEvent::DOM_VK_F18
-#define NS_VK_F19            nsIDOMKeyEvent::DOM_VK_F19
-#define NS_VK_F20            nsIDOMKeyEvent::DOM_VK_F20
-#define NS_VK_F21            nsIDOMKeyEvent::DOM_VK_F21
-#define NS_VK_F22            nsIDOMKeyEvent::DOM_VK_F22
-#define NS_VK_F23            nsIDOMKeyEvent::DOM_VK_F23
-#define NS_VK_F24            nsIDOMKeyEvent::DOM_VK_F24
-
-#define NS_VK_NUM_LOCK       nsIDOMKeyEvent::DOM_VK_NUM_LOCK
-#define NS_VK_SCROLL_LOCK    nsIDOMKeyEvent::DOM_VK_SCROLL_LOCK
-
-#define NS_VK_COMMA          nsIDOMKeyEvent::DOM_VK_COMMA
-#define NS_VK_PERIOD         nsIDOMKeyEvent::DOM_VK_PERIOD
-#define NS_VK_SLASH          nsIDOMKeyEvent::DOM_VK_SLASH
-#define NS_VK_BACK_QUOTE     nsIDOMKeyEvent::DOM_VK_BACK_QUOTE
-#define NS_VK_OPEN_BRACKET   nsIDOMKeyEvent::DOM_VK_OPEN_BRACKET
-#define NS_VK_BACK_SLASH     nsIDOMKeyEvent::DOM_VK_BACK_SLASH
-#define NS_VK_CLOSE_BRACKET  nsIDOMKeyEvent::DOM_VK_CLOSE_BRACKET
-#define NS_VK_QUOTE          nsIDOMKeyEvent::DOM_VK_QUOTE
-
-#define NS_VK_META           nsIDOMKeyEvent::DOM_VK_META
+enum {
+#define NS_DEFINE_VK(aDOMKeyName, aDOMKeyCode) NS_##aDOMKeyName = aDOMKeyCode
+#include "nsVKList.h"
+#undef NS_DEFINE_VK
+};
 
 // IME Constants  -- keep in synch with nsIPrivateTextRange.h
 #define NS_TEXTRANGE_CARETPOSITION         0x01

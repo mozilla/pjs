@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Shawn Wilsher <me@shawnwilsher.com> (Original Author)
- *   Allison Naaktgeboren <ally@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
@@ -97,6 +63,7 @@ struct VisitData {
   , typed(false)
   , transitionType(PR_UINT32_MAX)
   , visitTime(0)
+  , frecency(-1)
   , titleChanged(false)
   {
     guid.SetIsVoid(true);
@@ -112,6 +79,7 @@ struct VisitData {
   , typed(false)
   , transitionType(PR_UINT32_MAX)
   , visitTime(0)
+  , frecency(-1)
   , titleChanged(false)
   {
     (void)aURI->GetSpec(spec);
@@ -124,8 +92,7 @@ struct VisitData {
   }
 
   /**
-   * Sets the transition type of the visit, as well as if it was typed and
-   * should be hidden (based on the transition type specified).
+   * Sets the transition type of the visit, as well as if it was typed.
    *
    * @param aTransitionType
    *        The transition type constant to set.  Must be one of the
@@ -134,10 +101,6 @@ struct VisitData {
   void SetTransitionType(PRUint32 aTransitionType)
   {
     typed = aTransitionType == nsINavHistoryService::TRANSITION_TYPED;
-    bool redirected =
-      aTransitionType == nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY ||
-      aTransitionType == nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT;
-    hidden = GetHiddenState(redirected, aTransitionType);
     transitionType = aTransitionType;
   }
 
@@ -171,6 +134,7 @@ struct VisitData {
   bool typed;
   PRUint32 transitionType;
   PRTime visitTime;
+  PRInt32 frecency;
 
   /**
    * Stores the title.  If this is empty (IsEmpty() returns true), then the
@@ -292,7 +256,7 @@ GetIntFromJSObject(JSContext* aCtx,
   NS_ENSURE_ARG(JSVAL_IS_PRIMITIVE(value));
   NS_ENSURE_ARG(JSVAL_IS_NUMBER(value));
 
-  jsdouble num;
+  double num;
   rc = JS_ValueToNumber(aCtx, value, &num);
   NS_ENSURE_TRUE(rc, NS_ERROR_UNEXPECTED);
   NS_ENSURE_ARG(IntType(num) == num);
@@ -318,7 +282,7 @@ GetIntFromJSObject(JSContext* aCtx,
 nsresult
 GetJSObjectFromArray(JSContext* aCtx,
                      JSObject* aArray,
-                     jsuint aIndex,
+                     uint32_t aIndex,
                      JSObject** _rooter)
 {
   NS_PRECONDITION(JS_IsArrayObject(aCtx, aArray),
@@ -505,6 +469,7 @@ public:
 
     History* history = History::GetService();
     NS_ENSURE_STATE(history);
+    history->AppendToRecentlyVisitedURIs(uri);
     history->NotifyVisited(uri);
 
     return NS_OK;
@@ -1056,7 +1021,7 @@ private:
     rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("visit_date"),
                                _place.visitTime);
     NS_ENSURE_SUCCESS(rv, rv);
-    PRInt32 transitionType = _place.transitionType;
+    PRUint32 transitionType = _place.transitionType;
     NS_ASSERTION(transitionType >= nsINavHistoryService::TRANSITION_LINK &&
                  transitionType <= nsINavHistoryService::TRANSITION_FRAMED_LINK,
                  "Invalid transition type!");
@@ -1086,6 +1051,11 @@ private:
    */
   nsresult UpdateFrecency(const VisitData& aPlace)
   {
+    // Don't update frecency if the page should not appear in autocomplete.
+    if (aPlace.frecency == 0) {
+      return NS_OK;
+    }
+
     nsresult rv;
     { // First, set our frecency to the proper value.
       nsCOMPtr<mozIStorageStatement> stmt;
@@ -1115,8 +1085,8 @@ private:
       NS_ENSURE_SUCCESS(rv, rv);
     }
 
-    { // Now, we need to mark the page as not hidden if the frecency is now
-      // nonzero.
+    if (!aPlace.hidden) {
+      // Mark the page as not hidden if the frecency is now nonzero.
       nsCOMPtr<mozIStorageStatement> stmt;
       if (aPlace.placeId) {
         stmt = mHistory->GetStatement(
@@ -1430,18 +1400,17 @@ NS_MEMORY_REPORTER_MALLOC_SIZEOF_FUN(HistoryLinksHashtableMallocSizeOf,
 PRInt64 GetHistoryObserversSize()
 {
   History* history = History::GetService();
-  if (!history)
-    return 0;
-  return history->SizeOfIncludingThis(HistoryLinksHashtableMallocSizeOf);
+  return history ?
+         history->SizeOfIncludingThis(HistoryLinksHashtableMallocSizeOf) : 0;
 }
 
 NS_MEMORY_REPORTER_IMPLEMENT(HistoryService,
-    "explicit/history-links-hashtable",
-    KIND_HEAP,
-    UNITS_BYTES,
-    GetHistoryObserversSize,
-    "Memory used by the hashtable of observers Places uses to notify objects of "
-    "changes to links' visited state.")
+  "explicit/history-links-hashtable",
+  KIND_HEAP,
+  UNITS_BYTES,
+  GetHistoryObserversSize,
+  "Memory used by the hashtable of observers Places uses to notify objects of "
+  "changes to links' visited state.")
 
 } // anonymous namespace
 
@@ -1453,6 +1422,7 @@ History* History::gService = NULL;
 History::History()
   : mShuttingDown(false)
   , mShutdownMutex("History::mShutdownMutex")
+  , mRecentlyVisitedURIsNextIndex(0)
 {
   NS_ASSERTION(!gService, "Ruh-roh!  This service has already been created!");
   gService = this;
@@ -1559,8 +1529,8 @@ History::InsertPlace(const VisitData& aPlace)
 
   nsCOMPtr<mozIStorageStatement> stmt = GetStatement(
       "INSERT INTO moz_places "
-        "(url, title, rev_host, hidden, typed, guid) "
-      "VALUES (:url, :title, :rev_host, :hidden, :typed, :guid) "
+        "(url, title, rev_host, hidden, typed, frecency, guid) "
+      "VALUES (:url, :title, :rev_host, :hidden, :typed, :frecency, :guid) "
     );
   NS_ENSURE_STATE(stmt);
   mozStorageStatementScoper scoper(stmt);
@@ -1580,6 +1550,8 @@ History::InsertPlace(const VisitData& aPlace)
   }
   NS_ENSURE_SUCCESS(rv, rv);
   rv = stmt->BindInt32ByName(NS_LITERAL_CSTRING("typed"), aPlace.typed);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = stmt->BindInt32ByName(NS_LITERAL_CSTRING("frecency"), aPlace.frecency);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = stmt->BindInt32ByName(NS_LITERAL_CSTRING("hidden"), aPlace.hidden);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1782,6 +1754,29 @@ History::Shutdown()
   }
 }
 
+void
+History::AppendToRecentlyVisitedURIs(nsIURI* aURI) {
+  if (mRecentlyVisitedURIs.Length() < RECENTLY_VISITED_URI_SIZE) {
+    // Append a new element while the array is not full.
+    mRecentlyVisitedURIs.AppendElement(aURI);
+  } else {
+    // Otherwise, replace the oldest member.
+    mRecentlyVisitedURIsNextIndex %= RECENTLY_VISITED_URI_SIZE;
+    mRecentlyVisitedURIs.ElementAt(mRecentlyVisitedURIsNextIndex) = aURI;
+    mRecentlyVisitedURIsNextIndex++;
+  }
+}
+
+inline bool
+History::IsRecentlyVisitedURI(nsIURI* aURI) {
+  bool equals = false;
+  RecentlyVisitedArray::index_type i;
+  for (i = 0; i < mRecentlyVisitedURIs.Length() && !equals; ++i) {
+    aURI->Equals(mRecentlyVisitedURIs.ElementAt(i), &equals);
+  }
+  return equals;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //// IHistory
 
@@ -1818,8 +1813,8 @@ History::VisitURI(nsIURI* aURI,
     bool same;
     rv = aURI->Equals(aLastVisitedURI, &same);
     NS_ENSURE_SUCCESS(rv, rv);
-    if (same) {
-      // Do not save refresh-page visits.
+    if (same && IsRecentlyVisitedURI(aURI)) {
+      // Do not save refresh visits if we have visited this URI recently.
       return NS_OK;
     }
   }
@@ -1843,29 +1838,36 @@ History::VisitURI(nsIURI* aURI,
   // if the visit is toplevel or a non-toplevel followed link, then it can be
   // handled as usual and stored on disk.
 
+  PRUint32 transitionType = nsINavHistoryService::TRANSITION_LINK;
+
   if (!(aFlags & IHistory::TOP_LEVEL) && !isFollowedLink) {
     // A frame redirected to a new site without user interaction.
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_EMBED);
+    transitionType = nsINavHistoryService::TRANSITION_EMBED;
   }
   else if (aFlags & IHistory::REDIRECT_TEMPORARY) {
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY);
+    transitionType = nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY;
   }
   else if (aFlags & IHistory::REDIRECT_PERMANENT) {
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT);
+    transitionType = nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT;
   }
   else if (recentFlags & nsNavHistory::RECENT_TYPED) {
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_TYPED);
+    transitionType = nsINavHistoryService::TRANSITION_TYPED;
   }
   else if (recentFlags & nsNavHistory::RECENT_BOOKMARKED) {
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_BOOKMARK);
+    transitionType = nsINavHistoryService::TRANSITION_BOOKMARK;
   }
   else if (!(aFlags & IHistory::TOP_LEVEL) && isFollowedLink) {
     // User activated a link in a frame.
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_FRAMED_LINK);
+    transitionType = nsINavHistoryService::TRANSITION_FRAMED_LINK;
   }
-  else {
-    // User was redirected or link was clicked in the main window.
-    place.SetTransitionType(nsINavHistoryService::TRANSITION_LINK);
+
+  place.SetTransitionType(transitionType);
+  place.hidden = GetHiddenState(aFlags & IHistory::REDIRECT_SOURCE,
+                                transitionType);
+
+  // Error pages should never be autocompleted.
+  if (aFlags & IHistory::UNRECOVERABLE_ERROR) {
+    place.frecency = 0;
   }
 
   // EMBED visits are session-persistent and should not go through the database.
@@ -1902,8 +1904,7 @@ History::RegisterVisitedCallback(nsIURI* aURI,
 
   // First, ensure that our hash table is setup.
   if (!mObservers.IsInitialized()) {
-    NS_ENSURE_TRUE(mObservers.Init(VISIT_OBSERVERS_INITIAL_CACHE_SIZE),
-                   NS_ERROR_OUT_OF_MEMORY);
+    mObservers.Init(VISIT_OBSERVERS_INITIAL_CACHE_SIZE);
   }
 
   // Obtain our array of observers for this URI.
@@ -2072,6 +2073,7 @@ History::AddDownload(nsIURI* aSource, nsIURI* aReferrer,
 
   place.visitTime = aStartTime;
   place.SetTransitionType(nsINavHistoryService::TRANSITION_DOWNLOAD);
+  place.hidden = false;
 
   mozIStorageConnection* dbConn = GetDBConn();
   NS_ENSURE_STATE(dbConn);
@@ -2104,7 +2106,7 @@ History::UpdatePlaces(const jsval& aPlaceInfos,
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_UNEXPECTED);
   NS_ENSURE_TRUE(!JSVAL_IS_PRIMITIVE(aPlaceInfos), NS_ERROR_INVALID_ARG);
 
-  jsuint infosLength = 1;
+  uint32_t infosLength = 1;
   JSObject* infos;
   if (JS_IsArrayObject(aCtx, JSVAL_TO_OBJECT(aPlaceInfos))) {
     infos = JSVAL_TO_OBJECT(aPlaceInfos);
@@ -2122,7 +2124,7 @@ History::UpdatePlaces(const jsval& aPlaceInfos,
   }
 
   nsTArray<VisitData> visitData;
-  for (jsuint i = 0; i < infosLength; i++) {
+  for (uint32_t i = 0; i < infosLength; i++) {
     JSObject* info;
     nsresult rv = GetJSObjectFromArray(aCtx, infos, i, &info);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -2168,7 +2170,7 @@ History::UpdatePlaces(const jsval& aPlaceInfos,
     }
     NS_ENSURE_ARG(visits);
 
-    jsuint visitsLength = 0;
+    uint32_t visitsLength = 0;
     if (visits) {
       (void)JS_GetArrayLength(aCtx, visits, &visitsLength);
     }
@@ -2176,7 +2178,7 @@ History::UpdatePlaces(const jsval& aPlaceInfos,
 
     // Check each visit, and build our array of VisitData objects.
     visitData.SetCapacity(visitData.Length() + visitsLength);
-    for (jsuint j = 0; j < visitsLength; j++) {
+    for (uint32_t j = 0; j < visitsLength; j++) {
       JSObject* visit;
       rv = GetJSObjectFromArray(aCtx, visits, j, &visit);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -2195,6 +2197,7 @@ History::UpdatePlaces(const jsval& aPlaceInfos,
                           nsINavHistoryService::TRANSITION_LINK,
                           nsINavHistoryService::TRANSITION_FRAMED_LINK);
       data.SetTransitionType(transitionType);
+      data.hidden = GetHiddenState(false, transitionType);
 
       // If the visit is an embed visit, we do not actually add it to the
       // database.

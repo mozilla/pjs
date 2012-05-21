@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *   Geoff Lankow <geoff@darktrojan.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsFileControlFrame.h"
 
@@ -57,7 +23,6 @@
 #include "nsIPresShell.h"
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
-#include "nsIComponentManager.h"
 #include "nsPIDOMWindow.h"
 #include "nsIFilePicker.h"
 #include "nsIDOMMouseEvent.h"
@@ -70,7 +35,6 @@
 #include "nsContentUtils.h"
 #include "nsDisplayList.h"
 #include "nsIDOMNSEvent.h"
-#include "nsIDOMHTMLInputElement.h"
 #include "nsEventListenerManager.h"
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -78,13 +42,11 @@
 
 #include "nsInterfaceHashtable.h"
 #include "nsURIHashKey.h"
-#include "nsILocalFile.h"
 #include "nsNetCID.h"
 #include "nsWeakReference.h"
 #include "nsIVariant.h"
 #include "mozilla/Services.h"
 #include "nsDirectoryServiceDefs.h"
-#include "nsHTMLInputElement.h"
 #include "nsICapturePicker.h"
 #include "nsIFileURL.h"
 #include "nsDOMFile.h"
@@ -163,57 +125,6 @@ nsFileControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
   nsBlockFrame::DestroyFrom(aDestructRoot);
 }
 
-struct CaptureCallbackData {
-  nsICapturePicker* picker;
-  PRUint32* mode;
-};
-
-typedef struct CaptureCallbackData CaptureCallbackData;
-
-bool CapturePickerAcceptCallback(const nsAString& aAccept, void* aClosure)
-{
-  nsresult rv;
-  bool captureEnabled;
-  CaptureCallbackData* closure = (CaptureCallbackData*)aClosure;
-
-  if (StringBeginsWith(aAccept,
-                       NS_LITERAL_STRING("image/"))) {
-    rv = closure->picker->ModeMayBeAvailable(nsICapturePicker::MODE_STILL,
-                                             &captureEnabled);
-    NS_ENSURE_SUCCESS(rv, true);
-    if (captureEnabled) {
-      *closure->mode = nsICapturePicker::MODE_STILL;
-      return false;
-    }
-  } else if (StringBeginsWith(aAccept,
-                              NS_LITERAL_STRING("audio/"))) {
-    rv = closure->picker->ModeMayBeAvailable(nsICapturePicker::MODE_AUDIO_CLIP,
-                                             &captureEnabled);
-    NS_ENSURE_SUCCESS(rv, true);
-    if (captureEnabled) {
-      *closure->mode = nsICapturePicker::MODE_AUDIO_CLIP;
-      return false;
-    }
-  } else if (StringBeginsWith(aAccept,
-                              NS_LITERAL_STRING("video/"))) {
-    rv = closure->picker->ModeMayBeAvailable(nsICapturePicker::MODE_VIDEO_CLIP,
-                                             &captureEnabled);
-    NS_ENSURE_SUCCESS(rv, true);
-    if (captureEnabled) {
-      *closure->mode = nsICapturePicker::MODE_VIDEO_CLIP;
-      return false;
-    }
-    rv = closure->picker->ModeMayBeAvailable(nsICapturePicker::MODE_VIDEO_NO_SOUND_CLIP,
-                                             &captureEnabled);
-    NS_ENSURE_SUCCESS(rv, true);
-    if (captureEnabled) {
-      *closure->mode = nsICapturePicker::MODE_VIDEO_NO_SOUND_CLIP;
-      return false;
-    }
-  }
-  return true;
-}
-
 nsresult
 nsFileControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
@@ -286,15 +197,12 @@ nsFileControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   nsCOMPtr<nsICapturePicker> capturePicker;
   capturePicker = do_GetService("@mozilla.org/capturepicker;1");
   if (capturePicker) {
-    PRUint32 mode = 0;
-
     CaptureCallbackData data;
     data.picker = capturePicker;
-    data.mode = &mode;
-    ParseAcceptAttribute(&CapturePickerAcceptCallback, (void*)&data);
+    data.mode = GetCaptureMode(data);
 
-    if (mode != 0) {
-      mCaptureMouseListener->mMode = mode;
+    if (data.mode != 0) {
+      mCaptureMouseListener->mMode = data.mode;
       nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::input, nsnull,
                                                      kNameSpaceID_XHTML,
                                                      nsIDOMNode::ELEMENT_NODE);
@@ -432,10 +340,6 @@ nsFileControlFrame::CaptureMouseListener::HandleEvent(nsIDOMEvent* aMouseEvent)
   rv = capturePicker->Init(win, title, mMode);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Tell our text control frame to remember the currently focused value.
-  nsTextControlFrame* textControlFrame = mFrame->GetTextControlFrame();
-  textControlFrame->InitFocusedValue();
-
   // Show dialog
   PRUint32 result;
   rv = capturePicker->Show(&result);
@@ -466,16 +370,15 @@ nsFileControlFrame::CaptureMouseListener::HandleEvent(nsIDOMEvent* aMouseEvent)
   // uneditable text box with the file name inside.
   // Set new selected files
   if (newFiles.Count()) {
-    // Tell our text control frame that this update of the value is a user
+    // Tell our input element that this update of the value is a user
     // initiated change. Otherwise it'll think that the value is being set by
     // a script and not fire onchange when it should.
-    bool oldState = textControlFrame->GetFireChangeEventState();
-    textControlFrame->SetFireChangeEventState(true);
+   
     inputElement->SetFiles(newFiles, true);
-    textControlFrame->SetFireChangeEventState(oldState);
-
-    // May need to fire an onchange here
-    textControlFrame->CheckFireOnChange();
+    
+    // Should fire a change event here since the SetFiles() call above ensures 
+    // a different value from the mFocusedValue of the inputElement. 
+    inputElement->FireChangeEventIfNeeded();
   }
 
   return NS_OK;
@@ -536,12 +439,9 @@ nsFileControlFrame::BrowseMouseListener::HandleEvent(nsIDOMEvent* aEvent)
     nsCOMPtr<nsIDOMFileList> fileList;
     dataTransfer->GetFiles(getter_AddRefs(fileList));
 
-    nsTextControlFrame* textControlFrame = mFrame->GetTextControlFrame();
-    bool oldState = textControlFrame->GetFireChangeEventState();
-    textControlFrame->SetFireChangeEventState(true);
+    
     inputElement->SetFiles(fileList, true);
-    textControlFrame->SetFireChangeEventState(oldState);
-    textControlFrame->CheckFireOnChange();
+    inputElement->FireChangeEventIfNeeded();
   }
 
   return NS_OK;
@@ -751,19 +651,51 @@ nsFileControlFrame::CreateAccessible()
 }
 #endif
 
-void 
-nsFileControlFrame::ParseAcceptAttribute(AcceptAttrCallback aCallback,
-                                         void* aClosure) const
+PRUint32
+nsFileControlFrame::GetCaptureMode(const CaptureCallbackData& aData)
 {
-  nsAutoString accept;
-  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::accept, accept);
+  PRInt32 filters = nsHTMLInputElement::FromContent(mContent)->GetFilterFromAccept();
+  nsresult rv;
+  bool captureEnabled;
 
-  HTMLSplitOnSpacesTokenizer tokenizer(accept, ',');
-  // Empty loop body because aCallback is doing the work
-  while (tokenizer.hasMoreTokens() &&
-         (*aCallback)(tokenizer.nextToken(), aClosure));
+  if (filters == nsIFilePicker::filterImages) {
+    rv = aData.picker->ModeMayBeAvailable(nsICapturePicker::MODE_STILL,
+                                             &captureEnabled);
+    NS_ENSURE_SUCCESS(rv, 0);
+    if (captureEnabled) {
+      return nsICapturePicker::MODE_STILL;
+    }
+    return 0;
+  }
+
+  if (filters == nsIFilePicker::filterAudio) {
+    rv = aData.picker->ModeMayBeAvailable(nsICapturePicker::MODE_AUDIO_CLIP,
+                                             &captureEnabled);
+    NS_ENSURE_SUCCESS(rv, 0);
+    if (captureEnabled) {
+      return nsICapturePicker::MODE_AUDIO_CLIP;
+    }
+    return 0;
+  }
+
+  if (filters == nsIFilePicker::filterVideo) {
+    rv = aData.picker->ModeMayBeAvailable(nsICapturePicker::MODE_VIDEO_CLIP,
+                                             &captureEnabled);
+    NS_ENSURE_SUCCESS(rv, 0);
+    if (captureEnabled) {
+      return nsICapturePicker::MODE_VIDEO_CLIP;
+    }
+    rv = aData.picker->ModeMayBeAvailable(nsICapturePicker::MODE_VIDEO_NO_SOUND_CLIP,
+                                             &captureEnabled);
+    NS_ENSURE_SUCCESS(rv, 0);
+    if (captureEnabled) {
+      return nsICapturePicker::MODE_VIDEO_NO_SOUND_CLIP;
+    }
+    return 0;
+  }
+  
+  return 0;
 }
-
 ////////////////////////////////////////////////////////////
 // Mouse listener implementation
 

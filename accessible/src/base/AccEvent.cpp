@@ -1,53 +1,17 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Aaron Leventhal <aaronl@netscape.com> <original author>
- *   Alexander Surkov <surkov.alexander@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AccEvent.h"
 
+#include "ApplicationAccessibleWrap.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
-#include "nsApplicationAccessibleWrap.h"
 #include "nsDocAccessible.h"
 #include "nsIAccessibleText.h"
-#ifdef MOZ_XUL
-#include "nsXULTreeAccessible.h"
-#endif
 #include "nsAccEvent.h"
+#include "States.h"
 
 #include "nsIDOMDocument.h"
 #include "nsEventStateManager.h"
@@ -55,6 +19,8 @@
 #ifdef MOZ_XUL
 #include "nsIDOMXULMultSelectCntrlEl.h"
 #endif
+
+using namespace mozilla::a11y;
 
 ////////////////////////////////////////////////////////////////////////////////
 // AccEvent
@@ -101,7 +67,10 @@ AccEvent::GetNode()
 nsDocAccessible*
 AccEvent::GetDocAccessible()
 {
-  nsINode *node = GetNode();
+  if (mAccessible)
+    return mAccessible->Document();
+
+  nsINode* node = GetNode();
   if (node)
     return GetAccService()->GetDocAccessible(node->OwnerDoc());
 
@@ -152,7 +121,7 @@ AccEvent::CaptureIsFromUserInput(EIsFromUserInput aIsFromUserInput)
     // XXX: remove this hack during reorganization of 506907. Meanwhile we
     // want to get rid an assertion for application accessible events which
     // don't have DOM node (see bug 506206).
-    nsApplicationAccessible *applicationAcc =
+    ApplicationAccessible* applicationAcc =
       nsAccessNode::GetApplicationAccessible();
 
     if (mAccessible != static_cast<nsIAccessible*>(applicationAcc))
@@ -254,6 +223,10 @@ AccTextChangeEvent::
   , mIsInserted(aIsInserted)
   , mModifiedText(aModifiedText)
 {
+  // XXX We should use IsFromUserInput here, but that isn't always correct
+  // when the text change isn't related to content insertion or removal.
+   mIsFromUserInput = mAccessible->State() &
+    (states::FOCUSED | states::EDITABLE);
 }
 
 already_AddRefed<nsAccEvent>
@@ -380,3 +353,24 @@ AccTableChangeEvent::CreateXPCOMObject()
   return event;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////
+// AccVCChangeEvent
+////////////////////////////////////////////////////////////////////////////////
+
+AccVCChangeEvent::
+  AccVCChangeEvent(nsAccessible* aAccessible,
+                   nsIAccessible* aOldAccessible,
+                   PRInt32 aOldStart, PRInt32 aOldEnd) :
+    AccEvent(::nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED, aAccessible),
+    mOldAccessible(aOldAccessible), mOldStart(aOldStart), mOldEnd(aOldEnd)
+{
+}
+
+already_AddRefed<nsAccEvent>
+AccVCChangeEvent::CreateXPCOMObject()
+{
+  nsAccEvent* event = new nsAccVirtualCursorChangeEvent(this);
+  NS_ADDREF(event);
+  return event;
+}

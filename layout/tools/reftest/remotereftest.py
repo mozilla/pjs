@@ -1,40 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is mozilla.org code.
-#
-# The Initial Developer of the Original Code is Joel Maher.
-#
-# Portions created by the Initial Developer are Copyright (C) 2010
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#  Joel Maher <joel.maher@gmail.com> (Original Developer)
-#  Clint Talbert <cmtalbert@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import sys
 import os
@@ -364,30 +330,17 @@ user_pref("capability.principal.codebase.p2.id", "http://%s:%s");
         if (self._devicemanager.pushDir(profileDir, options.remoteProfile) == None):
             raise devicemanager.FileError("Failed to copy extra files to device") 
 
-    def registerExtension(self, browserEnv, options, profileDir, extraArgs = ['-silent'] ):
-        if options.bootstrap:
-            return
-
-        self.automation.log.info("REFTEST INFO | runreftest.py | Performing extension manager registration: start.\n")
-        # Because our startProcess code doesn't return until fennec starts we just give it
-        # a maxTime of 20 secs before timing it out and ensuring it is dead.
-        # Besides registering the extension, this works around fennec bug 570027
-        status = self.automation.runApp(None, browserEnv, options.app, profileDir,
-                                   extraArgs,
-                                   utilityPath = options.utilityPath,
-                                   xrePath=options.xrePath,
-                                   symbolsPath=options.symbolsPath,
-                                   maxTime = 20)
-        # We don't care to call |processLeakLog()| for this step.
-        self.automation.log.info("\nREFTEST INFO | runreftest.py | Performing extension manager registration: end.")
-
     def getManifestPath(self, path):
         return path
 
     def cleanup(self, profileDir):
         # Pull results back from device
         if (self.remoteLogFile):
-            self._devicemanager.getFile(self.remoteLogFile, self.localLogName)
+            try:
+                self._devicemanager.getFile(self.remoteLogFile, self.localLogName)
+            except:
+                print "ERROR: We were not able to retrieve the info from %s" % self.remoteLogFile
+                sys.exit(5)
         self._devicemanager.removeDir(self.remoteProfile)
         self._devicemanager.removeDir(self.remoteTestRoot)
         RefTest.cleanup(self, profileDir)
@@ -399,8 +352,7 @@ user_pref("capability.principal.codebase.p2.id", "http://%s:%s");
                 print "Warning: cleaning up pidfile '%s' was unsuccessful from the test harness" % self.pidFile
 
 def main():
-    dm_none = devicemanagerADB.DeviceManagerADB(None, None)
-    automation = RemoteAutomation(dm_none)
+    automation = RemoteAutomation(None)
     parser = RemoteOptions(automation)
     options, args = parser.parse_args()
 
@@ -408,13 +360,18 @@ def main():
         print "Error: you must provide a device IP to connect to via the --device option"
         sys.exit(1)
 
-    if (options.dm_trans == "adb"):
-        if (options.deviceIP):
-            dm = devicemanagerADB.DeviceManagerADB(options.deviceIP, options.devicePort)
+    try:
+        if (options.dm_trans == "adb"):
+            if (options.deviceIP):
+                dm = devicemanagerADB.DeviceManagerADB(options.deviceIP, options.devicePort)
+            else:
+                dm = devicemanagerADB.DeviceManagerADB(None, None)
         else:
-            dm = dm_none
-    else:
-         dm = devicemanagerSUT.DeviceManagerSUT(options.deviceIP, options.devicePort)
+            dm = devicemanagerSUT.DeviceManagerSUT(options.deviceIP, options.devicePort)
+    except devicemanager.DMError:
+        print "Error: exception while initializing devicemanager.  Most likely the device is not in a testable state."
+        sys.exit(1)
+
     automation.setDeviceManager(dm)
 
     if (options.remoteProductName != None):

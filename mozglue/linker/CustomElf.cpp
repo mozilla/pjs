@@ -291,6 +291,8 @@ CustomElf::GetSymbolPtrInDeps(const char *symbol) const
       return FunctionPtr(__wrap_dlsym);
     if (strcmp(symbol + 2, "addr") == 0)
       return FunctionPtr(__wrap_dladdr);
+    if (strcmp(symbol + 2, "_iterate_phdr") == 0)
+      return FunctionPtr(__wrap_dl_iterate_phdr);
   } else if (symbol[0] == '_' && symbol[1] == '_') {
   /* Resolve a few C++ ABI specific functions to point to ours */
 #ifdef __ARM_EABI__
@@ -541,6 +543,43 @@ CustomElf::InitDyn(const Phdr *pt_dyn)
         debug_dyn("DT_FINI_ARRAYSZ", dyn);
         fini_array.InitSize(dyn->d_un.d_val);
         break;
+      case DT_PLTREL:
+        if (dyn->d_un.d_val != RELOC()) {
+          log("%s: Error: DT_PLTREL is not " STR_RELOC(), GetPath());
+          return false;
+        }
+        break;
+      case DT_FLAGS:
+        {
+           Word flags = dyn->d_un.d_val;
+           /* Treat as a DT_TEXTREL tag */
+           if (flags & DF_TEXTREL) {
+             log("%s: Text relocations are not supported", GetPath());
+             return false;
+           }
+           /* we can treat this like having a DT_SYMBOLIC tag */
+           flags &= ~DF_SYMBOLIC;
+           if (flags)
+             log("%s: Warning: unhandled flags #%" PRIxAddr" not handled",
+                 GetPath(), flags);
+        }
+        break;
+      case DT_SONAME: /* Should match GetName(), but doesn't matter */
+      case DT_SYMBOLIC: /* Indicates internal symbols should be looked up in
+                         * the library itself first instead of the executable,
+                         * which is actually what this linker does by default */
+      case RELOC(COUNT): /* Indicates how many relocations are relative, which
+                          * is usually used to skip relocations on prelinked
+                          * libraries. They are not supported anyways. */
+      case UNSUPPORTED_RELOC(COUNT): /* This should error out, but it doesn't
+                                      * really matter. */
+      case DT_VERSYM: /* DT_VER* entries are used for symbol versioning, which */
+      case DT_VERDEF: /* this linker doesn't support yet. */
+      case DT_VERDEFNUM:
+      case DT_VERNEED:
+      case DT_VERNEEDNUM:
+        /* Ignored */
+        break;
       default:
         log("%s: Warning: dynamic header type #%" PRIxAddr" not handled",
             GetPath(), dyn->d_tag);
@@ -647,9 +686,12 @@ CustomElf::RelocateJumps()
       symptr = GetSymbolPtrInDeps(strtab.GetStringAt(sym.st_name));
 
     if (symptr == NULL) {
-      log("%s: Error: relocation to NULL @0x%08" PRIxAddr " for symbol \"%s\"",
-          GetPath(), rel->r_offset, strtab.GetStringAt(sym.st_name));
-      return false;
+      log("%s: %s: relocation to NULL @0x%08" PRIxAddr " for symbol \"%s\"",
+          GetPath(),
+          (ELF_ST_BIND(sym.st_info) == STB_WEAK) ? "Warning" : "Error",
+          rel->r_offset, strtab.GetStringAt(sym.st_name));
+      if (ELF_ST_BIND(sym.st_info) != STB_WEAK)
+        return false;
     }
     /* Apply relocation */
     *(void **) ptr = symptr;
@@ -665,7 +707,8 @@ CustomElf::CallInit()
 
   for (Array<void *>::iterator it = init_array.begin();
        it < init_array.end(); ++it) {
-    if (*it)
+    /* Android x86 NDK wrongly puts 0xffffffff in INIT_ARRAY */
+    if (*it && *it != reinterpret_cast<void *>(-1))
       CallFunction(*it);
   }
   initialized = true;
@@ -679,7 +722,8 @@ CustomElf::CallFini()
     return;
   for (Array<void *>::iterator it = fini_array.begin();
        it < fini_array.end(); ++it) {
-    if (*it)
+    /* Android x86 NDK wrongly puts 0xffffffff in FINI_ARRAY */
+    if (*it && *it != reinterpret_cast<void *>(-1))
       CallFunction(*it);
   }
   if (fini)

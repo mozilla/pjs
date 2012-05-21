@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim: ft=cpp tw=78 sw=2 et ts=2
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Boris Zbarsky <bzbarsky@mit.edu>.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Christian Biesinger <cbiesinger@web.de>
- *   Bobby Holley <bobbyholley@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * A base class which implements nsIImageLoadingContent and can be
@@ -60,7 +26,8 @@
 #include "nsThreadUtils.h"
 #include "nsNetUtil.h"
 #include "nsAsyncDOMEvent.h"
-#include "nsGenericHTMLElement.h"
+#include "nsGenericElement.h"
+#include "nsImageFrame.h"
 
 #include "nsIPresShell.h"
 #include "nsEventStates.h"
@@ -75,12 +42,13 @@
 #include "nsContentUtils.h"
 #include "nsLayoutUtils.h"
 #include "nsIContentPolicy.h"
-#include "nsContentPolicyUtils.h"
 #include "nsEventDispatcher.h"
 #include "nsSVGEffects.h"
 
 #include "mozAutoDocUpdate.h"
 #include "mozilla/dom/Element.h"
+
+using namespace mozilla;
 
 #ifdef DEBUG_chb
 static void PrintReqURL(imgIRequest* req) {
@@ -299,10 +267,7 @@ nsImageLoadingContent::OnStopDecode(imgIRequest* aRequest,
 
   // If the pending request is loaded, switch to it.
   if (aRequest == mPendingRequest) {
-    PrepareCurrentRequest() = mPendingRequest;
-    mPendingRequest = nsnull;
-    mCurrentRequestNeedsResetAnimation = mPendingRequestNeedsResetAnimation;
-    mPendingRequestNeedsResetAnimation = false;
+    MakePendingRequestCurrent();
   }
   NS_ABORT_IF_FALSE(aRequest == mCurrentRequest,
                     "One way or another, we should be current by now");
@@ -315,42 +280,32 @@ nsImageLoadingContent::OnStopDecode(imgIRequest* aRequest,
     mCurrentRequestNeedsResetAnimation = false;
   }
 
-  // We just loaded all the data we're going to get. If we haven't done an
-  // initial paint, we want to make sure the image starts decoding for 2
-  // reasons:
+  // We just loaded all the data we're going to get. If we're visible and
+  // haven't done an initial paint (*), we want to make sure the image starts
+  // decoding immediately, for two reasons:
   //
   // 1) This image is sitting idle but might need to be decoded as soon as we
   // start painting, in which case we've wasted time.
   //
   // 2) We want to block onload until all visible images are decoded. We do this
-  // by blocking onload until all in progress decodes get at least one frame
+  // by blocking onload until all in-progress decodes get at least one frame
   // decoded. However, if all the data comes in while painting is suppressed
   // (ie, before the initial paint delay is finished), we fire onload without
   // doing a paint first. This means that decode-on-draw images don't start
   // decoding, so we can't wait for them to finish. See bug 512435.
+  //
+  // (*) IsPaintingSuppressed returns false if we haven't gotten the initial
+  // reflow yet, so we have to test !DidInitialReflow || IsPaintingSuppressed.
+  // It's possible for painting to be suppressed for reasons other than the
+  // initial paint delay (for example, being in the bfcache), but we probably
+  // aren't loading images in those situations.
 
-  // We can only do this if we have a presshell
   nsIDocument* doc = GetOurDocument();
   nsIPresShell* shell = doc ? doc->GetShell() : nsnull;
-  if (shell) {
-    // We need to figure out whether to kick off decoding
-    bool doRequestDecode = false;
+  if (shell && shell->IsVisible() &&
+      (!shell->DidInitialReflow() || shell->IsPaintingSuppressed())) {
 
-    // If we haven't got the initial reflow yet, IsPaintingSuppressed actually
-    // returns false
-    if (!shell->DidInitialReflow())
-      doRequestDecode = true;
-
-    // Figure out if painting is suppressed. Note that it's possible for painting
-    // to be suppressed for reasons other than the initial paint delay (for
-    // example - being in the bfcache), but we probably aren't loading images in
-    // those situations.
-    if (shell->IsPaintingSuppressed())
-      doRequestDecode = true;
-
-    // If we're requesting a decode, do it
-    if (doRequestDecode)
-      mCurrentRequest->RequestDecode();
+    mCurrentRequest->RequestDecode();
   }
 
   // Fire the appropriate DOM event.
@@ -775,9 +730,9 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
 
   nsLoadFlags loadFlags = aLoadFlags;
   PRInt32 corsmode = GetCORSMode();
-  if (corsmode == nsGenericHTMLElement::CORS_ANONYMOUS) {
+  if (corsmode == CORS_ANONYMOUS) {
     loadFlags |= imgILoader::LOAD_CORS_ANONYMOUS;
-  } else if (corsmode == nsGenericHTMLElement::CORS_USE_CREDENTIALS) {
+  } else if (corsmode == CORS_USE_CREDENTIALS) {
     loadFlags |= imgILoader::LOAD_CORS_USE_CREDENTIALS;
   }
 
@@ -791,6 +746,26 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
                                  getter_AddRefs(req));
   if (NS_SUCCEEDED(rv)) {
     TrackImage(req);
+
+    // Handle cases when we just ended up with a pending request but it's
+    // already done.  In that situation we have to synchronously switch that
+    // request to being the current request, because websites depend on that
+    // behavior.
+    if (req == mPendingRequest) {
+      PRUint32 pendingLoadStatus;
+      rv = req->GetImageStatus(&pendingLoadStatus);
+      if (NS_SUCCEEDED(rv) &&
+          (pendingLoadStatus & imgIRequest::STATUS_LOAD_COMPLETE)) {
+        MakePendingRequestCurrent();
+        MOZ_ASSERT(mCurrentRequest,
+                   "How could we not have a current request here?");
+
+        nsImageFrame *f = do_QueryFrame(GetOurPrimaryFrame());
+        if (f) {
+          f->NotifyNewCurrentRequest(mCurrentRequest, NS_OK);
+        }
+      }
+    }
   } else {
     // If we don't have a current URI, we might as well store this URI so people
     // know what we tried (and failed) to load.
@@ -1046,6 +1021,16 @@ nsImageLoadingContent::PreparePendingRequest()
 }
 
 void
+nsImageLoadingContent::MakePendingRequestCurrent()
+{
+  MOZ_ASSERT(mPendingRequest);
+  PrepareCurrentRequest() = mPendingRequest;
+  mPendingRequest = nsnull;
+  mCurrentRequestNeedsResetAnimation = mPendingRequestNeedsResetAnimation;
+  mPendingRequestNeedsResetAnimation = false;
+}
+
+void
 nsImageLoadingContent::ClearCurrentRequest(nsresult aReason)
 {
   if (!mCurrentRequest) {
@@ -1187,8 +1172,8 @@ nsImageLoadingContent::CreateStaticImageClone(nsImageLoadingContent* aDest) cons
   aDest->mSuppressed = mSuppressed;
 }
 
-nsGenericHTMLElement::CORSMode
+CORSMode
 nsImageLoadingContent::GetCORSMode()
 {
-  return nsGenericHTMLElement::CORS_NONE;
+  return CORS_NONE;
 }

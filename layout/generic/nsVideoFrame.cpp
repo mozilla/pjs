@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for the HTML <video> element */
 
@@ -46,6 +14,7 @@
 #include "nsVideoFrame.h"
 #include "nsHTMLVideoElement.h"
 #include "nsIDOMHTMLVideoElement.h"
+#include "nsIDOMHTMLImageElement.h"
 #include "nsDisplayList.h"
 #include "gfxContext.h"
 #include "gfxImageSurface.h"
@@ -56,12 +25,10 @@
 #include "nsBoxFrame.h"
 #include "nsImageFrame.h"
 #include "nsIImageLoadingContent.h"
-#include "nsDisplayList.h"
 #include "nsCSSRendering.h"
 #include "nsContentUtils.h"
 
 #ifdef ACCESSIBILITY
-#include "nsIServiceManager.h"
 #include "nsAccessibilityService.h"
 #endif
 
@@ -192,11 +159,14 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
 {
   nsRect area = GetContentRect() - GetPosition() + aItem->ToReferenceFrame();
   nsHTMLVideoElement* element = static_cast<nsHTMLVideoElement*>(GetContent());
-  nsIntSize videoSize = element->GetVideoSize(nsIntSize(0, 0));
-  if (videoSize.width <= 0 || videoSize.height <= 0 || area.IsEmpty())
+  nsIntSize videoSize;
+  if (NS_FAILED(element->GetVideoSize(&videoSize)) || area.IsEmpty()) {
     return nsnull;
+  }
 
   nsRefPtr<ImageContainer> container = element->GetImageContainer();
+  if (!container)
+    return nsnull;
   
   // Retrieve the size of the decoded video frame, before being scaled
   // by pixel aspect ratio.
@@ -283,18 +253,34 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
                                        availableSize,
                                        aMetrics.width,
                                        aMetrics.height);
-      if (ShouldDisplayPoster()) {
-        kidReflowState.SetComputedWidth(aReflowState.ComputedWidth());
-        kidReflowState.SetComputedHeight(aReflowState.ComputedHeight());
-      } else {
-        kidReflowState.SetComputedWidth(0);
-        kidReflowState.SetComputedHeight(0);
+
+      PRUint32 posterHeight, posterWidth;
+      nsSize scaledPosterSize(0, 0);
+      nsSize computedArea(aReflowState.ComputedWidth(), aReflowState.ComputedHeight());
+      nsPoint posterTopLeft(0, 0);
+
+      nsCOMPtr<nsIDOMHTMLImageElement> posterImage = do_QueryInterface(mPosterImage);
+      NS_ENSURE_TRUE(posterImage, NS_ERROR_FAILURE);
+      posterImage->GetNaturalHeight(&posterHeight);
+      posterImage->GetNaturalWidth(&posterWidth);
+
+      if (ShouldDisplayPoster() && posterHeight && posterWidth) {
+        gfxFloat scale =
+          NS_MIN(static_cast<float>(computedArea.width)/nsPresContext::CSSPixelsToAppUnits(static_cast<float>(posterWidth)),
+                 static_cast<float>(computedArea.height)/nsPresContext::CSSPixelsToAppUnits(static_cast<float>(posterHeight)));
+        gfxSize scaledRatio = gfxSize(scale*posterWidth, scale*posterHeight);
+        scaledPosterSize.width = nsPresContext::CSSPixelsToAppUnits(static_cast<float>(scaledRatio.width));
+        scaledPosterSize.height = nsPresContext::CSSPixelsToAppUnits(static_cast<PRInt32>(scaledRatio.height));
       }
+      kidReflowState.SetComputedWidth(scaledPosterSize.width);
+      kidReflowState.SetComputedHeight(scaledPosterSize.height);
+      posterTopLeft.x = ((computedArea.width - scaledPosterSize.width) / 2) + mBorderPadding.left;
+      posterTopLeft.y = ((computedArea.height - scaledPosterSize.height) / 2) + mBorderPadding.top;
+
       ReflowChild(imageFrame, aPresContext, kidDesiredSize, kidReflowState,
-                  mBorderPadding.left, mBorderPadding.top, 0, aStatus);
-      FinishReflowChild(imageFrame, aPresContext,
-                        &kidReflowState, kidDesiredSize,
-                        mBorderPadding.left, mBorderPadding.top, 0);
+                        posterTopLeft.x, posterTopLeft.y, 0, aStatus);
+      FinishReflowChild(imageFrame, aPresContext, &kidReflowState, kidDesiredSize,
+                        posterTopLeft.x, posterTopLeft.y, 0);
     } else if (child->GetType() == nsGkAtoms::boxFrame) {
       // Reflow the video controls frame.
       nsBoxLayoutState boxState(PresContext(), aReflowState.rendContext);
@@ -345,8 +331,9 @@ public:
   // away completely (e.g. because of a decoder error). The problem would
   // be especially acute if we have off-main-thread rendering.
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder)
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
   {
+    *aSnap = false;
     nsIFrame* f = GetUnderlyingFrame();
     return f->GetContentRect() - f->GetPosition() + ToReferenceFrame();
   }
@@ -359,7 +346,8 @@ public:
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager)
+                                   LayerManager* aManager,
+                                   const FrameLayerBuilder::ContainerParameters& aParameters)
   {
     if (aManager->GetBackendType() != LayerManager::LAYERS_BASIC) {
       // For non-basic layer managers we can assume that compositing
@@ -452,7 +440,7 @@ nsSize nsVideoFrame::ComputeSize(nsRenderingContext *aRenderingContext,
                                      nsSize aMargin,
                                      nsSize aBorder,
                                      nsSize aPadding,
-                                     bool aShrinkWrap)
+                                     PRUint32 aFlags)
 {
   nsSize size = GetVideoIntrinsicSize(aRenderingContext);
 
@@ -523,19 +511,7 @@ nsVideoFrame::GetVideoIntrinsicSize(nsRenderingContext *aRenderingContext)
 {
   // Defaulting size to 300x150 if no size given.
   nsIntSize size(300, 150);
-
-  if (ShouldDisplayPoster()) {
-    // Use the poster image frame's size.
-    nsIFrame *child = mFrames.FirstChild();
-    if (child && child->GetType() == nsGkAtoms::imageFrame) {
-      nsImageFrame* imageFrame = static_cast<nsImageFrame*>(child);
-      nsSize imgsize;
-      if (NS_SUCCEEDED(imageFrame->GetIntrinsicImageSize(imgsize))) {
-        return imgsize;
-      }
-    }
-  }
-
+  
   if (!HasVideoElement()) {
     if (!aRenderingContext || !mFrames.FirstChild()) {
       // We just want our intrinsic ratio, but audio elements need no
@@ -551,7 +527,15 @@ nsVideoFrame::GetVideoIntrinsicSize(nsRenderingContext *aRenderingContext)
   }
 
   nsHTMLVideoElement* element = static_cast<nsHTMLVideoElement*>(GetContent());
-  size = element->GetVideoSize(size);
+  if (NS_FAILED(element->GetVideoSize(&size)) && ShouldDisplayPoster()) {
+    // Use the poster image frame's size.
+    nsIFrame *child = mPosterImage->GetPrimaryFrame();
+    nsImageFrame* imageFrame = do_QueryFrame(child);
+    nsSize imgsize;
+    if (NS_SUCCEEDED(imageFrame->GetIntrinsicImageSize(imgsize))) {
+      return imgsize;
+    }
+  }
 
   return nsSize(nsPresContext::CSSPixelsToAppUnits(size.width),
                 nsPresContext::CSSPixelsToAppUnits(size.height));
@@ -597,6 +581,7 @@ bool nsVideoFrame::HasVideoData()
   if (!HasVideoElement())
     return false;
   nsHTMLVideoElement* element = static_cast<nsHTMLVideoElement*>(GetContent());
-  nsIntSize size = element->GetVideoSize(nsIntSize(0,0));
+  nsIntSize size(0, 0);
+  element->GetVideoSize(&size);
   return size != nsIntSize(0,0);
 }

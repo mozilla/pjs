@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* struct containing the input to nsIFrame::Reflow */
 
@@ -56,9 +23,8 @@
 #include "nsIPercentHeightObserver.h"
 #include "nsLayoutUtils.h"
 #include "mozilla/Preferences.h"
-#ifdef IBMBIDI
 #include "nsBidiUtils.h"
-#endif
+#include "nsFontInflationData.h"
 
 #ifdef NS_DEBUG
 #undef NOISY_VERTICAL_ALIGN
@@ -297,9 +263,43 @@ nsHTMLReflowState::Init(nsPresContext* aPresContext,
       !(parent->GetType() == nsGkAtoms::scrollFrame &&
         parent->GetStyleDisplay()->mOverflowY != NS_STYLE_OVERFLOW_HIDDEN)) {
     frame->AddStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
-  } else if (mStylePosition->mHeight.GetUnit() != eStyleUnit_Auto ||
-             mStylePosition->mMaxHeight.GetUnit() != eStyleUnit_None) {
-    frame->AddStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
+  } else if ((mStylePosition->mHeight.GetUnit() != eStyleUnit_Auto ||
+              mStylePosition->mMaxHeight.GetUnit() != eStyleUnit_None) &&
+              // Don't set NS_FRAME_IN_CONSTRAINED_HEIGHT on body or html
+              // elements.
+             (frame->GetContent() &&
+            !(frame->GetContent()->IsHTML(nsGkAtoms::body) ||
+              frame->GetContent()->IsHTML(nsGkAtoms::html)))) {
+
+    // If our height was specified as a percentage, then this could
+    // actually resolve to 'auto', based on:
+    // http://www.w3.org/TR/CSS21/visudet.html#the-height-property
+    nsIFrame* containingBlk = frame;
+    while (containingBlk) {
+      const nsStylePosition* stylePos = containingBlk->GetStylePosition();
+      if ((stylePos->mHeight.IsCoordPercentCalcUnit() &&
+           !stylePos->mHeight.HasPercent()) ||
+          (stylePos->mMaxHeight.IsCoordPercentCalcUnit() &&
+           !stylePos->mMaxHeight.HasPercent())) {
+        frame->AddStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
+        break;
+      } else if ((stylePos->mHeight.IsCoordPercentCalcUnit() &&
+                  stylePos->mHeight.HasPercent()) ||
+                 (stylePos->mMaxHeight.IsCoordPercentCalcUnit() &&
+                  stylePos->mMaxHeight.HasPercent())) {
+        if (!(containingBlk = containingBlk->GetContainingBlock())) {
+          // If we've reached the top of the tree, then we don't have
+          // a constrained height.
+          frame->RemoveStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
+          break;
+        }
+
+        continue;
+      } else {
+        frame->RemoveStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
+        break;
+      }
+    }
   } else {
     frame->RemoveStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
   }
@@ -311,6 +311,12 @@ nsHTMLReflowState::Init(nsPresContext* aPresContext,
                    "have unconstrained width; this should only result from "
                    "very large sizes, not attempts at intrinsic width "
                    "calculation");
+
+  if (frame->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT) {
+    // Create our font inflation data if we don't have it already, and
+    // give it our current width information.
+    nsFontInflationData::UpdateFontInflationDataWidthFor(*this);
+  }
 }
 
 void nsHTMLReflowState::InitCBReflowState()
@@ -1238,7 +1244,11 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
   bool widthIsAuto = eStyleUnit_Auto == mStylePosition->mWidth.GetUnit();
   bool heightIsAuto = eStyleUnit_Auto == mStylePosition->mHeight.GetUnit();
 
-  bool shrinkWrap = leftIsAuto || rightIsAuto;
+  PRUint32 computeSizeFlags = 0;
+  if (leftIsAuto || rightIsAuto) {
+    computeSizeFlags |= nsIFrame::eShrinkWrap;
+  }
+
   {
     AutoMaybeNullInflationContainer an(frame);
 
@@ -1257,7 +1267,7 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
                                   mComputedPadding.TopBottom()),
                          nsSize(mComputedPadding.LeftRight(),
                                 mComputedPadding.TopBottom()),
-                         shrinkWrap);
+                         computeSizeFlags);
     mComputedWidth = size.width;
     mComputedHeight = size.height;
   }
@@ -1864,11 +1874,19 @@ nsHTMLReflowState::InitConstraints(nsPresContext* aPresContext,
     } else {
       AutoMaybeNullInflationContainer an(frame);
 
-      bool isBlock =
-        NS_CSS_FRAME_TYPE_BLOCK == NS_FRAME_GET_TYPE(mFrameType);
-      // make sure legend frames with display:block and width:auto still
-      // shrink-wrap
-      bool shrinkWrap = !isBlock || aFrameType == nsGkAtoms::legendFrame;
+      bool isBlock = NS_CSS_FRAME_TYPE_BLOCK == NS_FRAME_GET_TYPE(mFrameType);
+      PRUint32 computeSizeFlags = isBlock ? 0 : nsIFrame::eShrinkWrap;
+
+      // Make sure legend frames with display:block and width:auto still
+      // shrink-wrap.
+      if (isBlock &&
+          ((aFrameType == nsGkAtoms::legendFrame &&
+            frame->GetStyleContext()->GetPseudo() != nsCSSAnonBoxes::scrolledContent) ||
+           (aFrameType == nsGkAtoms::scrollFrame &&
+            frame->GetContentInsertionFrame()->GetType() == nsGkAtoms::legendFrame))) {
+        computeSizeFlags |= nsIFrame::eShrinkWrap;
+      }
+
       nsSize size =
         frame->ComputeSize(rendContext,
                            nsSize(aContainingBlockWidth,
@@ -1882,7 +1900,7 @@ nsHTMLReflowState::InitConstraints(nsPresContext* aPresContext,
                                     mComputedPadding.TopBottom()),
                            nsSize(mComputedPadding.LeftRight(),
                                   mComputedPadding.TopBottom()),
-                           shrinkWrap);
+                           computeSizeFlags);
 
       mComputedWidth = size.width;
       mComputedHeight = size.height;

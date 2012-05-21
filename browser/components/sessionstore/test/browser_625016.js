@@ -14,11 +14,19 @@ function test() {
   // window is now in _closedWindows.
 
   waitForExplicitFinish();
+  requestLongerTimeout(2);
 
   // We speed up the interval between session saves to ensure that the test
   // runs quickly.
-  Services.prefs.setIntPref("browser.sessionstore.interval", 2000);
+  Services.prefs.setIntPref("browser.sessionstore.interval", 4000);
+  registerCleanupFunction(function () {
+    Services.prefs.clearUserPref("browser.sessionstore.interval");
+  });
 
+  waitForSaveState(setup);
+}
+
+function setup() {
   // We'll clear all closed windows to make sure our state is clean
   // forgetClosedWindow doesn't trigger a delayed save
   while (ss.getClosedWindowCount()) {
@@ -97,7 +105,6 @@ function openTab() {
 }
 
 function done() {
-  Services.prefs.clearUserPref("browser.sessionstore.interval");
   gBrowser.removeTab(newTab);
   // The API still represents the closed window as closed, so we can clear it
   // with the API, but just to make sure...

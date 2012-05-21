@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsstr_h___
 #define jsstr_h___
@@ -45,7 +12,6 @@
 #include "jsatom.h"
 #include "jsprvtd.h"
 #include "jslock.h"
-#include "jscell.h"
 #include "jsutil.h"
 
 #include "js/HashTable.h"
@@ -74,7 +40,7 @@ class RopeBuilder;
 }  /* namespace js */
 
 extern JSString * JS_FASTCALL
-js_ConcatStrings(JSContext *cx, JSString *s1, JSString *s2);
+js_ConcatStrings(JSContext *cx, js::HandleString s1, js::HandleString s2);
 
 extern JSString * JS_FASTCALL
 js_toLowerCase(JSContext *cx, JSString *str);
@@ -97,7 +63,7 @@ extern JSSubString js_EmptySubString;
 #define JS7_ISDEC(c)    ((((unsigned)(c)) - '0') <= 9)
 #define JS7_UNDEC(c)    ((c) - '0')
 #define JS7_ISHEX(c)    ((c) < 128 && isxdigit(c))
-#define JS7_UNHEX(c)    (uintN)(JS7_ISDEC(c) ? (c) - '0' : 10 + tolower(c) - 'a')
+#define JS7_UNHEX(c)    (unsigned)(JS7_ISDEC(c) ? (c) - '0' : 10 + tolower(c) - 'a')
 #define JS7_ISLET(c)    ((c) < 128 && isalpha(c))
 
 /* Initialize the String class, returning its prototype object. */
@@ -243,7 +209,7 @@ DeflateString(JSContext *cx, const jschar *chars, size_t length);
 /*
  * Inflate bytes to JS chars in an existing buffer. 'chars' must be large
  * enough for 'length' jschars. The buffer is NOT null-terminated.
- * 
+ *
  * charsLength must be be initialized with the destination buffer size and, on
  * return, will contain on return the number of copied chars.
  */
@@ -289,21 +255,21 @@ DeflateStringToUTF8Buffer(JSContext *cx, const jschar *chars,
  * function optimization in js{interp,tracer}.cpp.
  */
 extern JSBool
-str_replace(JSContext *cx, uintN argc, js::Value *vp);
+str_replace(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern JSBool
-str_fromCharCode(JSContext *cx, uintN argc, Value *vp);
+str_fromCharCode(JSContext *cx, unsigned argc, Value *vp);
 
 } /* namespace js */
 
 extern JSBool
-js_str_toString(JSContext *cx, uintN argc, js::Value *vp);
+js_str_toString(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern JSBool
-js_str_charAt(JSContext *cx, uintN argc, js::Value *vp);
+js_str_charAt(JSContext *cx, unsigned argc, js::Value *vp);
 
 extern JSBool
-js_str_charCodeAt(JSContext *cx, uintN argc, js::Value *vp);
+js_str_charCodeAt(JSContext *cx, unsigned argc, js::Value *vp);
 
 /*
  * Convert one UCS-4 char and write it into a UTF-8 buffer, which must be at
@@ -348,17 +314,17 @@ FileEscapedString(FILE *fp, JSLinearString *str, uint32_t quote)
 }
 
 JSBool
-str_match(JSContext *cx, uintN argc, Value *vp);
+str_match(JSContext *cx, unsigned argc, Value *vp);
 
 JSBool
-str_search(JSContext *cx, uintN argc, Value *vp);
+str_search(JSContext *cx, unsigned argc, Value *vp);
 
 JSBool
-str_split(JSContext *cx, uintN argc, Value *vp);
+str_split(JSContext *cx, unsigned argc, Value *vp);
 
 } /* namespace js */
 
 extern JSBool
-js_String(JSContext *cx, uintN argc, js::Value *vp);
+js_String(JSContext *cx, unsigned argc, js::Value *vp);
 
 #endif /* jsstr_h___ */

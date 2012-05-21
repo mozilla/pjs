@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla MathML Project.
- *
- * The Initial Developer of the Original Code is
- * The University Of Queensland.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Roger B. Sidje <rbs@maths.uq.edu.au>
- *   Frederic Wang <fred.wang@free.fr>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsINameSpaceManager.h"
 #include "nsMathMLFrame.h"
@@ -380,95 +346,33 @@ nsMathMLFrame::CalcLength(nsPresContext*   aPresContext,
   return 0;
 }
 
-/* static */ bool
-nsMathMLFrame::ParseNamedSpaceValue(nsIFrame*   aMathMLmstyleFrame,
-                                    nsString&   aString,
-                                    nsCSSValue& aCSSValue)
+/* static */ void
+nsMathMLFrame::ParseNumericValue(const nsString&   aString,
+                                 nscoord*          aLengthValue,
+                                 PRUint32          aFlags,
+                                 nsPresContext*    aPresContext,
+                                 nsStyleContext*   aStyleContext)
 {
-  aCSSValue.Reset();
-  aString.CompressWhitespace(); //  aString is not a const in this code...
-  if (!aString.Length()) return false;
+  nsCSSValue cssValue;
 
-  // See if it is one of the 'namedspace' (ranging 1/18em...7/18em)
-  PRInt32 i = 0;
-  nsIAtom* namedspaceAtom = nsnull;
-  if (aString.EqualsLiteral("veryverythinmathspace")) {
-    i = 1;
-    namedspaceAtom = nsGkAtoms::veryverythinmathspace_;
-  }
-  else if (aString.EqualsLiteral("verythinmathspace")) {
-    i = 2;
-    namedspaceAtom = nsGkAtoms::verythinmathspace_;
-  }
-  else if (aString.EqualsLiteral("thinmathspace")) {
-    i = 3;
-    namedspaceAtom = nsGkAtoms::thinmathspace_;
-  }
-  else if (aString.EqualsLiteral("mediummathspace")) {
-    i = 4;
-    namedspaceAtom = nsGkAtoms::mediummathspace_;
-  }
-  else if (aString.EqualsLiteral("thickmathspace")) {
-    i = 5;
-    namedspaceAtom = nsGkAtoms::thickmathspace_;
-  }
-  else if (aString.EqualsLiteral("verythickmathspace")) {
-    i = 6;
-    namedspaceAtom = nsGkAtoms::verythickmathspace_;
-  }
-  else if (aString.EqualsLiteral("veryverythickmathspace")) {
-    i = 7;
-    namedspaceAtom = nsGkAtoms::veryverythickmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativeveryverythinmathspace")) {
-    i = -1;
-    namedspaceAtom = nsGkAtoms::negativeveryverythinmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativeverythinmathspace")) {
-    i = -2;
-    namedspaceAtom = nsGkAtoms::negativeverythinmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativethinmathspace")) {
-    i = -3;
-    namedspaceAtom = nsGkAtoms::negativethinmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativemediummathspace")) {
-    i = -4;
-    namedspaceAtom = nsGkAtoms::negativemediummathspace_;
-  }
-  else if (aString.EqualsLiteral("negativethickmathspace")) {
-    i = -5;
-    namedspaceAtom = nsGkAtoms::negativethickmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativeverythickmathspace")) {
-    i = -6;
-    namedspaceAtom = nsGkAtoms::negativeverythickmathspace_;
-  }
-  else if (aString.EqualsLiteral("negativeveryverythickmathspace")) {
-    i = -7;
-    namedspaceAtom = nsGkAtoms::negativeveryverythickmathspace_;
+  if (!nsMathMLElement::ParseNumericValue(aString, cssValue, aFlags)) {
+    // Invalid attribute value. aLengthValue remains unchanged, so the default
+    // length value is used.
+    return;
   }
 
-  if (0 != i) {
-    if (aMathMLmstyleFrame) {
-      // see if there is a <mstyle> that has overriden the default value
-      // GetAttribute() will recurse all the way up into the <mstyle> hierarchy
-      nsAutoString value;
-      GetAttribute(nsnull, aMathMLmstyleFrame, namedspaceAtom, value);
-      if (!value.IsEmpty()) {
-        if (ParseNumericValue(value, aCSSValue) &&
-            aCSSValue.IsLengthUnit()) {
-          return true;
-        }
-      }
-    }
+  nsCSSUnit unit = cssValue.GetUnit();
 
-    // fall back to the default value
-    aCSSValue.SetFloatValue(float(i)/float(18), eCSSUnit_EM);
-    return true;
+  if (unit == eCSSUnit_Percent || unit == eCSSUnit_Number) {
+    // Relative units. A multiple of the default length value is used.
+    *aLengthValue = NSToCoordRound(*aLengthValue * (unit == eCSSUnit_Percent ?
+                                                    cssValue.GetPercentValue() :
+                                                    cssValue.GetFloatValue()));
+    return;
   }
-
-  return false;
+  
+  // Absolute units.
+  *aLengthValue = CalcLength(aPresContext, aStyleContext, cssValue);
 }
 
 // ================

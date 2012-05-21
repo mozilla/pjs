@@ -1,39 +1,7 @@
 /* -*- Mode: c++; c-basic-offset: 4; tab-width: 20; indent-tabs-mode: nil; -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef AndroidJavaWrappers_h__
 #define AndroidJavaWrappers_h__
@@ -57,6 +25,9 @@
 #endif
 
 namespace mozilla {
+
+class AndroidGeckoLayerClient;
+class AutoLocalJNIFrame;
 
 void InitAndroidJavaWrappers(JNIEnv *jEnv);
 
@@ -151,31 +122,73 @@ protected:
     static jfieldID jTopField;
 };
 
-class AndroidGeckoSoftwareLayerClient : public WrappedJavaObject {
+class AndroidViewTransform : public WrappedJavaObject {
 public:
-    static void InitGeckoSoftwareLayerClientClass(JNIEnv *jEnv);
- 
-     void Init(jobject jobj);
- 
-    AndroidGeckoSoftwareLayerClient() {}
-    AndroidGeckoSoftwareLayerClient(jobject jobj) { Init(jobj); }
+    static void InitViewTransformClass(JNIEnv *jEnv);
 
-    jobject LockBuffer();
-    unsigned char *LockBufferBits();
-    void UnlockBuffer();
-    bool BeginDrawing(int aWidth, int aHeight, int aTileWidth, int aTileHeight, nsIntRect &aDirtyRect, const nsAString &aMetadata, bool aHasDirectTexture);
-    void EndDrawing(const nsIntRect &aRect);
+    void Init(jobject jobj);
+
+    AndroidViewTransform() {}
+    AndroidViewTransform(jobject jobj) { Init(jobj); }
+
+    float GetX(JNIEnv *env);
+    float GetY(JNIEnv *env);
+    float GetScale(JNIEnv *env);
 
 private:
-    static jclass jGeckoSoftwareLayerClientClass;
-    static jmethodID jLockBufferMethod;
-    static jmethodID jUnlockBufferMethod;
-
-protected:
-     static jmethodID jBeginDrawingMethod;
-     static jmethodID jEndDrawingMethod;
+    static jclass jViewTransformClass;
+    static jfieldID jXField;
+    static jfieldID jYField;
+    static jfieldID jScaleField;
 };
 
+class AndroidLayerRendererFrame : public WrappedJavaObject {
+public:
+    static void InitLayerRendererFrameClass(JNIEnv *jEnv);
+
+    void Init(JNIEnv *env, jobject jobj);
+    void Dispose(JNIEnv *env);
+
+    bool BeginDrawing(AutoLocalJNIFrame *jniFrame);
+    bool DrawBackground(AutoLocalJNIFrame *jniFrame);
+    bool DrawForeground(AutoLocalJNIFrame *jniFrame);
+    bool EndDrawing(AutoLocalJNIFrame *jniFrame);
+
+private:
+    static jclass jLayerRendererFrameClass;
+    static jmethodID jBeginDrawingMethod;
+    static jmethodID jDrawBackgroundMethod;
+    static jmethodID jDrawForegroundMethod;
+    static jmethodID jEndDrawingMethod;
+};
+
+class AndroidGeckoLayerClient : public WrappedJavaObject {
+public:
+    static void InitGeckoLayerClientClass(JNIEnv *jEnv);
+
+    void Init(jobject jobj);
+
+    AndroidGeckoLayerClient() {}
+    AndroidGeckoLayerClient(jobject jobj) { Init(jobj); }
+
+    void SetFirstPaintViewport(float aOffsetX, float aOffsetY, float aZoom, float aPageWidth, float aPageHeight,
+                               float aCssPageWidth, float aCssPageHeight);
+    void SetPageSize(float aZoom, float aPageWidth, float aPageHeight, float aCssPageWidth, float aCssPageHeight);
+    void SyncViewportInfo(const nsIntRect& aDisplayPort, float aDisplayResolution, bool aLayersUpdated,
+                          nsIntPoint& aScrollOffset, float& aScaleX, float& aScaleY);
+    bool CreateFrame(AutoLocalJNIFrame *jniFrame, AndroidLayerRendererFrame& aFrame);
+    bool ActivateProgram(AutoLocalJNIFrame *jniFrame);
+    bool DeactivateProgram(AutoLocalJNIFrame *jniFrame);
+
+protected:
+    static jclass jGeckoLayerClientClass;
+    static jmethodID jSetFirstPaintViewport;
+    static jmethodID jSetPageSize;
+    static jmethodID jSyncViewportInfoMethod;
+    static jmethodID jCreateFrameMethod;
+    static jmethodID jActivateProgramMethod;
+    static jmethodID jDeactivateProgramMethod;
+};
 
 class AndroidGeckoSurfaceView : public WrappedJavaObject
 {
@@ -197,17 +210,14 @@ public:
     };
 
     int BeginDrawing();
-    jobject GetSoftwareDrawBitmap();
-    jobject GetSoftwareDrawBuffer();
+    jobject GetSoftwareDrawBitmap(AutoLocalJNIFrame *jniFrame);
+    jobject GetSoftwareDrawBuffer(AutoLocalJNIFrame *jniFrame);
     void EndDrawing();
     void Draw2D(jobject bitmap, int width, int height);
     void Draw2D(jobject buffer, int stride);
 
-    jobject GetSurface();
-
-    // must have a JNI local frame when calling this,
-    // and you'd better know what you're doing
-    jobject GetSurfaceHolder();
+    jobject GetSurface(AutoLocalJNIFrame *jniFrame);
+    jobject GetSurfaceHolder(AutoLocalJNIFrame *jniFrame);
 
 protected:
     static jclass jGeckoSurfaceViewClass;
@@ -317,15 +327,137 @@ public:
         KEYCODE_MEDIA_REWIND       = 89,
         KEYCODE_MEDIA_FAST_FORWARD = 90,
         KEYCODE_MUTE               = 91,
+        KEYCODE_PAGE_UP            = 92,
+        KEYCODE_PAGE_DOWN          = 93,
+        KEYCODE_PICTSYMBOLS        = 94,
+        KEYCODE_SWITCH_CHARSET     = 95,
+        KEYCODE_BUTTON_A           = 96,
+        KEYCODE_BUTTON_B           = 97,
+        KEYCODE_BUTTON_C           = 98,
+        KEYCODE_BUTTON_X           = 99,
+        KEYCODE_BUTTON_Y           = 100,
+        KEYCODE_BUTTON_Z           = 101,
+        KEYCODE_BUTTON_L1          = 102,
+        KEYCODE_BUTTON_R1          = 103,
+        KEYCODE_BUTTON_L2          = 104,
+        KEYCODE_BUTTON_R2          = 105,
+        KEYCODE_BUTTON_THUMBL      = 106,
+        KEYCODE_BUTTON_THUMBR      = 107,
+        KEYCODE_BUTTON_START       = 108,
+        KEYCODE_BUTTON_SELECT      = 109,
+        KEYCODE_BUTTON_MODE        = 110,
+        KEYCODE_ESCAPE             = 111,
+        KEYCODE_FORWARD_DEL        = 112,
+        KEYCODE_CTRL_LEFT          = 113,
+        KEYCODE_CTRL_RIGHT         = 114,
+        KEYCODE_CAPS_LOCK          = 115,
+        KEYCODE_SCROLL_LOCK        = 116,
+        KEYCODE_META_LEFT          = 117,
+        KEYCODE_META_RIGHT         = 118,
+        KEYCODE_FUNCTION           = 119,
+        KEYCODE_SYSRQ              = 120,
+        KEYCODE_BREAK              = 121,
+        KEYCODE_MOVE_HOME          = 122,
+        KEYCODE_MOVE_END           = 123,
+        KEYCODE_INSERT             = 124,
+        KEYCODE_FORWARD            = 125,
+        KEYCODE_MEDIA_PLAY         = 126,
+        KEYCODE_MEDIA_PAUSE        = 127,
+        KEYCODE_MEDIA_CLOSE        = 128,
+        KEYCODE_MEDIA_EJECT        = 129,
+        KEYCODE_MEDIA_RECORD       = 130,
+        KEYCODE_F1                 = 131,
+        KEYCODE_F2                 = 132,
+        KEYCODE_F3                 = 133,
+        KEYCODE_F4                 = 134,
+        KEYCODE_F5                 = 135,
+        KEYCODE_F6                 = 136,
+        KEYCODE_F7                 = 137,
+        KEYCODE_F8                 = 138,
+        KEYCODE_F9                 = 139,
+        KEYCODE_F10                = 140,
+        KEYCODE_F11                = 141,
+        KEYCODE_F12                = 142,
+        KEYCODE_NUM_LOCK           = 143,
+        KEYCODE_NUMPAD_0           = 144,
+        KEYCODE_NUMPAD_1           = 145,
+        KEYCODE_NUMPAD_2           = 146,
+        KEYCODE_NUMPAD_3           = 147,
+        KEYCODE_NUMPAD_4           = 148,
+        KEYCODE_NUMPAD_5           = 149,
+        KEYCODE_NUMPAD_6           = 150,
+        KEYCODE_NUMPAD_7           = 151,
+        KEYCODE_NUMPAD_8           = 152,
+        KEYCODE_NUMPAD_9           = 153,
+        KEYCODE_NUMPAD_DIVIDE      = 154,
+        KEYCODE_NUMPAD_MULTIPLY    = 155,
+        KEYCODE_NUMPAD_SUBTRACT    = 156,
+        KEYCODE_NUMPAD_ADD         = 157,
+        KEYCODE_NUMPAD_DOT         = 158,
+        KEYCODE_NUMPAD_COMMA       = 159,
+        KEYCODE_NUMPAD_ENTER       = 160,
+        KEYCODE_NUMPAD_EQUALS      = 161,
+        KEYCODE_NUMPAD_LEFT_PAREN  = 162,
+        KEYCODE_NUMPAD_RIGHT_PAREN = 163,
+        KEYCODE_VOLUME_MUTE        = 164,
+        KEYCODE_INFO               = 165,
+        KEYCODE_CHANNEL_UP         = 166,
+        KEYCODE_CHANNEL_DOWN       = 167,
+        KEYCODE_ZOOM_IN            = 168,
+        KEYCODE_ZOOM_OUT           = 169,
+        KEYCODE_TV                 = 170,
+        KEYCODE_WINDOW             = 171,
+        KEYCODE_GUIDE              = 172,
+        KEYCODE_DVR                = 173,
+        KEYCODE_BOOKMARK           = 174,
+        KEYCODE_CAPTIONS           = 175,
+        KEYCODE_SETTINGS           = 176,
+        KEYCODE_TV_POWER           = 177,
+        KEYCODE_TV_INPUT           = 178,
+        KEYCODE_STB_POWER          = 179,
+        KEYCODE_STB_INPUT          = 180,
+        KEYCODE_AVR_POWER          = 181,
+        KEYCODE_AVR_INPUT          = 182,
+        KEYCODE_PROG_RED           = 183,
+        KEYCODE_PROG_GREEN         = 184,
+        KEYCODE_PROG_YELLOW        = 185,
+        KEYCODE_PROG_BLUE          = 186,
+        KEYCODE_APP_SWITCH         = 187,
+        KEYCODE_BUTTON_1           = 188,
+        KEYCODE_BUTTON_2           = 189,
+        KEYCODE_BUTTON_3           = 190,
+        KEYCODE_BUTTON_4           = 191,
+        KEYCODE_BUTTON_5           = 192,
+        KEYCODE_BUTTON_6           = 193,
+        KEYCODE_BUTTON_7           = 194,
+        KEYCODE_BUTTON_8           = 195,
+        KEYCODE_BUTTON_9           = 196,
+        KEYCODE_BUTTON_10          = 197,
+        KEYCODE_BUTTON_11          = 198,
+        KEYCODE_BUTTON_12          = 199,
+        KEYCODE_BUTTON_13          = 200,
+        KEYCODE_BUTTON_14          = 201,
+        KEYCODE_BUTTON_15          = 202,
+        KEYCODE_BUTTON_16          = 203,
+        KEYCODE_LANGUAGE_SWITCH    = 204,
+        KEYCODE_MANNER_MODE        = 205,
+        KEYCODE_3D_MODE            = 206,
+        KEYCODE_CONTACTS           = 207,
+        KEYCODE_CALENDAR           = 208,
+        KEYCODE_MUSIC              = 209,
+        KEYCODE_CALCULATOR         = 210,
+
         ACTION_DOWN                = 0,
         ACTION_UP                  = 1,
         ACTION_MULTIPLE            = 2,
         META_ALT_ON                = 0x00000002,
         META_ALT_LEFT_ON           = 0x00000010,
         META_ALT_RIGHT_ON          = 0x00000020,
+        META_ALT_MASK              = META_ALT_RIGHT_ON | META_ALT_LEFT_ON | META_ALT_ON,
         META_SHIFT_ON              = 0x00000001,
         META_SHIFT_LEFT_ON         = 0x00000040,
         META_SHIFT_RIGHT_ON        = 0x00000080,
+        META_SHIFT_MASK            = META_SHIFT_RIGHT_ON | META_SHIFT_LEFT_ON | META_SHIFT_ON,
         META_SYM_ON                = 0x00000004,
         FLAG_WOKE_HERE             = 0x00000001,
         FLAG_SOFT_KEYBOARD         = 0x00000002,
@@ -384,25 +516,6 @@ public:
     static jmethodID jGetTimeMethod;
 };
 
-class AndroidAddress : public WrappedJavaObject
-{
-public:
-    static void InitAddressClass(JNIEnv *jEnv);
-    static nsGeoPositionAddress* CreateGeoPositionAddress(JNIEnv *jenv, jobject jobj);
-    static jclass jAddressClass;
-    static jmethodID jGetAddressLineMethod;
-    static jmethodID jGetAdminAreaMethod;
-    static jmethodID jGetCountryNameMethod;
-    static jmethodID jGetFeatureNameMethod;
-    static jmethodID jGetLocalityMethod;
-    static jmethodID jGetPostalCodeMethod;
-    static jmethodID jGetPremisesMethod;
-    static jmethodID jGetSubAdminAreaMethod;
-    static jmethodID jGetSubLocalityMethod;
-    static jmethodID jGetSubThoroughfareMethod;
-    static jmethodID jGetThoroughfareMethod;
-};
-
 class AndroidGeckoEvent : public WrappedJavaObject
 {
 public:
@@ -439,20 +552,19 @@ public:
     nsTArray<float> Pressures() { return mPressures; }
     nsTArray<float> Orientations() { return mOrientations; }
     nsTArray<nsIntPoint> PointRadii() { return mPointRadii; }
-    double Alpha() { return mAlpha; }
-    double Beta() { return mBeta; }
-    double Gamma() { return mGamma; }
     double X() { return mX; }
     double Y() { return mY; }
     double Z() { return mZ; }
-    double Distance() { return mDistance; }
     const nsIntRect& Rect() { return mRect; }
     nsAString& Characters() { return mCharacters; }
     nsAString& CharactersExtra() { return mCharactersExtra; }
     int KeyCode() { return mKeyCode; }
     int MetaState() { return mMetaState; }
+    bool IsAltPressed() const { return (mMetaState & AndroidKeyEvent::META_ALT_MASK) != 0; }
+    bool IsShiftPressed() const { return (mMetaState & AndroidKeyEvent::META_SHIFT_MASK) != 0; }
     int Flags() { return mFlags; }
     int UnicodeChar() { return mUnicodeChar; }
+    int RepeatCount() const { return mRepeatCount; }
     int Offset() { return mOffset; }
     int Count() { return mCount; }
     int PointerIndex() { return mPointerIndex; }
@@ -461,9 +573,9 @@ public:
     int RangeForeColor() { return mRangeForeColor; }
     int RangeBackColor() { return mRangeBackColor; }
     nsGeoPosition* GeoPosition() { return mGeoPosition; }
-    nsGeoPositionAddress* GeoAddress() { return mGeoAddress; }
     double Bandwidth() { return mBandwidth; }
     bool CanBeMetered() { return mCanBeMetered; }
+    short ScreenOrientation() { return mScreenOrientation; }
 
 protected:
     int mAction;
@@ -477,18 +589,17 @@ protected:
     nsIntRect mRect;
     int mFlags, mMetaState;
     int mKeyCode, mUnicodeChar;
+    int mRepeatCount;
     int mOffset, mCount;
     int mRangeType, mRangeStyles;
     int mRangeForeColor, mRangeBackColor;
-    double mAlpha, mBeta, mGamma;
     double mX, mY, mZ;
-    double mDistance;
     int mPointerIndex;
     nsString mCharacters, mCharactersExtra;
     nsRefPtr<nsGeoPosition> mGeoPosition;
-    nsRefPtr<nsGeoPositionAddress> mGeoAddress;
     double mBandwidth;
     bool mCanBeMetered;
+    short mScreenOrientation;
 
     void ReadIntArray(nsTArray<int> &aVals,
                       JNIEnv *jenv,
@@ -515,9 +626,6 @@ protected:
     static jfieldID jOrientations;
     static jfieldID jPressures;
     static jfieldID jPointRadii;
-    static jfieldID jAlphaField;
-    static jfieldID jBetaField;
-    static jfieldID jGammaField;
     static jfieldID jXField;
     static jfieldID jYField;
     static jfieldID jZField;
@@ -534,23 +642,25 @@ protected:
     static jfieldID jCountField;
     static jfieldID jPointerIndexField;
     static jfieldID jUnicodeCharField;
+    static jfieldID jRepeatCountField;
     static jfieldID jRangeTypeField;
     static jfieldID jRangeStylesField;
     static jfieldID jRangeForeColorField;
     static jfieldID jRangeBackColorField;
     static jfieldID jLocationField;
-    static jfieldID jAddressField;
 
     static jfieldID jBandwidthField;
     static jfieldID jCanBeMeteredField;
+
+    static jfieldID jScreenOrientationField;
 
 public:
     enum {
         NATIVE_POKE = 0,
         KEY_EVENT = 1,
         MOTION_EVENT = 2,
-        ORIENTATION_EVENT = 3,
-        ACCELERATION_EVENT = 4,
+        SENSOR_EVENT = 3,
+        UNUSED1_EVENT = 4,
         LOCATION_EVENT = 5,
         IME_EVENT = 6,
         DRAW = 7,
@@ -568,9 +678,14 @@ public:
         VIEWPORT = 20,
         VISITED = 21,
         NETWORK_CHANGED = 22,
-        PROXIMITY_EVENT = 23,
+        UNUSED3_EVENT = 23,
         ACTIVITY_RESUMING = 24,
         SCREENSHOT = 25,
+        UNUSED2_EVENT = 26,
+        SCREENORIENTATION_CHANGED = 27,
+        COMPOSITOR_PAUSE = 28,
+        COMPOSITOR_RESUME = 29,
+        PAINT_LISTEN_START_EVENT = 30,
         dummy_java_enum_list_end
     };
 
@@ -589,7 +704,7 @@ public:
 class nsJNIString : public nsString
 {
 public:
-    nsJNIString(jstring jstr, JNIEnv *jenv = NULL);
+    nsJNIString(jstring jstr, JNIEnv *jenv);
 };
 
 }

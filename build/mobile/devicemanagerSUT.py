@@ -1,41 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.   
-#
-# The Original Code is Test Automation Framework.
-#
-# The Initial Developer of the Original Code is Joel Maher.
-#
-# Portions created by the Initial Developer are Copyright (C) 2009
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Joel Maher <joel.maher@gmail.com> (Original Developer)
-#   Clint Talbert <cmtalbert@gmail.com>
-#   Mark Cote <mcote@mozilla.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import socket
 import SocketServer
@@ -85,7 +50,8 @@ class DeviceManagerSUT(DeviceManager):
     self.retrylimit = retrylimit
     self.retries = 0
     self._sock = None
-    self.getDeviceRoot()
+    if self.getDeviceRoot() == None:
+        raise BaseException("Failed to connect to SUT Agent and retrieve the device root.")
 
   def _cmdNeedsResponse(self, cmd):
     """ Not all commands need a response from the agent:
@@ -199,17 +165,17 @@ class DeviceManagerSUT(DeviceManager):
         if self.debug >= 1:
           print "reconnecting socket"
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-      except:
+      except socket.error, msg:
         self._sock = None
-        raise AgentError("unable to create socket")
+        raise AgentError("unable to create socket: "+str(msg))
 
       try:
         self._sock.connect((self.host, int(self.port)))
         self._sock.recv(1024)
-      except:
+      except socket.error, msg:
         self._sock.close()
         self._sock = None
-        raise AgentError("unable to connect socket")
+        raise AgentError("unable to connect socket: "+str(msg))
 
     for cmd in cmdlist:
       if newline: cmd += '\r\n'
@@ -220,9 +186,11 @@ class DeviceManagerSUT(DeviceManager):
           raise AgentError("ERROR: our cmd was %s bytes and we only sent %s" % (len(cmd),
                                                                                 numbytes))
         if (self.debug >= 4): print "send cmd: " + str(cmd)
-      except:
+      except socket.error, msg:
         self._sock.close()
         self._sock = None
+        if self.debug >= 1:
+          print "Error sending data to socket. cmd="+str(cmd)+"; err="+str(msg)
         return False
 
       # Check if the command should close the socket
@@ -242,10 +210,10 @@ class DeviceManagerSUT(DeviceManager):
           try:
             temp = self._sock.recv(1024)
             if (self.debug >= 4): print "response: " + str(temp)
-          except:
+          except socket.error, msg:
             self._sock.close()
             self._sock = None
-            raise AgentError("Error receiving data from socket")
+            raise AgentError("Error receiving data from socket. cmd="+str(cmd)+"; err="+str(msg))
 
           data += temp
 
@@ -404,7 +372,7 @@ class DeviceManagerSUT(DeviceManager):
   #  failure: None
   def pushDir(self, localDir, remoteDir):
     if (self.debug >= 2): print "pushing directory: %s to %s" % (localDir, remoteDir)
-    for root, dirs, files in os.walk(localDir):
+    for root, dirs, files in os.walk(localDir, followlinks=True):
       parts = root.split(localDir)
       for file in files:
         remoteRoot = remoteDir + '/' + parts[1]
@@ -425,7 +393,7 @@ class DeviceManagerSUT(DeviceManager):
   #  success: True
   #  failure: False
   def dirExists(self, dirname):
-    match = ".*" + dirname + "$"
+    match = ".*" + dirname.replace('^', '\^') + "$"
     dirre = re.compile(match)
     try:
       data = self.runCmds(['cd ' + dirname, 'cwd'])
@@ -582,15 +550,17 @@ class DeviceManagerSUT(DeviceManager):
 
   # external function
   # returns:
-  #  success: output from testagent
-  #  failure: None
-  def killProcess(self, appname):
+  #  success: True
+  #  failure: False
+  def killProcess(self, appname, forceKill=False):
+    if forceKill:
+      print "WARNING: killProcess(): forceKill parameter unsupported on SUT"
     try:
       data = self.runCmds(['kill ' + appname])
     except AgentError:
-      return None
+      return False
 
-    return data
+    return True
 
   # external function
   # returns:

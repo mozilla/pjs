@@ -1,43 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:set ts=4 sw=4 sts=4 et cin: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Bradley Baetz <bbaetz@student.usyd.edu.au>
- *   Malcolm Smith <malsmith@cs.rmit.edu.au>
- *   Taras Glek <tglek@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsNetUtil_h__
 #define nsNetUtil_h__
@@ -48,8 +13,9 @@
 #include "nsMemory.h"
 #include "nsCOMPtr.h"
 #include "prio.h" // for read/write flags, permissions, etc.
+#include "nsHashKeys.h"
 
-#include "nsCRT.h"
+#include "plstr.h"
 #include "nsIURI.h"
 #include "nsIStandardURL.h"
 #include "nsIURLParser.h"
@@ -106,10 +72,9 @@
 #include "nsIChannelPolicy.h"
 #include "nsISocketProviderService.h"
 #include "nsISocketProvider.h"
+#include "nsIRedirectChannelRegistrar.h"
 #include "nsIMIMEHeaderParam.h"
 #include "mozilla/Services.h"
-
-#include "nsIRedirectChannelRegistrar.h"
 
 #ifdef MOZILLA_INTERNAL_API
 
@@ -229,8 +194,14 @@ NS_NewChannel(nsIChannel           **result,
                 rv |= chan->SetLoadGroup(loadGroup);
             if (callbacks)
                 rv |= chan->SetNotificationCallbacks(callbacks);
-            if (loadFlags != nsIRequest::LOAD_NORMAL)
-                rv |= chan->SetLoadFlags(loadFlags);
+            if (loadFlags != nsIRequest::LOAD_NORMAL) {
+                // Retain the LOAD_REPLACE load flag if set.
+                nsLoadFlags normalLoadFlags = 0;
+                chan->GetLoadFlags(&normalLoadFlags);
+                rv |= chan->SetLoadFlags(loadFlags | 
+                                         (normalLoadFlags & 
+                                          nsIChannel::LOAD_REPLACE));
+            }
             if (channelPolicy) {
                 nsCOMPtr<nsIWritablePropertyBag2> props = do_QueryInterface(chan);
                 if (props) {
@@ -1188,17 +1159,21 @@ NS_ReadInputStreamToBuffer(nsIInputStream *aInputStream,
     return rv; 
 }
 
+// external code can't see fallible_t
+#ifdef MOZILLA_INTERNAL_API
+
 inline nsresult
 NS_ReadInputStreamToString(nsIInputStream *aInputStream, 
                            nsACString &aDest,
                            PRUint32 aCount)
 {
-    aDest.SetLength(aCount);
-    if (aDest.Length() != aCount)
+    if (!aDest.SetLength(aCount, mozilla::fallible_t()))
         return NS_ERROR_OUT_OF_MEMORY;
     void* dest = aDest.BeginWriting();
     return NS_ReadInputStreamToBuffer(aInputStream, &dest, aCount);
 }
+
+#endif
 
 inline nsresult
 NS_LoadPersistentPropertiesFromURI(nsIPersistentProperties **result,
@@ -1618,7 +1593,7 @@ NS_SecurityHashURI(nsIURI* aURI)
     nsCAutoString scheme;
     PRUint32 schemeHash = 0;
     if (NS_SUCCEEDED(baseURI->GetScheme(scheme)))
-        schemeHash = nsCRT::HashCode(scheme.get());
+        schemeHash = mozilla::HashString(scheme);
 
     // TODO figure out how to hash file:// URIs
     if (scheme.EqualsLiteral("file"))
@@ -1631,17 +1606,16 @@ NS_SecurityHashURI(nsIURI* aURI)
         nsCAutoString spec;
         PRUint32 specHash = baseURI->GetSpec(spec);
         if (NS_SUCCEEDED(specHash))
-            specHash = nsCRT::HashCode(spec.get());
+            specHash = mozilla::HashString(spec);
         return specHash;
     }
 
     nsCAutoString host;
     PRUint32 hostHash = 0;
     if (NS_SUCCEEDED(baseURI->GetAsciiHost(host)))
-        hostHash = nsCRT::HashCode(host.get());
+        hostHash = mozilla::HashString(host);
 
-    // XOR to combine hash values
-    return schemeHash ^ hostHash ^ NS_GetRealPort(baseURI);
+    return mozilla::AddToHash(schemeHash, hostHash, NS_GetRealPort(baseURI));
 }
 
 inline bool

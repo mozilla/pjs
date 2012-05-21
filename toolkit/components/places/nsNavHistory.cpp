@@ -1,57 +1,13 @@
 //* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla History System.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brett Wilson <brettw@gmail.com> (original author)
- *   Dietrich Ayala <dietrich@mozilla.com>
- *   Seth Spitzer <sspitzer@mozilla.com>
- *   Asaf Romano <mano@mozilla.com>
- *   Marco Bonardo <mak77@bonardo.net>
- *   Edward Lee <edward.lee@engineering.uiuc.edu>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *   Philipp von Weitershausen <philipp@weitershausen.de>
- *   Paolo Amadini <http://www.amadzone.org/>
- *   Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdio.h>
 
 #include "nsNavHistory.h"
 
 #include "mozIPlacesAutoComplete.h"
-#include "nsILivemarkService.h"
 #include "nsNavBookmarks.h"
 #include "nsAnnotationService.h"
 #include "nsFaviconService.h"
@@ -342,16 +298,12 @@ nsNavHistory::Init()
   NS_ENSURE_STATE(mDB);
 
   // recent events hash tables
-  NS_ENSURE_TRUE(mRecentTyped.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE),
-                 NS_ERROR_OUT_OF_MEMORY);
-  NS_ENSURE_TRUE(mRecentLink.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE),
-                 NS_ERROR_OUT_OF_MEMORY);
-  NS_ENSURE_TRUE(mRecentBookmark.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mRecentTyped.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE);
+  mRecentLink.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE);
+  mRecentBookmark.Init(RECENT_EVENTS_INITIAL_CACHE_SIZE);
 
   // Embed visits hash table.
-  NS_ENSURE_TRUE(mEmbedVisits.Init(EMBED_VISITS_INITIAL_CACHE_SIZE),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mEmbedVisits.Init(EMBED_VISITS_INITIAL_CACHE_SIZE);
 
   /*****************************************************************************
    *** IMPORTANT NOTICE!
@@ -1198,25 +1150,18 @@ nsNavHistory::GetHasHistoryEntries(bool* aHasEntries)
 nsresult
 nsNavHistory::invalidateFrecencies(const nsCString& aPlaceIdsQueryString)
 {
-  // Exclude place: queries and unvisited livemark children from autocomplete,
-  // by setting their frecency to zero.
+  // Exclude place: queries by setting their frecency to zero.
   nsCAutoString invalideFrecenciesSQLFragment(
     "UPDATE moz_places SET frecency = (CASE "
       "WHEN url BETWEEN 'place:' AND 'place;' "
       "THEN 0 "
-      "WHEN id IN (SELECT b.fk FROM moz_bookmarks b "
-                  "JOIN moz_bookmarks bp ON bp.id = b.parent "
-                  "JOIN moz_items_annos a ON a.item_id = bp.id "
-                  "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
-                  "WHERE b.fk = moz_places.id AND visit_count = 0 "
-                    "AND n.name = :anno_name) "
-      "THEN 0 "
       "ELSE -1 "
       "END) "
+    "WHERE frecency > 0 "
   );
 
   if (!aPlaceIdsQueryString.IsEmpty()) {
-    invalideFrecenciesSQLFragment.AppendLiteral("WHERE id IN(");
+    invalideFrecenciesSQLFragment.AppendLiteral("AND id IN(");
     invalideFrecenciesSQLFragment.Append(aPlaceIdsQueryString);
     invalideFrecenciesSQLFragment.AppendLiteral(")");
   }
@@ -1226,13 +1171,8 @@ nsNavHistory::invalidateFrecencies(const nsCString& aPlaceIdsQueryString)
   );
   NS_ENSURE_STATE(stmt);
 
-  nsresult rv = stmt->BindUTF8StringByName(
-     NS_LITERAL_CSTRING("anno_name"), NS_LITERAL_CSTRING(LMANNO_FEEDURI)
-   );
-   NS_ENSURE_SUCCESS(rv, rv);
-
   nsCOMPtr<mozIStoragePendingStatement> ps;
-  rv = stmt->ExecuteAsync(nsnull, getter_AddRefs(ps));
+  nsresult rv = stmt->ExecuteAsync(nsnull, getter_AddRefs(ps));
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1645,10 +1585,10 @@ nsNavHistory::ExecuteQueries(nsINavHistoryQuery** aQueries, PRUint32 aQueryCount
 // determine from our nsNavHistoryQuery array and nsNavHistoryQueryOptions
 // if this is the place query from the history menu.
 // from browser-menubar.inc, our history menu query is:
-// place:redirectsMode=2&sort=4&maxResults=10
+// place:sort=4&maxResults=10
 // note, any maxResult > 0 will still be considered a history menu query
-// or if this is the place query from the "Most Visited" item in the "Smart Bookmarks" folder:
-// place:redirectsMode=2&sort=8&maxResults=10
+// or if this is the place query from the "Most Visited" item in the
+// "Smart Bookmarks" folder: place:sort=8&maxResults=10
 // note, any maxResult > 0 will still be considered a Most Visited menu query
 static
 bool IsOptimizableHistoryQuery(const nsCOMArray<nsNavHistoryQuery>& aQueries,
@@ -1718,32 +1658,8 @@ static
 bool NeedToFilterResultSet(const nsCOMArray<nsNavHistoryQuery>& aQueries, 
                              nsNavHistoryQueryOptions *aOptions)
 {
-  // Never filter queries returning queries
   PRUint16 resultType = aOptions->ResultType();
-  if (resultType == nsINavHistoryQueryOptions::RESULTS_AS_DATE_QUERY ||
-      resultType == nsINavHistoryQueryOptions::RESULTS_AS_DATE_SITE_QUERY ||
-      resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAG_QUERY ||
-      resultType == nsINavHistoryQueryOptions::RESULTS_AS_SITE_QUERY)
-    return false;
-
-  // Always filter bookmarks queries to avoid the inclusion of query nodes,
-  // but RESULTS AS TAG QUERY never needs to be filtered.
-  if (aOptions->QueryType() == nsINavHistoryQueryOptions::QUERY_TYPE_BOOKMARKS)
-    return true;
-
-  nsCString parentAnnotationToExclude;
-  nsresult rv = aOptions->GetExcludeItemIfParentHasAnnotation(parentAnnotationToExclude);
-  NS_ENSURE_SUCCESS(rv, true);
-  if (!parentAnnotationToExclude.IsEmpty())
-    return true;
-
-  // Need to filter on parent if any folder is set.
-  for (PRInt32 i = 0; i < aQueries.Count(); ++i) {
-    if (aQueries[i]->Folders().Length() != 0) {
-      return true;
-    }
-  }
-  return false;
+  return resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS;
 }
 
 // ** Helper class for ConstructQueryString **/
@@ -1786,7 +1702,6 @@ private:
   PRUint16 mResultType;
   PRUint16 mQueryType;
   bool mIncludeHidden;
-  PRUint16 mRedirectsMode;
   PRUint16 mSortingMode;
   PRUint32 mMaxResults;
 
@@ -1809,7 +1724,6 @@ PlacesSQLQueryBuilder::PlacesSQLQueryBuilder(
 , mResultType(aOptions->ResultType())
 , mQueryType(aOptions->QueryType())
 , mIncludeHidden(aOptions->IncludeHidden())
-, mRedirectsMode(aOptions->RedirectsMode())
 , mSortingMode(aOptions->SortingMode())
 , mMaxResults(aOptions->MaxResults())
 , mSkipOrderBy(false)
@@ -2008,7 +1922,7 @@ PlacesSQLQueryBuilder::SelectAsDay()
   // beginTime will become the node's time property, we don't use endTime
   // because it could overlap, and we use time to sort containers and find
   // insert position in a result.
-  mQueryString = nsPrintfCString(1024,
+  mQueryString = nsPrintfCString(
      "SELECT null, "
        "'place:type=%ld&sort=%ld&beginTime='||beginTime||'&endTime='||endTime, "
       "dayTitle, null, null, beginTime, null, null, null, null, null, null "
@@ -2156,7 +2070,7 @@ PlacesSQLQueryBuilder::SelectAsDay()
     nsPrintfCString dateParam("dayTitle%d", i);
     mAddParams.Put(dateParam, dateName);
 
-    nsPrintfCString dayRange(1024,
+    nsPrintfCString dayRange(
       "SELECT :%s AS dayTitle, "
              "%s AS beginTime, "
              "%s AS endTime "
@@ -2212,7 +2126,7 @@ PlacesSQLQueryBuilder::SelectAsSite()
                                     "'&endTime='||:end_time");
   }
 
-  mQueryString = nsPrintfCString(2048,
+  mQueryString = nsPrintfCString(
     "SELECT null, 'place:type=%ld&sort=%ld&domain=&domainIsHost=true'%s, "
            ":localhost, :localhost, null, null, null, null, null, null, null "
     "WHERE EXISTS ( "
@@ -2264,7 +2178,7 @@ PlacesSQLQueryBuilder::SelectAsTag()
   // other history queries.
   mHasDateColumns = true; 
 
-  mQueryString = nsPrintfCString(2048,
+  mQueryString = nsPrintfCString(
     "SELECT null, 'place:folder=' || id || '&queryType=%d&type=%ld', "
            "title, null, null, null, null, null, null, dateAdded, "
            "lastModified, null, null "
@@ -2285,27 +2199,6 @@ PlacesSQLQueryBuilder::Where()
   // Set query options
   nsCAutoString additionalVisitsConditions;
   nsCAutoString additionalPlacesConditions;
-
-  if (mRedirectsMode == nsINavHistoryQueryOptions::REDIRECTS_MODE_SOURCE) {
-    // At least one visit that is not a redirect target should exist.
-    additionalVisitsConditions += NS_LITERAL_CSTRING(
-      "AND visit_type NOT IN ") +
-      nsPrintfCString("(%d,%d) ", nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
-                                  nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY);
-  }
-  else if (mRedirectsMode == nsINavHistoryQueryOptions::REDIRECTS_MODE_TARGET) {
-    // At least one visit that is not a redirect source should exist.
-    additionalPlacesConditions += nsPrintfCString(1024,
-      "AND EXISTS ( "
-        "SELECT id "
-        "FROM moz_historyvisits v "
-        "WHERE place_id = h.id "
-          "AND NOT EXISTS(SELECT id FROM moz_historyvisits "
-                         "WHERE from_visit = v.id AND visit_type IN (%d,%d)) "
-      ") ",
-      nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
-      nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY);
-  }
 
   if (!mIncludeHidden) {
     additionalPlacesConditions += NS_LITERAL_CSTRING("AND hidden = 0 ");
@@ -2450,23 +2343,23 @@ PlacesSQLQueryBuilder::OrderBy()
 
 void PlacesSQLQueryBuilder::OrderByColumnIndexAsc(PRInt32 aIndex)
 {
-  mQueryString += nsPrintfCString(128, " ORDER BY %d ASC", aIndex+1);
+  mQueryString += nsPrintfCString(" ORDER BY %d ASC", aIndex+1);
 }
 
 void PlacesSQLQueryBuilder::OrderByColumnIndexDesc(PRInt32 aIndex)
 {
-  mQueryString += nsPrintfCString(128, " ORDER BY %d DESC", aIndex+1);
+  mQueryString += nsPrintfCString(" ORDER BY %d DESC", aIndex+1);
 }
 
 void PlacesSQLQueryBuilder::OrderByTextColumnIndexAsc(PRInt32 aIndex)
 {
-  mQueryString += nsPrintfCString(128, " ORDER BY %d COLLATE NOCASE ASC",
+  mQueryString += nsPrintfCString(" ORDER BY %d COLLATE NOCASE ASC",
                                   aIndex+1);
 }
 
 void PlacesSQLQueryBuilder::OrderByTextColumnIndexDesc(PRInt32 aIndex)
 {
-  mQueryString += nsPrintfCString(128, " ORDER BY %d COLLATE NOCASE DESC",
+  mQueryString += nsPrintfCString(" ORDER BY %d COLLATE NOCASE DESC",
                                   aIndex+1);
 }
 
@@ -2545,33 +2438,7 @@ nsNavHistory::ConstructQueryString(
     queryString.AppendInt(aOptions->MaxResults());
 
     nsCAutoString additionalQueryOptions;
-    if (aOptions->RedirectsMode() ==
-          nsINavHistoryQueryOptions::REDIRECTS_MODE_SOURCE) {
-      // At least one visit that is not a redirect target should exist.
-      additionalQueryOptions +=  nsPrintfCString(256,
-        "AND EXISTS ( "
-          "SELECT id "
-          "FROM moz_historyvisits "
-          "WHERE place_id = h.id "
-            "AND visit_type NOT IN (%d,%d)"
-        ") ",
-        TRANSITION_REDIRECT_PERMANENT,
-        TRANSITION_REDIRECT_TEMPORARY);
-    }
-    else if (aOptions->RedirectsMode() ==
-              nsINavHistoryQueryOptions::REDIRECTS_MODE_TARGET) {
-      // At least one visit that is not a redirect source should exist.
-      additionalQueryOptions += nsPrintfCString(1024,
-        "AND EXISTS ( "
-          "SELECT id "
-          "FROM moz_historyvisits v "
-          "WHERE place_id = h.id "
-            "AND NOT EXISTS(SELECT id FROM moz_historyvisits "
-                           "WHERE from_visit = v.id AND visit_type IN (%d,%d)) "
-        ") ",
-        TRANSITION_REDIRECT_PERMANENT,
-        TRANSITION_REDIRECT_TEMPORARY);
-    }
+
     queryString.ReplaceSubstring("{QUERY_OPTIONS}",
                                   additionalQueryOptions.get());
     return NS_OK;
@@ -2771,56 +2638,6 @@ nsNavHistory::GetHistoryDisabled(bool *_retval)
 }
 
 // Browser history *************************************************************
-
-
-// nsNavHistory::AddPageWithDetails
-//
-//    This function is used by the migration components to import history.
-//
-//    Note that this always adds the page with one visit and no parent, which
-//    is appropriate for imported URIs.
-
-NS_IMETHODIMP
-nsNavHistory::AddPageWithDetails(nsIURI *aURI, const PRUnichar *aTitle,
-                                 PRInt64 aLastVisited)
-{
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aURI);
-
-  // Don't update the page title inside the private browsing mode.
-  if (InPrivateBrowsingMode())
-    return NS_OK;
-
-  PRInt64 visitID;
-  nsresult rv = AddVisit(aURI, aLastVisited, 0, TRANSITION_LINK, false,
-                         0, &visitID);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return SetPageTitleInternal(aURI, nsString(aTitle));
-}
-
-
-// nsNavHistory::GetCount
-//
-//    This function is used in legacy code to see if there is any history to
-//    clear. Counting the actual number of history entries is very slow, so
-//    we just see if there are any and return 0 or 1, which is enough to make
-//    all the code that uses this function happy.
-
-NS_IMETHODIMP
-nsNavHistory::GetCount(PRUint32 *aCount)
-{
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG_POINTER(aCount);
-
-  bool hasEntries = false;
-  nsresult rv = GetHasHistoryEntries(&hasEntries);
-  if (hasEntries)
-    *aCount = 1;
-  else
-    *aCount = 0;
-  return rv;
-}
 
 
 // nsNavHistory::RemovePagesInternal
@@ -3297,21 +3114,6 @@ nsNavHistory::RemoveAllPages()
   NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to fix invalid frecencies");
 
   return NS_OK;
-}
-
-
-// nsNavHistory::HidePage
-//
-//    Sets the 'hidden' column to true. If we've not heard of the page, we
-//    succeed and do nothing.
-
-NS_IMETHODIMP
-nsNavHistory::HidePage(nsIURI *aURI)
-{
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aURI);
-
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 
@@ -4040,6 +3842,7 @@ nsNavHistory::QueryToSelectClause(nsNavHistoryQuery* aQuery, // const
                                   nsCString* aClause)
 {
   bool hasIt;
+  bool excludeQueries = aOptions->ExcludeQueries();
 
   ConditionBuilder clause(aQueryIndex);
 
@@ -4063,8 +3866,10 @@ nsNavHistory::QueryToSelectClause(nsNavHistoryQuery* aQuery, // const
     // it can match everything and work as a nice case insensitive comparator.
     clause.Condition("AUTOCOMPLETE_MATCH(").Param(":search_string")
           .Str(", h.url, page_title, tags, ")
-          .Str(nsPrintfCString(17, "0, 0, 0, 0, %d, 0)",
+          .Str(nsPrintfCString("0, 0, 0, 0, %d, 0)",
                                mozIPlacesAutoComplete::MATCH_ANYWHERE_UNMODIFIED).get());
+    // Serching by terms implicitly exclude queries.
+    excludeQueries = true;
   }
 
   // min and max visit count
@@ -4156,11 +3961,35 @@ nsNavHistory::QueryToSelectClause(nsNavHistoryQuery* aQuery, // const
               ).Param(param.get()).Str(" LIMIT 1)");
   }
 
-  // parent parameter is used in tag contents queries.
-  // Only one folder should be defined for them.
-  if (aOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS &&
-      aQuery->Folders().Length() == 1) {
-    clause.Condition("b.parent =").Param(":parent");
+  // folders
+  const nsTArray<PRInt64>& folders = aQuery->Folders();
+  if (folders.Length() > 0) {
+    nsTArray<PRInt64> includeFolders;
+    includeFolders.AppendElements(folders);
+
+    nsNavBookmarks* bookmarks = nsNavBookmarks::GetBookmarksService();
+    NS_ENSURE_STATE(bookmarks);
+
+    for (nsTArray<PRInt64>::size_type i = 0; i < folders.Length(); ++i) {
+      nsTArray<PRInt64> subFolders;
+      if (NS_FAILED(bookmarks->GetDescendantFolders(folders[i], subFolders)))
+        continue;
+      includeFolders.AppendElements(subFolders);
+    }
+
+    clause.Condition("b.parent IN(");
+    for (nsTArray<PRInt64>::size_type i = 0; i < includeFolders.Length(); ++i) {
+      clause.Str(nsPrintfCString("%d", includeFolders[i]).get());
+      if (i < includeFolders.Length() - 1) {
+        clause.Str(",");
+      }
+    }
+    clause.Str(")");
+  }
+
+  if (excludeQueries) {
+    // Serching by terms implicitly exclude queries.
+    clause.Condition("NOT h.url BETWEEN 'place:' AND 'place;'");
   }
 
   clause.GetClauseString(*aClause);
@@ -4318,15 +4147,6 @@ nsNavHistory::BindQueryClauseParameters(mozIStorageBaseStatement* statement,
     }
   }
 
-  // parent parameter
-  if (aOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS &&
-      aQuery->Folders().Length() == 1) {
-    rv = statement->BindInt64ByName(
-      NS_LITERAL_CSTRING("parent") + qIndex, aQuery->Folders()[0]
-    );
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
   return NS_OK;
 }
 
@@ -4403,12 +4223,8 @@ nsNavHistory::GetTagsFolder()
 // nsNavHistory::FilterResultSet
 //
 // This does some post-query-execution filtering:
-//   - searching on title & url
-//   - parent folder (recursively)
-//   - excludeQueries
-//   - tags
+//   - searching on title, url and tags
 //   - limit count
-//   - excludingLivemarkItems
 //
 // Note:  changes to filtering in FilterResultSet() 
 // may require changes to NeedToFilterResultSet()
@@ -4420,8 +4236,6 @@ nsNavHistory::FilterResultSet(nsNavHistoryQueryResultNode* aQueryNode,
                               const nsCOMArray<nsNavHistoryQuery>& aQueries,
                               nsNavHistoryQueryOptions *aOptions)
 {
-  nsresult rv;
-
   // get the bookmarks service
   nsNavBookmarks *bookmarks = nsNavBookmarks::GetBookmarksService();
   NS_ENSURE_TRUE(bookmarks, NS_ERROR_OUT_OF_MEMORY);
@@ -4429,59 +4243,6 @@ nsNavHistory::FilterResultSet(nsNavHistoryQueryResultNode* aQueryNode,
   // parse the search terms
   nsTArray<nsTArray<nsString>*> terms;
   ParseSearchTermsFromQueries(aQueries, &terms);
-
-  // The includeFolders array for each query is initialized with its
-  // query's folders array. We add sub-folders as we check items.
-  nsTArray< nsTArray<PRInt64>* > includeFolders;
-  nsTArray< nsTArray<PRInt64>* > excludeFolders;
-  for (PRInt32 queryIndex = 0;
-       queryIndex < aQueries.Count(); queryIndex++) {
-    includeFolders.AppendElement(new nsTArray<PRInt64>(aQueries[queryIndex]->Folders()));
-    excludeFolders.AppendElement(new nsTArray<PRInt64>());
-  }
-
-  // Filter against query options.
-  // XXX Only excludeQueries and excludeItemIfParentHasAnnotation are supported
-  // at the moment.
-  bool excludeQueries = false;
-  if (aQueryNode) {
-    rv = aQueryNode->mOptions->GetExcludeQueries(&excludeQueries);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  nsCString parentAnnotationToExclude;
-  nsTArray<PRInt64> parentFoldersToExclude;
-  if (aQueryNode) {
-    rv = aQueryNode->mOptions->GetExcludeItemIfParentHasAnnotation(parentAnnotationToExclude);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  if (!parentAnnotationToExclude.IsEmpty()) {
-    // Find all the folders with the annotation we are excluding and save their
-    // item ids.  When doing filtering, if item id of a result's parent
-    // matches one of the saved item ids, the result will be excluded.
-    nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
-      "SELECT a.item_id, a.content "
-      "FROM moz_anno_attributes n "
-      "JOIN moz_items_annos a ON n.id = a.anno_attribute_id "
-      "WHERE n.name = :anno_name "
-    );
-    NS_ENSURE_STATE(stmt);
-    mozStorageStatementScoper scoper(stmt);
-
-    rv = stmt->BindUTF8StringByName(
-      NS_LITERAL_CSTRING("anno_name"), parentAnnotationToExclude
-    );
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    bool hasMore = false;
-    while (NS_SUCCEEDED(stmt->ExecuteStep(&hasMore)) && hasMore) {
-      PRInt64 folderId = 0;
-      rv = stmt->GetInt64(0, &folderId);
-      NS_ENSURE_SUCCESS(rv, rv);
-      parentFoldersToExclude.AppendElement(folderId);
-    }
-  }
 
   PRUint16 resultType = aOptions->ResultType();
   for (PRInt32 nodeIndex = 0; nodeIndex < aSet.Count(); nodeIndex++) {
@@ -4497,18 +4258,10 @@ nsNavHistory::FilterResultSet(nsNavHistoryQueryResultNode* aQueryNode,
         nodeIndex > 0 && aSet[nodeIndex]->mURI == aSet[nodeIndex-1]->mURI)
       continue;
 
-    PRInt64 parentId = -1;
-    if (aSet[nodeIndex]->mItemId != -1) {
-      if (aQueryNode && aQueryNode->mItemId == aSet[nodeIndex]->mItemId)
-        continue;
-      parentId = aSet[nodeIndex]->mFolderId;
-    }
-
-    // if we are excluding items by parent annotation, 
-    // exclude items who's parent is a folder with that annotation
-    if (!parentAnnotationToExclude.IsEmpty() &&
-        parentFoldersToExclude.Contains(parentId))
+    if (aSet[nodeIndex]->mItemId != -1 && aQueryNode &&
+        aQueryNode->mItemId == aSet[nodeIndex]->mItemId) {
       continue;
+    }
 
     // Append the node only if it matches one of the queries.
     bool appendNode = false;
@@ -4542,55 +4295,13 @@ nsNavHistory::FilterResultSet(nsNavHistoryQueryResultNode* aQueryNode,
           continue;
       }
 
-      // Filter bookmarks on parent folder.
-      // RESULTS_AS_TAG_CONTENTS changes bookmarks' parents, so we cannot filter
-      // this kind of result based on the parent.
-      if (includeFolders[queryIndex]->Length() != 0 &&
-          resultType != nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS) {
-        // Filter out the node if its parent is in the excludeFolders
-        // cache or it has no parent.
-        if (excludeFolders[queryIndex]->Contains(parentId) || parentId == -1) {
-          continue;
-        }
-
-        if (!includeFolders[queryIndex]->Contains(parentId)) {
-          // If parent is not found in current includeFolders cache, we check
-          // its ancestors.
-          PRInt64 ancestor = parentId;
-          bool belongs = false;
-          nsTArray<PRInt64> ancestorFolders;
-
-          while (!belongs) {
-            // Avoid using |ancestor| itself if GetFolderIdForItem failed.
-            ancestorFolders.AppendElement(ancestor);
-
-            // GetFolderIdForItems throws when called for the places-root
-            if (NS_FAILED(bookmarks->GetFolderIdForItem(ancestor, &ancestor))) {
-              break;
-            } else if (excludeFolders[queryIndex]->Contains(ancestor)) {
-              break;
-            } else if (includeFolders[queryIndex]->Contains(ancestor)) {
-              belongs = true;
-            }
-          }
-          // if the parentId or any of its ancestors "belong",
-          // include all of them.  otherwise, exclude all of them.
-          if (belongs) {
-            includeFolders[queryIndex]->AppendElements(ancestorFolders);
-          } else {
-            excludeFolders[queryIndex]->AppendElements(ancestorFolders);
-            continue;
-          }
-        }
-      }
-
       // We passed all filters, so we can append the node to filtered results.
       appendNode = true;
     }
 
     if (appendNode)
       aFiltered->AppendObject(aSet[nodeIndex]);
-      
+
     // Stop once we have reached max results.
     if (aOptions->MaxResults() > 0 &&
         (PRUint32)aFiltered->Count() >= aOptions->MaxResults())
@@ -4600,8 +4311,6 @@ nsNavHistory::FilterResultSet(nsNavHistoryQueryResultNode* aQueryNode,
   // De-allocate the temporary matrixes.
   for (PRInt32 i = 0; i < aQueries.Count(); i++) {
     delete terms[i];
-    delete includeFolders[i];
-    delete excludeFolders[i];
   }
 
   return NS_OK;

@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef nsGenericHTMLElement_h___
 #define nsGenericHTMLElement_h___
 
@@ -45,7 +13,6 @@
 #include "nsFrameLoader.h"
 #include "nsGkAtoms.h"
 #include "nsContentCreatorFunctions.h"
-#include "nsDOMMemoryReporter.h"
 
 class nsIDOMAttr;
 class nsIDOMEventListener;
@@ -81,9 +48,6 @@ public:
     NS_ASSERTION(mNodeInfo->NamespaceID() == kNameSpaceID_XHTML,
                  "Unexpected namespace");
   }
-
-  NS_DECL_AND_IMPL_DOM_MEMORY_REPORTER_SIZEOF(nsGenericHTMLElement,
-                                              nsGenericHTMLElementBase)
 
   /** Typesafe, non-refcounting cast from nsIContent.  Cheaper than QI. **/
   static nsGenericHTMLElement* FromContent(nsIContent *aContent)
@@ -136,7 +100,6 @@ public:
   NS_IMETHOD InsertAdjacentHTML(const nsAString& aPosition,
                                 const nsAString& aText);
   nsresult ScrollIntoView(bool aTop, PRUint8 optional_argc);
-  nsresult MozRequestFullScreen();
   // Declare Focus(), Blur(), GetTabIndex(), SetTabIndex(), GetHidden(),
   // SetHidden(), GetSpellcheck(), SetSpellcheck(), and GetDraggable() such that
   // classes that inherit interfaces with those methods properly override them.
@@ -531,42 +494,24 @@ public:
   NS_HIDDEN_(nsresult) GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsAString& aResult);
 
   /**
+   * Gets the absolute URI values of an attribute, by resolving any relative
+   * URIs in the attribute against the baseuri of the element. If a substring
+   * isn't a relative URI, the substring is returned as is. Only works for
+   * attributes in null namespace.
+   */
+  bool GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsIURI** aURI) const;
+
+  /**
    * Returns the current disabled state of the element.
    */
   virtual bool IsDisabled() const {
-    return HasAttr(kNameSpaceID_None, nsGkAtoms::disabled);
+    return false;
   }
 
   bool IsHidden() const
   {
     return HasAttr(kNameSpaceID_None, nsGkAtoms::hidden);
   }
-
-  /**
-   * Shared cross-origin resource sharing attributes so they don't get
-   * duplicated on every CORS-enabled element
-   */
-
-  enum CORSMode {
-    /**
-     * The default of not using CORS to validate cross-origin loads.
-     */
-    CORS_NONE,
-
-    /**
-     * Validate cross-site loads using CORS, but do not send any credentials
-     * (cookies, HTTP auth logins, etc) along with the request.
-     */
-    CORS_ANONYMOUS,
-
-    /**
-     * Validate cross-site loads using CORS, and send credentials such as cookies
-     * and HTTP auth logins along with the request.
-     */
-    CORS_USE_CREDENTIALS
-  };
-
-  const static nsAttrValue::EnumTable kCORSAttributeTable[];
 
 protected:
   /**
@@ -637,18 +582,6 @@ protected:
     GetEventListenerManagerForAttr(nsIAtom* aAttrName, bool* aDefer);
 
   virtual const nsAttrName* InternalGetExistingAttrNameFromQName(const nsAString& aStr) const;
-
-  /**
-   * Helper method for NS_IMPL_STRING_ATTR macro.
-   * Gets the value of an attribute, returns empty string if
-   * attribute isn't set. Only works for attributes in null namespace.
-   *
-   * @param aAttr    name of attribute.
-   * @param aDefault default-value to return if attribute isn't set.
-   * @param aResult  result value [out]
-   * @result always NS_OK
-   */
-  NS_HIDDEN_(nsresult) GetAttrHelper(nsIAtom* aAttr, nsAString& aValue);
 
   /**
    * Helper method for NS_IMPL_STRING_ATTR macro.
@@ -727,19 +660,6 @@ protected:
   NS_HIDDEN_(nsresult) SetUnsignedIntAttr(nsIAtom* aAttr, PRUint32 aValue);
 
   /**
-   * Helper method for NS_IMPL_DOUBLE_ATTR macro.
-   * Gets the double-value of an attribute, returns specified default value
-   * if the attribute isn't set or isn't set to a double. Only works for
-   * attributes in null namespace.
-   *
-   * @param aAttr    name of attribute.
-   * @param aDefault default-value to return if attribute isn't set.
-   * @param aResult  result value [out]
-   */
-  NS_HIDDEN_(nsresult) GetDoubleAttr(nsIAtom* aAttr, double aDefault, double* aValue);
-
-  /**
-   * Helper method for NS_IMPL_DOUBLE_ATTR macro.
    * Sets value of attribute to specified double. Only works for attributes
    * in null namespace.
    *
@@ -747,14 +667,6 @@ protected:
    * @param aValue   Double value of attribute.
    */
   NS_HIDDEN_(nsresult) SetDoubleAttr(nsIAtom* aAttr, double aValue);
-
-  /**
-   * Helper for GetURIAttr and GetHrefURIForAnchors which returns an
-   * nsIURI in the out param.
-   *
-   * @return true if we had the attr, false otherwise.
-   */
-  NS_HIDDEN_(bool) GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsIURI** aURI) const;
 
   /**
    * This method works like GetURIAttr, except that it supports multiple
@@ -874,9 +786,6 @@ public:
   nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo> aNodeInfo);
   virtual ~nsGenericHTMLFormElement();
 
-  NS_DECL_AND_IMPL_DOM_MEMORY_REPORTER_SIZEOF(nsGenericHTMLFormElement,
-                                              nsGenericHTMLElement)
-
   NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
 
   virtual bool IsNodeOfType(PRUint32 aFlags) const;
@@ -955,8 +864,6 @@ protected:
 
   virtual nsresult AfterSetAttr(PRInt32 aNameSpaceID, nsIAtom* aName,
                                 const nsAttrValue* aValue, bool aNotify);
-
-  void UpdateEditableFormControlState(bool aNotify);
 
   /**
    * This method will update the form owner, using @form or looking to a parent.
@@ -1039,23 +946,6 @@ protected:
 PR_STATIC_ASSERT(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 1 < 32);
 
 //----------------------------------------------------------------------
-
-/**
- * A macro to implement the getter and setter for a given string
- * valued content property. The method uses the generic GetAttr and
- * SetAttr methods.
- */
-#define NS_IMPL_STRING_ATTR(_class, _method, _atom)                  \
-  NS_IMETHODIMP                                                      \
-  _class::Get##_method(nsAString& aValue)                            \
-  {                                                                  \
-    return GetAttrHelper(nsGkAtoms::_atom, aValue);                  \
-  }                                                                  \
-  NS_IMETHODIMP                                                      \
-  _class::Set##_method(const nsAString& aValue)                      \
-  {                                                                  \
-    return SetAttrHelper(nsGkAtoms::_atom, aValue);                  \
-  }
 
 /**
  * This macro is similar to NS_IMPL_STRING_ATTR except that the getter method
@@ -1155,26 +1045,6 @@ PR_STATIC_ASSERT(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 1 < 32);
       return NS_ERROR_DOM_INDEX_SIZE_ERR;                                 \
     }                                                                     \
     return SetUnsignedIntAttr(nsGkAtoms::_atom, aValue);                  \
-  }
-
-/**
- * A macro to implement the getter and setter for a given double-precision
- * floating point valued content property. The method uses GetDoubleAttr and
- * SetDoubleAttr methods.
- */
-#define NS_IMPL_DOUBLE_ATTR(_class, _method, _atom)                    \
-  NS_IMPL_DOUBLE_ATTR_DEFAULT_VALUE(_class, _method, _atom, 0.0)
-
-#define NS_IMPL_DOUBLE_ATTR_DEFAULT_VALUE(_class, _method, _atom, _default) \
-  NS_IMETHODIMP                                                             \
-  _class::Get##_method(double* aValue)                                      \
-  {                                                                         \
-    return GetDoubleAttr(nsGkAtoms::_atom, _default, aValue);               \
-  }                                                                         \
-  NS_IMETHODIMP                                                             \
-  _class::Set##_method(double aValue)                                       \
-  {                                                                         \
-    return SetDoubleAttr(nsGkAtoms::_atom, aValue);                         \
   }
 
 /**
@@ -1562,9 +1432,6 @@ PR_STATIC_ASSERT(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 1 < 32);
   } \
   NS_SCRIPTABLE NS_IMETHOD GetOffsetHeight(PRInt32* aOffsetHeight) { \
     return _to GetOffsetHeight(aOffsetHeight); \
-  } \
-  NS_SCRIPTABLE NS_IMETHOD MozRequestFullScreen() { \
-    return _to MozRequestFullScreen(); \
   }
 
 /**

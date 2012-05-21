@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_mozalloc_h
 #define mozilla_mozalloc_h
@@ -51,6 +18,10 @@
 #  include <new>
 #endif
 #include "xpcom-config.h"
+
+#if defined(__cplusplus)
+#include "mozilla/fallible.h"
+#endif
 
 #define MOZALLOC_HAVE_XMALLOC
 
@@ -146,7 +117,7 @@ MOZALLOC_EXPORT char* moz_strndup(const char* str, size_t strsize)
 #endif /* if defined(HAVE_STRNDUP) */
 
 
-#if defined(HAVE_POSIX_MEMALIGN) || defined(HAVE_JEMALLOC_POSIX_MEMALIGN)
+#if defined(HAVE_POSIX_MEMALIGN)
 MOZALLOC_EXPORT int moz_xposix_memalign(void **ptr, size_t alignment, size_t size)
     NS_WARN_UNUSED_RESULT;
 
@@ -155,7 +126,7 @@ MOZALLOC_EXPORT int moz_posix_memalign(void **ptr, size_t alignment, size_t size
 #endif /* if defined(HAVE_POSIX_MEMALIGN) */
 
 
-#if defined(HAVE_MEMALIGN) || defined(HAVE_JEMALLOC_MEMALIGN)
+#if defined(HAVE_MEMALIGN)
 MOZALLOC_EXPORT void* moz_xmemalign(size_t boundary, size_t size)
     NS_ATTR_MALLOC NS_WARN_UNUSED_RESULT;
 
@@ -164,7 +135,7 @@ MOZALLOC_EXPORT void* moz_memalign(size_t boundary, size_t size)
 #endif /* if defined(HAVE_MEMALIGN) */
 
 
-#if defined(HAVE_VALLOC) || defined(HAVE_JEMALLOC_VALLOC)
+#if defined(HAVE_VALLOC)
 MOZALLOC_EXPORT void* moz_xvalloc(size_t size)
     NS_ATTR_MALLOC NS_WARN_UNUSED_RESULT;
 
@@ -290,12 +261,6 @@ void operator delete[](void* ptr, const std::nothrow_t&) MOZALLOC_THROW_IF_HAS_E
  *   (3) the matching system |operator delete(void*, std::nothrow)|
  *   (4) the matching system |operator delete(void*) throw(std::bad_alloc)|
  */
-
-namespace mozilla {
-
-struct MOZALLOC_EXPORT fallible_t { };
-
-} /* namespace mozilla */
 
 MOZALLOC_INLINE
 void* operator new(size_t size, const mozilla::fallible_t&) MOZALLOC_THROW_IF_HAS_EXCEPTIONS

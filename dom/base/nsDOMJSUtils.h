@@ -1,9 +1,15 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #ifndef nsDOMJSUtils_h__
 #define nsDOMJSUtils_h__
 
 #include "jsapi.h"
 #include "nsIScriptContext.h"
+
+class nsIJSArgArray;
 
 // seems like overkill for just this 1 function - but let's see what else
 // falls out first.
@@ -50,6 +56,6 @@ GetScriptContextPrincipalFromJSContext(JSContext *cx)
 // rooted, but all items remain NULL.  This presumably means the caller will
 // then QI us for nsIJSArgArray, and set our array elements.
 nsresult NS_CreateJSArgv(JSContext *aContext, PRUint32 aArgc, void *aArgv,
-                         nsIArray **aArray);
+                         nsIJSArgArray **aArray);
 
 #endif // nsDOMJSUtils_h__

@@ -1,41 +1,8 @@
 /* -*- Mode: Java; tab-width: 4; indent-tabs-mode: t; c-basic-offset: 4 -*- */
 /* vim: set shiftwidth=4 tabstop=4 autoindent cindent noexpandtab: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is property_database.js.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation (original author)
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // True longhand properties.
 const CSS_TYPE_LONGHAND = 0;
@@ -250,16 +217,21 @@ var gCSSProperties = {
 						"repeat 27 27 27 27 / 10 10 10 / 10 10 url('border.png')",
 						"url('border.png') 27 27 27 27 / / 10 10 1em",
 						"fill 27 27 27 27 / / 10 10 1em url('border.png')",
-						"url('border.png') 27 27 27 27 /",
 						"url('border.png') 27 27 27 27 / 1em 1em 1em 1em repeat",
 						"url('border.png') 27 27 27 27 / 1em 1em 1em 1em stretch round" ],
 		invalid_values: [ "url('border.png') 27 27 27 27 27",
 						  "url('border.png') 27 27 27 27 / 1em 1em 1em 1em 1em",
+						  "url('border.png') 27 27 27 27 /",
 						  "url('border.png') fill",
 						  "url('border.png') fill repeat",
 						  "fill repeat",
 						  "url('border.png') fill / 1em",
-						  "url('border.png') / repeat" ]
+						  "url('border.png') / repeat",
+						  "url('border.png') 1 /",
+						  "url('border.png') 1 / /",
+						  "1 / url('border.png')",
+						  "url('border.png') / 1",
+						  "url('border.png') / / 1"]
 	},
 	"-moz-border-image-source": {
 		domProp: "MozBorderImageSource",
@@ -1018,7 +990,9 @@ var gCSSProperties = {
 			"translatex(-moz-max(5px,10%))",
 			"translate(10px, -moz-calc(min(5px,10%)))",
 			"translate(-moz-calc(max(5px,10%)), 10%)",
-			"matrix(1, 0, 0, 1, -moz-max(5px * 3), -moz-calc(10% - 3px))"
+			"matrix(1, 0, 0, 1, -moz-max(5px * 3), -moz-calc(10% - 3px))",
+			// Bug 734953
+			"skew(45deg)", "skew(45deg, 45deg)",
 		].concat(SpecialPowers.getBoolPref("layout.3d-transforms.enabled") ? [
             "perspective(0px)", "perspective(-10px)", "matrix3d(dinosaur)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15%, 16)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16px)", "rotatey(words)", "rotatex(7)", "translate3d(3px, 4px, 1px, 7px)"
 		] : [])
@@ -1606,14 +1580,23 @@ var gCSSProperties = {
 		domProp: "backgroundRepeat",
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
-		initial_values: [ "repeat" ],
+		initial_values: [ "repeat", "repeat repeat" ],
 		other_values: [ "repeat-x", "repeat-y", "no-repeat",
 			"repeat-x, repeat-x",
 			"repeat, no-repeat",
 			"repeat-y, no-repeat, repeat-y",
-			"repeat, repeat, repeat"
+			"repeat, repeat, repeat",
+			"repeat no-repeat",
+			"no-repeat repeat",
+			"no-repeat no-repeat",
+			"repeat repeat, repeat repeat",
 		],
-		invalid_values: [ "repeat repeat" ]
+		invalid_values: [ "repeat repeat repeat", 
+		                  "repeat-x repeat-y",
+		                  "repeat repeat-x", 
+		                  "repeat repeat-y",
+		                  "repeat-x repeat", 
+		                  "repeat-y repeat" ]
 	},
 	"background-size": {
 		domProp: "backgroundSize",
@@ -2030,8 +2013,19 @@ var gCSSProperties = {
 		inherited: true,
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "normal" ],
-		other_values: [ "'liga=1'", "\"liga=1\"", "'foo,bar=\"hello\"'" ],
-		invalid_values: [ "liga=1", "foo,bar=\"hello\"" ]
+		other_values: [
+			"'liga' on", "'liga'", "\"liga\" 1", "'liga', 'clig' 1",
+			"\"liga\" off", "\"liga\" 0", '"cv01" 3, "cv02" 4',
+			'"cswh", "smcp" off, "salt" 4', '"cswh" 1, "smcp" off, "salt" 4',
+			'"cswh" 0, \'blah\', "liga", "smcp" off, "salt" 4',
+			'"liga"        ,"smcp" 0         , "blah"'
+		],
+		invalid_values: [
+			'liga', 'liga 1', 'liga normal', '"liga" normal', 'normal liga', 
+			'normal "liga"', 'normal, "liga"', '"liga=1"', "'foobar' on",
+			'"blahblah" 0', '"liga" 3.14', '"liga" 1 3.14', '"liga" 1 normal',
+			'"liga" 1 off', '"liga" on off', '"liga" , 0 "smcp"', '"liga" "smcp"'
+		]
 	},
 	"-moz-font-language-override": {
 		domProp: "MozFontLanguageOverride",
@@ -2039,7 +2033,7 @@ var gCSSProperties = {
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "normal" ],
 		other_values: [ "'ENG'", "'TRK'", "\"TRK\"", "'N\\'Ko'" ],
-		invalid_values: [ "TRK" ]
+		invalid_values: [ "TRK", "ja" ]
 	},
 	"font-size": {
 		domProp: "fontSize",
@@ -2949,6 +2943,14 @@ var gCSSProperties = {
 			"-moz-calc(3em * 3em / 100%)"
 		]
 	},
+	"word-break": {
+		domProp: "wordBreak",
+		inherited: true,
+		type: CSS_TYPE_LONGHAND,
+		initial_values: [ "normal" ],
+		other_values: [ "break-all", "keep-all" ],
+		invalid_values: []
+	},
 	"word-spacing": {
 		domProp: "wordSpacing",
 		inherited: true,
@@ -3240,6 +3242,14 @@ var gCSSProperties = {
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "auto" ],
 		other_values: [ "optimizeSpeed", "optimizeLegibility", "geometricPrecision" ],
+		invalid_values: []
+	},
+	"vector-effect": {
+		domProp: "vectorEffect",
+		inherited: false,
+		type: CSS_TYPE_LONGHAND,
+		initial_values: [ "none" ],
+		other_values: [ "non-scaling-stroke" ],
 		invalid_values: []
 	}
 }

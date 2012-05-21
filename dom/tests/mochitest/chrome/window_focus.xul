@@ -491,7 +491,9 @@ function startTest()
   ok(gEvents === "", "focusing element that is already focused");
 
   $("t2").blur();
+  $("t7").blur();
   ok(gEvents === "", "blurring element that is not focused");
+  is(document.activeElement, $("t1"), "old element still focused after blur() on another element");
 
   // focus() method on elements that are not tabbable 
   for (idx = 1; idx <= kFocusSteps; idx++) {
@@ -537,8 +539,13 @@ function startTest()
     gLastFocusMethod = (key == "D" || key == "G") ? fm.FLAG_BYMOVEFOCUS : fm.FLAG_BYKEY;
 
     // on Windows and Linux, the shift key must be pressed for content area access keys
-    if (navigator.platform.indexOf("Mac") == -1)
-      accessKeyDetails.shiftKey = (getById(keys[k]).ownerDocument.defaultView == gChildWindow);
+    // and on Mac, the alt key must be pressed for content area access keys
+    var isContent = (getById(keys[k]).ownerDocument.defaultView == gChildWindow);
+    if (navigator.platform.indexOf("Mac") == -1) {
+      accessKeyDetails.shiftKey = isContent;
+    } else {
+      accessKeyDetails.altKey = isContent;
+    }
 
     expectFocusShift(function () synthesizeKey(key, accessKeyDetails),
                      null, getById(keys[k]), true, "accesskey " + key);

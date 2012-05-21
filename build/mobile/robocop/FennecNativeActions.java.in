@@ -1,62 +1,35 @@
 #filter substitution
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Firefox Mobile Test Framework.
- *
- * The Initial Developer of the Original Code is Mozilla.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- * Trevor Fairey <tnfairey@gmail.com>
- * David Burns <dburns@mozilla.com>
- * Joel Maher <joel.maher@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 package @ANDROID_PACKAGE_NAME@;
 
 import java.lang.Class;
+import java.lang.ClassLoader;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.InvocationHandler;
 import java.lang.Long;
+import java.util.concurrent.SynchronousQueue;
+import java.util.ArrayList;
 
 import android.app.Activity;
+import android.content.Context;
 import android.app.Instrumentation;
+import android.database.Cursor;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.KeyEvent;
-
-import java.util.concurrent.SynchronousQueue;
+import android.util.Log;
 
 import org.json.*;
 
 import com.jayway.android.robotium.solo.Solo;
+
+import static @ANDROID_PACKAGE_NAME@.FennecNativeDriver.LogLevel;
 
 public class FennecNativeActions implements Actions {
     private Solo mSolo;
@@ -74,6 +47,7 @@ public class FennecNativeActions implements Actions {
     private Method mSendGE;
     private Method mGetLayerClient;
     private Method mSetDrawListener;
+    private static final String LOGTAG = "FennecNativeActions";
 
     public FennecNativeActions(Activity activity, Solo robocop, Instrumentation instrumentation) {
         mSolo = robocop;
@@ -94,19 +68,19 @@ public class FennecNativeActions implements Actions {
             parameters[0] = mGe;
             mSendGE = mGas.getMethod("sendEventToGecko", parameters);
 
-            mGetLayerClient = activity.getClass().getMethod("getSoftwareLayerClient");
-            Class gslc = mClassLoader.loadClass("org.mozilla.gecko.gfx.GeckoSoftwareLayerClient");
-            mDrawListener = mClassLoader.loadClass("org.mozilla.gecko.gfx.GeckoSoftwareLayerClient$DrawListener");
+            mGetLayerClient = activity.getClass().getMethod("getLayerClient");
+            Class gslc = mClassLoader.loadClass("org.mozilla.gecko.gfx.GeckoLayerClient");
+            mDrawListener = mClassLoader.loadClass("org.mozilla.gecko.gfx.GeckoLayerClient$DrawListener");
             mSetDrawListener = gslc.getDeclaredMethod("setDrawListener", mDrawListener);
-         } catch (ClassNotFoundException e) {
-             e.printStackTrace();
-         } catch (SecurityException e) {
-             e.printStackTrace();
-         } catch (NoSuchMethodException e) {
-             e.printStackTrace();
-         } catch (IllegalArgumentException e) {
-             e.printStackTrace();
-         }
+        } catch (ClassNotFoundException e) {
+            FennecNativeDriver.log(LogLevel.ERROR, e);
+        } catch (SecurityException e) {
+            FennecNativeDriver.log(LogLevel.ERROR, e);
+        } catch (NoSuchMethodException e) {
+            FennecNativeDriver.log(LogLevel.ERROR, e);
+        } catch (IllegalArgumentException e) {
+            FennecNativeDriver.log(LogLevel.ERROR, e);
+        }
     }
 
     class wakeInvocationHandler implements InvocationHandler {
@@ -131,7 +105,7 @@ public class FennecNativeActions implements Actions {
             if(methodName.equals("hashCode")) {
                 return 314;
             }
-            FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_DEBUG, 
+            FennecNativeDriver.log(FennecNativeDriver.LogLevel.DEBUG, 
                 "Waking up on "+methodName);
             mEventExpecter.notifyOfEvent();
             return null;
@@ -153,11 +127,11 @@ public class FennecNativeActions implements Actions {
                 try {
                     this.wait();
                 } catch (InterruptedException ie) {
-                    ie.printStackTrace();
+                    FennecNativeDriver.log(LogLevel.ERROR, ie);
                     break;
                 }
             }
-            FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_DEBUG,
+            FennecNativeDriver.log(FennecNativeDriver.LogLevel.DEBUG,
                 "unblocked on expecter for " + mGeckoEvent);
         }
 
@@ -169,11 +143,11 @@ public class FennecNativeActions implements Actions {
             try {
                 mUnregisterGEL.invoke(null, mRegistrationParams);
             } catch (IllegalAccessException e) {
-                e.printStackTrace();
+                FennecNativeDriver.log(LogLevel.ERROR, e);
             } catch (InvocationTargetException e) {
-                e.printStackTrace();
+                FennecNativeDriver.log(LogLevel.ERROR, e);
             }
-            FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_DEBUG,
+            FennecNativeDriver.log(FennecNativeDriver.LogLevel.DEBUG,
                 "received event " + mGeckoEvent);
             synchronized (this) {
                 mEventReceived = true;
@@ -183,7 +157,7 @@ public class FennecNativeActions implements Actions {
     }
     
     public EventExpecter expectGeckoEvent(String geckoEvent) {
-        FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_DEBUG,
+        FennecNativeDriver.log(FennecNativeDriver.LogLevel.DEBUG,
             "waiting for "+geckoEvent);
         try {
             Class [] interfaces = new Class[1];
@@ -199,9 +173,9 @@ public class FennecNativeActions implements Actions {
             
             return expecter;
         } catch (IllegalAccessException e) {
-            e.printStackTrace();
+            FennecNativeDriver.log(LogLevel.ERROR, e);
         } catch (InvocationTargetException e) {
-            e.printStackTrace();
+            FennecNativeDriver.log(LogLevel.ERROR, e);
         }
         return null;
     }
@@ -216,7 +190,7 @@ public class FennecNativeActions implements Actions {
         public Object invoke(Object proxy, Method method, Object[] args) {
             String methodName = method.getName();
             if ("drawFinished".equals(methodName)) {
-                FennecNativeDriver.log(FennecNativeDriver.LogLevel.LOG_LEVEL_DEBUG,
+                FennecNativeDriver.log(FennecNativeDriver.LogLevel.DEBUG,
                     "Received drawFinished notification");
                 mPaintExpecter.notifyOfEvent();
             } else if ("toString".equals(methodName)) {
@@ -251,14 +225,14 @@ public class FennecNativeActions implements Actions {
                 try {
                     this.wait();
                 } catch (InterruptedException ie) {
-                    ie.printStackTrace();
+                    FennecNativeDriver.log(LogLevel.ERROR, ie);
                     break;
                 }
             }
             try {
                 mSetDrawListener.invoke(mLayerClient, (Object)null);
             } catch (Exception e) {
-                e.printStackTrace();
+                FennecNativeDriver.log(LogLevel.ERROR, e);
             }
         }
 
@@ -275,7 +249,7 @@ public class FennecNativeActions implements Actions {
                 try {
                     this.wait();
                 } catch (InterruptedException ie) {
-                    ie.printStackTrace();
+                    FennecNativeDriver.log(LogLevel.ERROR, ie);
                     break;
                 }
             }
@@ -285,7 +259,7 @@ public class FennecNativeActions implements Actions {
                 try {
                     this.wait(millis);
                 } catch (InterruptedException ie) {
-                    ie.printStackTrace();
+                    FennecNativeDriver.log(LogLevel.ERROR, ie);
                     break;
                 }
                 long endTime = SystemClock.uptimeMillis();
@@ -299,7 +273,7 @@ public class FennecNativeActions implements Actions {
             try {
                 mSetDrawListener.invoke(mLayerClient, (Object)null);
             } catch (Exception e) {
-                e.printStackTrace();
+                FennecNativeDriver.log(LogLevel.ERROR, e);
             }
         }
     }
@@ -308,7 +282,7 @@ public class FennecNativeActions implements Actions {
         try {
             return new PaintExpecter();
         } catch (Exception e) {
-            e.printStackTrace();
+            FennecNativeDriver.log(LogLevel.ERROR, e);
             return null;
         }
     }
@@ -348,5 +322,37 @@ public class FennecNativeActions implements Actions {
 
     public void drag(int startingX, int endingX, int startingY, int endingY) {
         mSolo.drag(startingX, endingX, startingY, endingY, 10);
+    }
+
+    public Cursor querySql(String dbPath, String sql) {
+        try {
+            ClassLoader classLoader = mGeckoApp.getClassLoader();
+            Class sqlClass = classLoader.loadClass("org.mozilla.gecko.sqlite.SQLiteBridge");
+            Class stringClass = String.class;
+            Class stringArrayClass = String[].class;
+            Class appshell = classLoader.loadClass("org.mozilla.gecko.GeckoAppShell");
+            Class contextClass = Context.class;
+    
+            Constructor bridgeConstructor = sqlClass.getConstructor(stringClass);
+            Method query = sqlClass.getMethod("rawQuery", stringClass, stringArrayClass);
+            Method loadSQLiteLibs = appshell.getMethod("loadSQLiteLibs", contextClass, stringClass);
+    
+            Object bridge = bridgeConstructor.newInstance(dbPath);
+    
+            String resourcePath = mGeckoApp.getApplication().getPackageResourcePath();
+            loadSQLiteLibs.invoke(null, mGeckoApp, resourcePath);
+            return (Cursor)query.invoke(bridge, sql, null);
+        } catch(ClassNotFoundException ex) {
+            Log.e(LOGTAG, "Error getting class", ex);
+        } catch(NoSuchMethodException ex) {
+            Log.e(LOGTAG, "Error getting method", ex);
+        } catch(InvocationTargetException ex) {
+            Log.e(LOGTAG, "Error invoking method", ex);
+        } catch(InstantiationException ex) {
+            Log.e(LOGTAG, "Error calling constructor", ex);
+        } catch(IllegalAccessException ex) {
+            Log.e(LOGTAG, "Error using field", ex);
+        }
+        return null;
     }
 }

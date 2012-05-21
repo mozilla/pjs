@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=78:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey global object code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jeff Walden <jwalden+code@mit.edu> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GlobalObject_h___
 #define GlobalObject_h___
@@ -49,7 +16,6 @@
 #include "jsfun.h"
 #include "jsiter.h"
 #include "jsnum.h"
-#include "jstypedarray.h"
 
 #include "js/Vector.h"
 
@@ -60,6 +26,9 @@ js_InitObjectClass(JSContext *cx, JSObject *obj);
 
 extern JSObject *
 js_InitFunctionClass(JSContext *cx, JSObject *obj);
+
+extern JSObject *
+js_InitTypedArrayClasses(JSContext *cx, JSObject *obj);
 
 namespace js {
 
@@ -92,28 +61,26 @@ class Debugger;
  * even deletable) Object, Array, &c. properties (although a slot won't be used
  * again if its property is deleted and readded).
  */
-class GlobalObject : public JSObject {
-    GlobalObject(const GlobalObject &other) MOZ_DELETE;
-    void operator=(const GlobalObject &other) MOZ_DELETE;
-
+class GlobalObject : public JSObject
+{
     /*
      * Count of slots to store built-in constructors, prototypes, and initial
      * visible properties for the constructors.
      */
-    static const uintN STANDARD_CLASS_SLOTS  = JSProto_LIMIT * 3;
+    static const unsigned STANDARD_CLASS_SLOTS  = JSProto_LIMIT * 3;
 
     /* One-off properties stored after slots for built-ins. */
-    static const uintN THROWTYPEERROR          = STANDARD_CLASS_SLOTS;
-    static const uintN GENERATOR_PROTO         = THROWTYPEERROR + 1;
-    static const uintN REGEXP_STATICS          = GENERATOR_PROTO + 1;
-    static const uintN FUNCTION_NS             = REGEXP_STATICS + 1;
-    static const uintN RUNTIME_CODEGEN_ENABLED = FUNCTION_NS + 1;
-    static const uintN EVAL                    = RUNTIME_CODEGEN_ENABLED + 1;
-    static const uintN FLAGS                   = EVAL + 1;
-    static const uintN DEBUGGERS               = FLAGS + 1;
+    static const unsigned THROWTYPEERROR          = STANDARD_CLASS_SLOTS;
+    static const unsigned GENERATOR_PROTO         = THROWTYPEERROR + 1;
+    static const unsigned REGEXP_STATICS          = GENERATOR_PROTO + 1;
+    static const unsigned FUNCTION_NS             = REGEXP_STATICS + 1;
+    static const unsigned RUNTIME_CODEGEN_ENABLED = FUNCTION_NS + 1;
+    static const unsigned EVAL                    = RUNTIME_CODEGEN_ENABLED + 1;
+    static const unsigned FLAGS                   = EVAL + 1;
+    static const unsigned DEBUGGERS               = FLAGS + 1;
 
     /* Total reserved-slot count for global objects. */
-    static const uintN RESERVED_SLOTS = DEBUGGERS + 1;
+    static const unsigned RESERVED_SLOTS = DEBUGGERS + 1;
 
     void staticAsserts() {
         /*
@@ -199,7 +166,7 @@ class GlobalObject : public JSObject {
      * ctor, a method which creates objects with the given class.
      */
     JSFunction *
-    createConstructor(JSContext *cx, JSNative ctor, Class *clasp, JSAtom *name, uintN length,
+    createConstructor(JSContext *cx, JSNative ctor, JSAtom *name, unsigned length,
                       gc::AllocKind kind = JSFunction::FinalizeKind);
 
     /*
@@ -298,7 +265,7 @@ class GlobalObject : public JSObject {
         return &self->getPrototype(JSProto_ArrayBuffer).toObject();
     }
 
-    JSObject *getOrCreateCustomErrorPrototype(JSContext *cx, intN exnType) {
+    JSObject *getOrCreateCustomErrorPrototype(JSContext *cx, int exnType) {
         GlobalObject *self = this;
         JSProtoKey key = GetExceptionProtoKey(exnType);
         if (!errorClassesInitialized()) {
@@ -342,8 +309,8 @@ class GlobalObject : public JSObject {
 
     bool getFunctionNamespace(JSContext *cx, Value *vp);
 
-    bool initGeneratorClass(JSContext *cx);
-    bool initStandardClasses(JSContext *cx);
+    static bool initGeneratorClass(JSContext *cx, Handle<GlobalObject*> global);
+    static bool initStandardClasses(JSContext *cx, Handle<GlobalObject*> global);
 
     typedef js::Vector<js::Debugger *, 0, js::SystemAllocPolicy> DebuggerVector;
 
@@ -357,9 +324,9 @@ class GlobalObject : public JSObject {
      * The same, but create the empty vector if one does not already
      * exist. Returns NULL only on OOM.
      */
-    DebuggerVector *getOrCreateDebuggers(JSContext *cx);
+    static DebuggerVector *getOrCreateDebuggers(JSContext *cx, Handle<GlobalObject*> global);
 
-    bool addDebugger(JSContext *cx, Debugger *dbg);
+    static bool addDebugger(JSContext *cx, Handle<GlobalObject*> global, Debugger *dbg);
 };
 
 /*

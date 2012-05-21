@@ -1,44 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Places Command Controller.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Goodger <beng@google.com>
- *   Myk Melez <myk@mozilla.org>
- *   Asaf Romano <mano@mozilla.com>
- *   Sungjoon Steve Won <stevewon@gmail.com>
- *   Dietrich Ayala <dietrich@mozilla.com>
- *   Marco Bonardo <mak77@bonardo.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const EXPORTED_SYMBOLS = [
   "PlacesUtils"
@@ -55,8 +18,6 @@ const EXPORTED_SYMBOLS = [
 , "PlacesSetPageAnnotationTransaction"
 , "PlacesEditBookmarkKeywordTransaction"
 , "PlacesEditBookmarkPostDataTransaction"
-, "PlacesEditLivemarkSiteURITransaction"
-, "PlacesEditLivemarkFeedURITransaction"
 , "PlacesEditItemDateAddedTransaction"
 , "PlacesEditItemLastModifiedTransaction"
 , "PlacesSortFolderByNameTransaction"
@@ -87,7 +48,7 @@ XPCOMUtils.defineLazyGetter(this, "NetUtil", function() {
 const MIN_TRANSACTIONS_FOR_BATCH = 5;
 
 // The RESTORE_*_NSIOBSERVER_TOPIC constants should match the #defines of the
-// same names in browser/components/places/src/nsPlacesImportExportService.cpp
+// same names in browser/components/places/src/nsPlacesExportService.cpp
 const RESTORE_BEGIN_NSIOBSERVER_TOPIC = "bookmarks-restore-begin";
 const RESTORE_SUCCESS_NSIOBSERVER_TOPIC = "bookmarks-restore-success";
 const RESTORE_FAILED_NSIOBSERVER_TOPIC = "bookmarks-restore-failed";
@@ -133,12 +94,8 @@ var PlacesUtils = {
   TYPE_X_MOZ_PLACE_ACTION: "text/x-moz-place-action",
 
   EXCLUDE_FROM_BACKUP_ANNO: "places/excludeFromBackup",
-  GUID_ANNO: "placesInternal/GUID",
   LMANNO_FEEDURI: "livemark/feedURI",
   LMANNO_SITEURI: "livemark/siteURI",
-  LMANNO_EXPIRATION: "livemark/expiration",
-  LMANNO_LOADFAILED: "livemark/loadfailed",
-  LMANNO_LOADING: "livemark/loading",
   POST_DATA_ANNO: "bookmarkProperties/POSTData",
   READ_ONLY_ANNO: "placesInternal/READ_ONLY",
 
@@ -318,7 +275,9 @@ var PlacesUtils = {
     switch (aTopic) {
       case this.TOPIC_SHUTDOWN:
         Services.obs.removeObserver(this, this.TOPIC_SHUTDOWN);
-        this._shutdownFunctions.forEach(function (aFunc) aFunc.apply(this), this);
+        while (this._shutdownFunctions.length > 0) {
+          this._shutdownFunctions.shift().apply(this);
+        }
         if (this._bookmarksServiceObserversQueue.length > 0) {
           // Since we are shutting down, there's no reason to add the observers.
           this._bookmarksServiceObserversQueue.length = 0;
@@ -327,8 +286,8 @@ var PlacesUtils = {
       case "bookmarks-service-ready":
         this._bookmarksServiceReady = true;
         while (this._bookmarksServiceObserversQueue.length > 0) {
-          let observer = this._bookmarksServiceObserversQueue.shift();
-          this.bookmarks.addObserver(observer, false);
+          let observerInfo = this._bookmarksServiceObserversQueue.shift();
+          this.bookmarks.addObserver(observerInfo.observer, observerInfo.weak);
         }
         break;
     }
@@ -497,8 +456,13 @@ var PlacesUtils = {
    * @param aItemId
    *        The id of the potential livemark.
    * @returns true if the item is a livemark.
+   * @deprecated see the new API in mozIAsyncLivemarks.
    */
   itemIsLivemark: function PU_itemIsLivemark(aItemId) {
+    Cu.reportError("Synchronous livemarks methods and PlacesUtils livemarks " +
+                   "utils (itemIsLivemark, nodeIsLivemarkContainer, " +
+                   "nodeIsLivemarkItem) are deprecated and will be removed " +
+                   "in a future release.");
     // If the Livemark service hasn't yet been initialized then
     // use the annotations service directly to avoid instanciating
     // it on startup. (bug 398300)
@@ -513,6 +477,7 @@ var PlacesUtils = {
    * @param aNode
    *        A result Node
    * @returns true if the node is a livemark container item
+   * @deprecated see the new API in mozIAsyncLivemarks.
    */
   nodeIsLivemarkContainer: function PU_nodeIsLivemarkContainer(aNode) {
     return this.nodeIsFolder(aNode) && this.itemIsLivemark(aNode.itemId);
@@ -523,6 +488,7 @@ var PlacesUtils = {
   * @param aNode
   *        A result node
   * @returns true if the node is a livemark container item
+   * @deprecated see the new API in mozIAsyncLivemarks.
   */
   nodeIsLivemarkItem: function PU_nodeIsLivemarkItem(aNode) {
     return aNode.parent && this.nodeIsLivemarkContainer(aNode.parent);
@@ -588,6 +554,22 @@ var PlacesUtils = {
       return [cNode, false];
     }
 
+    function gatherLivemarkUrl(aNode) {
+      try {
+        return PlacesUtils.annotations.getItemAnnotation(aNode.itemId,
+                                                         this.LMANNO_SITEURI);
+      } catch (ex) {
+        return PlacesUtils.annotations.getItemAnnotation(aNode.itemId,
+                                                         this.LMANNO_FEEDURI);
+      }
+    }
+
+    function isLivemark(aNode) {
+      return PlacesUtils.nodeIsFolder(aNode) &&
+             PlacesUtils.annotations.itemHasAnnotation(aNode.itemId,
+                                                       this.LMANNO_FEEDURI);
+    }
+
     switch (aType) {
       case this.TYPE_X_MOZ_PLACE:
       case this.TYPE_X_MOZ_PLACE_SEPARATOR:
@@ -608,11 +590,10 @@ var PlacesUtils = {
       }
       case this.TYPE_X_MOZ_URL: {
         function gatherDataUrl(bNode) {
-          if (PlacesUtils.nodeIsLivemarkContainer(bNode)) {
-            let uri = PlacesUtils.livemarks.getSiteURI(bNode.itemId) ||
-                      PlacesUtils.livemarks.getFeedURI(bNode.itemId);
-            return uri.spec + NEWLINE + bNode.title;
+          if (isLivemark(bNode)) {
+            return gatherLivemarkUrl(bNode) + NEWLINE + bNode.title;
           }
+
           if (PlacesUtils.nodeIsURI(bNode))
             return (aOverrideURI || bNode.uri) + NEWLINE + bNode.title;
           // ignore containers and separators - items without valid URIs
@@ -638,11 +619,11 @@ var PlacesUtils = {
           }
           // escape out potential HTML in the title
           let escapedTitle = bNode.title ? htmlEscape(bNode.title) : "";
-          if (PlacesUtils.nodeIsLivemarkContainer(bNode)) {
-            let uri = PlacesUtils.livemarks.getSiteURI(bNode.itemId) ||
-                      PlacesUtils.livemarks.getFeedURI(bNode.itemId);
-            return "<A HREF=\"" + uri.spec + "\">" + escapedTitle + "</A>" + NEWLINE;
+
+          if (isLivemark(bNode)) {
+            return "<A HREF=\"" + gatherLivemarkUrl(bNode) + "\">" + escapedTitle + "</A>" + NEWLINE;
           }
+
           if (PlacesUtils.nodeIsContainer(bNode)) {
             asContainer(bNode);
             let wasOpen = bNode.containerOpen;
@@ -678,9 +659,10 @@ var PlacesUtils = {
 
     // Otherwise, we wrap as TYPE_UNICODE.
     function gatherDataText(bNode) {
-      if (PlacesUtils.nodeIsLivemarkContainer(bNode))
-        return PlacesUtils.livemarks.getSiteURI(bNode.itemId) ||
-               PlacesUtils.livemarks.getFeedURI(bNode.itemId);
+      if (isLivemark(bNode)) {
+        return gatherLivemarkUrl(bNode);
+      }
+
       if (PlacesUtils.nodeIsContainer(bNode)) {
         asContainer(bNode);
         let wasOpen = bNode.containerOpen;
@@ -1040,8 +1022,7 @@ var PlacesUtils = {
   },
 
   /**
-   * Get all bookmarks for a URL, excluding items under tag or livemark
-   * containers.
+   * Get all bookmarks for a URL, excluding items under tags.
    */
   getBookmarksForURI:
   function PU_getBookmarksForURI(aURI) {
@@ -1050,9 +1031,6 @@ var PlacesUtils = {
     // filter the ids list
     return bmkIds.filter(function(aID) {
       var parentId = this.bookmarks.getFolderIdForItem(aID);
-      // Livemark child
-      if (this.itemIsLivemark(parentId))
-        return false;
       var grandparentId = this.bookmarks.getFolderIdForItem(parentId);
       // item under a tag container
       if (grandparentId == this.tagsFolderId)
@@ -1063,7 +1041,7 @@ var PlacesUtils = {
 
   /**
    * Get the most recently added/modified bookmark for a URL, excluding items
-   * under tag or livemark containers.
+   * under tags.
    *
    * @param aURI
    *        nsIURI of the page we will look for.
@@ -1084,39 +1062,9 @@ var PlacesUtils = {
         return itemId;
 
       var grandparentId = this.bookmarks.getFolderIdForItem(parentId);
-      if (grandparentId != this.tagsFolderId &&
-          !this.itemIsLivemark(parentId))
+      if (grandparentId != this.tagsFolderId)
         return itemId;
     }
-    return -1;
-  },
-
-  /**
-   * Get the most recent folder item id for a feed URI.
-   *
-   * @param aURI
-   *        nsIURI of the feed we will look for.
-   * @returns folder item id of the found livemark, or -1 if nothing is found.
-   */
-  getMostRecentFolderForFeedURI:
-  function PU_getMostRecentFolderForFeedURI(aFeedURI) {
-    // If the Livemark service hasn't yet been initialized then
-    // use the annotations service directly to avoid instanciating
-    // it on startup. (bug 398300)
-    if (Object.getOwnPropertyDescriptor(this, "livemarks").value === undefined) {
-      var feedSpec = aFeedURI.spec
-      var annosvc = this.annotations;
-      var livemarks = annosvc.getItemsWithAnnotation(this.LMANNO_FEEDURI);
-      for (var i = 0; i < livemarks.length; i++) {
-        if (annosvc.getItemAnnotation(livemarks[i], this.LMANNO_FEEDURI) == feedSpec)
-          return livemarks[i];
-      }
-    }
-    else {
-      // If the livemark service has already been instanciated, use it.
-      return this.livemarks.getLivemarkIdForFeedURI(aFeedURI);
-    }
-
     return -1;
   },
 
@@ -1399,20 +1347,30 @@ var PlacesUtils = {
               case this.LMANNO_SITEURI:
                 siteURI = this._uri(aAnno.value);
                 return false;
-              case this.LMANNO_EXPIRATION:
-              case this.LMANNO_LOADING:
-              case this.LMANNO_LOADFAILED:
-                return false;
               default:
                 return true;
             }
           }, this);
 
           if (feedURI) {
-            id = this.livemarks.createLivemarkFolderOnly(aContainer,
-                                                         aData.title,
-                                                         siteURI, feedURI,
-                                                         aIndex);
+            this.livemarks.addLivemark(
+              { title: aData.title
+              , feedURI: feedURI
+              , parentId: aContainer
+              , index: aIndex
+              , lastModified: aData.lastModified
+              , siteURI: siteURI
+              },
+              (function(aStatus, aLivemark) {
+                if (Components.isSuccessCode(aStatus)) {
+                  let id = aLivemark.id;
+                  if (aData.dateAdded)
+                    this.bookmarks.setItemDateAdded(id, aData.dateAdded);
+                  if (aData.annos && aData.annos.length)
+                    this.setAnnotationsForItem(id, aData.annos);
+                }
+              }).bind(this)
+            );
           }
         }
         else {
@@ -2086,11 +2044,6 @@ var PlacesUtils = {
       + "FROM moz_bookmarks b "
       + "JOIN moz_places h on h.id = b.fk "
       + "WHERE h.url = :url "
-      +   "AND NOT EXISTS( "
-      +     "SELECT 1 FROM moz_items_annos a "
-      +     "JOIN moz_anno_attributes n ON a.anno_attribute_id = n.id "
-      +     "WHERE a.item_id = b.parent AND n.name = :name "
-      +   ") "
       );
       this.registerShutdownFunction(function () {
         this._asyncGetBookmarksStmt.finalize();
@@ -2099,7 +2052,6 @@ var PlacesUtils = {
 
     let url = aURI instanceof Ci.nsIURI ? aURI.spec : aURI;
     this._asyncGetBookmarksStmt.params.url = url;
-    this._asyncGetBookmarksStmt.params.name = this.LMANNO_FEEDURI;
 
     // Storage does not guarantee that invoking cancel() on a statement
     // will cause a REASON_CANCELED.  Thus we wrap the statement.
@@ -2127,6 +2079,9 @@ var PlacesUtils = {
    *
    * @param aObserver
    *        Object implementing nsINavBookmarkObserver
+   * @param [optional]aWeakOwner
+   *        Whether to use weak ownership.
+   *
    * @note Correct functionality of lazy observers relies on the fact Places
    *       notifies categories before real observers, and uses
    *       PlacesCategoriesStarter component to kick-off the registration.
@@ -2134,12 +2089,13 @@ var PlacesUtils = {
   _bookmarksServiceReady: false,
   _bookmarksServiceObserversQueue: [],
   addLazyBookmarkObserver:
-  function PU_addLazyBookmarkObserver(aObserver) {
+  function PU_addLazyBookmarkObserver(aObserver, aWeakOwner) {
     if (this._bookmarksServiceReady) {
-      this.bookmarks.addObserver(aObserver, false);
+      this.bookmarks.addObserver(aObserver, aWeakOwner === true);
       return;
     }
-    this._bookmarksServiceObserversQueue.push(aObserver);
+    this._bookmarksServiceObserversQueue.push({ observer: aObserver,
+                                                weak: aWeakOwner === true });
   },
 
   /**
@@ -2151,14 +2107,19 @@ var PlacesUtils = {
   removeLazyBookmarkObserver:
   function PU_removeLazyBookmarkObserver(aObserver) {
     if (this._bookmarksServiceReady) {
-      this.bookmarks.removeObserver(aObserver, false);
+      this.bookmarks.removeObserver(aObserver);
       return;
     }
-    let index = this._bookmarksServiceObserversQueue.indexOf(aObserver);
+    let index = -1;
+    for (let i = 0;
+         i < this._bookmarksServiceObserversQueue.length && index == -1; i++) {
+      if (this._bookmarksServiceObserversQueue[i].observer === aObserver)
+        index = i;
+    }
     if (index != -1) {
       this._bookmarksServiceObserversQueue.splice(index, 1);
     }
-  },
+  }
 };
 
 /**
@@ -2200,6 +2161,10 @@ XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "history",
                                    "@mozilla.org/browser/nav-history-service;1",
                                    "nsINavHistoryService");
 
+XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "asyncHistory",
+                                   "@mozilla.org/browser/history;1",
+                                   "mozIAsyncHistory");
+
 XPCOMUtils.defineLazyGetter(PlacesUtils, "bhistory", function() {
   return PlacesUtils.history.QueryInterface(Ci.nsIBrowserHistory);
 });
@@ -2224,13 +2189,15 @@ XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "tagging",
                                    "@mozilla.org/browser/tagging-service;1",
                                    "nsITaggingService");
 
-XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "livemarks",
-                                   "@mozilla.org/browser/livemark-service;2",
-                                   "nsILivemarkService");
+XPCOMUtils.defineLazyGetter(PlacesUtils, "livemarks", function() {
+  return Cc["@mozilla.org/browser/livemark-service;2"].
+         getService(Ci.nsILivemarkService).
+         QueryInterface(Ci.mozIAsyncLivemarks);
+});
 
 XPCOMUtils.defineLazyGetter(PlacesUtils, "transactionManager", function() {
   let tm = Cc["@mozilla.org/transactionmanager;1"].
-           getService(Ci.nsITransactionManager);
+           createInstance(Ci.nsITransactionManager);
   tm.AddListener(PlacesUtils);
   this.registerShutdownFunction(function () {
     // Clear all references to local transactions in the transaction manager,
@@ -2238,7 +2205,26 @@ XPCOMUtils.defineLazyGetter(PlacesUtils, "transactionManager", function() {
     this.transactionManager.RemoveListener(this);
     this.transactionManager.clear();
   });
-  return tm;
+
+  // Bug 750269
+  // The transaction manager keeps strong references to transactions, and by
+  // that, also to the global for each transaction.  A transaction, however,
+  // could be either the transaction itself (for which the global is this
+  // module) or some js-proxy in another global, usually a window.  The later
+  // would leak because the transaction lifetime (in the manager's stacks)
+  // is independent of the global from which doTransaction was called.
+  // To avoid such a leak, we hide the native doTransaction from callers,
+  // and let each doTransaction call go through this module.
+  // Doing so ensures that, as long as the transaction is any of the
+  // PlacesXXXTransaction objects declared in this module, the object
+  // referenced by the transaction manager has the module itself as global.
+  return Object.create(tm, {
+    "doTransaction": {
+      value: function(aTransaction) {
+        tm.doTransaction(aTransaction);
+      }
+    }
+  });
 });
 
 XPCOMUtils.defineLazyGetter(this, "bundle", function() {
@@ -2290,7 +2276,6 @@ TransactionItemCache.prototype = {
     this._parentId || -1,
   keyword: null,
   title: null,
-  guid: null,
   dateAdded: null,
   lastModified: null,
   postData: null,
@@ -2474,9 +2459,6 @@ PlacesCreateFolderTransaction.prototype = {
                                                 this.childTransactions);
       txn.doTransaction();
     }
-
-    if (this.item.guid)
-      PlacesUtils.bookmarks.setItemGUID(this.item.id, this.item.guid);
   },
 
   undoTransaction: function CFTXN_undoTransaction()
@@ -2486,11 +2468,6 @@ PlacesCreateFolderTransaction.prototype = {
                                                 this.childTransactions);
       txn.undoTransaction();
     }
-
-    // If a GUID exists for this item, preserve it before removing the item.
-    if (PlacesUtils.annotations.itemHasAnnotation(this.item.id,
-                                                  PlacesUtils.GUID_ANNO))
-      this.item.guid = PlacesUtils.bookmarks.getItemGUID(this.item.id);
 
     // Remove item only after all child transactions have been reverted.
     PlacesUtils.bookmarks.removeItem(this.item.id);
@@ -2562,8 +2539,6 @@ PlacesCreateBookmarkTransaction.prototype = {
                                                 this.childTransactions);
       txn.doTransaction();
     }
-    if (this.item.guid)
-      PlacesUtils.bookmarks.setItemGUID(this.item.id, this.item.guid);
   },
 
   undoTransaction: function CITXN_undoTransaction()
@@ -2574,11 +2549,6 @@ PlacesCreateBookmarkTransaction.prototype = {
                                                 this.childTransactions);
       txn.undoTransaction();
     }
-
-    // If a GUID exists for this item, preserve it before removing the item.
-    if (PlacesUtils.annotations
-                   .itemHasAnnotation(this.item.id, PlacesUtils.GUID_ANNO))
-      this.item.guid = PlacesUtils.bookmarks.getItemGUID(this.item.id);
 
     // Remove item only after all child transactions have been reverted.
     PlacesUtils.bookmarks.removeItem(this.item.id);
@@ -2610,17 +2580,10 @@ PlacesCreateSeparatorTransaction.prototype = {
   {
     this.item.id =
       PlacesUtils.bookmarks.insertSeparator(this.item.parentId, this.item.index);
-    if (this.item.guid)
-      PlacesUtils.bookmarks.setItemGUID(this.item.id, this.item.guid);
   },
 
   undoTransaction: function CSTXN_undoTransaction()
   {
-    // If a GUID exists for this item, preserve it before removing the item.
-    if (PlacesUtils.annotations
-                   .itemHasAnnotation(this.item.id, PlacesUtils.GUID_ANNO))
-      this.item.guid = PlacesUtils.bookmarks.getItemGUID(this.item.id);
-
     PlacesUtils.bookmarks.removeItem(this.item.id);
   }
 };
@@ -2629,8 +2592,7 @@ PlacesCreateSeparatorTransaction.prototype = {
 /**
  * Transaction for creating a new livemark item.
  *
- * @see nsILivemarksService::createLivemark for documentation regarding the
- * first three arguments.
+ * @see mozIAsyncLivemarks for documentation regarding the arguments.
  *
  * @param aFeedURI
  *        nsIURI of the feed
@@ -2664,25 +2626,35 @@ PlacesCreateLivemarkTransaction.prototype = {
 
   doTransaction: function CLTXN_doTransaction()
   {
-    this.item.id = PlacesUtils.livemarks.createLivemark(this.item.parentId,
-                                                        this.item.title,
-                                                        this.item.siteURI,
-                                                        this.item.feedURI,
-                                                        this.item.index);
-    if (this.item.annotations && this.item.annotations.length > 0)
-      PlacesUtils.setAnnotationsForItem(this.item.id, this.item.annotations);
-    if (this.item.guid)
-      PlacesUtils.bookmarks.setItemGUID(this.item.id, this.item.guid);
+    PlacesUtils.livemarks.addLivemark(
+      { title: this.item.title
+      , feedURI: this.item.feedURI
+      , parentId: this.item.parentId
+      , index: this.item.index
+      , siteURI: this.item.siteURI
+      },
+      (function(aStatus, aLivemark) {
+        if (Components.isSuccessCode(aStatus)) {
+          this.item.id = aLivemark.id;
+          if (this.item.annotations && this.item.annotations.length > 0) {
+            PlacesUtils.setAnnotationsForItem(this.item.id,
+                                              this.item.annotations);
+          }
+        }
+      }).bind(this)
+    );
   },
 
   undoTransaction: function CLTXN_undoTransaction()
   {
-    // If a GUID exists for this item, preserve it before removing the item.
-    if (PlacesUtils.annotations.itemHasAnnotation(this.item.id,
-                                                  PlacesUtils.GUID_ANNO))
-      this.item.guid = PlacesUtils.bookmarks.getItemGUID(this.item.id);
-
-    PlacesUtils.bookmarks.removeItem(this.item.id);
+    // The getLivemark callback is expected to receive a failure status but it
+    // is used just to serialize, so doesn't matter.
+    PlacesUtils.livemarks.getLivemark(
+      { id: this.item.id },
+      (function (aStatus, aLivemark) {
+        PlacesUtils.bookmarks.removeItem(this.item.id);
+      }).bind(this)
+    );
   }
 };
 
@@ -2706,15 +2678,10 @@ function PlacesRemoveLivemarkTransaction(aLivemarkId)
   let annos = PlacesUtils.getAnnotationsForItem(this.item.id);
   // Exclude livemark service annotations, those will be recreated automatically
   let annosToExclude = [PlacesUtils.LMANNO_FEEDURI,
-                        PlacesUtils.LMANNO_SITEURI,
-                        PlacesUtils.LMANNO_EXPIRATION,
-                        PlacesUtils.LMANNO_LOADFAILED,
-                        PlacesUtils.LMANNO_LOADING];
+                        PlacesUtils.LMANNO_SITEURI];
   this.item.annotations = annos.filter(function(aValue, aIndex, aArray) {
       return annosToExclude.indexOf(aValue.name) == -1;
     });
-  this.item.feedURI = PlacesUtils.livemarks.getFeedURI(this.item.id);
-  this.item.siteURI = PlacesUtils.livemarks.getSiteURI(this.item.id);
   this.item.dateAdded = PlacesUtils.bookmarks.getItemDateAdded(this.item.id);
   this.item.lastModified =
     PlacesUtils.bookmarks.getItemLastModified(this.item.id);
@@ -2725,22 +2692,45 @@ PlacesRemoveLivemarkTransaction.prototype = {
 
   doTransaction: function RLTXN_doTransaction()
   {
-    this.item.index = PlacesUtils.bookmarks.getItemIndex(this.item.id);
-    PlacesUtils.bookmarks.removeItem(this.item.id);
+    PlacesUtils.livemarks.getLivemark(
+      { id: this.item.id },
+      (function (aStatus, aLivemark) {
+        if (Components.isSuccessCode(aStatus)) {
+          this.item.feedURI = aLivemark.feedURI;
+          this.item.siteURI = aLivemark.siteURI;
+
+          PlacesUtils.bookmarks.removeItem(this.item.id);
+        }
+      }).bind(this)
+    );
   },
 
   undoTransaction: function RLTXN_undoTransaction()
   {
-    this.item.id = PlacesUtils.livemarks.createLivemark(this.item.parentId,
-                                                        this.item.title,
-                                                        this.item.siteURI,
-                                                        this.item.feedURI,
-                                                        this.item.index);
-    PlacesUtils.bookmarks.setItemDateAdded(this.item.id, this.item.dateAdded);
-    PlacesUtils.bookmarks.setItemLastModified(this.item.id,
-                                              this.item.lastModified);
-    // Restore annotations
-    PlacesUtils.setAnnotationsForItem(this.item.id, this.item.annotations);
+    // Undo work must be serialized, otherwise won't be able to know the
+    // feedURI and siteURI of the livemark.
+    // The getLivemark callback is expected to receive a failure status but it
+    // is used just to serialize, so doesn't matter.
+    PlacesUtils.livemarks.getLivemark(
+      { id: this.item.id },
+      (function () {
+        let addLivemarkCallback = (function(aStatus, aLivemark) {
+          if (Components.isSuccessCode(aStatus)) {
+            let itemId = aLivemark.id;
+            PlacesUtils.bookmarks.setItemDateAdded(itemId, this.item.dateAdded);
+            PlacesUtils.setAnnotationsForItem(itemId, this.item.annotations);
+          }
+        }).bind(this);
+        PlacesUtils.livemarks.addLivemark({ parentId: this.item.parentId
+                                          , title: this.item.title
+                                          , siteURI: this.item.siteURI
+                                          , feedURI: this.item.feedURI
+                                          , index: this.item.index
+                                          , lastModified: this.item.lastModified
+                                          },
+                                          addLivemarkCallback);
+      }).bind(this)
+    );
   }
 };
 
@@ -2816,9 +2806,9 @@ function PlacesRemoveItemTransaction(aItemId)
     return new PlacesUntagURITransaction(uri, [parent]);
   }
 
-  // if the item is a livemark container we will not save its children and
-  // will use createLivemark to undo.
-  if (PlacesUtils.itemIsLivemark(aItemId))
+  // if the item is a livemark container we will not save its children.
+  if (PlacesUtils.annotations.itemHasAnnotation(aItemId,
+                                                PlacesUtils.LMANNO_FEEDURI))
     return new PlacesRemoveLivemarkTransaction(aItemId);
 
   this.item = new TransactionItemCache();
@@ -2865,8 +2855,8 @@ PlacesRemoveItemTransaction.prototype = {
 
       PlacesUtils.bookmarks.removeItem(this.item.id);
 
-      // If this was the last bookmark (excluding tag-items and livemark
-      // children) for this url, persist the tags.
+      // If this was the last bookmark (excluding tag-items) for this url,
+      // persist the tags.
       if (tags && PlacesUtils.getMostRecentBookmarkForURI(this.item.uri) == -1) {
         this.item.tags = tags;
       }
@@ -3195,76 +3185,6 @@ PlacesEditBookmarkPostDataTransaction.prototype = {
 
 
 /**
- * Transaction for editing a live bookmark's site URI.
- *
- * @param aLivemarkId
- *        id of the livemark
- * @param aSiteURI
- *        new site uri
- *
- * @return nsITransaction object
- */
-function PlacesEditLivemarkSiteURITransaction(aLivemarkId, aSiteURI)
-{
-  this.item = new TransactionItemCache();  
-  this.item.id = aLivemarkId;
-  this.new = new TransactionItemCache();
-  this.new.siteURI = aSiteURI;
-}
-
-PlacesEditLivemarkSiteURITransaction.prototype = {
-  __proto__: BaseTransaction.prototype,
-
-  doTransaction: function ELSUTXN_doTransaction()
-  {
-    this.item.siteURI = PlacesUtils.livemarks.getSiteURI(this.item.id);
-    PlacesUtils.livemarks.setSiteURI(this.item.id, this.new.siteURI);
-  },
-
-  undoTransaction: function ELSUTXN_undoTransaction()
-  {
-    PlacesUtils.livemarks.setSiteURI(this.item.id, this.item.siteURI);
-  }
-};
-
-
-/**
- * Transaction for editting a live bookmark's feed URI.
- *
- * @param aLivemarkId
- *        id of the livemark
- * @param aFeedURI
- *        new feed uri
- *
- * @return nsITransaction object
- */
-function PlacesEditLivemarkFeedURITransaction(aLivemarkId, aFeedURI)
-{
-  this.item = new TransactionItemCache();  
-  this.item.id = aLivemarkId;
-  this.new = new TransactionItemCache();
-  this.new.feedURI = aFeedURI;
-}
-
-PlacesEditLivemarkFeedURITransaction.prototype = {
-  __proto__: BaseTransaction.prototype,
-
-  doTransaction: function ELFUTXN_doTransaction()
-  {
-    this.item.feedURI = PlacesUtils.livemarks.getFeedURI(this.item.id);
-    PlacesUtils.livemarks.setFeedURI(this.item.id, this.new.feedURI);
-    PlacesUtils.livemarks.reloadLivemarkFolder(this.item.id);
-  },
-
-  undoTransaction: function ELFUTXN_undoTransaction()
-  {
-    PlacesUtils.livemarks.setFeedURI(this.item.id, this.item.feedURI);
-    PlacesUtils.livemarks.reloadLivemarkFolder(this.item.id);
-  }
-};
-
-
-/**
  * Transaction for editing an item's date added property.
  *
  * @param aItemId
@@ -3459,8 +3379,6 @@ PlacesTagURITransaction.prototype = {
                                    this.item.uri,
                                    PlacesUtils.bookmarks.DEFAULT_INDEX,
                                    PlacesUtils.history.getPageTitle(this.item.uri));
-      if (this.item.guid)
-        PlacesUtils.bookmarks.setItemGUID(this.item.id, this.item.guid);
     }
     PlacesUtils.tagging.tagURI(this.item.uri, this.item.tags);
   },
@@ -3468,11 +3386,6 @@ PlacesTagURITransaction.prototype = {
   undoTransaction: function TUTXN_undoTransaction()
   {
     if (this.item.id != -1) {
-      // If a GUID exists for this item, preserve it before removing the item.
-      if (PlacesUtils.annotations
-                     .itemHasAnnotation(this.item.id, PlacesUtils.GUID_ANNO)) {
-        this.item.guid = PlacesUtils.bookmarks.getItemGUID(this.item.id);
-      }
       PlacesUtils.bookmarks.removeItem(this.item.id);
       this.item.id = -1;
     }

@@ -1,38 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Firefox Sync.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Gregory Szorc <gps@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * This file defines the add-on sync functionality.
@@ -72,11 +40,14 @@ Cu.import("resource://services-sync/engines.js");
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://services-sync/constants.js");
-Cu.import("resource://services-sync/async.js");
-Cu.import("resource://services-sync/ext/Preferences.js");
+Cu.import("resource://services-common/async.js");
+Cu.import("resource://services-common/preferences.js");
 
-Cu.import("resource://gre/modules/AddonManager.jsm");
-Cu.import("resource://gre/modules/AddonRepository.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository",
+                                  "resource://gre/modules/AddonRepository.jsm");
 
 const EXPORTED_SYMBOLS = ["AddonsEngine"];
 
@@ -274,6 +245,8 @@ AddonsStore.prototype = {
 
   // Define the add-on types (.type) that we support.
   _syncableTypes: ["extension", "theme"],
+
+  _extensionsPrefs: new Preferences("extensions."),
 
   get reconciler() {
     return this.engine._reconciler;
@@ -539,7 +512,8 @@ AddonsStore.prototype = {
     //   2) Installed in the current profile
     //   3) Not installed by a foreign entity (i.e. installed by the app)
     //      since they act like global extensions.
-    //   4) Are installed from AMO
+    //   4) Is not a hotfix.
+    //   5) Are installed from AMO
 
     // We could represent the test as a complex boolean expression. We go the
     // verbose route so the failure reason is logged.
@@ -565,6 +539,12 @@ AddonsStore.prototype = {
     // TODO Address the edge case and come up with more robust heuristics.
     if (addon.foreignInstall) {
       this._log.debug(addon.id + " not syncable: is foreign install.");
+      return false;
+    }
+
+    // Ignore hotfix extensions (bug 741670). The pref may not be defined.
+    if (this._extensionsPrefs.get("hotfix.id", null) == addon.id) {
+      this._log.debug(addon.id + " not syncable: is a hotfix.");
       return false;
     }
 

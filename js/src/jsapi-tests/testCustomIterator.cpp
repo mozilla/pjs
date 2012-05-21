@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "tests.h"
 
 #include "jsclass.h"
@@ -5,7 +9,7 @@
 int count = 0;
 
 static JSBool
-IterNext(JSContext *cx, uintN argc, jsval *vp)
+IterNext(JSContext *cx, unsigned argc, jsval *vp)
 {
     if (count++ == 100)
         return JS_ThrowStopIteration(cx);
@@ -14,7 +18,7 @@ IterNext(JSContext *cx, uintN argc, jsval *vp)
 }
 
 static JSObject *
-IterHook(JSContext *cx, JSObject *obj, JSBool keysonly)
+IterHook(JSContext *cx, JS::HandleObject obj, JSBool keysonly)
 {
     JSObject *iterObj = JS_NewObject(cx, NULL, NULL, NULL);
     if (!iterObj)
@@ -50,9 +54,9 @@ js::Class HasCustomIterClass = {
 };
 
 JSBool
-IterClassConstructor(JSContext *cx, uintN argc, jsval *vp)
+IterClassConstructor(JSContext *cx, unsigned argc, jsval *vp)
 {
-    JSObject *obj = JS_NewObjectForConstructor(cx, vp);
+    JSObject *obj = JS_NewObjectForConstructor(cx, Jsvalify(&HasCustomIterClass), vp);
     if (!obj)
         return false;
     JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(obj));

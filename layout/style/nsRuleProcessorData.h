@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * data structures passed to nsIStyleRuleProcessor methods (to pull loop
@@ -51,11 +18,102 @@
 #include "nsCSSPseudoElements.h"
 #include "nsRuleWalker.h"
 #include "nsNthIndexCache.h"
+#include "nsILoadContext.h"
+#include "mozilla/BloomFilter.h"
+#include "mozilla/GuardObjects.h"
 
 class nsIStyleSheet;
 class nsIAtom;
 class nsICSSPseudoComparator;
 class nsAttrValue;
+
+/**
+ * An AncestorFilter is used to keep track of ancestors so that we can
+ * quickly tell that a particular selector is not relevant to a given
+ * element.
+ */
+class NS_STACK_CLASS AncestorFilter {
+ public:
+  /**
+   * Initialize the filter.  If aElement is not null, it and all its
+   * ancestors will be passed to PushAncestor, starting from the root
+   * and going down the tree.
+   */
+  void Init(mozilla::dom::Element *aElement);
+
+  /* Maintenance of our ancestor state */
+  void PushAncestor(mozilla::dom::Element *aElement);
+  void PopAncestor();
+
+  /* Helper class for maintaining the ancestor state */
+  class NS_STACK_CLASS AutoAncestorPusher {
+  public:
+    AutoAncestorPusher(bool aDoPush,
+                       AncestorFilter &aFilter,
+                       mozilla::dom::Element *aElement
+                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+      : mPushed(aDoPush && aElement), mFilter(aFilter)
+    {
+      MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+      if (mPushed) {
+        mFilter.PushAncestor(aElement);
+      }
+    }
+    ~AutoAncestorPusher() {
+      if (mPushed) {
+        mFilter.PopAncestor();
+      }
+    }
+
+  private:
+    bool mPushed;
+    AncestorFilter &mFilter;
+    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+  };
+
+  /* Check whether we might have an ancestor matching one of the given
+     atom hashes.  |hashes| must have length hashListLength */
+  template<size_t hashListLength>
+    bool MightHaveMatchingAncestor(const uint32_t* aHashes) const
+  {
+    MOZ_ASSERT(mFilter);
+    for (size_t i = 0; i < hashListLength && aHashes[i]; ++i) {
+      if (!mFilter->mightContain(aHashes[i])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool HasFilter() const { return mFilter; }
+
+#ifdef DEBUG
+  void AssertHasAllAncestors(mozilla::dom::Element *aElement) const;
+#endif
+  
+ private:
+  // Using 2^12 slots makes the Bloom filter a nice round page in
+  // size, so let's do that.  We get a false positive rate of 1% or
+  // less even with several hundred things in the filter.  Note that
+  // we allocate the filter lazily, because not all tree match
+  // contexts can use one effectively.
+  typedef mozilla::BloomFilter<12, nsIAtom> Filter;
+  nsAutoPtr<Filter> mFilter;
+
+  // Stack of indices to pop to.  These are indices into mHashes.
+  nsTArray<PRUint32> mPopTargets;
+
+  // List of hashes; this is what we pop using mPopTargets.  We store
+  // hashes of our ancestor element tag names, ids, and classes in
+  // here.
+  nsTArray<uint32_t> mHashes;
+
+  // A debug-only stack of Elements for use in assertions
+#ifdef DEBUG
+  nsTArray<mozilla::dom::Element*> mElements;
+#endif
+};
 
 /**
  * A |TreeMatchContext| has data about a matching operation.  The
@@ -128,6 +186,12 @@ struct NS_STACK_CLASS TreeMatchContext {
   // The nth-index cache we should use
   nsNthIndexCache mNthIndexCache;
 
+  // An ancestor filter
+  AncestorFilter mAncestorFilter;
+
+  // Whether this document is using PB mode
+  bool mUsingPrivateBrowsing;
+
   // Constructor to use when creating a tree match context for styling
   TreeMatchContext(bool aForStyling,
                    nsRuleWalker::VisitedHandlingType aVisitedHandling,
@@ -139,7 +203,16 @@ struct NS_STACK_CLASS TreeMatchContext {
     , mScopedRoot(nsnull)
     , mIsHTMLDocument(aDocument->IsHTML())
     , mCompatMode(aDocument->GetCompatibilityMode())
+    , mUsingPrivateBrowsing(false)
   {
+    nsCOMPtr<nsISupports> container = mDocument->GetContainer();
+    if (container) {
+      nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(container);
+      NS_ASSERTION(loadContext, "Couldn't get loadContext from container; assuming no private browsing.");
+      if (loadContext) {
+        mUsingPrivateBrowsing = loadContext->UsePrivateBrowsing();
+      }
+    }
   }
 };
 

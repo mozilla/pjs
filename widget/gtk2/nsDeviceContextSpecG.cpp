@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Roland Mainz <roland.mainz@informatik.med.uni-giessen.de>
- *   Ken Herron <kherron+mozilla@fmailbox.com>
- *   Julien Lafon <julien.lafon@gmail.com>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
 /* Store per-printer features in temp. prefs vars that the
  * print dialog can pick them up... */
@@ -191,21 +155,21 @@ private:
 
 void nsPrinterFeatures::SetBoolValue( const char *tagname, bool value )
 {
-  nsPrintfCString prefName(256, PRINTERFEATURES_PREF ".%s.%s",
+  nsPrintfCString prefName(PRINTERFEATURES_PREF ".%s.%s",
                            mPrinterName.get(), tagname);
   Preferences::SetBool(prefName.get(), value);
 }
 
 void nsPrinterFeatures::SetIntValue(  const char *tagname, PRInt32 value )
 {
-  nsPrintfCString prefName(256, PRINTERFEATURES_PREF ".%s.%s",
+  nsPrintfCString prefName(PRINTERFEATURES_PREF ".%s.%s",
                            mPrinterName.get(), tagname);
   Preferences::SetInt(prefName.get(), value);
 }
 
 void nsPrinterFeatures::SetCharValue(  const char *tagname, const char *value )
 {
-  nsPrintfCString prefName(256, PRINTERFEATURES_PREF ".%s.%s",
+  nsPrintfCString prefName(PRINTERFEATURES_PREF ".%s.%s",
                            mPrinterName.get(), tagname);
   Preferences::SetCString(prefName.get(), value);
 }
@@ -236,10 +200,10 @@ void nsPrinterFeatures::SetNumPaperSizeRecords( PRInt32 aCount )
 
 void nsPrinterFeatures::SetPaperRecord(PRInt32 aIndex, const char *aPaperName, PRInt32 aWidthMM, PRInt32 aHeightMM, bool aIsInch)
 {
-  SetCharValue(nsPrintfCString(256, "paper.%d.name",      aIndex).get(), aPaperName);
-  SetIntValue( nsPrintfCString(256, "paper.%d.width_mm",  aIndex).get(), aWidthMM);
-  SetIntValue( nsPrintfCString(256, "paper.%d.height_mm", aIndex).get(), aHeightMM);
-  SetBoolValue(nsPrintfCString(256, "paper.%d.is_inch",   aIndex).get(), aIsInch);
+  SetCharValue(nsPrintfCString("paper.%d.name",      aIndex).get(), aPaperName);
+  SetIntValue( nsPrintfCString("paper.%d.width_mm",  aIndex).get(), aWidthMM);
+  SetIntValue( nsPrintfCString("paper.%d.height_mm", aIndex).get(), aHeightMM);
+  SetBoolValue(nsPrintfCString("paper.%d.is_inch",   aIndex).get(), aIsInch);
 }
 
 void nsPrinterFeatures::SetCanChangeOrientation( bool aCanSetOrientation )
@@ -259,7 +223,7 @@ void nsPrinterFeatures::SetNumOrientationRecords( PRInt32 aCount )
 
 void nsPrinterFeatures::SetOrientationRecord( PRInt32 aIndex, const char *aOrientationName )
 {
-  SetCharValue(nsPrintfCString(256, "orientation.%d.name", aIndex).get(), aOrientationName);
+  SetCharValue(nsPrintfCString("orientation.%d.name", aIndex).get(), aOrientationName);
 }
 
 void nsPrinterFeatures::SetCanChangePlex( bool aCanSetPlex )
@@ -279,7 +243,7 @@ void nsPrinterFeatures::SetNumPlexRecords( PRInt32 aCount )
 
 void nsPrinterFeatures::SetPlexRecord( PRInt32 aIndex, const char *aPlexName )
 {
-  SetCharValue(nsPrintfCString(256, "plex.%d.name", aIndex).get(), aPlexName);
+  SetCharValue(nsPrintfCString("plex.%d.name", aIndex).get(), aPlexName);
 }
 
 void nsPrinterFeatures::SetCanChangeResolutionName( bool aCanSetResolutionName )
@@ -299,7 +263,7 @@ void nsPrinterFeatures::SetNumResolutionNameRecords( PRInt32 aCount )
 
 void nsPrinterFeatures::SetResolutionNameRecord( PRInt32 aIndex, const char *aResolutionName )
 {
-  SetCharValue(nsPrintfCString(256, "resolution.%d.name", aIndex).get(), aResolutionName);
+  SetCharValue(nsPrintfCString("resolution.%d.name", aIndex).get(), aResolutionName);
 }
 
 void nsPrinterFeatures::SetCanChangeColorspace( bool aCanSetColorspace )
@@ -319,7 +283,7 @@ void nsPrinterFeatures::SetNumColorspaceRecords( PRInt32 aCount )
 
 void nsPrinterFeatures::SetColorspaceRecord( PRInt32 aIndex, const char *aColorspace )
 {
-  SetCharValue(nsPrintfCString(256, "colorspace.%d.name", aIndex).get(), aColorspace);
+  SetCharValue(nsPrintfCString("colorspace.%d.name", aIndex).get(), aColorspace);
 }
 
 void nsPrinterFeatures::SetCanChangeDownloadFonts( bool aCanSetDownloadFonts )
@@ -653,7 +617,7 @@ nsresult CopyPrinterCharPref(const char *modulename, const char *printername,
  
   if (printername && modulename) {
     /* Get prefs per printer name and module name */
-    nsPrintfCString name(512, "print.%s.printer_%s.%s", modulename, printername, prefname);
+    nsPrintfCString name("print.%s.printer_%s.%s", modulename, printername, prefname);
     DO_PR_DEBUG_LOG(("trying to get '%s'\n", name.get()));
     rv = Preferences::GetCString(name.get(), &return_buf);
   }
@@ -661,7 +625,7 @@ nsresult CopyPrinterCharPref(const char *modulename, const char *printername,
   if (NS_FAILED(rv)) { 
     if (printername) {
       /* Get prefs per printer name */
-      nsPrintfCString name(512, "print.printer_%s.%s", printername, prefname);
+      nsPrintfCString name("print.printer_%s.%s", printername, prefname);
       DO_PR_DEBUG_LOG(("trying to get '%s'\n", name.get()));
       rv = Preferences::GetCString(name.get(), &return_buf);
     }
@@ -669,14 +633,14 @@ nsresult CopyPrinterCharPref(const char *modulename, const char *printername,
     if (NS_FAILED(rv)) {
       if (modulename) {
         /* Get prefs per module name */
-        nsPrintfCString name(512, "print.%s.%s", modulename, prefname);
+        nsPrintfCString name("print.%s.%s", modulename, prefname);
         DO_PR_DEBUG_LOG(("trying to get '%s'\n", name.get()));
         rv = Preferences::GetCString(name.get(), &return_buf);
       }
       
       if (NS_FAILED(rv)) {
         /* Get prefs */
-        nsPrintfCString name(512, "print.%s", prefname);
+        nsPrintfCString name("print.%s", prefname);
         DO_PR_DEBUG_LOG(("trying to get '%s'\n", name.get()));
         rv = Preferences::GetCString(name.get(), &return_buf);
       }
@@ -776,7 +740,7 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::InitPrintSettingsFromPrinter(const PRUnich
 
 #ifdef SET_PRINTER_FEATURES_VIA_PREFS
   /* Defaults to FALSE */
-  nsPrintfCString  prefName(256,
+  nsPrintfCString  prefName(
     PRINTERFEATURES_PREF ".%s.has_special_printerfeatures",
     fullPrinterName.get());
   Preferences::SetBool(prefName.get(), false);
@@ -792,7 +756,7 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::InitPrintSettingsFromPrinter(const PRUnich
       path = PR_GetEnv("HOME");
   
     if (path)
-      filename = nsPrintfCString(PATH_MAX, "%s/mozilla.pdf", path);
+      filename = nsPrintfCString("%s/mozilla.pdf", path);
     else
       filename.AssignLiteral("mozilla.pdf");
   }  

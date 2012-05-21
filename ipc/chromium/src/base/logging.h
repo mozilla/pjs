@@ -14,8 +14,6 @@
 // Replace the Chromium logging code with NSPR-based logging code and
 // some C++ wrappers to emulate std::ostream
 
-#define ERROR 0
-
 namespace mozilla {
 
 enum LogSeverity {
@@ -100,8 +98,8 @@ const mozilla::EmptyLog& operator <<(const mozilla::EmptyLog& log, const T&)
 #define DCHECK(condition) while (false && (condition)) mozilla::EmptyLog()
 #endif
 
-#define LOG_ASSERT(cond) CHECK(ERROR)
-#define DLOG_ASSERT(cond) DCHECK(ERROR)
+#define LOG_ASSERT(cond) CHECK(0)
+#define DLOG_ASSERT(cond) DCHECK(0)
 
 #define NOTREACHED() LOG(ERROR)
 #define NOTIMPLEMENTED() LOG(ERROR)
@@ -114,10 +112,5 @@ const mozilla::EmptyLog& operator <<(const mozilla::EmptyLog& log, const T&)
 #define DCHECK_LT(v1, v2) DCHECK((v1) < (v2))
 #define DCHECK_GE(v1, v2) DCHECK((v1) >= (v2))
 #define DCHECK_GT(v1, v2) DCHECK((v1) > (v2))
-
-#ifdef assert
-#undef assert
-#endif
-#define assert DLOG_ASSERT
 
 #endif  // BASE_LOGGING_H_

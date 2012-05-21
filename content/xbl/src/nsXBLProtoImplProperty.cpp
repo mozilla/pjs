@@ -1,47 +1,13 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   David Hyatt <hyatt@netscape.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIAtom.h"
 #include "nsString.h"
 #include "jsapi.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
-#include "nsString.h"
 #include "nsXBLProtoImplProperty.h"
 #include "nsUnicharUtils.h"
 #include "nsReadableUtils.h"
@@ -167,31 +133,28 @@ const char* gPropertyArgs[] = { "val" };
 nsresult
 nsXBLProtoImplProperty::InstallMember(nsIScriptContext* aContext,
                                       nsIContent* aBoundElement, 
-                                      void* aScriptObject,
-                                      void* aTargetClassObject,
+                                      JSObject* aScriptObject,
+                                      JSObject* aTargetClassObject,
                                       const nsCString& aClassStr)
 {
   NS_PRECONDITION(mIsCompiled,
                   "Should not be installing an uncompiled property");
   JSContext* cx = aContext->GetNativeContext();
 
-  nsIDocument *ownerDoc = aBoundElement->OwnerDoc();
-  nsIScriptGlobalObject *sgo;
+  nsIScriptGlobalObject* sgo = aBoundElement->OwnerDoc()->GetScopeObject();
 
-  if (!(sgo = ownerDoc->GetScopeObject())) {
+  if (!sgo) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  JSObject * scriptObject = (JSObject *) aScriptObject;
-  NS_ASSERTION(scriptObject, "uh-oh, script Object should NOT be null or bad things will happen");
-  if (!scriptObject)
+  NS_ASSERTION(aScriptObject, "uh-oh, script Object should NOT be null or bad things will happen");
+  if (!aScriptObject)
     return NS_ERROR_FAILURE;
 
-  JSObject * targetClassObject = (JSObject *) aTargetClassObject;
   JSObject * globalObject = sgo->GetGlobalJSObject();
 
   // now we want to reevaluate our property using aContext and the script object for this window...
-  if ((mJSGetterObject || mJSSetterObject) && targetClassObject) {
+  if ((mJSGetterObject || mJSSetterObject) && aTargetClassObject) {
     JSObject * getter = nsnull;
     JSAutoRequest ar(cx);
     JSAutoEnterCompartment ac;
@@ -209,8 +172,8 @@ nsXBLProtoImplProperty::InstallMember(nsIScriptContext* aContext,
         return NS_ERROR_OUT_OF_MEMORY;
 
     nsDependentString name(mName);
-    if (!::JS_DefineUCProperty(cx, targetClassObject,
-                               reinterpret_cast<const jschar*>(mName),
+    if (!::JS_DefineUCProperty(cx, aTargetClassObject,
+                               static_cast<const jschar*>(mName),
                                name.Length(), JSVAL_VOID,
                                JS_DATA_TO_FUNC_PTR(JSPropertyOp, getter),
                                JS_DATA_TO_FUNC_PTR(JSStrictPropertyOp, setter),
@@ -345,13 +308,11 @@ void
 nsXBLProtoImplProperty::Trace(TraceCallback aCallback, void *aClosure) const
 {
   if (mJSAttributes & JSPROP_GETTER) {
-    aCallback(nsIProgrammingLanguage::JAVASCRIPT, mJSGetterObject,
-              "mJSGetterObject", aClosure);
+    aCallback(mJSGetterObject, "mJSGetterObject", aClosure);
   }
 
   if (mJSAttributes & JSPROP_SETTER) {
-    aCallback(nsIProgrammingLanguage::JAVASCRIPT, mJSSetterObject,
-              "mJSSetterObject", aClosure);
+    aCallback(mJSSetterObject, "mJSSetterObject", aClosure);
   }
 }
 

@@ -1,52 +1,24 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Benoit Girard <bgirard@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <stdlib.h>
 #include <signal.h>
-#include "thread_helper.h"
+#include "mozilla/ThreadLocal.h"
 #include "nscore.h"
+#include "jsapi.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/Util.h"
 
 using mozilla::TimeStamp;
 using mozilla::TimeDuration;
 
-extern mozilla::tls::key pkey_stack;
-extern mozilla::tls::key pkey_ticker;
+struct ProfileStack;
+class TableTicker;
+
+extern mozilla::ThreadLocal<ProfileStack> tlsStack;
+extern mozilla::ThreadLocal<TableTicker> tlsTicker;
 extern bool stack_key_initialized;
 
 #ifndef SAMPLE_FUNCTION_NAME
@@ -68,10 +40,16 @@ extern bool stack_key_initialized;
 #define SAMPLER_GET_RESPONSIVENESS() mozilla_sampler_get_responsiveness()
 #define SAMPLER_SAVE() mozilla_sampler_save()
 #define SAMPLER_GET_PROFILE() mozilla_sampler_get_profile()
+#define SAMPLER_GET_PROFILE_DATA(ctx) mozilla_sampler_get_profile_data(ctx)
 #define SAMPLER_GET_FEATURES() mozilla_sampler_get_features()
 // we want the class and function name but can't easily get that using preprocessor macros
 // __func__ doesn't have the class name and __PRETTY_FUNCTION__ has the parameters
-#define SAMPLE_LABEL(name_space, info) mozilla::SamplerStackFrameRAII only_one_sampleraii_per_scope(name_space "::" info)
+
+#define SAMPLER_APPEND_LINE_NUMBER_PASTE(id, line) id ## line
+#define SAMPLER_APPEND_LINE_NUMBER_EXPAND(id, line) SAMPLER_APPEND_LINE_NUMBER_PASTE(id, line)
+#define SAMPLER_APPEND_LINE_NUMBER(id) SAMPLER_APPEND_LINE_NUMBER_EXPAND(id, __LINE__)
+
+#define SAMPLE_LABEL(name_space, info) mozilla::SamplerStackFrameRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info)
 #define SAMPLE_MARKER(info) mozilla_sampler_add_marker(info)
 
 /* we duplicate this code here to avoid header dependencies
@@ -86,6 +64,23 @@ extern bool stack_key_initialized;
 #warning Please add support for your architecture in chromium_types.h
 #endif
 
+#define PROFILE_DEFAULT_ENTRY 100000
+#ifdef ANDROID
+// We use a lower frequency on Android, in order to make things work
+// more smoothly on phones.  This value can be adjusted later with
+// some libunwind optimizations.
+// In one sample measurement on Galaxy Nexus, out of about 700 backtraces,
+// 60 of them took more than 25ms, and the average and standard deviation
+// were 6.17ms and 9.71ms respectively.
+
+// For now since we don't support stackwalking let's use 1ms since it's fast
+// enough.
+#define PROFILE_DEFAULT_INTERVAL 1
+#else
+#define PROFILE_DEFAULT_INTERVAL 1
+#endif
+#define PROFILE_DEFAULT_FEATURES NULL
+#define PROFILE_DEFAULT_FEATURE_COUNT 0
 
 // STORE_SEQUENCER: Because signals can interrupt our profile modification
 //                  we need to make stores are not re-ordered by the compiler
@@ -140,6 +135,7 @@ void mozilla_sampler_responsiveness(TimeStamp time);
 const double* mozilla_sampler_get_responsiveness();
 void mozilla_sampler_save();
 char* mozilla_sampler_get_profile();
+JSObject *mozilla_sampler_get_profile_data(JSContext *aCx);
 const char** mozilla_sampler_get_features();
 void mozilla_sampler_init();
 
@@ -162,10 +158,10 @@ private:
 
 // the SamplerStack members are read by signal
 // handlers, so the mutation of them needs to be signal-safe.
-struct Stack
+struct ProfileStack
 {
 public:
-  Stack()
+  ProfileStack()
     : mStackPointer(0)
     , mMarkerPointer(0)
     , mDroppedStackEntries(0)
@@ -180,7 +176,7 @@ public:
     if (!aMarker) {
       return; //discard
     }
-    if (mMarkerPointer == 1024) {
+    if (size_t(mMarkerPointer) == mozilla::ArrayLength(mMarkers)) {
       return; //array full, silently drop
     }
     mMarkers[mMarkerPointer] = aMarker;
@@ -194,7 +190,8 @@ public:
     if (mQueueClearMarker) {
       clearMarkers();
     }
-    if (aMarkerId >= mMarkerPointer) {
+    if (aMarkerId < 0 ||
+	static_cast<mozilla::sig_safe_t>(aMarkerId) >= mMarkerPointer) {
       return NULL;
     }
     return mMarkers[aMarkerId];
@@ -209,7 +206,7 @@ public:
 
   void push(const char *aName)
   {
-    if (mStackPointer >= 1024) {
+    if (size_t(mStackPointer) >= mozilla::ArrayLength(mStack)) {
       mDroppedStackEntries++;
       return;
     }
@@ -249,11 +246,11 @@ public:
 inline void* mozilla_sampler_call_enter(const char *aInfo)
 {
   // check if we've been initialized to avoid calling pthread_getspecific
-  // with a null pkey_stack which will return undefined results.
+  // with a null tlsStack which will return undefined results.
   if (!stack_key_initialized)
     return NULL;
 
-  Stack *stack = mozilla::tls::get<Stack>(pkey_stack);
+  ProfileStack *stack = tlsStack.get();
   // we can't infer whether 'stack' has been initialized
   // based on the value of stack_key_intiailized because
   // 'stack' is only intialized when a thread is being
@@ -276,13 +273,13 @@ inline void mozilla_sampler_call_exit(void *aHandle)
   if (!aHandle)
     return;
 
-  Stack *stack = (Stack*)aHandle;
+  ProfileStack *stack = (ProfileStack*)aHandle;
   stack->pop();
 }
 
 inline void mozilla_sampler_add_marker(const char *aMarker)
 {
-  Stack *stack = mozilla::tls::get<Stack>(pkey_stack);
+  ProfileStack *stack = tlsStack.get();
   if (!stack) {
     return;
   }

@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object to wrap rendering objects that should be scrollable */
 
@@ -76,6 +44,8 @@ public:
 
   nsGfxScrollFrameInner(nsContainerFrame* aOuter, bool aIsRoot);
   ~nsGfxScrollFrameInner();
+
+  void Init();
 
   typedef nsIScrollableFrame::ScrollbarStyles ScrollbarStyles;
   ScrollbarStyles GetScrollbarStylesFromFrame() const;
@@ -151,7 +121,8 @@ public:
   static void SetScrollbarEnabled(nsIContent* aContent, nscoord aMaxPos);
   static void SetCoordAttribute(nsIContent* aContent, nsIAtom* aAtom,
                                 nscoord aSize);
-  nscoord GetCoordAttribute(nsIBox* aFrame, nsIAtom* atom, nscoord defaultValue);
+  nscoord GetCoordAttribute(nsIBox* aFrame, nsIAtom* aAtom, nscoord aDefaultValue,
+                            nscoord* aRangeStart, nscoord* aRangeLength);
 
   // Update scrollbar curpos attributes to reflect current scroll position
   void UpdateScrollbarPosition();
@@ -176,15 +147,27 @@ public:
     return pt;
   }
   nsRect GetScrollRange() const;
+  // Get the scroll range assuming the scrollport has size (aWidth, aHeight).
+  nsRect GetScrollRange(nscoord aWidth, nscoord aHeight) const;
+protected:
+  nsRect GetScrollRangeForClamping() const;
 
-  nsPoint RestrictToDevPixels(const nsPoint& aPt, nsIntPoint* aPtDevPx, bool aShouldClamp) const;
-  nsPoint ClampScrollPosition(const nsPoint& aPt) const;
-  static void AsyncScrollCallback(nsITimer *aTimer, void* anInstance);
-  void ScrollTo(nsPoint aScrollPosition, nsIScrollableFrame::ScrollMode aMode);
-  void ScrollToImpl(nsPoint aScrollPosition);
+public:
+  static void AsyncScrollCallback(void* anInstance, mozilla::TimeStamp aTime);
+  /**
+   * aRange is the range of allowable scroll positions around the desired
+   * aScrollPosition. Null means only aScrollPosition is allowed.
+   * This is a closed-ended range --- aRange.XMost()/aRange.YMost() are allowed.
+   */
+  void ScrollTo(nsPoint aScrollPosition, nsIScrollableFrame::ScrollMode aMode,
+                const nsRect* aRange = nsnull) {
+    ScrollToWithOrigin(aScrollPosition, aMode, nsGkAtoms::other, aRange);
+  }
+  void ScrollToCSSPixels(nsIntPoint aScrollPosition);
+  void ScrollToImpl(nsPoint aScrollPosition, const nsRect& aRange);
   void ScrollVisual(nsPoint aOldScrolledFramePosition);
   void ScrollBy(nsIntPoint aDelta, nsIScrollableFrame::ScrollUnit aUnit,
-                nsIScrollableFrame::ScrollMode aMode, nsIntPoint* aOverflow);
+                nsIScrollableFrame::ScrollMode aMode, nsIntPoint* aOverflow, nsIAtom *aOrigin = nsnull);
   void ScrollToRestoredPosition();
   nsSize GetLineScrollAmount() const;
   nsSize GetPageScrollAmount() const;
@@ -286,7 +269,7 @@ public:
   nsIBox* mScrollCornerBox;
   nsIBox* mResizerBox;
   nsContainerFrame* mOuter;
-  AsyncScroll* mAsyncScroll;
+  nsRefPtr<AsyncScroll> mAsyncScroll;
   nsTArray<nsIScrollPositionListener*> mListeners;
   nsRect mScrollPort;
   // Where we're currently scrolling to, if we're scrolling asynchronously.
@@ -340,6 +323,12 @@ public:
   // If true, the layer should always be active because we always build a layer.
   // Used for asynchronous scrolling.
   bool mShouldBuildLayer:1;
+
+protected:
+  void ScrollToWithOrigin(nsPoint aScrollPosition,
+                          nsIScrollableFrame::ScrollMode aMode,
+                          nsIAtom *aOrigin, // nsnull indicates "other" origin
+                          const nsRect* aRange);
 };
 
 /**
@@ -363,6 +352,9 @@ public:
 
   // Called to set the child frames. We typically have three: the scroll area,
   // the vertical scrollbar, and the horizontal scrollbar.
+  NS_IMETHOD Init(nsIContent*      aContent,
+                  nsIFrame*        aParent,
+                  nsIFrame*        aPrevInFlow);
   NS_IMETHOD SetInitialChildList(ChildListID     aListID,
                                  nsFrameList&    aChildList);
 
@@ -478,12 +470,16 @@ public:
   virtual nsSize GetPageScrollAmount() const {
     return mInner.GetPageScrollAmount();
   }
-  virtual void ScrollTo(nsPoint aScrollPosition, ScrollMode aMode) {
-    mInner.ScrollTo(aScrollPosition, aMode);
+  virtual void ScrollTo(nsPoint aScrollPosition, ScrollMode aMode,
+                        const nsRect* aRange = nsnull) {
+    mInner.ScrollTo(aScrollPosition, aMode, aRange);
+  }
+  virtual void ScrollToCSSPixels(nsIntPoint aScrollPosition) {
+    mInner.ScrollToCSSPixels(aScrollPosition);
   }
   virtual void ScrollBy(nsIntPoint aDelta, ScrollUnit aUnit, ScrollMode aMode,
-                        nsIntPoint* aOverflow) {
-    mInner.ScrollBy(aDelta, aUnit, aMode, aOverflow);
+                        nsIntPoint* aOverflow, nsIAtom *aOrigin = nsnull) {
+    mInner.ScrollBy(aDelta, aUnit, aMode, aOverflow, aOrigin);
   }
   virtual void ScrollToRestoredPosition() {
     mInner.ScrollToRestoredPosition();
@@ -591,6 +587,9 @@ public:
 
   // Called to set the child frames. We typically have three: the scroll area,
   // the vertical scrollbar, and the horizontal scrollbar.
+  NS_IMETHOD Init(nsIContent*      aContent,
+                  nsIFrame*        aParent,
+                  nsIFrame*        aPrevInFlow);
   NS_IMETHOD SetInitialChildList(ChildListID     aListID,
                                  nsFrameList&    aChildList);
 
@@ -716,12 +715,16 @@ public:
   virtual nsSize GetPageScrollAmount() const {
     return mInner.GetPageScrollAmount();
   }
-  virtual void ScrollTo(nsPoint aScrollPosition, ScrollMode aMode) {
-    mInner.ScrollTo(aScrollPosition, aMode);
+  virtual void ScrollTo(nsPoint aScrollPosition, ScrollMode aMode,
+                        const nsRect* aRange = nsnull) {
+    mInner.ScrollTo(aScrollPosition, aMode, aRange);
+  }
+  virtual void ScrollToCSSPixels(nsIntPoint aScrollPosition) {
+    mInner.ScrollToCSSPixels(aScrollPosition);
   }
   virtual void ScrollBy(nsIntPoint aDelta, ScrollUnit aUnit, ScrollMode aMode,
-                        nsIntPoint* aOverflow) {
-    mInner.ScrollBy(aDelta, aUnit, aMode, aOverflow);
+                        nsIntPoint* aOverflow, nsIAtom *aOrigin = nsnull) {
+    mInner.ScrollBy(aDelta, aUnit, aMode, aOverflow, aOrigin);
   }
   virtual void ScrollToRestoredPosition() {
     mInner.ScrollToRestoredPosition();
@@ -791,12 +794,9 @@ protected:
     /* 
      * For RTL frames, restore the original scrolled position of the right
      * edge, then subtract the current width to find the physical position.
-     * This can break the invariant that the scroll position is a multiple of
-     * device pixels, so round off the result to the nearest device pixel.
      */
     if (!mInner.IsLTR()) {
-      aRect.x = PresContext()->RoundAppUnitsToNearestDevPixels(
-         mInner.mScrollPort.XMost() - aScrollPosition.x - aRect.width);
+      aRect.x = mInner.mScrollPort.XMost() - aScrollPosition.x - aRect.width;
     }
     mInner.mScrolledFrame->SetBounds(aState, aRect, aRemoveOverflowAreas);
   }

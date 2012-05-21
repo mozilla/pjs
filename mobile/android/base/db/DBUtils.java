@@ -4,9 +4,14 @@
 
 package org.mozilla.gecko.db;
 
+import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.sync.Utils;
 
 import android.content.ContentValues;
+import android.content.Context;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.os.Build;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
@@ -15,6 +20,8 @@ import java.util.UUID;
 import java.util.Random;
 
 public class DBUtils {
+    private static final String LOGTAG = "GeckoDBUtils";
+
     public static final String qualifyColumn(String table, String column) {
         return table + "." + column;
     }
@@ -59,8 +66,25 @@ public class DBUtils {
             aValues.remove(aOriginalKey);
         }
 
-        if (!aValues.containsKey(aOriginalKey)) {
+        if (!aValues.containsKey(aNewKey)) {
             aValues.put(aNewKey, value);
+        }
+    }
+
+    public static void ensureDatabaseIsNotLocked(SQLiteOpenHelper dbHelper, String databasePath) {
+        try {
+            dbHelper.getWritableDatabase();
+        } catch (Exception e) {
+            Log.d(LOGTAG, "Database is locked, trying to kill any zombie processes: " + databasePath);
+
+            GeckoAppShell.killAnyZombies();
+
+            // This call should not throw if the forced unlocking
+            // actually fixed the situation.
+            dbHelper.getWritableDatabase();
+
+            // TODO: maybe check if the database is still locked and let the
+            // user know that the device needs rebooting?
         }
     }
 }

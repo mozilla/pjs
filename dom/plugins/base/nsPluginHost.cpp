@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Sean Echevarria <sean@beatnik.com>
- *   Håkan Waara <hwaara@chello.se>
- *   Josh Aas <josh@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* nsPluginHost.cpp - top-level plugin management code */
 
@@ -50,7 +15,6 @@
 #include "nsNPAPIPlugin.h"
 #include "nsNPAPIPluginStreamListener.h"
 #include "nsNPAPIPluginInstance.h"
-#include "nsIPluginStreamListener.h"
 #include "nsIHTTPHeaderListener.h"
 #include "nsIHttpHeaderVisitor.h"
 #include "nsIObserverService.h"
@@ -68,6 +32,9 @@
 #include "nsIProtocolProxyService.h"
 #include "nsIStreamConverterService.h"
 #include "nsIFile.h"
+#if defined(XP_MACOSX)
+#include "nsILocalFileMac.h"
+#endif
 #include "nsIInputStream.h"
 #include "nsIIOService.h"
 #include "nsIURL.h"
@@ -80,14 +47,13 @@
 #include "nsHashtable.h"
 #include "nsIProxyInfo.h"
 #include "nsPluginLogging.h"
-#include "nsIPrefBranch.h"
 #include "nsIScriptChannel.h"
 #include "nsIBlocklistService.h"
 #include "nsVersionComparator.h"
-#include "nsIPrivateBrowsingService.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsIWritablePropertyBag2.h"
 #include "nsPluginStreamListenerPeer.h"
+#include "mozilla/Preferences.h"
 
 #include "nsEnumeratorUtils.h"
 #include "nsXPCOM.h"
@@ -336,17 +302,7 @@ NS_IMETHODIMP nsPluginDocReframeEvent::Run() {
 
 static bool UnloadPluginsASAP()
 {
-  nsresult rv;
-  nsCOMPtr<nsIPrefBranch> pref(do_GetService(NS_PREFSERVICE_CONTRACTID, &rv));
-  if (NS_SUCCEEDED(rv)) {
-    bool unloadPluginsASAP = false;
-    rv = pref->GetBoolPref("dom.ipc.plugins.unloadASAP", &unloadPluginsASAP);
-    if (NS_SUCCEEDED(rv)) {
-      return unloadPluginsASAP;
-    }
-  }
-
-  return false;
+  return Preferences::GetBool("dom.ipc.plugins.unloadASAP", false);
 }
 
 nsPluginHost::nsPluginHost()
@@ -355,26 +311,17 @@ nsPluginHost::nsPluginHost()
 {
   // check to see if pref is set at startup to let plugins take over in
   // full page mode for certain image mime types that we handle internally
-  mPrefService = do_GetService(NS_PREFSERVICE_CONTRACTID);
-  if (mPrefService) {
-    bool tmp;
-    nsresult rv = mPrefService->GetBoolPref("plugin.override_internal_types",
-                                            &tmp);
-    if (NS_SUCCEEDED(rv)) {
-      mOverrideInternalTypes = tmp;
-    }
+  mOverrideInternalTypes =
+    Preferences::GetBool("plugin.override_internal_types", false);
 
-    rv = mPrefService->GetBoolPref("plugin.disable", &tmp);
-    if (NS_SUCCEEDED(rv)) {
-      mPluginsDisabled = tmp;
-    }
-  }
+  mPluginsDisabled = Preferences::GetBool("plugin.disable", false);
+
+  Preferences::AddStrongObserver(this, "plugin.disable");
 
   nsCOMPtr<nsIObserverService> obsService =
     mozilla::services::GetObserverService();
   if (obsService) {
     obsService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
-    obsService->AddObserver(this, NS_PRIVATE_BROWSING_SWITCH_TOPIC, false);
 #ifdef MOZ_WIDGET_ANDROID
     obsService->AddObserver(this, "application-foreground", false);
     obsService->AddObserver(this, "application-background", false);
@@ -404,7 +351,7 @@ nsPluginHost::~nsPluginHost()
 {
   PLUGIN_LOG(PLUGIN_LOG_ALWAYS,("nsPluginHost::dtor\n"));
 
-  Destroy();
+  UnloadPlugins();
   sInst = nsnull;
 }
 
@@ -428,16 +375,16 @@ nsPluginHost::GetInst()
   return sInst;
 }
 
-bool nsPluginHost::IsRunningPlugin(nsPluginTag * plugin)
+bool nsPluginHost::IsRunningPlugin(nsPluginTag * aPluginTag)
 {
-  if (!plugin || !plugin->mEntryPoint) {
+  if (!aPluginTag || !aPluginTag->mPlugin) {
     return false;
   }
 
   for (PRUint32 i = 0; i < mInstances.Length(); i++) {
     nsNPAPIPluginInstance *instance = mInstances[i].get();
     if (instance &&
-        instance->GetPlugin() == plugin->mEntryPoint &&
+        instance->GetPlugin() == aPluginTag->mPlugin &&
         instance->IsRunning()) {
       return true;
     }
@@ -606,7 +553,7 @@ nsresult nsPluginHost::GetPrompt(nsIPluginInstanceOwner *aOwner, nsIPrompt **aPr
 nsresult nsPluginHost::GetURL(nsISupports* pluginInst,
                               const char* url,
                               const char* target,
-                              nsIPluginStreamListener* streamListener,
+                              nsNPAPIPluginStreamListener* streamListener,
                               const char* altHost,
                               const char* referrer,
                               bool forceJSEnabled)
@@ -619,7 +566,7 @@ nsresult nsPluginHost::GetURL(nsISupports* pluginInst,
 nsresult nsPluginHost::GetURLWithHeaders(nsNPAPIPluginInstance* pluginInst,
                                          const char* url,
                                          const char* target,
-                                         nsIPluginStreamListener* streamListener,
+                                         nsNPAPIPluginStreamListener* streamListener,
                                          const char* altHost,
                                          const char* referrer,
                                          bool forceJSEnabled,
@@ -627,7 +574,7 @@ nsresult nsPluginHost::GetURLWithHeaders(nsNPAPIPluginInstance* pluginInst,
                                          const char* getHeaders)
 {
   // we can only send a stream back to the plugin (as specified by a
-  // null target) if we also have a nsIPluginStreamListener to talk to
+  // null target) if we also have a nsNPAPIPluginStreamListener to talk to
   if (!target && !streamListener)
     return NS_ERROR_ILLEGAL_VALUE;
 
@@ -663,7 +610,7 @@ nsresult nsPluginHost::PostURL(nsISupports* pluginInst,
                                     const char* postData,
                                     bool isFile,
                                     const char* target,
-                                    nsIPluginStreamListener* streamListener,
+                                    nsNPAPIPluginStreamListener* streamListener,
                                     const char* altHost,
                                     const char* referrer,
                                     bool forceJSEnabled,
@@ -673,7 +620,7 @@ nsresult nsPluginHost::PostURL(nsISupports* pluginInst,
   nsresult rv;
 
   // we can only send a stream back to the plugin (as specified
-  // by a null target) if we also have a nsIPluginStreamListener
+  // by a null target) if we also have a nsNPAPIPluginStreamListener
   // to talk to also
   if (!target && !streamListener)
     return NS_ERROR_ILLEGAL_VALUE;
@@ -828,14 +775,12 @@ nsresult nsPluginHost::Init()
   return NS_OK;
 }
 
-nsresult nsPluginHost::Destroy()
+nsresult nsPluginHost::UnloadPlugins()
 {
-  PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsPluginHost::Destroy Called\n"));
+  PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsPluginHost::UnloadPlugins Called\n"));
 
-  if (mIsDestroyed)
+  if (!mPluginsLoaded)
     return NS_OK;
-
-  mIsDestroyed = true;
 
   // we should call nsIPluginInstance::Stop and nsIPluginInstance::SetWindow
   // for those plugins who want it
@@ -866,7 +811,7 @@ nsresult nsPluginHost::Destroy()
   }
 #endif /* XP_WIN */
 
-  mPrefService = nsnull; // release prefs service to avoid leaks!
+  mPluginsLoaded = false;
 
   return NS_OK;
 }
@@ -932,40 +877,10 @@ nsPluginHost::GetPluginTempDir(nsIFile **aDir)
   return sPluginTempDir->Clone(aDir);
 }
 
-nsresult nsPluginHost::InstantiatePluginForChannel(nsIChannel* aChannel,
-                                                   nsObjectLoadingContent* aContent,
-                                                   nsIStreamListener** aListener)
-{
-  NS_PRECONDITION(aChannel && aContent,
-                  "Invalid arguments to InstantiatePluginForChannel");
-  nsCOMPtr<nsIURI> uri;
-  nsresult rv = aChannel->GetURI(getter_AddRefs(uri));
-  if (NS_FAILED(rv))
-    return rv;
-
-#ifdef PLUGIN_LOGGING
-  if (PR_LOG_TEST(nsPluginLogging::gPluginLog, PLUGIN_LOG_NORMAL)) {
-    nsCAutoString urlSpec;
-    uri->GetAsciiSpec(urlSpec);
-
-    PR_LOG(nsPluginLogging::gPluginLog, PLUGIN_LOG_NORMAL,
-           ("nsPluginHost::InstantiatePluginForChannel Begin content=%p, url=%s\n",
-           aContent, urlSpec.get()));
-
-    PR_LogFlush();
-  }
-#endif
-
-  // Note that we're not setting up a plugin instance here; the stream
-  // listener's OnStartRequest will handle doing that.
-
-  return NewEmbeddedPluginStreamListener(uri, aContent, nsnull, aListener);
-}
-
 nsresult
-nsPluginHost::InstantiateEmbeddedPlugin(const char *aMimeType, nsIURI* aURL,
-                                        nsObjectLoadingContent *aContent,
-                                        nsPluginInstanceOwner** aOwner)
+nsPluginHost::InstantiateEmbeddedPluginInstance(const char *aMimeType, nsIURI* aURL,
+                                                nsObjectLoadingContent *aContent,
+                                                nsPluginInstanceOwner** aOwner)
 {
   NS_ENSURE_ARG_POINTER(aOwner);
 
@@ -1068,7 +983,7 @@ nsPluginHost::InstantiateEmbeddedPlugin(const char *aMimeType, nsIURI* aURL,
   // if we don't have a MIME type at this point, we still have one more chance by
   // opening the stream and seeing if the server hands one back
   if (!aMimeType) {
-    if (bCanHandleInternally && !aContent->SrcStreamLoadInitiated()) {
+    if (bCanHandleInternally && !aContent->SrcStreamLoading()) {
       NewEmbeddedPluginStream(aURL, aContent, nsnull);
     }
     return NS_ERROR_FAILURE;
@@ -1096,8 +1011,8 @@ nsPluginHost::InstantiateEmbeddedPlugin(const char *aMimeType, nsIURI* aURL,
     // no need to check for "data" as it would have been converted to "src"
     const char *value;
     bool havedata = NS_SUCCEEDED(pti->GetAttribute("SRC", &value));
-    if (havedata && !isJava && bCanHandleInternally && !aContent->SrcStreamLoadInitiated()) {
-      NewEmbeddedPluginStream(aURL, nsnull, instance.get());
+    if (havedata && !isJava && bCanHandleInternally && !aContent->SrcStreamLoading()) {
+      NewEmbeddedPluginStream(aURL, aContent, instance.get());
     }
   }
 
@@ -1118,11 +1033,11 @@ nsPluginHost::InstantiateEmbeddedPlugin(const char *aMimeType, nsIURI* aURL,
   return NS_OK;
 }
 
-nsresult nsPluginHost::InstantiateFullPagePlugin(const char *aMimeType,
-                                                 nsIURI* aURI,
-                                                 nsObjectLoadingContent *aContent,
-                                                 nsPluginInstanceOwner **aOwner,
-                                                 nsIStreamListener **aStreamListener)
+nsresult nsPluginHost::InstantiateFullPagePluginInstance(const char *aMimeType,
+                                                         nsIURI* aURI,
+                                                         nsObjectLoadingContent *aContent,
+                                                         nsPluginInstanceOwner **aOwner,
+                                                         nsIStreamListener **aStreamListener)
 {
 #ifdef PLUGIN_LOGGING
   nsCAutoString urlSpec;
@@ -1164,7 +1079,7 @@ nsresult nsPluginHost::InstantiateFullPagePlugin(const char *aMimeType,
   instanceOwner->CreateWidget();
   instanceOwner->CallSetWindow();
 
-  rv = NewFullPagePluginStream(aURI, instance.get(), aStreamListener);
+  rv = NewFullPagePluginStreamListener(aURI, instance.get(), aStreamListener);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -1198,7 +1113,7 @@ nsPluginHost::TagForPlugin(nsNPAPIPlugin* aPlugin)
 {
   nsPluginTag* pluginTag;
   for (pluginTag = mPlugins; pluginTag; pluginTag = pluginTag->mNext) {
-    if (pluginTag->mEntryPoint == aPlugin) {
+    if (pluginTag->mPlugin == aPlugin) {
       return pluginTag;
     }
   }
@@ -1213,37 +1128,31 @@ nsresult nsPluginHost::SetUpPluginInstance(const char *aMimeType,
 {
   NS_ENSURE_ARG_POINTER(aOwner);
 
-  nsresult rv = NS_OK;
-
-  rv = TrySetUpPluginInstance(aMimeType, aURL, aOwner);
-
-  // if we fail, refresh plugin list just in case the plugin has been
-  // just added and try to instantiate plugin instance again, see bug 143178
-  if (NS_FAILED(rv)) {
-    // we should also make sure not to do this more than once per page
-    // so if there are a few embed tags with unknown plugins,
-    // we don't get unnecessary overhead
-    // let's cache document to decide whether this is the same page or not
-    nsCOMPtr<nsIDocument> document;
-    aOwner->GetDocument(getter_AddRefs(document));
-
-    nsCOMPtr<nsIDocument> currentdocument = do_QueryReferent(mCurrentDocument);
-    if (document == currentdocument)
-      return rv;
-
-    mCurrentDocument = do_GetWeakReference(document);
-
-    // ReloadPlugins will do the job smartly: nothing will be done
-    // if no changes detected, in such a case just return
-    if (NS_ERROR_PLUGINS_PLUGINSNOTCHANGED == ReloadPlugins(false))
-      return rv;
-
-    // other failure return codes may be not fatal, so we can still try
-    aOwner->SetInstance(nsnull); // avoid assert about setting it twice
-    rv = TrySetUpPluginInstance(aMimeType, aURL, aOwner);
+  nsresult rv = TrySetUpPluginInstance(aMimeType, aURL, aOwner);
+  if (NS_SUCCEEDED(rv)) {
+    return rv;
   }
 
-  return rv;
+  // If we failed to load a plugin instance we'll try again after
+  // reloading our plugin list. Only do that once per document to
+  // avoid redundant high resource usage on pages with multiple
+  // unkown instance types. We'll do that by caching the document.
+  nsCOMPtr<nsIDocument> document;
+  aOwner->GetDocument(getter_AddRefs(document));
+
+  nsCOMPtr<nsIDocument> currentdocument = do_QueryReferent(mCurrentDocument);
+  if (document == currentdocument) {
+    return rv;
+  }
+
+  mCurrentDocument = do_GetWeakReference(document);
+
+  // Don't try to set up an instance again if nothing changed.
+  if (ReloadPlugins(false) == NS_ERROR_PLUGINS_PLUGINSNOTCHANGED) {
+    return rv;
+  }
+
+  return TrySetUpPluginInstance(aMimeType, aURL, aOwner);
 }
 
 nsresult
@@ -1261,8 +1170,6 @@ nsPluginHost::TrySetUpPluginInstance(const char *aMimeType,
 
   PR_LogFlush();
 #endif
-
-  nsresult rv = NS_ERROR_FAILURE;
   
   const char* mimetype = nsnull;
 
@@ -1292,50 +1199,21 @@ nsPluginHost::TrySetUpPluginInstance(const char *aMimeType,
 
   nsRefPtr<nsNPAPIPlugin> plugin;
   GetPlugin(mimetype, getter_AddRefs(plugin));
-
-  nsRefPtr<nsNPAPIPluginInstance> instance;
-
-  if (plugin) {
-#if defined(XP_WIN)
-    static BOOL firstJavaPlugin = FALSE;
-    BOOL restoreOrigDir = FALSE;
-    WCHAR origDir[_MAX_PATH];
-    if (pluginTag->mIsJavaPlugin && !firstJavaPlugin) {
-      DWORD dw = GetCurrentDirectoryW(_MAX_PATH, origDir);
-      NS_ASSERTION(dw <= _MAX_PATH, "Failed to obtain the current directory, which may lead to incorrect class loading");
-      nsCOMPtr<nsIFile> binDirectory;
-      rv = NS_GetSpecialDirectory(NS_XPCOM_CURRENT_PROCESS_DIR,
-                                  getter_AddRefs(binDirectory));
-
-      if (NS_SUCCEEDED(rv)) {
-        nsAutoString path;
-        binDirectory->GetPath(path);
-        restoreOrigDir = SetCurrentDirectoryW(path.get());
-      }
-    }
-#endif
-
-    rv = plugin->CreatePluginInstance(getter_AddRefs(instance));
-
-#if defined(XP_WIN)
-    if (!firstJavaPlugin && restoreOrigDir) {
-      BOOL bCheck = SetCurrentDirectoryW(origDir);
-      NS_ASSERTION(bCheck, "Error restoring directory");
-      firstJavaPlugin = TRUE;
-    }
-#endif
+  if (!plugin) {
+    return NS_ERROR_FAILURE;
   }
 
-  if (NS_FAILED(rv))
-    return rv;
+  nsRefPtr<nsNPAPIPluginInstance> instance = new nsNPAPIPluginInstance();
 
-  // it is adreffed here
+  // This will create the owning reference. The connection must be made between the
+  // instance and the instance owner before initialization. Plugins can call into
+  // the browser during initialization.
   aOwner->SetInstance(instance.get());
 
   // this should not addref the instance or owner
   // except in some cases not Java, see bug 140931
   // our COM pointer will free the peer
-  rv = instance->Initialize(aOwner, mimetype);
+  nsresult rv = instance->Initialize(plugin.get(), aOwner, mimetype);
   if (NS_FAILED(rv)) {
     aOwner->SetInstance(nsnull);
     return rv;
@@ -1491,11 +1369,7 @@ public:
 
   NS_METHOD GetFilename(nsAString& aFilename)
   {
-    bool bShowPath;
-    nsCOMPtr<nsIPrefBranch> prefService = do_GetService(NS_PREFSERVICE_CONTRACTID);
-    if (prefService &&
-        NS_SUCCEEDED(prefService->GetBoolPref("plugin.expose_full_path", &bShowPath)) &&
-        bShowPath) {
+    if (Preferences::GetBool("plugin.expose_full_path", false)) {
       CopyUTF8toUTF16(mPluginTag.mFullPath, aFilename);
     } else {
       CopyUTF8toUTF16(mPluginTag.mFileName, aFilename);
@@ -1689,15 +1563,15 @@ static nsresult CreateNPAPIPlugin(nsPluginTag *aPluginTag,
   return rv;
 }
 
-nsresult nsPluginHost::EnsurePluginLoaded(nsPluginTag* plugin)
+nsresult nsPluginHost::EnsurePluginLoaded(nsPluginTag* aPluginTag)
 {
-  nsRefPtr<nsNPAPIPlugin> entrypoint = plugin->mEntryPoint;
-  if (!entrypoint) {
-    nsresult rv = CreateNPAPIPlugin(plugin, getter_AddRefs(entrypoint));
+  nsRefPtr<nsNPAPIPlugin> plugin = aPluginTag->mPlugin;
+  if (!plugin) {
+    nsresult rv = CreateNPAPIPlugin(aPluginTag, getter_AddRefs(plugin));
     if (NS_FAILED(rv)) {
       return rv;
     }
-    plugin->mEntryPoint = entrypoint;
+    aPluginTag->mPlugin = plugin;
   }
   return NS_OK;
 }
@@ -1730,7 +1604,7 @@ nsresult nsPluginHost::GetPlugin(const char *aMimeType, nsNPAPIPlugin** aPlugin)
       return rv;
     }
 
-    NS_ADDREF(*aPlugin = pluginTag->mEntryPoint);
+    NS_ADDREF(*aPlugin = pluginTag->mPlugin);
     return NS_OK;
   }
 
@@ -1854,7 +1728,7 @@ nsPluginHost::ClearSiteData(nsIPluginTag* plugin, const nsACString& domain,
   // We only ensure support for clearing Flash site data for now.
   // We will also attempt to clear data for any plugin that happens
   // to be loaded already.
-  if (!tag->mIsFlashPlugin && !tag->mEntryPoint) {
+  if (!tag->mIsFlashPlugin && !tag->mPlugin) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1864,7 +1738,7 @@ nsPluginHost::ClearSiteData(nsIPluginTag* plugin, const nsACString& domain,
     return rv;
   }
 
-  PluginLibrary* library = tag->mEntryPoint->GetLibrary();
+  PluginLibrary* library = tag->mPlugin->GetLibrary();
 
   // If 'domain' is the null string, clear everything.
   if (domain.IsVoid()) {
@@ -1905,7 +1779,7 @@ nsPluginHost::SiteHasData(nsIPluginTag* plugin, const nsACString& domain,
   // We only ensure support for clearing Flash site data for now.
   // We will also attempt to clear data for any plugin that happens
   // to be loaded already.
-  if (!tag->mIsFlashPlugin && !tag->mEntryPoint) {
+  if (!tag->mIsFlashPlugin && !tag->mPlugin) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1915,7 +1789,7 @@ nsPluginHost::SiteHasData(nsIPluginTag* plugin, const nsACString& domain,
     return rv;
   }
 
-  PluginLibrary* library = tag->mEntryPoint->GetLibrary();
+  PluginLibrary* library = tag->mPlugin->GetLibrary();
 
   // Get the list of sites from the plugin.
   InfallibleTArray<nsCString> sites;
@@ -2054,7 +1928,19 @@ nsresult nsPluginHost::ScanPluginsDirectory(nsIFile *pluginsDir,
       continue;
 
     PRInt64 fileModTime = LL_ZERO;
+#if defined(XP_MACOSX)
+    // On OS X the date of a bundle's "contents" (i.e. of its Info.plist file)
+    // is a much better guide to when it was last modified than the date of
+    // its package directory.  See bug 313700.
+    nsCOMPtr<nsILocalFileMac> localFileMac = do_QueryInterface(localfile);
+    if (localFileMac) {
+      localFileMac->GetBundleContentsLastModifiedTime(&fileModTime);
+    } else {
+      localfile->GetLastModifiedTime(&fileModTime);
+    }
+#else
     localfile->GetLastModifiedTime(&fileModTime);
+#endif
 
     // Look for it in our cache
     NS_ConvertUTF16toUTF8 filePath(utf16FilePath);
@@ -2256,7 +2142,7 @@ nsresult nsPluginHost::ScanPluginsDirectory(nsIFile *pluginsDir,
   }
 
   if (warnOutdated) {
-    mPrefService->SetBoolPref("plugins.update.notifyUser", true);
+    Preferences::SetBool("plugins.update.notifyUser", true);
   }
 
   return NS_OK;
@@ -2385,10 +2271,7 @@ nsresult nsPluginHost::FindPlugins(bool aCreatePluginList, bool * aPluginsChange
                             // the rest is optional
 
 #ifdef XP_WIN
-  bool bScanPLIDs = false;
-
-  if (mPrefService)
-    mPrefService->GetBoolPref("plugin.scan.plid.all", &bScanPLIDs);
+  bool bScanPLIDs = Preferences::GetBool("plugin.scan.plid.all", false);
 
     // Now lets scan any PLID directories
   if (bScanPLIDs && mPrivateDirServiceProvider) {
@@ -2634,7 +2517,7 @@ nsPluginHost::WritePluginInfo()
         (tag->mName.get()),
         PLUGIN_REGISTRY_FIELD_DELIMITER,
         PLUGIN_REGISTRY_END_OF_LINE_MARKER,
-        tag->mMimeTypes.Length() + (tag->mIsNPRuntimeEnabledJavaPlugin ? 1 : 0));
+        tag->mMimeTypes.Length());
 
       // Add in each mimetype this plugin supports
       for (PRUint32 i = 0; i < tag->mMimeTypes.Length(); i++) {
@@ -2645,18 +2528,6 @@ nsPluginHost::WritePluginInfo()
           (tag->mMimeDescriptions[i].get()),
           PLUGIN_REGISTRY_FIELD_DELIMITER,
           (tag->mExtensions[i].get()),
-          PLUGIN_REGISTRY_FIELD_DELIMITER,
-          PLUGIN_REGISTRY_END_OF_LINE_MARKER);
-      }
-
-      if (tag->mIsNPRuntimeEnabledJavaPlugin) {
-        PR_fprintf(fd, "%d%c%s%c%s%c%s%c%c\n",
-          tag->mMimeTypes.Length(), PLUGIN_REGISTRY_FIELD_DELIMITER,
-          "application/x-java-vm-npruntime",
-          PLUGIN_REGISTRY_FIELD_DELIMITER,
-          "",
-          PLUGIN_REGISTRY_FIELD_DELIMITER,
-          "",
           PLUGIN_REGISTRY_FIELD_DELIMITER,
           PLUGIN_REGISTRY_END_OF_LINE_MARKER);
       }
@@ -2776,19 +2647,20 @@ nsPluginHost::ReadPluginInfo()
     return rv;
 
   // kPluginRegistryVersion
-  PRInt32 vdiff = NS_CompareVersions(values[1], kPluginRegistryVersion);
+  PRInt32 vdiff = mozilla::CompareVersions(values[1], kPluginRegistryVersion);
+  mozilla::Version version(values[1]);
   // If this is a registry from some future version then don't attempt to read it
   if (vdiff > 0)
     return rv;
   // If this is a registry from before the minimum then don't attempt to read it
-  if (NS_CompareVersions(values[1], kMinimumRegistryVersion) < 0)
+  if (version < kMinimumRegistryVersion)
     return rv;
 
   // Registry v0.10 and upwards includes the plugin version field
-  bool regHasVersion = NS_CompareVersions(values[1], "0.10") >= 0;
+  bool regHasVersion = (version >= "0.10");
 
   // Registry v0.13 and upwards includes the architecture
-  if (NS_CompareVersions(values[1], "0.13") >= 0) {
+  if (version >= "0.13") {
     char* archValues[6];
     
     if (!reader.NextLine()) {
@@ -2822,7 +2694,7 @@ nsPluginHost::ReadPluginInfo()
   }
   
   // Registry v0.13 and upwards includes the list of invalid plugins
-  bool hasInvalidPlugins = (NS_CompareVersions(values[1], "0.13") >= 0);
+  bool hasInvalidPlugins = (version >= "0.13");
 
   if (!ReadSectionHeader(reader, "PLUGINS"))
     return rv;
@@ -2830,7 +2702,7 @@ nsPluginHost::ReadPluginInfo()
 #if defined(XP_MACOSX)
   bool hasFullPathInFileNameField = false;
 #else
-  bool hasFullPathInFileNameField = (NS_CompareVersions(values[1], "0.11") < 0);
+  bool hasFullPathInFileNameField = (version < "0.11");
 #endif
 
   while (reader.NextLine()) {
@@ -3029,7 +2901,7 @@ nsPluginHost::EnsurePrivateDirServiceProvider()
 
 nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
                                           nsNPAPIPluginInstance *aInstance,
-                                          nsIPluginStreamListener* aListener,
+                                          nsNPAPIPluginStreamListener* aListener,
                                           nsIInputStream *aPostStream,
                                           const char *aHeadersData,
                                           PRUint32 aHeadersDataLen)
@@ -3119,7 +2991,17 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
       // Only set the Referer header for GET requests because IIS throws
       // errors about malformed requests if we include it in POSTs. See
       // bug 724465.
-      rv = httpChannel->SetReferrer(doc->GetDocumentURI());  
+      nsCOMPtr<nsIURI> referer;
+
+      nsCOMPtr<nsIObjectLoadingContent> olc = do_QueryInterface(element);
+      if (olc)
+        olc->GetSrcURI(getter_AddRefs(referer));
+
+
+      if (!referer)
+        referer = doc->GetDocumentURI();
+
+      rv = httpChannel->SetReferrer(referer);
       NS_ENSURE_SUCCESS(rv,rv);
     }
       
@@ -3253,19 +3135,16 @@ nsPluginHost::StopPluginInstance(nsNPAPIPluginInstance* aInstance)
     return NS_OK;
   }
 
+  Telemetry::AutoTimer<Telemetry::PLUGIN_SHUTDOWN_MS> timer;
   aInstance->Stop();
 
   // if the instance does not want to be 'cached' just remove it
   bool doCache = aInstance->ShouldCache();
   if (doCache) {
     // try to get the max cached instances from a pref or use default
-    PRUint32 cachedInstanceLimit;
-    nsresult rv = NS_ERROR_FAILURE;
-    if (mPrefService)
-      rv = mPrefService->GetIntPref(NS_PREF_MAX_NUM_CACHED_INSTANCES, (int*)&cachedInstanceLimit);
-    if (NS_FAILED(rv))
-      cachedInstanceLimit = DEFAULT_NUMBER_OF_STOPPED_INSTANCES;
-    
+    PRUint32 cachedInstanceLimit =
+      Preferences::GetUint(NS_PREF_MAX_NUM_CACHED_INSTANCES,
+                           DEFAULT_NUMBER_OF_STOPPED_INSTANCES);
     if (StoppedInstanceCount() >= cachedInstanceLimit) {
       nsNPAPIPluginInstance *oldestInstance = FindOldestStoppedInstance();
       if (oldestInstance) {
@@ -3285,44 +3164,29 @@ nsPluginHost::StopPluginInstance(nsNPAPIPluginInstance* aInstance)
   return NS_OK;
 }
 
-nsresult nsPluginHost::NewEmbeddedPluginStreamListener(nsIURI* aURL,
+nsresult nsPluginHost::NewEmbeddedPluginStreamListener(nsIURI* aURI,
                                                        nsObjectLoadingContent *aContent,
                                                        nsNPAPIPluginInstance* aInstance,
-                                                       nsIStreamListener** aListener)
+                                                       nsIStreamListener **aStreamListener)
 {
-  if (!aURL)
-    return NS_OK;
+  NS_ENSURE_ARG_POINTER(aURI);
+  NS_ENSURE_ARG_POINTER(aStreamListener);
 
   nsRefPtr<nsPluginStreamListenerPeer> listener = new nsPluginStreamListenerPeer();
-  if (!listener)
-    return NS_ERROR_OUT_OF_MEMORY;
+  nsresult rv = listener->InitializeEmbedded(aURI, aInstance, aContent);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
-  nsresult rv;
+  listener.forget(aStreamListener);
 
-  // if we have an instance, everything has been set up
-  // if we only have an owner, then we need to pass it in
-  // so the listener can set up the instance later after
-  // we've determined the mimetype of the stream
-  if (aInstance)
-    rv = listener->InitializeEmbedded(aURL, aInstance, nsnull);
-  else if (aContent)
-    rv = listener->InitializeEmbedded(aURL, nsnull, aContent);
-  else
-    rv = NS_ERROR_ILLEGAL_VALUE;
-
-  if (NS_SUCCEEDED(rv))
-    NS_ADDREF(*aListener = listener);
-
-  return rv;
+  return NS_OK;
 }
 
-// Called by InstantiateEmbeddedPlugin()
 nsresult nsPluginHost::NewEmbeddedPluginStream(nsIURI* aURL,
                                                nsObjectLoadingContent *aContent,
                                                nsNPAPIPluginInstance* aInstance)
 {
-  NS_ASSERTION(!aContent || !aInstance, "Don't pass both content and an instance to NewEmbeddedPluginStream!");
-
   nsCOMPtr<nsIStreamListener> listener;
   nsresult rv = NewEmbeddedPluginStreamListener(aURL, aContent, aInstance,
                                                 getter_AddRefs(listener));
@@ -3354,17 +3218,14 @@ nsresult nsPluginHost::NewEmbeddedPluginStream(nsIURI* aURL,
   return rv;
 }
 
-// Called by InstantiateFullPagePlugin()
-nsresult nsPluginHost::NewFullPagePluginStream(nsIURI* aURI,
-                                               nsNPAPIPluginInstance *aInstance,
-                                               nsIStreamListener **aStreamListener)
+nsresult nsPluginHost::NewFullPagePluginStreamListener(nsIURI* aURI,
+                                                       nsNPAPIPluginInstance *aInstance,
+                                                       nsIStreamListener **aStreamListener)
 {
-  NS_ASSERTION(aStreamListener, "Stream listener out param cannot be null");
+  NS_ENSURE_ARG_POINTER(aURI);
+  NS_ENSURE_ARG_POINTER(aStreamListener);
 
   nsRefPtr<nsPluginStreamListenerPeer> listener = new nsPluginStreamListenerPeer();
-  if (!listener)
-    return NS_ERROR_OUT_OF_MEMORY;
-
   nsresult rv = listener->InitializeFullPage(aURI, aInstance);
   if (NS_FAILED(rv)) {
     return rv;
@@ -3381,13 +3242,16 @@ NS_IMETHODIMP nsPluginHost::Observe(nsISupports *aSubject,
 {
   if (!nsCRT::strcmp(NS_XPCOM_SHUTDOWN_OBSERVER_ID, aTopic)) {
     OnShutdown();
-    Destroy();
+    UnloadPlugins();
     sInst->Release();
   }
-  if (!nsCRT::strcmp(NS_PRIVATE_BROWSING_SWITCH_TOPIC, aTopic)) {
-    // inform all active plugins of changed private mode state
-    for (PRUint32 i = 0; i < mInstances.Length(); i++) {
-      mInstances[i]->PrivateModeStateChanged();
+  if (!nsCRT::strcmp(NS_PREFBRANCH_PREFCHANGE_TOPIC_ID, aTopic)) {
+    mPluginsDisabled = Preferences::GetBool("plugin.disable", false);
+    // Unload or load plugins as needed
+    if (mPluginsDisabled) {
+      UnloadPlugins();
+    } else {
+      LoadPlugins();
     }
   }
 #ifdef MOZ_WIDGET_ANDROID
@@ -3764,33 +3628,6 @@ nsPluginHost::NewPluginNativeWindow(nsPluginNativeWindow ** aPluginNativeWindow)
 }
 
 nsresult
-nsPluginHost::InstantiateDummyJavaPlugin(nsIPluginInstanceOwner *aOwner)
-{
-  // Pass false as the second arg, we want the answer to be the
-  // same here whether the Java plugin is enabled or not.
-  nsPluginTag *plugin = FindPluginForType("application/x-java-vm", false);
-
-  if (!plugin || !plugin->mIsNPRuntimeEnabledJavaPlugin) {
-    // No NPRuntime enabled Java plugin found, no point in
-    // instantiating a dummy plugin then.
-
-    return NS_OK;
-  }
-
-  nsresult rv = SetUpPluginInstance("application/x-java-vm", nsnull, aOwner);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsRefPtr<nsNPAPIPluginInstance> instance;
-  aOwner->GetInstance(getter_AddRefs(instance));
-  if (!instance)
-    return NS_OK;
-
-  instance->DefineJavaProperties();
-
-  return NS_OK;
-}
-
-nsresult
 nsPluginHost::GetPluginName(nsNPAPIPluginInstance *aPluginInstance,
                             const char** aPluginName)
 {
@@ -4006,10 +3843,10 @@ nsPluginHost::PluginCrashed(nsNPAPIPlugin* aPlugin,
   }
 
   // Only after all instances have been invalidated is it safe to null
-  // out nsPluginTag.mEntryPoint. The next time we try to create an
+  // out nsPluginTag.mPlugin. The next time we try to create an
   // instance of this plugin we reload it (launch a new plugin process).
 
-  crashedPluginTag->mEntryPoint = nsnull;
+  crashedPluginTag->mPlugin = nsnull;
 
 #ifdef XP_WIN
   CheckForDisabledWindows();

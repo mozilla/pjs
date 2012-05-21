@@ -272,12 +272,11 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       if (parent) {
         nsHtml5OtherDocUpdate update(parent->OwnerDoc(),
                                      aBuilder->GetDocument());
-        PRUint32 pos = parent->IndexOf(node);
+        PRInt32 pos = parent->IndexOf(node);
         NS_ASSERTION((pos >= 0), "Element not found as child of its parent");
-        rv = parent->RemoveChildAt(pos, true);
-        NS_ENSURE_SUCCESS(rv, rv);
+        parent->RemoveChildAt(pos, true);
       }
-      return rv;
+      return NS_OK;
     }
     case eTreeOpAppendChildrenToNewParent: {
       nsCOMPtr<nsIContent> node = *(mOne.node);
@@ -291,8 +290,7 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       bool didAppend = false;
       while (node->HasChildren()) {
         nsCOMPtr<nsIContent> child = node->GetFirstChild();
-        rv = node->RemoveChildAt(0, true);
-        NS_ENSURE_SUCCESS(rv, rv);
+        node->RemoveChildAt(0, true);
         rv = parent->AppendChildTo(child, false);
         NS_ENSURE_SUCCESS(rv, rv);
         didAppend = true;
@@ -588,7 +586,7 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       return AppendToDocument(asContent, aBuilder);
     }
     case eTreeOpMarkAsBroken: {
-      aBuilder->MarkAsBroken();
+      aBuilder->MarkAsBroken(NS_ERROR_OUT_OF_MEMORY);
       return rv;
     }
     case eTreeOpRunScript: {
@@ -629,7 +627,8 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
     case eTreeOpNeedsCharsetSwitchTo: {
       char* str = mOne.charPtr;
       PRInt32 charsetSource = mFour.integer;
-      aBuilder->NeedsCharsetSwitchTo(str, charsetSource);
+      PRInt32 lineNumber = mTwo.integer;
+      aBuilder->NeedsCharsetSwitchTo(str, charsetSource, (PRUint32)lineNumber);
       return rv;    
     }
     case eTreeOpUpdateStyleSheet: {
@@ -691,6 +690,13 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       if (NS_FAILED(NS_DispatchToMainThread(event))) {
         NS_WARNING("failed to dispatch svg load dispatcher");
       }
+      return rv;
+    }
+    case eTreeOpMaybeComplainAboutCharset: {
+      char* msgId = mOne.charPtr;
+      bool error = mTwo.integer;
+      PRInt32 lineNumber = mThree.integer;
+      aBuilder->MaybeComplainAboutCharset(msgId, error, (PRUint32)lineNumber);
       return rv;
     }
     case eTreeOpAddClass: {
@@ -795,12 +801,12 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
         const PRUnichar* params[] = { atom->GetUTF16String(),
                                       otherAtom->GetUTF16String() };
         rv = nsContentUtils::FormatLocalizedString(
-          nsContentUtils::eHTMLPARSER_PROPERTIES, msgId, params, 2, message);
+          nsContentUtils::eHTMLPARSER_PROPERTIES, msgId, params, message);
         NS_ENSURE_SUCCESS(rv, rv);
       } else if (atom) {
         const PRUnichar* params[] = { atom->GetUTF16String() };
         rv = nsContentUtils::FormatLocalizedString(
-          nsContentUtils::eHTMLPARSER_PROPERTIES, msgId, params, 1, message);
+          nsContentUtils::eHTMLPARSER_PROPERTIES, msgId, params, message);
         NS_ENSURE_SUCCESS(rv, rv);
       } else {
         rv = nsContentUtils::GetLocalizedString(

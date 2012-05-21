@@ -1,48 +1,15 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.com code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Dietrich Ayala <dietrich@mozilla.com>
- *  Marco Bonardo <mak77@bonardo.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // An object representing the contents of bookmarks.preplaces.html.
 let test_bookmarks = {
   menu: [
     { title: "Mozilla Firefox",
       children: [
-        { title: "Help and Tutorials", 
+        { title: "Help and Tutorials",
           url: "http://en-us.www.mozilla.com/en-US/firefox/help/",
           icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAAHWSURBVHjaYvz//z8DJQAggJiQOe/fv2fv7Oz8rays/N+VkfG/iYnJfyD/1+rVq7ffu3dPFpsBAAHEAHIBCJ85c8bN2Nj4vwsDw/8zQLwKiO8CcRoQu0DxqlWrdsHUwzBAAIGJmTNnPgYa9j8UqhFElwPxf2MIDeIrKSn9FwSJoRkAEEAM0DD4DzMAyPi/G+QKY4hh5WAXGf8PDQ0FGwJ22d27CjADAAIIrLmjo+MXA9R2kAHvGBA2wwx6B8W7od6CeQcggKCmCEL8bgwxYCbUIGTDVkHDBia+CuotgACCueD3TDQN75D4xmAvCoK9ARMHBzAw0AECiBHkAlC0Mdy7x9ABNA3obAZXIAa6iKEcGlMVQHwWyjYuL2d4v2cPg8vZswx7gHyAAAK7AOif7SAbOqCmn4Ha3AHFsIDtgPq/vLz8P4MSkJ2W9h8ggBjevXvHDo4FQUQg/kdypqCg4H8lUIACnQ/SOBMYI8bAsAJFPcj1AAEEjwVQqLpAbXmH5BJjqI0gi9DTAAgDBBCcAVLkgmQ7yKCZxpCQxqUZhAECCJ4XgMl493ug21ZD+aDAXH0WLM4A9MZPXJkJIIAwTAR5pQMalaCABQUULttBGCCAGCnNzgABBgAMJ5THwGvJLAAAAABJRU5ErkJggg=="
         },
@@ -57,8 +24,8 @@ let test_bookmarks = {
         { title: "About Us",
           url: "http://en-us.www.mozilla.com/en-US/about/",
           icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAAHWSURBVHjaYvz//z8DJQAggJiQOe/fv2fv7Oz8rays/N+VkfG/iYnJfyD/1+rVq7ffu3dPFpsBAAHEAHIBCJ85c8bN2Nj4vwsDw/8zQLwKiO8CcRoQu0DxqlWrdsHUwzBAAIGJmTNnPgYa9j8UqhFElwPxf2MIDeIrKSn9FwSJoRkAEEAM0DD4DzMAyPi/G+QKY4hh5WAXGf8PDQ0FGwJ22d27CjADAAIIrLmjo+MXA9R2kAHvGBA2wwx6B8W7od6CeQcggKCmCEL8bgwxYCbUIGTDVkHDBia+CuotgACCueD3TDQN75D4xmAvCoK9ARMHBzAw0AECiBHkAlC0Mdy7x9ABNA3obAZXIAa6iKEcGlMVQHwWyjYuL2d4v2cPg8vZswx7gHyAAAK7AOif7SAbOqCmn4Ha3AHFsIDtgPq/vLz8P4MSkJ2W9h8ggBjevXvHDo4FQUQg/kdypqCg4H8lUIACnQ/SOBMYI8bAsAJFPcj1AAEEjwVQqLpAbXmH5BJjqI0gi9DTAAgDBBCcAVLkgmQ7yKCZxpCQxqUZhAECCJ4XgMl493ug21ZD+aDAXH0WLM4A9MZPXJkJIIAwTAR5pQMalaCABQUULttBGCCAGCnNzgABBgAMJ5THwGvJLAAAAABJRU5ErkJggg=="
-        },
-      ],
+        }
+      ]
     },
     { title: "test",
       description: "folder test comment",
@@ -72,10 +39,10 @@ let test_bookmarks = {
           keyword: "test",
           sidebar: true,
           postData: "hidden1%3Dbar&text1%3D%25s",
-          charset: "ISO-8859-1",
-        },
+          charset: "ISO-8859-1"
+        }
       ]
-    },
+    }
   ],
   toolbar: [
     { title: "Getting Started",
@@ -83,16 +50,15 @@ let test_bookmarks = {
       icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAAHWSURBVHjaYvz//z8DJQAggJiQOe/fv2fv7Oz8rays/N+VkfG/iYnJfyD/1+rVq7ffu3dPFpsBAAHEAHIBCJ85c8bN2Nj4vwsDw/8zQLwKiO8CcRoQu0DxqlWrdsHUwzBAAIGJmTNnPgYa9j8UqhFElwPxf2MIDeIrKSn9FwSJoRkAEEAM0DD4DzMAyPi/G+QKY4hh5WAXGf8PDQ0FGwJ22d27CjADAAIIrLmjo+MXA9R2kAHvGBA2wwx6B8W7od6CeQcggKCmCEL8bgwxYCbUIGTDVkHDBia+CuotgACCueD3TDQN75D4xmAvCoK9ARMHBzAw0AECiBHkAlC0Mdy7x9ABNA3obAZXIAa6iKEcGlMVQHwWyjYuL2d4v2cPg8vZswx7gHyAAAK7AOif7SAbOqCmn4Ha3AHFsIDtgPq/vLz8P4MSkJ2W9h8ggBjevXvHDo4FQUQg/kdypqCg4H8lUIACnQ/SOBMYI8bAsAJFPcj1AAEEjwVQqLpAbXmH5BJjqI0gi9DTAAgDBBCcAVLkgmQ7yKCZxpCQxqUZhAECCJ4XgMl493ug21ZD+aDAXH0WLM4A9MZPXJkJIIAwTAR5pQMalaCABQUULttBGCCAGCnNzgABBgAMJ5THwGvJLAAAAABJRU5ErkJggg=="
     },
     { title: "Latest Headlines",
-      description: "Livemark test comment",
       url: "http://en-us.fxfeeds.mozilla.com/en-US/firefox/livebookmarks/",
-      feedUrl: "http://en-us.fxfeeds.mozilla.com/en-US/firefox/headlines.xml",
+      feedUrl: "http://en-us.fxfeeds.mozilla.com/en-US/firefox/headlines.xml"
     }
   ],
   unfiled: [
     { title: "Example.tld",
-      url: "http://example.tld/",
-    },
-  ],
+      url: "http://example.tld/"
+    }
+  ]
 };
 
 // Pre-Places bookmarks.html file pointer.
@@ -100,11 +66,17 @@ let gBookmarksFileOld;
 // Places bookmarks.html file pointer.
 let gBookmarksFileNew;
 
-let importer = Cc["@mozilla.org/browser/places/import-export-service;1"].
+let exporter = Cc["@mozilla.org/browser/places/import-export-service;1"].
                getService(Ci.nsIPlacesImportExportService);
+
+Cu.import("resource://gre/modules/BookmarkHTMLUtils.jsm");
 
 function run_test()
 {
+  run_next_test();
+}
+
+add_test(function setup() {
   // Avoid creating smart bookmarks during the test.
   Services.prefs.setIntPref("browser.places.smartBookmarksVersion", -1);
 
@@ -128,19 +100,27 @@ function run_test()
   // 2. run the test-suite
   // Note: we do not empty the db before this import to catch bugs like 380999
   try {
-    importer.importHTMLFromFile(gBookmarksFileOld, true);
+    BookmarkHTMLUtils.importFromFile(gBookmarksFileOld, true, function(success) {
+      if (success) {
+        waitForAsyncUpdates(function () {
+          testImportedBookmarks();
+
+          // Prepare for next tests.
+          try {
+            exporter.exportHTMLToFile(gBookmarksFileNew);
+          } catch(ex) { do_throw("couldn't export to file: " + ex); }
+
+          waitForAsyncUpdates(function () {
+            remove_all_bookmarks();
+            run_next_test();
+          });
+        });
+      } else {
+        do_throw("couldn't import legacy bookmarks file.");
+      }
+    });
   } catch(ex) { do_throw("couldn't import legacy bookmarks file: " + ex); }
-
-  testImportedBookmarks();
-
-  // Prepare for next tests.
-  try {
-    importer.exportHTMLToFile(gBookmarksFileNew);
-  } catch(ex) { do_throw("couldn't export to file: " + ex); }
-
-  remove_all_bookmarks();
-  run_next_test();
-}
+});
 
 add_test(function test_import_new()
 {
@@ -149,102 +129,158 @@ add_test(function test_import_new()
   // 2. run the test-suite
 
   try {
-    importer.importHTMLFromFile(gBookmarksFileNew, true);
+    BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+      if (success) {
+        waitForAsyncUpdates(function () {
+          testImportedBookmarks();
+
+          waitForAsyncUpdates(function () {
+            remove_all_bookmarks();
+            run_next_test();
+          });
+        });
+      } else {
+        do_throw("couldn't import the exported file.");
+      }
+    });
   } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
-
-  testImportedBookmarks();
-
-  remove_all_bookmarks();
-  run_next_test();
 });
 
 add_test(function test_emptytitle_export()
 {
   // Test exporting and importing with an empty-titled bookmark.
   // 1. import bookmarks
-  // 1. create an empty-titled bookmark.
-  // 2. export to bookmarks.exported.html
-  // 3. empty bookmarks db
-  // 4. import bookmarks.exported.html
-  // 5. run the test-suite
+  // 2. create an empty-titled bookmark.
+  // 3. export to bookmarks.exported.html
+  // 4. empty bookmarks db
+  // 5. import bookmarks.exported.html
+  // 6. run the test-suite
+  // 7. remove the empty-titled bookmark
+  // 8. export to bookmarks.exported.html
+  // 9. empty bookmarks db and continue
 
   try {
-    importer.importHTMLFromFile(gBookmarksFileNew, true);
+    BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+      if (success) {
+        const NOTITLE_URL = "http://notitle.mozilla.org/";
+        let id = PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
+                                                      NetUtil.newURI(NOTITLE_URL),
+                                                      PlacesUtils.bookmarks.DEFAULT_INDEX,
+                                                      "");
+        test_bookmarks.unfiled.push({ title: "", url: NOTITLE_URL });
+
+        try {
+          exporter.exportHTMLToFile(gBookmarksFileNew);
+        } catch(ex) { do_throw("couldn't export to file: " + ex); }
+
+        remove_all_bookmarks();
+
+        try {
+          BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+           if (success) {
+              waitForAsyncUpdates(function () {
+                testImportedBookmarks();
+
+                // Cleanup.
+                test_bookmarks.unfiled.pop();
+                PlacesUtils.bookmarks.removeItem(id);
+
+                try {
+                  exporter.exportHTMLToFile(gBookmarksFileNew);
+                } catch(ex) { do_throw("couldn't export to file: " + ex); }
+
+                waitForAsyncUpdates(function () {
+                  remove_all_bookmarks();
+                  run_next_test();
+                });
+              });
+            } else {
+              do_throw("couldn't import the exported file.");
+            }
+          });
+        } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
+      } else {
+        do_throw("couldn't import the exported file.");
+      }
+    });
   } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
-
-  const NOTITLE_URL = "http://notitle.mozilla.org/";
-  let id = PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
-                                                NetUtil.newURI(NOTITLE_URL),
-                                                PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                                "");
-  test_bookmarks.unfiled.push({ title: "", url: NOTITLE_URL });
-
-  try {
-    importer.exportHTMLToFile(gBookmarksFileNew);
-  } catch(ex) { do_throw("couldn't export to file: " + ex); }
-
-  remove_all_bookmarks();
-
-  try {
-    importer.importHTMLFromFile(gBookmarksFileNew, true);
-  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
-
-  testImportedBookmarks();
-
-  // Cleanup.
-  test_bookmarks.unfiled.pop();
-  PlacesUtils.bookmarks.removeItem(id);
-
-  try {
-    importer.exportHTMLToFile(gBookmarksFileNew);
-  } catch(ex) { do_throw("couldn't export to file: " + ex); }
-
-  remove_all_bookmarks();
-  run_next_test();
 });
 
-add_test(function test_import_preplaces_to_folder()
+add_test(function test_import_chromefavicon()
 {
-  // Test importing a pre-Places canonical bookmarks file to a specific folder.
-  // 1. create a new folder
-  // 2. import bookmarks.preplaces.html to that folder
-  // 3. run the test-suite
+  // Test exporting and importing with a bookmark pointing to a chrome favicon.
+  // 1. import bookmarks
+  // 2. create a bookmark pointing to a chrome favicon.
+  // 3. export to bookmarks.exported.html
+  // 4. empty bookmarks db
+  // 5. import bookmarks.exported.html
+  // 6. run the test-suite
+  // 7. remove the bookmark pointing to a chrome favicon.
+  // 8. export to bookmarks.exported.html
+  // 9. empty bookmarks db and continue
 
-  let testFolder = PlacesUtils.bookmarks.createFolder(
-    PlacesUtils.bookmarksMenuFolderId, "test-import",
-    PlacesUtils.bookmarks.DEFAULT_INDEX
-  );
+  const PAGE_URI = NetUtil.newURI("http://example.com/chromefavicon_page");
+  const CHROME_FAVICON_URI = NetUtil.newURI("chrome://global/skin/icons/information-16.png");
+  const CHROME_FAVICON_URI_2 = NetUtil.newURI("chrome://global/skin/icons/error-16.png");
+
   try {
-    importer.importHTMLFromFileToFolder(gBookmarksFileOld, testFolder, false);
-  } catch(ex) { do_throw("couldn't import the exported file to folder: " + ex); }
+    BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+      if (!success) {
+        do_throw("couldn't import the exported file.");
+      }
+      let id = PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
+                                                    PAGE_URI,
+                                                    PlacesUtils.bookmarks.DEFAULT_INDEX,
+                                                    "Test");
 
-  // Import-to-folder creates subfolders for toolbar and unfiled.
-  testImportedBookmarksToFolder(testFolder);
+      PlacesUtils.favicons.setAndFetchFaviconForPage(
+        PAGE_URI, CHROME_FAVICON_URI, true, function () {
+          PlacesUtils.favicons.getFaviconDataForPage(
+            PAGE_URI, function (aURI, aDataLen, aData, aMimeType) {
+              let base64Icon = "data:image/png;base64," +
+                  base64EncodeString(String.fromCharCode.apply(String, aData));
 
-  remove_all_bookmarks();
-  run_next_test();
-});
+              test_bookmarks.unfiled.push(
+                { title: "Test", url: PAGE_URI.spec, icon: base64Icon });
 
-add_test(function test_import_to_folder()
-{
-  // Test importing a Places canonical bookmarks file to a specific folder.
-  // 1. create a new folder
-  // 2. import bookmarks.exported.html to that folder
-  // 3. run the test-suite
+              try {
+                exporter.exportHTMLToFile(gBookmarksFileNew);
+              } catch(ex) { do_throw("couldn't export to file: " + ex); }
 
-  let testFolder = PlacesUtils.bookmarks.createFolder(
-    PlacesUtils.bookmarksMenuFolderId, "test-import",
-    PlacesUtils.bookmarks.DEFAULT_INDEX
-  );
-  try {
-    importer.importHTMLFromFileToFolder(gBookmarksFileNew, testFolder, false);
-  } catch(ex) { do_throw("couldn't import the exported file to folder: " + ex); }
+              // Change the favicon to check it's really imported again later.
+              PlacesUtils.favicons.setAndFetchFaviconForPage(
+                PAGE_URI, CHROME_FAVICON_URI_2, true, function () {
 
-  // Import-to-folder creates subfolders for toolbar and unfiled.
-  testImportedBookmarksToFolder(testFolder);
+                  remove_all_bookmarks();
 
-  remove_all_bookmarks();
-  run_next_test();
+                  try {
+                    BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+                     if (!success) {
+                        do_throw("couldn't import the exported file.");
+                      }
+                      waitForAsyncUpdates(function () {
+                        testImportedBookmarks();
+
+                        // Cleanup.
+                        test_bookmarks.unfiled.pop();
+                        PlacesUtils.bookmarks.removeItem(id);
+
+                        try {
+                          exporter.exportHTMLToFile(gBookmarksFileNew);
+                        } catch(ex) { do_throw("couldn't export to file: " + ex); }
+
+                        waitForAsyncUpdates(function () {
+                          remove_all_bookmarks();
+                          run_next_test();
+                        });
+                      });
+                    });
+                  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
+                });
+            });
+        });
+    });
+  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
 });
 
 add_test(function test_import_ontop()
@@ -258,24 +294,40 @@ add_test(function test_import_ontop()
   // 4. run the test-suite
 
   try {
-    importer.importHTMLFromFile(gBookmarksFileNew, true);
-  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
-  try {
-    importer.exportHTMLToFile(gBookmarksFileNew);
-  } catch(ex) { do_throw("couldn't export to file: " + ex); }
-  try {
-    importer.importHTMLFromFile(gBookmarksFileNew, true);
-  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
+    BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+      if (success) {
+        try {
+          exporter.exportHTMLToFile(gBookmarksFileNew);
+        } catch(ex) { do_throw("couldn't export to file: " + ex); }
+        try {
+          BookmarkHTMLUtils.importFromFile(gBookmarksFileNew, true, function(success) {
+            if (success) {
+              waitForAsyncUpdates(function () {
+                testImportedBookmarks();
 
-  testImportedBookmarks();
+                waitForAsyncUpdates(function () {
+                  remove_all_bookmarks();
+                  run_next_test();
+                });
+              });
+            } else {
+              do_throw("couldn't import the exported file.");
+            }
+          });
+        } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
 
-  remove_all_bookmarks();
-  run_next_test();
+      } else {
+        do_throw("couldn't import the exported file.");
+      }
+    });
+  } catch(ex) { do_throw("couldn't import the exported file: " + ex); }
 });
 
 function testImportedBookmarks()
 {
   for (let group in test_bookmarks) {
+    do_print("[testImportedBookmarks()] Checking group '" + group + "'");
+
     let root;
     switch (group) {
       case "menu":
@@ -308,6 +360,7 @@ function testImportedBookmarksToFolder(aFolder)
 
   for (let i = 0; i < root.childCount; i++) {
     let child = root.getChild(i);
+    // This check depends on all "menu" bookmarks being listed first in the imported file :-|
     if (i < rootFolderCount) {
       checkItem(test_bookmarks.menu[i], child);
     }
@@ -316,9 +369,8 @@ function testImportedBookmarksToFolder(aFolder)
       let group = /Toolbar/.test(container.title) ? test_bookmarks.toolbar
                                                   : test_bookmarks.unfiled;
       container.containerOpen = true;
-      print(container.title);
+      do_print("[testImportedBookmarksToFolder()] Checking container '" + container.title + "'");
       for (let t = 0; t < container.childCount; t++) {
-        print(group[t].title + " " + container.getChild(t).title);
         checkItem(group[t], container.getChild(t));
       }
       container.containerOpen = false;
@@ -350,8 +402,14 @@ function checkItem(aExpected, aNode)
                       aExpected.lastModified);
         break;
       case "url":
-        if (!PlacesUtils.livemarks.isLivemark(id))
-          do_check_eq(aNode.uri, aExpected.url);
+        PlacesUtils.livemarks.getLivemark(
+          { id: id },
+          function (aStatus, aLivemark) {
+            if (!Components.isSuccessCode(aStatus)) {
+              do_check_eq(aNode.uri, aExpected.url);
+            }
+          }
+        );
         break;
       case "icon":
         let faviconURI = PlacesUtils.favicons.getFaviconForPage(
@@ -378,11 +436,14 @@ function checkItem(aExpected, aNode)
                     aExpected.charset);
         break;
       case "feedUrl":
-        do_check_true(PlacesUtils.livemarks.isLivemark(id));
-        do_check_eq(PlacesUtils.livemarks.getSiteURI(id).spec,
-                    aExpected.url);
-        do_check_eq(PlacesUtils.livemarks.getFeedURI(id).spec,
-                    aExpected.feedUrl);
+        PlacesUtils.livemarks.getLivemark(
+          { id: id },
+          function (aStatus, aLivemark) {
+            do_check_true(Components.isSuccessCode(aStatus));
+            do_check_eq(aLivemark.siteURI.spec, aExpected.url);
+            do_check_eq(aLivemark.feedURI.spec, Expected.feedUrl);
+          }
+        );
         break;
       case "children":
         let folder = aNode.QueryInterface(Ci.nsINavHistoryContainerResultNode);

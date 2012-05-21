@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include "mozilla/ModuleUtils.h"
 #include "nsIClassInfoImpl.h"
 
@@ -6,7 +10,7 @@
 #include "nsNavHistory.h"
 #include "nsNavBookmarks.h"
 #include "nsFaviconService.h"
-#include "nsPlacesImportExportService.h"
+#include "nsPlacesExportService.h"
 #include "History.h"
 #include "nsDocShellCID.h"
 
@@ -24,8 +28,8 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsNavBookmarks,
                                          nsNavBookmarks::GetSingleton)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsFaviconService,
                                          nsFaviconService::GetSingleton)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsPlacesImportExportService,
-                                         nsPlacesImportExportService::GetSingleton)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsPlacesExportService,
+                                         nsPlacesExportService::GetSingleton)
 #ifdef MOZ_ANDROID_HISTORY
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsAndroidHistory, nsAndroidHistory::GetSingleton)
 #else
@@ -57,7 +61,7 @@ const mozilla::Module::CIDEntry kPlacesCIDs[] = {
 #else
   { &kNS_HISTORYSERVICE_CID, false, NULL, HistoryConstructor },
 #endif
-  { &kNS_PLACESIMPORTEXPORTSERVICE_CID, false, NULL, nsPlacesImportExportServiceConstructor },
+  { &kNS_PLACESIMPORTEXPORTSERVICE_CID, false, NULL, nsPlacesExportServiceConstructor },
   { NULL }
 };
 

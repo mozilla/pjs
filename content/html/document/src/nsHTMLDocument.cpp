@@ -1,46 +1,10 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=2 ts=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Kathleen Brade <brade@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
-
-#include "nsICharsetAlias.h"
 
 #include "nsCOMPtr.h"
 #include "nsXPIDLString.h"
@@ -83,7 +47,6 @@
 #include "nsNodeUtils.h"
 
 #include "nsNetCID.h"
-#include "nsIIOService.h"
 #include "nsICookieService.h"
 
 #include "nsIServiceManager.h"
@@ -102,7 +65,6 @@
 #include "nsFrameSelection.h"
 #include "nsISelectionPrivate.h"//for toStringwithformat code
 
-#include "nsICharsetAlias.h"
 #include "nsContentUtils.h"
 #include "nsJSUtils.h"
 #include "nsIDocumentEncoder.h" //for outputting selection
@@ -137,6 +99,9 @@
 #include "mozilla/Preferences.h"
 #include "nsMimeTypes.h"
 #include "nsIRequest.h"
+#include "nsHtml5TreeOpExecutor.h"
+#include "nsHtml5Parser.h"
+#include "nsIDOMJSWindow.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -151,8 +116,6 @@ const PRInt32 kForward  = 0;
 const PRInt32 kBackward = 1;
 
 //#define DEBUG_charset
-
-#define NS_USE_NEW_PLAIN_TEXT 1
 
 static NS_DEFINE_CID(kCParserCID, NS_PARSER_CID);
 
@@ -562,51 +525,57 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
                                   bool aReset,
                                   nsIContentSink* aSink)
 {
+  if (!aCommand) {
+    MOZ_ASSERT(false, "Command is mandatory");
+    return NS_ERROR_INVALID_POINTER;
+  }
+  if (aSink) {
+    MOZ_ASSERT(false, "Got a sink override. Should not happen for HTML doc.");
+    return NS_ERROR_INVALID_ARG;
+  }
+  if (!mIsRegularHTML) {
+    MOZ_ASSERT(false, "Must not set HTML doc to XHTML mode before load start.");
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
+
   nsCAutoString contentType;
   aChannel->GetContentType(contentType);
 
-  bool viewSource = aCommand && !nsCRT::strcmp(aCommand, "view-source");
-  bool plainText = (contentType.EqualsLiteral(TEXT_PLAIN) ||
+  bool view = !strcmp(aCommand, "view") ||
+              !strcmp(aCommand, "external-resource");
+  bool viewSource = !strcmp(aCommand, "view-source");
+  bool asData = !strcmp(aCommand, kLoadAsData);
+  if(!(view || viewSource || asData)) {
+    MOZ_ASSERT(false, "Bad parser command");
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  bool html = contentType.EqualsLiteral(TEXT_HTML);
+  bool xhtml = !html && contentType.EqualsLiteral(APPLICATION_XHTML_XML);
+  bool plainText = !html && !xhtml && (contentType.EqualsLiteral(TEXT_PLAIN) ||
     contentType.EqualsLiteral(TEXT_CSS) ||
     contentType.EqualsLiteral(APPLICATION_JAVASCRIPT) ||
     contentType.EqualsLiteral(APPLICATION_XJAVASCRIPT) ||
     contentType.EqualsLiteral(TEXT_ECMASCRIPT) ||
     contentType.EqualsLiteral(APPLICATION_ECMASCRIPT) ||
-    contentType.EqualsLiteral(TEXT_JAVASCRIPT));
-  bool loadAsHtml5 = nsHtml5Module::sEnabled || viewSource || plainText;
-  if (!NS_USE_NEW_PLAIN_TEXT && !viewSource) {
-    plainText = false;
+    contentType.EqualsLiteral(TEXT_JAVASCRIPT) ||
+    contentType.EqualsLiteral(APPLICATION_JSON));
+  if (!(html || xhtml || plainText || viewSource)) {
+    MOZ_ASSERT(false, "Channel with bad content type.");
+    return NS_ERROR_INVALID_ARG;
   }
 
-  NS_ASSERTION(!(plainText && aSink),
-               "Someone tries to load plain text into a custom sink.");
+  bool loadAsHtml5 = true;
 
-  if (aSink) {
-    loadAsHtml5 = false;
-  }
-
-  if (contentType.Equals("application/xhtml+xml") && !viewSource) {
-    // We're parsing XHTML as XML, remember that.
-
-    mIsRegularHTML = false;
-    mCompatMode = eCompatibility_FullStandards;
-    loadAsHtml5 = false;
-  }
-#ifdef DEBUG
-  else {
-    NS_ASSERTION(mIsRegularHTML,
-                 "Hey, someone forgot to reset mIsRegularHTML!!!");
-  }
-#endif
-  
-  if (loadAsHtml5 && !viewSource &&
-      (!(contentType.EqualsLiteral("text/html") || plainText) &&
-      aCommand && !nsCRT::strcmp(aCommand, "view"))) {
-    loadAsHtml5 = false;
+  if (!viewSource && xhtml) {
+      // We're parsing XHTML as XML, remember that.
+      mIsRegularHTML = false;
+      mCompatMode = eCompatibility_FullStandards;
+      loadAsHtml5 = false;
   }
   
   // TODO: Proper about:blank treatment is bug 543435
-  if (loadAsHtml5 && aCommand && !nsCRT::strcmp(aCommand, "view")) {
+  if (loadAsHtml5 && view) {
     // mDocumentURI hasn't been set, yet, so get the URI from the channel
     nsCOMPtr<nsIURI> uri;
     aChannel->GetOriginalURI(getter_AddRefs(uri));
@@ -624,14 +593,6 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
   
   CSSLoader()->SetCompatibilityMode(mCompatMode);
   
-  bool needsParser = true;
-  if (aCommand)
-  {
-    if (!nsCRT::strcmp(aCommand, "view delayedContentLoad")) {
-      needsParser = false;
-    }
-  }
-
   nsresult rv = nsDocument::StartDocumentLoad(aCommand,
                                               aChannel, aLoadGroup,
                                               aContainer,
@@ -651,24 +612,22 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
 
   nsCOMPtr<nsICachingChannel> cachingChan = do_QueryInterface(aChannel);
 
-  if (needsParser) {
-    if (loadAsHtml5) {
-      mParser = nsHtml5Module::NewHtml5Parser();
-      if (plainText) {
-        if (viewSource) {
-          mParser->MarkAsNotScriptCreated("view-source-plain");
-        } else {
-          mParser->MarkAsNotScriptCreated("plain-text");
-        }
-      } else if (viewSource && !contentType.EqualsLiteral("text/html")) {
-        mParser->MarkAsNotScriptCreated("view-source-xml");
+  if (loadAsHtml5) {
+    mParser = nsHtml5Module::NewHtml5Parser();
+    if (plainText) {
+      if (viewSource) {
+        mParser->MarkAsNotScriptCreated("view-source-plain");
       } else {
-        mParser->MarkAsNotScriptCreated(aCommand);
+        mParser->MarkAsNotScriptCreated("plain-text");
       }
+    } else if (viewSource && !html) {
+      mParser->MarkAsNotScriptCreated("view-source-xml");
     } else {
-      mParser = do_CreateInstance(kCParserCID, &rv);
-      NS_ENSURE_SUCCESS(rv, rv);
+      mParser->MarkAsNotScriptCreated(aCommand);
     }
+  } else {
+    mParser = do_CreateInstance(kCParserCID, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
 
   PRInt32 textType = GET_BIDI_OPTION_TEXTTYPE(GetBidiOptions());
@@ -735,11 +694,17 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
 
   nsCOMPtr<nsIWyciwygChannel> wyciwygChannel;
   
+  // For error reporting
+  nsHtml5TreeOpExecutor* executor = nsnull;
+  if (loadAsHtml5) {
+    executor = static_cast<nsHtml5TreeOpExecutor*> (mParser->GetContentSink());
+  }
+
   if (!IsHTML() || !docShell) { // no docshell for text/html XHR
     charsetSource = IsHTML() ? kCharsetFromWeakDocTypeDefault
                              : kCharsetFromDocTypeDefault;
     charset.AssignLiteral("UTF-8");
-    TryChannelCharset(aChannel, charsetSource, charset);
+    TryChannelCharset(aChannel, charsetSource, charset, executor);
     parserCharsetSource = charsetSource;
     parserCharset = charset;
   } else {
@@ -761,7 +726,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
       // Don't actually get the charset from the channel if this is a
       // wyciwyg channel; it'll always be UTF-16
       if (!wyciwygChannel &&
-          TryChannelCharset(aChannel, charsetSource, charset)) {
+          TryChannelCharset(aChannel, charsetSource, charset, executor)) {
         // Use the channel's charset (e.g., charset from HTTP
         // "Content-Type" header).
       }
@@ -848,54 +813,37 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
   }
 
   // Set the parser as the stream listener for the document loader...
-  if (mParser) {
-    rv = NS_OK;
-    nsCOMPtr<nsIStreamListener> listener = mParser->GetStreamListener();
-    listener.forget(aDocListener);
+  rv = NS_OK;
+  nsCOMPtr<nsIStreamListener> listener = mParser->GetStreamListener();
+  listener.forget(aDocListener);
 
 #ifdef DEBUG_charset
-    printf(" charset = %s source %d\n",
-          charset.get(), charsetSource);
+  printf(" charset = %s source %d\n",
+        charset.get(), charsetSource);
 #endif
-    mParser->SetDocumentCharset(parserCharset, parserCharsetSource);
-    mParser->SetCommand(aCommand);
+  mParser->SetDocumentCharset(parserCharset, parserCharsetSource);
+  mParser->SetCommand(aCommand);
 
-    // create the content sink
-    nsCOMPtr<nsIContentSink> sink;
-
-    if (aSink) {
-      NS_ASSERTION(!loadAsHtml5, "Panic: We are loading as HTML5 and someone tries to set an external sink!");
-      sink = aSink;
+  if (!IsHTML()) {
+    MOZ_ASSERT(!loadAsHtml5);
+    nsCOMPtr<nsIXMLContentSink> xmlsink;
+    NS_NewXMLContentSink(getter_AddRefs(xmlsink), this, uri,
+                         docShell, aChannel);
+    mParser->SetContentSink(xmlsink);
+  } else {
+    if (loadAsHtml5) {
+      nsHtml5Module::Initialize(mParser, this, uri, docShell, aChannel);
     } else {
-      if (!IsHTML()) {
-        nsCOMPtr<nsIXMLContentSink> xmlsink;
-        rv = NS_NewXMLContentSink(getter_AddRefs(xmlsink), this, uri,
-                                  docShell, aChannel);
-
-        sink = xmlsink;
-      } else {
-        if (loadAsHtml5) {
-          nsHtml5Module::Initialize(mParser, this, uri, docShell, aChannel);
-          sink = mParser->GetContentSink();
-        } else {
-          nsCOMPtr<nsIHTMLContentSink> htmlsink;
-
-          rv = NS_NewHTMLContentSink(getter_AddRefs(htmlsink), this, uri,
-                                     docShell, aChannel);
-
-          sink = htmlsink;
-        }
-      }
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      NS_ASSERTION(sink,
-                   "null sink with successful result from factory method");
+      // about:blank *only*
+      nsCOMPtr<nsIHTMLContentSink> htmlsink;
+      NS_NewHTMLContentSink(getter_AddRefs(htmlsink), this, uri,
+                            docShell, aChannel);
+      mParser->SetContentSink(htmlsink);
     }
-
-    mParser->SetContentSink(sink);
-    // parser the content of the URI
-    mParser->Parse(uri, nsnull, (void *)this);
   }
+
+  // parser the content of the URI
+  mParser->Parse(uri, nsnull, (void *)this);
 
   return rv;
 }
@@ -1345,9 +1293,10 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
     if (!window) {
       return NS_OK;
     }
+    nsCOMPtr<nsIDOMJSWindow> win = do_QueryInterface(window);
     nsCOMPtr<nsIDOMWindow> newWindow;
-    nsresult rv = window->Open(aContentTypeOrUrl, aReplaceOrName, aFeatures,
-                               getter_AddRefs(newWindow));
+    nsresult rv = win->OpenJS(aContentTypeOrUrl, aReplaceOrName, aFeatures,
+                              getter_AddRefs(newWindow));
     *aReturn = newWindow.forget().get();
     return rv;
   }
@@ -1361,7 +1310,7 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
   contentType.AssignLiteral("text/html");
   if (aOptionalArgCount > 0) {
     nsAutoString type;
-    ToLowerCase(aContentTypeOrUrl, type);
+    nsContentUtils::ASCIIToLower(aContentTypeOrUrl, type);
     nsCAutoString actualType, dummy;
     NS_ParseContentType(NS_ConvertUTF16toUTF8(type), actualType, dummy);
     if (!actualType.EqualsLiteral("text/html") &&
@@ -1371,7 +1320,16 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
   }
 
   // If we already have a parser we ignore the document.open call.
-  if (mParser) {
+  if (mParser || mParserAborted) {
+    // The WHATWG spec says: "If the document has an active parser that isn't
+    // a script-created parser, and the insertion point associated with that
+    // parser's input stream is not undefined (that is, it does point to
+    // somewhere in the input stream), then the method does nothing. Abort
+    // these steps and return the Document object on which the method was
+    // invoked."
+    // Note that aborting a parser leaves the parser "active" with its
+    // insertion point "not undefined". We track this using mParserAborted,
+    // because aborting a parser nulls out mParser.
     return NS_OK;
   }
 
@@ -1555,34 +1513,13 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
   // resetting the document.
   mSecurityInfo = securityInfo;
 
-  bool loadAsHtml5 = nsHtml5Module::sEnabled;
-  if (loadAsHtml5) {
-    mParser = nsHtml5Module::NewHtml5Parser();
-    rv = NS_OK;
-  } else {
-    mParser = do_CreateInstance(kCParserCID, &rv);  
-  }
+  mParserAborted = false;
+  mParser = nsHtml5Module::NewHtml5Parser();
+  nsHtml5Module::Initialize(mParser, this, uri, shell, channel);
+  rv = NS_OK;
 
   // This will be propagated to the parser when someone actually calls write()
   SetContentTypeInternal(contentType);
-
-  if (NS_SUCCEEDED(rv)) {
-    if (loadAsHtml5) {
-      nsHtml5Module::Initialize(mParser, this, uri, shell, channel);
-    } else {
-      nsCOMPtr<nsIHTMLContentSink> sink;
-
-      rv = NS_NewHTMLContentSink(getter_AddRefs(sink), this, uri, shell,
-                                 channel);
-      if (NS_FAILED(rv)) {
-        // Don't use a parser without a content sink.
-        mParser = nsnull;
-        return rv;
-      }
-
-      mParser->SetContentSink(sink);
-    }
-  }
 
   // Prepare the docshell and the document viewer for the impending
   // out of band document.write()
@@ -1616,6 +1553,8 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
 
   --mWriteLevel;
 
+  SetReadyStateInternal(nsIDocument::READYSTATE_LOADING);
+
   NS_ENSURE_SUCCESS(rv, rv);
   return CallQueryInterface(this, aReturn);
 }
@@ -1641,8 +1580,8 @@ nsHTMLDocument::Close()
   }
 
   ++mWriteLevel;
-  nsresult rv = mParser->Parse(EmptyString(), nsnull,
-                               GetContentTypeInternal(), true);
+  nsresult rv = (static_cast<nsHtml5Parser*>(mParser.get()))->Parse(
+    EmptyString(), nsnull, GetContentTypeInternal(), true);
   --mWriteLevel;
 
   // XXX Make sure that all the document.written content is
@@ -1696,6 +1635,13 @@ nsHTMLDocument::WriteCommon(JSContext *cx,
     // No calling document.write*() on XHTML!
 
     return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
+
+  if (mParserAborted) {
+    // Hixie says aborting the parser doesn't undefine the insertion point.
+    // However, since we null out mParser in that case, we track the
+    // theoretically defined insertion point using mParserAborted.
+    return NS_OK;
   }
 
   nsresult rv = NS_OK;
@@ -1761,13 +1707,11 @@ nsHTMLDocument::WriteCommon(JSContext *cx,
   // since the concatenation of strings costs more than we like. And
   // why pay that price when we don't need to?
   if (aNewlineTerminate) {
-    rv = mParser->Parse(aText + new_line,
-                        key, GetContentTypeInternal(),
-                        false);
+    rv = (static_cast<nsHtml5Parser*>(mParser.get()))->Parse(
+      aText + new_line, key, GetContentTypeInternal(), false);
   } else {
-    rv = mParser->Parse(aText,
-                        key, GetContentTypeInternal(),
-                        false);
+    rv = (static_cast<nsHtml5Parser*>(mParser.get()))->Parse(
+      aText, key, GetContentTypeInternal(), false);
   }
 
   --mWriteLevel;
@@ -2261,21 +2205,17 @@ nsHTMLDocument::GenerateParserKey(void)
 
   // The script loader provides us with the currently executing script element,
   // which is guaranteed to be unique per script.
-  if (nsHtml5Module::sEnabled) {
-    nsIScriptElement* script = mScriptLoader->GetCurrentParserInsertedScript();
-    if (script && mParser && mParser->IsScriptCreated()) {
-      nsCOMPtr<nsIParser> creatorParser = script->GetCreatorParser();
-      if (creatorParser != mParser) {
-        // Make scripts that aren't inserted by the active parser of this document
-        // participate in the context of the script that document.open()ed 
-        // this document.
-        return nsnull;
-      }
+  nsIScriptElement* script = mScriptLoader->GetCurrentParserInsertedScript();
+  if (script && mParser && mParser->IsScriptCreated()) {
+    nsCOMPtr<nsIParser> creatorParser = script->GetCreatorParser();
+    if (creatorParser != mParser) {
+      // Make scripts that aren't inserted by the active parser of this document
+      // participate in the context of the script that document.open()ed
+      // this document.
+      return nsnull;
     }
-    return script;
-  } else {
-    return mScriptLoader->GetCurrentScript();
   }
+  return script;
 }
 
 /* attribute DOMString designMode; */
@@ -2340,7 +2280,7 @@ nsresult
 nsHTMLDocument::ChangeContentEditableCount(nsIContent *aElement,
                                            PRInt32 aChange)
 {
-  NS_ASSERTION(mContentEditableCount + aChange >= 0,
+  NS_ASSERTION(PRInt32(mContentEditableCount) + aChange >= 0,
                "Trying to decrement too much.");
 
   mContentEditableCount += aChange;
@@ -2685,8 +2625,8 @@ nsHTMLDocument::EditingStateChanged()
     rv = LoadChromeSheetSync(uri, true, getter_AddRefs(sheet));
     NS_ENSURE_TRUE(sheet, rv);
 
-    rv = agentSheets.AppendObject(sheet);
-    NS_ENSURE_SUCCESS(rv, rv);
+    bool result = agentSheets.AppendObject(sheet);
+    NS_ENSURE_TRUE(result, NS_ERROR_OUT_OF_MEMORY);
 
     // Should we update the editable state of all the nodes in the document? We
     // need to do this when the designMode value changes, as that overrides
@@ -2699,8 +2639,8 @@ nsHTMLDocument::EditingStateChanged()
       rv = LoadChromeSheetSync(uri, true, getter_AddRefs(sheet));
       NS_ENSURE_TRUE(sheet, rv);
 
-      rv = agentSheets.AppendObject(sheet);
-      NS_ENSURE_SUCCESS(rv, rv);
+      result = agentSheets.AppendObject(sheet);
+      NS_ENSURE_TRUE(result, NS_ERROR_OUT_OF_MEMORY);
 
       // Disable scripting and plugins.
       rv = editSession->DisableJSAndPlugins(window);
@@ -2853,7 +2793,7 @@ static const struct MidasCommand gMidasCommandTable[] = {
   { "redo",          "cmd_redo",            "", true,  false },
   { "indent",        "cmd_indent",          "", true,  false },
   { "outdent",       "cmd_outdent",         "", true,  false },
-  { "backcolor",     "cmd_backgroundColor", "", false, false },
+  { "backcolor",     "cmd_highlight",       "", false, false },
   { "forecolor",     "cmd_fontColor",       "", false, false },
   { "hilitecolor",   "cmd_highlight",       "", false, false },
   { "fontname",      "cmd_fontFace",        "", false, false },
@@ -2912,8 +2852,8 @@ static const char* const gBlocks[] = {
 };
 
 static bool
-ConvertToMidasInternalCommandInner(const nsAString & inCommandID,
-                                   const nsAString & inParam,
+ConvertToMidasInternalCommandInner(const nsAString& inCommandID,
+                                   const nsAString& inParam,
                                    nsACString& outCommandID,
                                    nsACString& outParam,
                                    bool& outIsBoolean,
@@ -2927,8 +2867,7 @@ ConvertToMidasInternalCommandInner(const nsAString & inCommandID,
   if (convertedCommandID.LowerCaseEqualsLiteral("usecss")) {
     convertedCommandID.Assign("styleWithCSS");
     invertBool = true;
-  }
-  else if (convertedCommandID.LowerCaseEqualsLiteral("readonly")) {
+  } else if (convertedCommandID.LowerCaseEqualsLiteral("readonly")) {
     convertedCommandID.Assign("contentReadOnly");
     invertBool = true;
   }
@@ -2943,68 +2882,84 @@ ConvertToMidasInternalCommandInner(const nsAString & inCommandID,
     }
   }
 
-  if (found) {
-    // set outCommandID (what we use internally)
-    outCommandID.Assign(gMidasCommandTable[i].internalCommandString);
-
-    // set outParam & outIsBoolean based on flags from the table
-    outIsBoolean = gMidasCommandTable[i].convertToBoolean;
-
-    if (!aIgnoreParams) {
-      if (gMidasCommandTable[i].useNewParam) {
-        outParam.Assign(gMidasCommandTable[i].internalParamString);
-      }
-      else {
-        // handle checking of param passed in
-        if (outIsBoolean) {
-          // if this is a boolean value and it's not explicitly false
-          // (e.g. no value) we default to "true". For old backwards commands
-          // we invert the check (see bug 301490).
-          if (invertBool) {
-            outBooleanValue = inParam.LowerCaseEqualsLiteral("false");
-          }
-          else {
-            outBooleanValue = !inParam.LowerCaseEqualsLiteral("false");
-          }
-          outParam.Truncate();
-        }
-        else {
-          // check to see if we need to convert the parameter
-          if (outCommandID.EqualsLiteral("cmd_paragraphState")) {
-            const PRUnichar *start = inParam.BeginReading();
-            const PRUnichar *end = inParam.EndReading();
-            if (start != end && *start == '<' && *(end - 1) == '>') {
-              ++start;
-              --end;
-            }
-
-            NS_ConvertUTF16toUTF8 convertedParam(Substring(start, end));
-            PRUint32 j;
-            for (j = 0; j < ArrayLength(gBlocks); ++j) {
-              if (convertedParam.Equals(gBlocks[j],
-                                        nsCaseInsensitiveCStringComparator())) {
-                outParam.Assign(gBlocks[j]);
-                break;
-              }
-            }
-
-            return j != ArrayLength(gBlocks);
-          }
-          else {
-            CopyUTF16toUTF8(inParam, outParam);
-          }
-        }
-      }
-    }
-  } // end else for useNewParam (do convert existing param)
-  else {
+  if (!found) {
     // reset results if the command is not found in our table
     outCommandID.SetLength(0);
     outParam.SetLength(0);
     outIsBoolean = false;
+    return false;
   }
 
-  return found;
+  // set outCommandID (what we use internally)
+  outCommandID.Assign(gMidasCommandTable[i].internalCommandString);
+
+  // set outParam & outIsBoolean based on flags from the table
+  outIsBoolean = gMidasCommandTable[i].convertToBoolean;
+
+  if (aIgnoreParams) {
+    // No further work to do
+    return true;
+  }
+
+  if (gMidasCommandTable[i].useNewParam) {
+    // Just have to copy it, no checking
+    outParam.Assign(gMidasCommandTable[i].internalParamString);
+    return true;
+  }
+
+  // handle checking of param passed in
+  if (outIsBoolean) {
+    // If this is a boolean value and it's not explicitly false (e.g. no value)
+    // we default to "true". For old backwards commands we invert the check (see
+    // bug 301490).
+    if (invertBool) {
+      outBooleanValue = inParam.LowerCaseEqualsLiteral("false");
+    } else {
+      outBooleanValue = !inParam.LowerCaseEqualsLiteral("false");
+    }
+    outParam.Truncate();
+
+    return true;
+  }
+
+  // String parameter -- see if we need to convert it (necessary for
+  // cmd_paragraphState and cmd_fontSize)
+  if (outCommandID.EqualsLiteral("cmd_paragraphState")) {
+    const PRUnichar* start = inParam.BeginReading();
+    const PRUnichar* end = inParam.EndReading();
+    if (start != end && *start == '<' && *(end - 1) == '>') {
+      ++start;
+      --end;
+    }
+
+    NS_ConvertUTF16toUTF8 convertedParam(Substring(start, end));
+    PRUint32 j;
+    for (j = 0; j < ArrayLength(gBlocks); ++j) {
+      if (convertedParam.Equals(gBlocks[j],
+                                nsCaseInsensitiveCStringComparator())) {
+        outParam.Assign(gBlocks[j]);
+        break;
+      }
+    }
+
+    if (j == ArrayLength(gBlocks)) {
+      outParam.Truncate();
+    }
+  } else if (outCommandID.EqualsLiteral("cmd_fontSize")) {
+    // Per editing spec as of April 23, 2012, we need to reject the value if
+    // it's not a valid floating-point number surrounded by optional whitespace.
+    // Otherwise, we parse it as a legacy font size.  For now, we just parse as
+    // a legacy font size regardless (matching WebKit) -- bug 747879.
+    outParam.Truncate();
+    PRInt32 size = nsContentUtils::ParseLegacyFontSize(inParam);
+    if (size) {
+      outParam.AppendInt(size);
+    }
+  } else {
+    CopyUTF16toUTF8(inParam, outParam);
+  }
+
+  return true;
 }
 
 static bool
@@ -3097,6 +3052,15 @@ nsHTMLDocument::ExecCommand(const nsAString & commandID,
 
   *_retval = false;
 
+  nsCAutoString cmdToDispatch, paramStr;
+  bool isBool, boolVal;
+  if (!ConvertToMidasInternalCommand(commandID, value,
+                                     cmdToDispatch, paramStr,
+                                     isBool, boolVal)) {
+    // Return false
+    return NS_OK;
+  }
+
   // if editing is not on, bail
   if (!IsEditingOnAfterFlush())
     return NS_ERROR_FAILURE;
@@ -3130,11 +3094,11 @@ nsHTMLDocument::ExecCommand(const nsAString & commandID,
   if (!window)
     return NS_ERROR_FAILURE;
 
-  nsCAutoString cmdToDispatch, paramStr;
-  bool isBool, boolVal;
-  if (!ConvertToMidasInternalCommand(commandID, value,
-                                     cmdToDispatch, paramStr, isBool, boolVal))
+  if ((cmdToDispatch.EqualsLiteral("cmd_paragraphState") ||
+       cmdToDispatch.EqualsLiteral("cmd_fontSize")) && paramStr.IsEmpty()) {
+    // Invalid value
     return NS_OK;
+  }
 
   if (!isBool && paramStr.IsEmpty()) {
     rv = cmdMgr->DoCommand(cmdToDispatch.get(), nsnull, window);
@@ -3163,22 +3127,6 @@ nsHTMLDocument::ExecCommand(const nsAString & commandID,
   return rv;
 }
 
-/* TODO: don't let this call do anything if the page is not done loading */
-/* boolean execCommandShowHelp(in DOMString commandID); */
-NS_IMETHODIMP
-nsHTMLDocument::ExecCommandShowHelp(const nsAString & commandID,
-                                    bool *_retval)
-{
-  NS_ENSURE_ARG_POINTER(_retval);
-  *_retval = false;
-
-  // if editing is not on, bail
-  if (!IsEditingOnAfterFlush())
-    return NS_ERROR_FAILURE;
-
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
 /* boolean queryCommandEnabled(in DOMString commandID); */
 NS_IMETHODIMP
 nsHTMLDocument::QueryCommandEnabled(const nsAString & commandID,
@@ -3186,6 +3134,12 @@ nsHTMLDocument::QueryCommandEnabled(const nsAString & commandID,
 {
   NS_ENSURE_ARG_POINTER(_retval);
   *_retval = false;
+
+  nsCAutoString cmdToDispatch;
+  if (!ConvertToMidasInternalCommand(commandID, cmdToDispatch)) {
+    // Return false
+    return NS_OK;
+  }
 
   // if editing is not on, bail
   if (!IsEditingOnAfterFlush())
@@ -3200,10 +3154,6 @@ nsHTMLDocument::QueryCommandEnabled(const nsAString & commandID,
   nsIDOMWindow *window = GetWindow();
   if (!window)
     return NS_ERROR_FAILURE;
-
-  nsCAutoString cmdToDispatch;
-  if (!ConvertToMidasInternalCommand(commandID, cmdToDispatch))
-    return NS_OK; // queryCommandEnabled returns false on unsupported commands
 
   return cmdMgr->IsCommandEnabled(cmdToDispatch.get(), window, _retval);
 }
@@ -3216,6 +3166,12 @@ nsHTMLDocument::QueryCommandIndeterm(const nsAString & commandID,
   NS_ENSURE_ARG_POINTER(_retval);
   *_retval = false;
 
+  nsCAutoString cmdToDispatch;
+  if (!ConvertToMidasInternalCommand(commandID, cmdToDispatch)) {
+    // Return false
+    return NS_OK;
+  }
+
   // if editing is not on, bail
   if (!IsEditingOnAfterFlush())
     return NS_ERROR_FAILURE;
@@ -3229,12 +3185,6 @@ nsHTMLDocument::QueryCommandIndeterm(const nsAString & commandID,
   nsIDOMWindow *window = GetWindow();
   if (!window)
     return NS_ERROR_FAILURE;
-
-  nsCAutoString cmdToDispatch, paramToCheck;
-  bool dummy;
-  if (!ConvertToMidasInternalCommand(commandID, commandID,
-                                     cmdToDispatch, paramToCheck, dummy, dummy))
-    return NS_ERROR_NOT_IMPLEMENTED;
 
   nsresult rv;
   nsCOMPtr<nsICommandParams> cmdParams = do_CreateInstance(
@@ -3245,10 +3195,11 @@ nsHTMLDocument::QueryCommandIndeterm(const nsAString & commandID,
   if (NS_FAILED(rv))
     return rv;
 
-  // if command does not have a state_mixed value, this call fails, so we fail too,
-  // which is what is expected
-  rv = cmdParams->GetBooleanValue("state_mixed", _retval);
-  return rv;
+  // If command does not have a state_mixed value, this call fails and sets
+  // *_retval to false.  This is fine -- we want to return false in that case
+  // anyway (bug 738385), so we just return NS_OK regardless.
+  cmdParams->GetBooleanValue("state_mixed", _retval);
+  return NS_OK;
 }
 
 /* boolean queryCommandState(in DOMString commandID); */
@@ -3257,6 +3208,15 @@ nsHTMLDocument::QueryCommandState(const nsAString & commandID, bool *_retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
   *_retval = false;
+
+  nsCAutoString cmdToDispatch, paramToCheck;
+  bool dummy, dummy2;
+  if (!ConvertToMidasInternalCommand(commandID, commandID,
+                                     cmdToDispatch, paramToCheck,
+                                     dummy, dummy2)) {
+    // Return false
+    return NS_OK;
+  }
 
   // if editing is not on, bail
   if (!IsEditingOnAfterFlush())
@@ -3272,11 +3232,12 @@ nsHTMLDocument::QueryCommandState(const nsAString & commandID, bool *_retval)
   if (!window)
     return NS_ERROR_FAILURE;
 
-  nsCAutoString cmdToDispatch, paramToCheck;
-  bool dummy, dummy2;
-  if (!ConvertToMidasInternalCommand(commandID, commandID,
-                                     cmdToDispatch, paramToCheck, dummy, dummy2))
-    return NS_ERROR_NOT_IMPLEMENTED;
+  if (commandID.LowerCaseEqualsLiteral("usecss")) {
+    // Per spec, state is supported for styleWithCSS but not useCSS, so we just
+    // return false always.
+    *_retval = false;
+    return NS_OK;
+  }
 
   nsresult rv;
   nsCOMPtr<nsICommandParams> cmdParams = do_CreateInstance(
@@ -3302,14 +3263,14 @@ nsHTMLDocument::QueryCommandState(const nsAString & commandID, bool *_retval)
     }
     if (actualAlignmentType)
       nsMemory::Free(actualAlignmentType);
-  }
-  else {
-    rv = cmdParams->GetBooleanValue("state_all", _retval);
-    if (NS_FAILED(rv))
-      *_retval = false;
+    return rv;
   }
 
-  return rv;
+  // If command does not have a state_all value, this call fails and sets
+  // *_retval to false.  This is fine -- we want to return false in that case
+  // anyway (bug 738385), so we just return NS_OK regardless.
+  cmdParams->GetBooleanValue("state_all", _retval);
+  return NS_OK;
 }
 
 /* boolean queryCommandSupported(in DOMString commandID); */
@@ -3318,38 +3279,12 @@ nsHTMLDocument::QueryCommandSupported(const nsAString & commandID,
                                       bool *_retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
-  *_retval = false;
-
-  // if editing is not on, bail
-  if (!IsEditingOnAfterFlush())
-    return NS_ERROR_FAILURE;
-
-  // get command manager
-  nsCOMPtr<nsICommandManager> cmdMgr;
-  GetMidasCommandManager(getter_AddRefs(cmdMgr));
-  if (!cmdMgr)
-    return NS_ERROR_FAILURE;
 
   // commandID is supported if it can be converted to a Midas command
   nsCAutoString cmdToDispatch;
-  if (ConvertToMidasInternalCommand(commandID, cmdToDispatch))
-    *_retval = true;
+  *_retval = ConvertToMidasInternalCommand(commandID, cmdToDispatch);
 
   return NS_OK;
-}
-
-/* DOMString queryCommandText(in DOMString commandID); */
-NS_IMETHODIMP
-nsHTMLDocument::QueryCommandText(const nsAString & commandID,
-                                 nsAString & _retval)
-{
-  _retval.SetLength(0);
-
-  // if editing is not on, bail
-  if (!IsEditingOnAfterFlush())
-    return NS_ERROR_FAILURE;
-
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /* DOMString queryCommandValue(in DOMString commandID); */
@@ -3358,6 +3293,12 @@ nsHTMLDocument::QueryCommandValue(const nsAString & commandID,
                                   nsAString &_retval)
 {
   _retval.SetLength(0);
+
+  nsCAutoString cmdToDispatch, paramStr;
+  if (!ConvertToMidasInternalCommand(commandID, cmdToDispatch)) {
+    // Return empty string
+    return NS_OK;
+  }
 
   // if editing is not on, bail
   if (!IsEditingOnAfterFlush())
@@ -3372,10 +3313,6 @@ nsHTMLDocument::QueryCommandValue(const nsAString & commandID,
   nsIDOMWindow *window = GetWindow();
   if (!window)
     return NS_ERROR_FAILURE;
-
-  nsCAutoString cmdToDispatch, paramStr;
-  if (!ConvertToMidasInternalCommand(commandID, cmdToDispatch))
-    return NS_ERROR_NOT_IMPLEMENTED;
 
   // create params
   nsresult rv;
@@ -3405,12 +3342,16 @@ nsHTMLDocument::QueryCommandValue(const nsAString & commandID,
   if (NS_FAILED(rv))
     return rv;
 
+  // If command does not have a state_attribute value, this call fails, and
+  // _retval will wind up being the empty string.  This is fine -- we want to
+  // return "" in that case anyway (bug 738385), so we just return NS_OK
+  // regardless.
   nsXPIDLCString cStringResult;
-  rv = cmdParams->GetCStringValue("state_attribute",
-                                  getter_Copies(cStringResult));
+  cmdParams->GetCStringValue("state_attribute",
+                             getter_Copies(cStringResult));
   CopyUTF8toUTF16(cStringResult, _retval);
 
-  return rv;
+  return NS_OK;
 }
 
 nsresult
@@ -3448,4 +3389,23 @@ nsHTMLDocument::RemovedFromDocShell()
 {
   mEditingState = eOff;
   nsDocument::RemovedFromDocShell();
+}
+
+/* virtual */ void
+nsHTMLDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
+{
+  nsDocument::DocSizeOfExcludingThis(aWindowSizes);
+
+  // Measurement of the following members may be added later if DMD finds it is
+  // worthwhile:
+  // - mImages
+  // - mApplets
+  // - mEmbeds
+  // - mLinks
+  // - mAnchors
+  // - mScripts
+  // - mForms
+  // - mFormControls
+  // - mWyciwygChannel
+  // - mMidasCommandManager
 }

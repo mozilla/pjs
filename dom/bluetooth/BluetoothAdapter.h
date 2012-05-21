@@ -10,11 +10,14 @@
 #include "BluetoothCommon.h"
 #include "nsDOMEventTargetHelper.h"
 #include "nsIDOMBluetoothAdapter.h"
+#include "nsIDOMDOMRequest.h"
+
+class nsIEventTarget;
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-class BluetoothAdapter : public nsIDOMBluetoothAdapter
-                        ,public nsDOMEventTargetHelper
+class BluetoothAdapter : public nsDOMEventTargetHelper
+                       , public nsIDOMBluetoothAdapter
 {
 public:
   NS_DECL_ISUPPORTS
@@ -25,19 +28,19 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(BluetoothAdapter,
                                            nsDOMEventTargetHelper)
 
-  BluetoothAdapter();
+  BluetoothAdapter(nsPIDOMWindow*);
 
-  nsresult FirePowered();
+  inline void SetEnabledInternal(bool aEnabled) {mEnabled = aEnabled;}
 
 protected:
-  bool mPower;
+  bool mEnabled;
 
-  NS_DECL_EVENT_HANDLER(powered)
+  NS_DECL_EVENT_HANDLER(enabled)
 
 private:
   nsCOMPtr<nsIEventTarget> mToggleBtThread;
-  void ToggleBluetoothAsync();
 };
 
 END_BLUETOOTH_NAMESPACE
+
 #endif

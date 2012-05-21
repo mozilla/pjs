@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 toolkit.jar:
 % skin global classic/1.0 %skin/classic/global/ os=WINNT osversion<6
 % skin global classic/1.0 %skin/classic/global/ os!=WINNT
@@ -54,6 +58,8 @@ toolkit.jar:
         skin/classic/global/textbox.css
 *       skin/classic/global/toolbar.css
         skin/classic/global/toolbarbutton.css
+        skin/classic/global/TopLevelImageDocument.css
+        skin/classic/global/TopLevelVideoDocument.css
         skin/classic/global/tree.css
         skin/classic/global/wizard.css
         skin/classic/global/alerts/alert.css                     (alerts/alert.css)
@@ -229,6 +235,8 @@ toolkit.jar:
 *       skin/classic/aero/global/textbox.css                             (textbox-aero.css)
 *       skin/classic/aero/global/toolbar.css
 *       skin/classic/aero/global/toolbarbutton.css                       (toolbarbutton-aero.css)
+        skin/classic/aero/global/TopLevelImageDocument.css
+        skin/classic/aero/global/TopLevelVideoDocument.css
 *       skin/classic/aero/global/tree.css                                (tree-aero.css)
         skin/classic/aero/global/wizard.css
         skin/classic/aero/global/alerts/alert.css                        (alerts/alert.css)

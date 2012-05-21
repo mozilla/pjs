@@ -1,60 +1,26 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is
- * Scooter Morris.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Scooter Morris <scootermorris@comcast.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Main header first:
 #include "nsSVGPatternFrame.h"
 
-#include "nsGkAtoms.h"
-#include "nsIDOMSVGAnimatedRect.h"
-#include "SVGAnimatedTransformList.h"
-#include "nsStyleContext.h"
-#include "nsINameSpaceManager.h"
-#include "nsISVGChildFrame.h"
-#include "nsSVGRect.h"
-#include "nsSVGUtils.h"
-#include "nsSVGEffects.h"
-#include "nsSVGOuterSVGFrame.h"
-#include "nsSVGPatternElement.h"
-#include "nsSVGGeometryFrame.h"
+// Keep others in (case-insensitive) order:
 #include "gfxContext.h"
-#include "gfxPlatform.h"
-#include "gfxPattern.h"
 #include "gfxMatrix.h"
+#include "gfxPattern.h"
+#include "gfxPlatform.h"
 #include "nsContentUtils.h"
+#include "nsGkAtoms.h"
+#include "nsISVGChildFrame.h"
+#include "nsRenderingContext.h"
+#include "nsStyleContext.h"
+#include "nsSVGEffects.h"
+#include "nsSVGGeometryFrame.h"
+#include "nsSVGPatternElement.h"
+#include "nsSVGUtils.h"
+#include "SVGAnimatedTransformList.h"
 
 using namespace mozilla;
 
@@ -179,6 +145,7 @@ nsresult
 nsSVGPatternFrame::PaintPattern(gfxASurface** surface,
                                 gfxMatrix* patternMatrix,
                                 nsIFrame *aSource,
+                                nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
                                 float aGraphicOpacity,
                                 const gfxRect *aOverrideBounds)
 {
@@ -253,6 +220,11 @@ nsSVGPatternFrame::PaintPattern(gfxASurface** surface,
   // Get the pattern transform
   gfxMatrix patternTransform = GetPatternTransform();
 
+  // revert the vector effect transform so that the pattern appears unchanged
+  if (aFillOrStroke == &nsStyleSVG::mStroke) {
+    patternTransform.Multiply(nsSVGUtils::GetStrokeTransform(aSource).Invert());
+  }
+
   // Get the transformation matrix that we will hand to the renderer's pattern
   // routine.
   *patternMatrix = GetPatternMatrix(patternTransform,
@@ -295,17 +267,18 @@ nsSVGPatternFrame::PaintPattern(gfxASurface** surface,
   if (!tmpSurface || tmpSurface->CairoStatus())
     return NS_ERROR_FAILURE;
 
-  nsSVGRenderState tmpState(tmpSurface);
-  gfxContext* tmpContext = tmpState.GetGfxContext();
+  nsRenderingContext context;
+  context.Init(aSource->PresContext()->DeviceContext(), tmpSurface);
+  gfxContext* gfx = context.ThebesContext();
 
   // Fill with transparent black
-  tmpContext->SetOperator(gfxContext::OPERATOR_CLEAR);
-  tmpContext->Paint();
-  tmpContext->SetOperator(gfxContext::OPERATOR_OVER);
+  gfx->SetOperator(gfxContext::OPERATOR_CLEAR);
+  gfx->Paint();
+  gfx->SetOperator(gfxContext::OPERATOR_OVER);
 
   if (aGraphicOpacity != 1.0f) {
-    tmpContext->Save();
-    tmpContext->PushGroup(gfxASurface::CONTENT_COLOR_ALPHA);
+    gfx->Save();
+    gfx->PushGroup(gfxASurface::CONTENT_COLOR_ALPHA);
   }
 
   // OK, now render -- note that we use "firstKid", which
@@ -326,10 +299,11 @@ nsSVGPatternFrame::PaintPattern(gfxASurface** surface,
       // The CTM of each frame referencing us can be different
       nsISVGChildFrame* SVGFrame = do_QueryFrame(kid);
       if (SVGFrame) {
-        SVGFrame->NotifySVGChanged(nsISVGChildFrame::SUPPRESS_INVALIDATION |
-                                   nsISVGChildFrame::TRANSFORM_CHANGED);
+        SVGFrame->NotifySVGChanged(
+                          nsISVGChildFrame::DO_NOT_NOTIFY_RENDERING_OBSERVERS |
+                          nsISVGChildFrame::TRANSFORM_CHANGED);
       }
-      nsSVGUtils::PaintFrameWithEffects(&tmpState, nsnull, kid);
+      nsSVGUtils::PaintFrameWithEffects(&context, nsnull, kid);
     }
     patternFrame->RemoveStateBits(NS_FRAME_DRAWING_AS_PAINTSERVER);
   }
@@ -337,9 +311,9 @@ nsSVGPatternFrame::PaintPattern(gfxASurface** surface,
   patternFrame->mSource = nsnull;
 
   if (aGraphicOpacity != 1.0f) {
-    tmpContext->PopGroupToSource();
-    tmpContext->Paint(aGraphicOpacity);
-    tmpContext->Restore();
+    gfx->PopGroupToSource();
+    gfx->Paint(aGraphicOpacity);
+    gfx->Restore();
   }
 
   // caller now owns the surface
@@ -419,7 +393,7 @@ nsSVGPatternFrame::GetViewBox(nsIContent* aDefault)
   const nsSVGViewBox &thisViewBox =
     static_cast<nsSVGPatternElement *>(mContent)->mViewBox;
 
-  if (thisViewBox.IsValid())
+  if (thisViewBox.IsExplicitlySet())
     return thisViewBox;
 
   AutoPatternReferencer patternRef(this);
@@ -579,10 +553,14 @@ nsSVGPatternFrame::ConstructCTM(const gfxRect &callerBBox,
     tCTM.Scale(scale, scale);
   }
 
-  const nsSVGViewBoxRect viewBox = GetViewBox().GetAnimValue();
-
-  if (viewBox.height <= 0.0f || viewBox.width <= 0.0f) {
+  const nsSVGViewBox& viewBox = GetViewBox();
+  if (!viewBox.IsExplicitlySet()) {
     return tCTM;
+  }
+  const nsSVGViewBoxRect viewBoxRect = GetViewBox().GetAnimValue();
+
+  if (viewBoxRect.height <= 0.0f || viewBoxRect.width <= 0.0f) {
+    return gfxMatrix(0.0, 0.0, 0.0, 0.0, 0.0, 0.0); // singular
   }
 
   float viewportWidth, viewportHeight;
@@ -601,11 +579,16 @@ nsSVGPatternFrame::ConstructCTM(const gfxRect &callerBBox,
     viewportHeight =
       GetLengthValue(nsSVGPatternElement::HEIGHT)->GetAnimValue(aTarget);
   }
+
+  if (viewportWidth <= 0.0f || viewportHeight <= 0.0f) {
+    return gfxMatrix(0.0, 0.0, 0.0, 0.0, 0.0, 0.0); // singular
+  }
+
   gfxMatrix tm = nsSVGUtils::GetViewBoxTransform(
     static_cast<nsSVGPatternElement*>(mContent),
     viewportWidth, viewportHeight,
-    viewBox.x, viewBox.y,
-    viewBox.width, viewBox.height,
+    viewBoxRect.x, viewBoxRect.y,
+    viewBoxRect.width, viewBoxRect.height,
     GetPreserveAspectRatio());
 
   return tm * tCTM;
@@ -673,6 +656,7 @@ nsSVGPatternFrame::GetTargetGeometry(gfxMatrix *aCTM,
 
 already_AddRefed<gfxPattern>
 nsSVGPatternFrame::GetPaintServerPattern(nsIFrame *aSource,
+                                         nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
                                          float aGraphicOpacity,
                                          const gfxRect *aOverrideBounds)
 {
@@ -685,7 +669,7 @@ nsSVGPatternFrame::GetPaintServerPattern(nsIFrame *aSource,
   nsRefPtr<gfxASurface> surface;
   gfxMatrix pMatrix;
   nsresult rv = PaintPattern(getter_AddRefs(surface), &pMatrix,
-                             aSource, aGraphicOpacity, aOverrideBounds);
+                             aSource, aFillOrStroke, aGraphicOpacity, aOverrideBounds);
 
   if (NS_FAILED(rv)) {
     return nsnull;

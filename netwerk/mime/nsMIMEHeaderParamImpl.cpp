@@ -1,45 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:expandtab:shiftwidth=2:tabstop=4:
- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   rhp@netscape.com
- *   Jungshik Shin <jshin@mailaps.org>
- *   John G Myers   <jgmyers@netscape.com>
- *   Takayuki Tei   <taka@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* vim: set sw=4 ts=8 et tw=80 : */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <string.h>
 #include "prtypes.h"
@@ -169,6 +132,165 @@ void RemoveQuotedStringEscapes(char *src)
   *dst = 0;
 }
 
+// Support for continuations (RFC 2231, Section 3)
+
+// only a sane number supported
+#define MAX_CONTINUATIONS 999
+
+// part of a continuation
+
+class Continuation {
+  public:
+    Continuation(const char *aValue, PRUint32 aLength,
+                 bool aNeedsPercentDecoding) {
+      value = aValue;
+      length = aLength;
+      needsPercentDecoding = aNeedsPercentDecoding;
+    }
+    Continuation() {
+      // empty constructor needed for nsTArray
+      value = 0L;
+      length = 0;
+      needsPercentDecoding = false;
+    }
+    ~Continuation() {}
+
+    const char *value;
+    PRUint32 length;
+    bool needsPercentDecoding;
+};
+
+// combine segments into a single string, returning the allocated string
+// (or NULL) while emptying the list 
+char *combineContinuations(nsTArray<Continuation>& aArray)
+{
+  // Sanity check
+  if (aArray.Length() == 0)
+    return NULL;
+
+  // Get an upper bound for the length
+  PRUint32 length = 0;
+  for (PRUint32 i = 0; i < aArray.Length(); i++) {
+    length += aArray[i].length;
+  }
+
+  // Allocate
+  char *result = (char *) nsMemory::Alloc(length + 1);
+
+  // Concatenate
+  if (result) {
+    *result = '\0';
+
+    for (PRUint32 i = 0; i < aArray.Length(); i++) {
+      Continuation cont = aArray[i];
+      if (! cont.value) break;
+
+      char *c = result + strlen(result);
+      strncat(result, cont.value, cont.length);
+      if (cont.needsPercentDecoding) {
+        nsUnescape(c);
+      }
+    }
+
+    // return null if empty value
+    if (*result == '\0') {
+      nsMemory::Free(result);
+      result = NULL;
+    }
+  } else {
+    // Handle OOM
+    NS_WARNING("Out of memory\n");
+  }
+
+  return result;
+}
+
+// add a continuation, return false on error if segment already has been seen
+bool addContinuation(nsTArray<Continuation>& aArray, PRUint32 aIndex,
+                     const char *aValue, PRUint32 aLength,
+                     bool aNeedsPercentDecoding)
+{
+  if (aIndex < aArray.Length() && aArray[aIndex].value) {
+    NS_WARNING("duplicate RC2231 continuation segment #\n");
+    return false;
+  }
+
+  if (aIndex > MAX_CONTINUATIONS) {
+    NS_WARNING("RC2231 continuation segment # exceeds limit\n");
+    return false;
+  }
+
+  Continuation cont (aValue, aLength, aNeedsPercentDecoding);
+
+  if (aArray.Length() <= aIndex) {
+    aArray.SetLength(aIndex + 1);
+  }
+  aArray[aIndex] = cont;
+
+  return true;
+}
+
+// parse a segment number; return -1 on error
+PRInt32 parseSegmentNumber(const char *aValue, PRInt32 aLen)
+{
+  if (aLen < 1) {
+    NS_WARNING("segment number missing\n");
+    return -1;
+  }
+
+  if (aLen > 1 && aValue[0] == '0') {
+    NS_WARNING("leading '0' not allowed in segment number\n");
+    return -1;
+  }
+
+  PRInt32 segmentNumber = 0;
+
+  for (PRInt32 i = 0; i < aLen; i++) {
+    if (! (aValue[i] >= '0' && aValue[i] <= '9')) {
+      NS_WARNING("invalid characters in segment number\n");
+      return -1;
+    }
+
+    segmentNumber *= 10;
+    segmentNumber += aValue[i] - '0';
+    if (segmentNumber > MAX_CONTINUATIONS) {
+      NS_WARNING("Segment number exceeds sane size\n");
+      return -1;
+    }
+  }
+
+  return segmentNumber;
+}
+
+// validate a given octet sequence for compliance with the specified
+// encoding
+bool IsValidOctetSequenceForCharset(nsACString& aCharset, const char *aOctets)
+{
+  nsCOMPtr<nsIUTF8ConverterService> cvtUTF8(do_GetService
+    (NS_UTF8CONVERTERSERVICE_CONTRACTID));
+  if (!cvtUTF8) {
+    NS_WARNING("Can't get UTF8ConverterService\n");
+    return false;
+  }
+
+  nsCAutoString tmpRaw;
+  tmpRaw.Assign(aOctets);
+  nsCAutoString tmpDecoded;
+
+  nsresult rv = cvtUTF8->ConvertStringToUTF8(tmpRaw,
+                                             PromiseFlatCString(aCharset).get(),
+                                             true, tmpDecoded);
+
+  if (rv != NS_OK) {
+    // we can't decode; charset may be unsupported, or the octet sequence
+    // is broken (illegal or incomplete octet sequence contained)
+    NS_WARNING("RFC2231/5987 parameter value does not decode according to specified charset\n");
+    return false;
+  }
+
+  return true;
+}
+
 // moved almost verbatim from mimehdrs.cpp
 // char *
 // MimeHeaders_get_parameter (const char *header_value, const char *parm_name,
@@ -204,6 +326,10 @@ nsMIMEHeaderParamImpl::DoParameterInternal(const char *aHeaderValue,
 
   if (aCharset) *aCharset = nsnull;
   if (aLang) *aLang = nsnull;
+
+  nsCAutoString charset;
+
+  bool acceptContinuations = (aDecoding != RFC_5987_DECODING);
 
   const char *str = aHeaderValue;
 
@@ -255,37 +381,55 @@ nsMIMEHeaderParamImpl::DoParameterInternal(const char *aHeaderValue,
   //    title*1="There is no charset and lang info."
   // RFC5987: only A and B
   
+  // collect results for the different algorithms (plain filename,
+  // RFC5987/2231-encoded filename, + continuations) separately and decide
+  // which to use at the end
+  char *caseAResult = NULL;
+  char *caseBResult = NULL;
+  char *caseCDResult = NULL;
+
+  // collect continuation segments
+  nsTArray<Continuation> segments;
+
+
+  // our copies of the charset parameter, kept separately as they might
+  // differ for the two formats
+  nsDependentCSubstring charsetB, charsetCD;
+
+  nsDependentCSubstring lang;
+
   PRInt32 paramLen = strlen(aParamName);
 
-  bool haveCaseAValue = false;
-  PRInt32 nextContinuation = 0; // next value in series, or -1 if error
-
   while (*str) {
-    const char *tokenStart = str;
-    const char *tokenEnd = 0;
+    // find name/value
+
+    const char *nameStart = str;
+    const char *nameEnd = NULL;
     const char *valueStart = str;
-    const char *valueEnd = 0;
-    bool seenEquals = false;
+    const char *valueEnd = NULL;
+    bool isQuotedString = false;
 
     NS_ASSERTION(!nsCRT::IsAsciiSpace(*str), "should be after whitespace.");
 
     // Skip forward to the end of this token. 
     for (; *str && !nsCRT::IsAsciiSpace(*str) && *str != '=' && *str != ';'; str++)
       ;
-    tokenEnd = str;
+    nameEnd = str;
+
+    PRInt32 nameLen = nameEnd - nameStart;
 
     // Skip over whitespace, '=', and whitespace
     while (nsCRT::IsAsciiSpace(*str)) ++str;
-    if (*str == '=') {
-      ++str;
-      seenEquals = true;
+    if (!*str) {
+      break;
+    }
+    if (*str++ != '=') {
+      // don't accept parameters without "="
+      goto increment_str;
     }
     while (nsCRT::IsAsciiSpace(*str)) ++str;
 
-    bool needUnquote = false;
-    
-    if (*str != '"')
-    {
+    if (*str != '"') {
       // The value is a token, not a quoted string.
       valueStart = str;
       for (valueEnd = str;
@@ -293,16 +437,12 @@ nsMIMEHeaderParamImpl::DoParameterInternal(const char *aHeaderValue,
            valueEnd++)
         ;
       str = valueEnd;
-    }
-    else
-    {
-      // The value is a quoted string.
-      needUnquote = true;
+    } else {
+      isQuotedString = true;
       
       ++str;
       valueStart = str;
-      for (valueEnd = str; *valueEnd; ++valueEnd)
-      {
+      for (valueEnd = str; *valueEnd; ++valueEnd) {
         if (*valueEnd == '\\')
           ++valueEnd;
         else if (*valueEnd == '"')
@@ -317,16 +457,14 @@ nsMIMEHeaderParamImpl::DoParameterInternal(const char *aHeaderValue,
     // See if this is the simplest case (case A above),
     // a 'single' line value with no charset and lang.
     // If so, copy it and return.
-    if (tokenEnd - tokenStart == paramLen &&
-        seenEquals &&
-        !nsCRT::strncasecmp(tokenStart, aParamName, paramLen))
-    {
-      if (*aResult)
-      {
-        // either seen earlier caseA value already--we prefer first--or caseA
-        // came after a continuation: either way, prefer other value
+    if (nameLen == paramLen &&
+        !nsCRT::strncasecmp(nameStart, aParamName, paramLen)) {
+
+      if (caseAResult) {
+        // we already have one caseA result, ignore subsequent ones
         goto increment_str;
       }
+
       // if the parameter spans across multiple lines we have to strip out the
       //     line continuation -- jht 4/29/98 
       nsCAutoString tempStr(valueStart, valueEnd - valueStart);
@@ -334,144 +472,131 @@ nsMIMEHeaderParamImpl::DoParameterInternal(const char *aHeaderValue,
       char *res = ToNewCString(tempStr);
       NS_ENSURE_TRUE(res, NS_ERROR_OUT_OF_MEMORY);
       
-      if (needUnquote)
+      if (isQuotedString)
         RemoveQuotedStringEscapes(res);
-            
-      *aResult = res;
-      
-      haveCaseAValue = true;
+
+      caseAResult = res;
       // keep going, we may find a RFC 2231/5987 encoded alternative
     }
     // case B, C, and D
-    else if (tokenEnd - tokenStart > paramLen &&
-             !nsCRT::strncasecmp(tokenStart, aParamName, paramLen) &&
-             seenEquals &&
-             *(tokenStart + paramLen) == '*')
-    {
-      const char *cp = tokenStart + paramLen + 1; // 1st char past '*'
-      bool needUnescape = *(tokenEnd - 1) == '*';
+    else if (nameLen > paramLen &&
+             !nsCRT::strncasecmp(nameStart, aParamName, paramLen) &&
+             *(nameStart + paramLen) == '*') {
 
-      bool caseB = (tokenEnd - tokenStart) == paramLen + 1;
-      bool caseCorDStart = (*cp == '0') && needUnescape;
-      bool acceptContinuations = (aDecoding != RFC_5987_DECODING);
- 
+      // 1st char past '*'       
+      const char *cp = nameStart + paramLen + 1; 
+
+      // if param name ends in "*" we need do to RFC5987 "ext-value" decoding
+      bool needExtDecoding = *(nameEnd - 1) == '*';      
+
+      bool caseB = nameLen == paramLen + 1;
+      bool caseCStart = (*cp == '0') && needExtDecoding;
+
+      // parse the segment number
+      PRInt32 segmentNumber = -1;
+      if (!caseB) {
+        PRInt32 segLen = (nameEnd - cp) - (needExtDecoding ? 1 : 0);
+        segmentNumber = parseSegmentNumber(cp, segLen);
+
+        if (segmentNumber == -1) {
+          acceptContinuations = false;
+          goto increment_str;
+        }
+      }
+
       // CaseB and start of CaseC: requires charset and optional language
       // in quotes (quotes required even if lang is blank)
-      if (caseB || (caseCorDStart && acceptContinuations))
-      {
-        if (caseCorDStart) {
-          if (nextContinuation++ != 0)
-          {
-            // error: already started a continuation.  Skip future
-            // continuations and return whatever initial parts were in order.
-            nextContinuation = -1;
-            goto increment_str;
-          }
-        }
+      if (caseB || (caseCStart && acceptContinuations)) {
         // look for single quotation mark(')
         const char *sQuote1 = PL_strchr(valueStart, 0x27);
-        const char *sQuote2 = (char *) (sQuote1 ? PL_strchr(sQuote1 + 1, 0x27) : nsnull);
+        const char *sQuote2 = sQuote1 ? PL_strchr(sQuote1 + 1, 0x27) : nsnull;
 
         // Two single quotation marks must be present even in
         // absence of charset and lang. 
-        if (!sQuote1 || !sQuote2)
+        if (!sQuote1 || !sQuote2) {
           NS_WARNING("Mandatory two single quotes are missing in header parameter\n");
-        if (aCharset && sQuote1 > valueStart && sQuote1 < valueEnd)
-        {
-          *aCharset = (char *) nsMemory::Clone(valueStart, sQuote1 - valueStart + 1);
-          if (*aCharset) 
-            *(*aCharset + (sQuote1 - valueStart)) = 0;
-        }
-        if (aLang && sQuote1 && sQuote2 && sQuote2 > sQuote1 + 1 &&
-            sQuote2 < valueEnd)
-        {
-          *aLang = (char *) nsMemory::Clone(sQuote1 + 1, sQuote2 - (sQuote1 + 1) + 1);
-          if (*aLang) 
-            *(*aLang + (sQuote2 - (sQuote1 + 1))) = 0;
         }
 
-        // Be generous and handle gracefully when required 
-        // single quotes are absent.
-        if (sQuote1)
-        {
-          if(!sQuote2)
-            sQuote2 = sQuote1;
-        }
-        else
-          sQuote2 = valueStart - 1;
+        const char *charsetStart = NULL;
+        PRInt32 charsetLength = 0;
+        const char *langStart = NULL;
+        PRInt32 langLength = 0;
+        const char *rawValStart = NULL;
+        PRInt32 rawValLength = 0;
 
-        if (sQuote2 && sQuote2 + 1 < valueEnd)
-        {
-          if (*aResult)
-          {
-            // caseA value already read, or caseC/D value already read
-            // but we're now reading caseB: either way, drop old value
-            nsMemory::Free(*aResult);
-            haveCaseAValue = false;
-          }
-          *aResult = (char *) nsMemory::Alloc(valueEnd - (sQuote2 + 1) + 1);
-          if (*aResult)
-          {
-            memcpy(*aResult, sQuote2 + 1, valueEnd - (sQuote2 + 1));
-            *(*aResult + (valueEnd - (sQuote2 + 1))) = 0;
-            if (needUnescape)
-            {
-              nsUnescape(*aResult);
-              if (caseB)
-                return NS_OK; // caseB wins over everything else
+        if (sQuote2 && sQuote1) {
+          // both delimiters present: charSet'lang'rawVal
+          rawValStart = sQuote2 + 1;
+          rawValLength = valueEnd - rawValStart;
+
+          langStart = sQuote1 + 1;
+          langLength = sQuote2 - langStart;
+
+          charsetStart = valueStart;
+          charsetLength = sQuote1 - charsetStart;
+        }
+        else if (sQuote1) {
+          // one delimiter; assume charset'rawVal
+          rawValStart = sQuote1 + 1;
+          rawValLength = valueEnd - rawValStart;
+
+          charsetStart = valueStart;
+          charsetLength = sQuote1 - valueStart;
+        }
+        else {
+          // no delimiter: just rawVal
+          rawValStart = valueStart;
+          rawValLength = valueEnd - valueStart;
+        }
+
+        if (langLength != 0) {
+          lang.Assign(langStart, langLength);
+        }
+
+        // keep the charset for later
+        if (caseB) {
+          charsetB.Assign(charsetStart, charsetLength);
+        } else {
+          // if caseCorD
+          charsetCD.Assign(charsetStart, charsetLength);
+        }
+
+        // non-empty value part
+        if (rawValLength > 0) {
+          if (!caseBResult && caseB) {
+            // allocate buffer for the raw value
+            char *tmpResult = (char *) nsMemory::Clone(rawValStart, rawValLength + 1);
+            if (!tmpResult) {
+              goto increment_str;
+            }
+            *(tmpResult + rawValLength) = 0;
+
+            nsUnescape(tmpResult);
+            caseBResult = tmpResult;
+          } else {
+            // caseC
+            bool added = addContinuation(segments, 0, rawValStart,
+                                         rawValLength, needExtDecoding);
+
+            if (!added) {
+              // continuation not added, stop processing them
+              acceptContinuations = false;
             }
           }
         }
       }  // end of if-block :  title*0*=  or  title*= 
       // caseD: a line of multiline param with no need for unescaping : title*[0-9]=
       // or 2nd or later lines of a caseC param : title*[1-9]*= 
-      else if (acceptContinuations && nsCRT::IsAsciiDigit(PRUnichar(*cp)))
-      {
-        PRInt32 nextSegment = atoi(cp);
-        // no leading zeros allowed except for ... position 0
-        bool broken = nextSegment > 0 && *cp == '0';
-          
-        if (broken || nextSegment != nextContinuation++)
-        {
-          // error: gap in continuation or unneccessary leading 0.
-          // Skip future continuations and return whatever initial parts were
-          // in order.
-          nextContinuation = -1;
-          goto increment_str;
+      else if (acceptContinuations && segmentNumber != -1) {
+        PRUint32 valueLength = valueEnd - valueStart;
+
+        bool added = addContinuation(segments, segmentNumber, valueStart,
+                                     valueLength, needExtDecoding);
+
+        if (!added) {
+          // continuation not added, stop processing them
+          acceptContinuations = false;
         }
-        if (haveCaseAValue && *aResult) 
-        {
-          // drop caseA value
-          nsMemory::Free(*aResult);
-          *aResult = 0;
-          haveCaseAValue = false;
-        }
-        PRInt32 len = 0;
-        if (*aResult) // 2nd or later lines of multiline parameter
-        {
-          len = strlen(*aResult);
-          char *ns = (char *) nsMemory::Realloc(*aResult, len + (valueEnd - valueStart) + 1);
-          if (!ns)
-          {
-            nsMemory::Free(*aResult);
-          }
-          *aResult = ns;
-        }
-        else 
-        {
-          NS_ASSERTION(*cp == '0', "Not first value in continuation"); // must be; 1st line :  title*0=
-          *aResult = (char *) nsMemory::Alloc(valueEnd - valueStart + 1);
-        }
-        if (*aResult)
-        {
-          // append a partial value
-          memcpy(*aResult + len, valueStart, valueEnd - valueStart);
-          *(*aResult + len + (valueEnd - valueStart)) = 0;
-          if (needUnescape)
-            nsUnescape(*aResult + len);
-        }
-        else 
-          return NS_ERROR_OUT_OF_MEMORY;
       } // end of if-block :  title*[0-9]= or title*[1-9]*=
     }
 
@@ -483,10 +608,64 @@ increment_str:
     while (nsCRT::IsAsciiSpace(*str)) ++str;
   }
 
-  if (*aResult) 
-    return NS_OK;
-  else
-    return NS_ERROR_INVALID_ARG; // aParameter not found !!
+  caseCDResult = combineContinuations(segments);
+
+  if (caseBResult && !charsetB.IsEmpty()) {
+    // check that the 2231/5987 result decodes properly given the
+    // specified character set
+    if (!IsValidOctetSequenceForCharset(charsetB, caseBResult))
+      caseBResult = NULL;
+  }
+
+  if (caseCDResult && !charsetCD.IsEmpty()) {
+    // check that the 2231/5987 result decodes properly given the
+    // specified character set
+    if (!IsValidOctetSequenceForCharset(charsetCD, caseCDResult))
+      caseCDResult = NULL;
+  }
+
+  if (caseBResult) {
+    // prefer simple 5987 format over 2231 with continuations
+    *aResult = caseBResult;
+    caseBResult = NULL;
+    charset.Assign(charsetB);
+  }
+  else if (caseCDResult) {
+    // prefer 2231/5987 with or without continuations over plain format
+    *aResult = caseCDResult;
+    caseCDResult = NULL;
+    charset.Assign(charsetCD);
+  }
+  else if (caseAResult) {
+    *aResult = caseAResult;
+    caseAResult = NULL;
+  }
+
+  // free unused stuff
+  nsMemory::Free(caseAResult);
+  nsMemory::Free(caseBResult);
+  nsMemory::Free(caseCDResult);
+
+  // if we have a result
+  if (*aResult) {
+    // then return charset and lang as well
+    if (aLang && !lang.IsEmpty()) {
+      PRUint32 len = lang.Length();
+      *aLang = (char *) nsMemory::Clone(lang.BeginReading(), len + 1);
+      if (*aLang) {
+        *(*aLang + len) = 0;
+      }
+   }
+    if (aCharset && !charset.IsEmpty()) {
+      PRUint32 len = charset.Length();
+      *aCharset = (char *) nsMemory::Clone(charset.BeginReading(), len + 1);
+      if (*aCharset) {
+        *(*aCharset + len) = 0;
+      }
+    }
+  }
+
+  return *aResult ? NS_OK : NS_ERROR_INVALID_ARG;
 }
 
 
@@ -544,9 +723,8 @@ nsMIMEHeaderParamImpl::DecodeParameter(const nsACString& aParamValue,
   {
     nsCOMPtr<nsIUTF8ConverterService> cvtUTF8(do_GetService(NS_UTF8CONVERTERSERVICE_CONTRACTID));
     if (cvtUTF8)
-      // skip ASCIIness/UTF8ness test if aCharset is 7bit non-ascii charset.
       return cvtUTF8->ConvertStringToUTF8(aParamValue, aCharset,
-          IS_7BIT_NON_ASCII_CHARSET(aCharset), aResult);
+          true, aResult);
   }
 
   const nsAFlatCString& param = PromiseFlatCString(aParamValue);
@@ -750,7 +928,7 @@ static const char especials[] = "()<>@,;:\\\"/[]?.=";
 nsresult DecodeRFC2047Str(const char *aHeader, const char *aDefaultCharset, 
                           bool aOverrideCharset, nsACString &aResult)
 {
-  const char *p, *q, *r;
+  const char *p, *q = nsnull, *r;
   char *decodedText;
   const char *begin; // tracking pointer for where we are in the input buffer
   PRInt32 isLastEncodedWord = 0;
@@ -886,4 +1064,3 @@ nsresult DecodeRFC2047Str(const char *aHeader, const char *aDefaultCharset,
 
   return NS_OK;
 }
-

@@ -1,51 +1,22 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=2 sw=2 et tw=78: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef NS_IPARSER___
 #define NS_IPARSER___
 
 
-/**
- * MODULE NOTES:
- *  
- *  This class defines the iparser interface. This XPCOM
- *  inteface is all that parser clients ever need to see.
+ /**
+ * This GECKO-INTERNAL interface is on track to being REMOVED (or refactored
+ * to the point of being near-unrecognizable).
  *
- **/
+ * Please DO NOT #include this file in comm-central code, in your XULRunner
+ * app or binary extensions.
+ *
+ * Please DO NOT #include this into new files even inside Gecko. It is more
+ * likely than not that #including this header is the wrong thing to do.
+ */
 
 #include "nsISupports.h"
 #include "nsIStreamListener.h"
@@ -56,8 +27,8 @@
 #include "nsParserBase.h"
 
 #define NS_IPARSER_IID \
-{ 0xd064f0d6, 0x44e3, 0x4366, \
-  { 0xa7, 0x05, 0xcf, 0x7a, 0x91, 0x26, 0x14, 0xb6 } }
+{ 0x2c4ad90a, 0x740e, 0x4212, \
+  { 0xba, 0x3f, 0xfe, 0xac, 0xda, 0x4b, 0x92, 0x9e } }
 
 // {41421C60-310A-11d4-816F-000064657374}
 #define NS_IDEBUG_DUMP_CONTENT_IID \
@@ -85,28 +56,6 @@ enum eParserDocType {
   eHTML_Strict
 };
 
-
-// define Charset source constants
-// note: the value order defines the priority; higher numbers take priority
-#define kCharsetUninitialized           0
-#define kCharsetFromWeakDocTypeDefault  1
-#define kCharsetFromUserDefault         2
-#define kCharsetFromDocTypeDefault      3 // This and up confident for XHR
-#define kCharsetFromCache               4
-#define kCharsetFromParentFrame         5
-#define kCharsetFromAutoDetection       6
-#define kCharsetFromHintPrevDoc         7
-#define kCharsetFromMetaPrescan         8 // this one and smaller: HTML5 Tentative
-#define kCharsetFromMetaTag             9 // this one and greater: HTML5 Confident
-#define kCharsetFromIrreversibleAutoDetection 10
-#define kCharsetFromByteOrderMark      11
-#define kCharsetFromChannel            12
-#define kCharsetFromOtherComponent     13
-// Levels below here will be forced onto childframes too
-#define kCharsetFromParentForced       14
-#define kCharsetFromUserForced         15
-#define kCharsetFromPreviousLoading    16
-
 enum eStreamState {eNone,eOnStart,eOnDataAvail,eOnStop};
 
 /** 
@@ -127,8 +76,14 @@ public:
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDebugDumpContent, NS_IDEBUG_DUMP_CONTENT_IID)
 
 /**
- *  This class defines the iparser interface. This XPCOM
- *  inteface is all that parser clients ever need to see.
+ * This GECKO-INTERNAL interface is on track to being REMOVED (or refactored
+ * to the point of being near-unrecognizable).
+ *
+ * Please DO NOT #include this file in comm-central code, in your XULRunner
+ * app or binary extensions.
+ *
+ * Please DO NOT #include this into new files even inside Gecko. It is more
+ * likely than not that #including this header is the wrong thing to do.
  */
 class nsIParser : public nsParserBase {
   public:
@@ -231,11 +186,6 @@ class nsIParser : public nsParserBase {
     NS_IMETHOD Parse(nsIURI* aURL,
                      nsIRequestObserver* aListener = nsnull,
                      void* aKey = 0,
-                     nsDTDMode aMode = eDTDMode_autodetect) = 0;
-    NS_IMETHOD Parse(const nsAString& aSourceBuffer,
-                     void* aKey,
-                     const nsACString& aMimeType,
-                     bool aLastCall,
                      nsDTDMode aMode = eDTDMode_autodetect) = 0;
 
     NS_IMETHOD Terminate(void) = 0;

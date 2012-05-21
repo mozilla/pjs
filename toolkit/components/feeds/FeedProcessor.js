@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is Robert Sayre.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Goodger <beng@google.com>
- *   Myk Melez <myk@mozilla.org>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *   Will Guaraldi <will.guaraldi@pculture.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 function LOG(str) {
   dump("*** " + str + "\n");
@@ -75,14 +40,13 @@ const IO_CONTRACTID = "@mozilla.org/network/io-service;1"
 const BAG_CONTRACTID = "@mozilla.org/hash-property-bag;1"
 const ARRAY_CONTRACTID = "@mozilla.org/array;1";
 const SAX_CONTRACTID = "@mozilla.org/saxparser/xmlreader;1";
-const UNESCAPE_CONTRACTID = "@mozilla.org/feed-unescapehtml;1";
+const PARSERUTILS_CONTRACTID = "@mozilla.org/parserutils;1";
 
 
 var gIoService = null;
 
 const XMLNS = "http://www.w3.org/XML/1998/namespace";
 const RSS090NS = "http://my.netscape.com/rdf/simple/0.9/";
-const WAIROLE_NS = "http://www.w3.org/2005/01/wai-rdf/GUIRoleTaxonomy#";
 
 /***** Some general utils *****/
 function strToURI(link, base) {
@@ -224,8 +188,6 @@ var gNamespaces = {
 // for attributes only
 var gAllowedXHTMLNamespaces = {
   "http://www.w3.org/XML/1998/namespace":"xml",
-  "http://www.w3.org/TR/xhtml2":"xhtml2",
-  "http://www.w3.org/2005/07/aaa":"aaa",
   // if someone ns qualifies XHTML, we have to prefix it to avoid an
   // attribute collision.
   "http://www.w3.org/1999/xhtml":"xhtml"
@@ -647,14 +609,16 @@ function TextConstruct() {
   this.base = null;
   this.type = "text";
   this.text = null;
-  this.unescapeHTML = Cc[UNESCAPE_CONTRACTID].
-                      getService(Ci.nsIScriptableUnescapeHTML);
+  this.parserUtils = Cc[PARSERUTILS_CONTRACTID].getService(Ci.nsIParserUtils);
 }
 
 TextConstruct.prototype = {
   plainText: function TC_plainText() {
     if (this.type != "text") {
-      return this.unescapeHTML.unescape(stripTags(this.text));
+      return this.parserUtils.convertToPlainText(stripTags(this.text),
+        Ci.nsIDocumentEncoder.OutputSelectionOnly |
+        Ci.nsIDocumentEncoder.OutputAbsoluteLinks,
+        0);
     }
     return this.text;
   },
@@ -675,8 +639,8 @@ TextConstruct.prototype = {
     else
       return null;
 
-    return this.unescapeHTML.parseFragment(this.text, isXML,
-                                           this.base, element);
+    return this.parserUtils.parseFragment(this.text, 0, isXML,
+                                          this.base, element);
   },
  
   // XPCOM stuff
@@ -886,14 +850,13 @@ function dateParse(aDateString) {
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
 // The XHTMLHandler handles inline XHTML found in things like atom:summary
-function XHTMLHandler(processor, isAtom, waiPrefixes) {
+function XHTMLHandler(processor, isAtom) {
   this._buf = "";
   this._processor = processor;
   this._depth = 0;
   this._isAtom = isAtom;
   // a stack of lists tracking in-scope namespaces
   this._inScopeNS = [];
-  this._waiPrefixes = waiPrefixes;
 }
 
 // The fidelity can be improved here, to allow handling of stuff like
@@ -943,39 +906,6 @@ XHTMLHandler.prototype = {
             // The attribute value we'll attempt to write
             var attributeValue = xmlEscape(attributes.getValue(i));
 
-            // More QName abuse from W3C
-            var rolePrefix = "";
-            if (attributes.getLocalName(i) == "role") {
-              for (var aPrefix in this._waiPrefixes) {
-                if (attributeValue.indexOf(aPrefix + ":") == 0) {     
-                  // Now, due to the terrible layer mismatch 
-                  // that is QNames in content, we have to see
-                  // if the attribute value clashes with our 
-                  // namespace declarations.
-                  var isCollision = false;
-                  for (var uriKey in gAllowedXHTMLNamespaces) {
-                    if (gAllowedXHTMLNamespaces[uriKey] == aPrefix)
-                      isCollision = true;
-                  }
-                  
-                  if (isCollision) {
-                    rolePrefix = aPrefix + i;
-                    attributeValue = 
-                      rolePrefix + ":" + 
-                      attributeValue.substring(aPrefix.length + 1);
-                  } else {
-                    rolePrefix = aPrefix;
-                  }
-
-                  break;
-                }
-              }
-
-              if (rolePrefix)
-                this._buf += (" xmlns:" + rolePrefix + 
-                              "='" + WAIROLE_NS + "'");
-            }
-
             // it's an allowed attribute NS.            
             // write the attribute
             this._buf += (" " + prefix + ":" + 
@@ -1016,12 +946,8 @@ XHTMLHandler.prototype = {
     this._buf += xmlEscape(data);
   },
   startPrefixMapping: function XH_startPrefixMapping(prefix, uri) {
-    if (prefix && uri == WAIROLE_NS) 
-      this._waiPrefixes[prefix] = WAIROLE_NS;
   },
   endPrefixMapping: function FP_endPrefixMapping(prefix) {
-    if (prefix)
-      delete this._waiPrefixes[prefix];
   },
   processingInstruction: function XH_processingInstruction() {
   }, 
@@ -1135,9 +1061,6 @@ function FeedProcessor() {
   this._xhtmlHandler = null;
   this._haveSentResult = false;
   
-  // http://www.w3.org/WAI/PF/GUI/ uses QNames in content :(
-  this._waiPrefixes = {};
-
   // The nsIFeedResultListener waiting for the parse results
   this.listener = null;
 
@@ -1487,8 +1410,7 @@ FeedProcessor.prototype = {
       var type = attributes.getValueFromName("","type");
       if (type != null && type.indexOf("xhtml") >= 0) {
         this._xhtmlHandler = 
-          new XHTMLHandler(this, (this._result.version == "atom"), 
-                           this._waiPrefixes);
+          new XHTMLHandler(this, (this._result.version == "atom"));
         this._reader.contentHandler = this._xhtmlHandler;
         return;
       }
@@ -1564,16 +1486,9 @@ FeedProcessor.prototype = {
   // don't conflict with the ones we've defined, throw them in a 
   // dictionary to check.
   startPrefixMapping: function FP_startPrefixMapping(prefix, uri) {
-    // Thanks for QNames in content, W3C
-    // This will even be a perf hit for every single feed
-    // http://www.w3.org/WAI/PF/GUI/
-    if (prefix && uri == WAIROLE_NS) 
-      this._waiPrefixes[prefix] = WAIROLE_NS;
   },
   
   endPrefixMapping: function FP_endPrefixMapping(prefix) {
-    if (prefix)
-      delete this._waiPrefixes[prefix];
   },
   
   processingInstruction: function FP_processingInstruction(target, data) {

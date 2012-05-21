@@ -1,45 +1,11 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Aaron Leventhal <aaronl@netscape.com> (original author)
- *   Kyle Yuan <kyle.yuan@sun.com>
- *   Alexander Surkov <surkov.alexander@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsXULListboxAccessible.h"
 
+#include "Accessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
 #include "nsDocAccessible.h"
@@ -134,7 +100,7 @@ nsXULColumnItemAccessible::DoAction(PRUint8 aIndex)
 
 nsXULListboxAccessible::
   nsXULListboxAccessible(nsIContent* aContent, nsDocAccessible* aDoc) :
-  XULSelectControlAccessible(aContent, aDoc)
+  XULSelectControlAccessible(aContent, aDoc), xpcAccessibleTable(this)
 {
   nsIContent* parentContent = mContent->GetParent();
   if (parentContent) {
@@ -162,6 +128,16 @@ nsXULListboxAccessible::QueryInterface(REFNSIID aIID, void** aInstancePtr)
   }
 
   return NS_ERROR_NO_INTERFACE;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//nsAccessNode
+
+void
+nsXULListboxAccessible::Shutdown()
+{
+  mTable = nsnull;
+  XULSelectControlAccessible::Shutdown();
 }
 
 bool
@@ -200,17 +176,18 @@ nsXULListboxAccessible::NativeState()
 /**
   * Our value is the label of our ( first ) selected child.
   */
-NS_IMETHODIMP nsXULListboxAccessible::GetValue(nsAString& _retval)
+void
+nsXULListboxAccessible::Value(nsString& aValue)
 {
-  _retval.Truncate();
+  aValue.Truncate();
+
   nsCOMPtr<nsIDOMXULSelectControlElement> select(do_QueryInterface(mContent));
   if (select) {
     nsCOMPtr<nsIDOMXULSelectControlItemElement> selectedItem;
     select->GetSelectedItem(getter_AddRefs(selectedItem));
     if (selectedItem)
-      return selectedItem->GetLabel(_retval);
+      selectedItem->GetLabel(aValue);
   }
-  return NS_ERROR_FAILURE;
 }
 
 role
@@ -229,32 +206,9 @@ nsXULListboxAccessible::NativeRole()
 ////////////////////////////////////////////////////////////////////////////////
 // nsXULListboxAccessible. nsIAccessibleTable
 
-NS_IMETHODIMP
-nsXULListboxAccessible::GetCaption(nsIAccessible **aCaption)
+PRUint32
+nsXULListboxAccessible::ColCount()
 {
-  NS_ENSURE_ARG_POINTER(aCaption);
-  *aCaption = nsnull;
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULListboxAccessible::GetSummary(nsAString &aSummary)
-{
-  aSummary.Truncate();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULListboxAccessible::GetColumnCount(PRInt32 *aColumnsCout)
-{
-  NS_ENSURE_ARG_POINTER(aColumnsCout);
-  *aColumnsCout = 0;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
   nsIContent* headContent = nsnull;
   for (nsIContent* childContent = mContent->GetFirstChild(); childContent;
        childContent = childContent->GetNextSibling()) {
@@ -264,7 +218,7 @@ nsXULListboxAccessible::GetColumnCount(PRInt32 *aColumnsCout)
     }
   }
   if (!headContent)
-    return NS_OK;
+    return 0;
 
   PRUint32 columnCount = 0;
   for (nsIContent* childContent = headContent->GetFirstChild(); childContent;
@@ -275,28 +229,19 @@ nsXULListboxAccessible::GetColumnCount(PRInt32 *aColumnsCout)
     }
   }
 
-  *aColumnsCout = columnCount;
-  return NS_OK;
+  return columnCount;
 }
 
-NS_IMETHODIMP
-nsXULListboxAccessible::GetRowCount(PRInt32 *aRowCount)
+PRUint32
+nsXULListboxAccessible::RowCount()
 {
-  NS_ENSURE_ARG_POINTER(aRowCount);
-  *aRowCount = 0;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
   nsCOMPtr<nsIDOMXULSelectControlElement> element(do_QueryInterface(mContent));
-  NS_ENSURE_STATE(element);
 
   PRUint32 itemCount = 0;
-  nsresult rv = element->GetItemCount(&itemCount);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if(element)
+    element->GetItemCount(&itemCount);
 
-  *aRowCount = itemCount;
-  return NS_OK;
+  return itemCount;
 }
 
 NS_IMETHODIMP
@@ -324,27 +269,6 @@ nsXULListboxAccessible::GetCellAt(PRInt32 aRow, PRInt32 aColumn,
   nsresult rv = row->GetChildAt(aColumn, aAccessibleCell);
   NS_ENSURE_SUCCESS(rv, NS_ERROR_INVALID_ARG);
 
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULListboxAccessible::GetCellIndexAt(PRInt32 aRow, PRInt32 aColumn,
-                                       PRInt32 *aIndex)
-{
-  NS_ENSURE_ARG_POINTER(aIndex);
-  *aIndex = -1;
-
-  PRInt32 rowCount = 0;
-  nsresult rv = GetRowCount(&rowCount);
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_TRUE(0 <= aRow && aRow <= rowCount, NS_ERROR_INVALID_ARG);
-
-  PRInt32 columnCount = 0;
-  rv = GetColumnCount(&columnCount);
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_TRUE(0 <= aColumn && aColumn <= columnCount, NS_ERROR_INVALID_ARG);
-
-  *aIndex = aRow * columnCount + aColumn;
   return NS_OK;
 }
 
@@ -795,38 +719,19 @@ nsXULListboxAccessible::SelectColumn(PRInt32 aColumn)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsXULListboxAccessible::UnselectRow(PRInt32 aRow)
+void
+nsXULListboxAccessible::UnselectRow(PRUint32 aRowIdx)
 {
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-  
   nsCOMPtr<nsIDOMXULMultiSelectControlElement> control =
     do_QueryInterface(mContent);
   NS_ASSERTION(control,
                "Doesn't implement nsIDOMXULMultiSelectControlElement.");
 
-  nsCOMPtr<nsIDOMXULSelectControlItemElement> item;
-  control->GetItemAtIndex(aRow, getter_AddRefs(item));
-  NS_ENSURE_TRUE(item, NS_ERROR_INVALID_ARG);
-
-  return control->RemoveItemFromSelection(item);
-}
-
-NS_IMETHODIMP
-nsXULListboxAccessible::UnselectColumn(PRInt32 aColumn)
-{
-  // xul:listbox and xul:richlistbox support row selection only.
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULListboxAccessible::IsProbablyForLayout(bool *aIsProbablyForLayout)
-{
-  NS_ENSURE_ARG_POINTER(aIsProbablyForLayout);
-  *aIsProbablyForLayout = false;
-
-  return NS_OK;
+  if (control) {
+    nsCOMPtr<nsIDOMXULSelectControlItemElement> item;
+    control->GetItemAtIndex(aRowIdx, getter_AddRefs(item));
+    control->RemoveItemFromSelection(item);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -976,7 +881,7 @@ nsXULListitemAccessible::NativeRole()
     return roles::ROW;
 
   if (mIsCheckbox)
-    return roles::CHECKBUTTON;
+    return roles::CHECK_RICH_OPTION;
 
   if (mParent && mParent->Role() == roles::COMBOBOX_LIST)
     return roles::COMBOBOX_OPTION;
@@ -1029,14 +934,6 @@ nsXULListitemAccessible::CanHaveAnonChildren()
 {
   // That indicates we should walk anonymous children for listitems
   return true;
-}
-
-void
-nsXULListitemAccessible::GetPositionAndSizeInternal(PRInt32 *aPosInSet,
-                                                    PRInt32 *aSetSize)
-{
-  nsAccUtils::GetPositionAndSizeForXULSelectControlItem(mContent, aPosInSet,
-                                                        aSetSize);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

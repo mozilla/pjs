@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=2 ts=2 et tw=79: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIAtom.h"
 #include "nsParser.h"
@@ -47,7 +14,7 @@
 #include "nsIChannel.h"
 #include "nsICachingChannel.h"
 #include "nsICacheEntryDescriptor.h"
-#include "nsICharsetAlias.h"
+#include "nsCharsetAlias.h"
 #include "nsICharsetConverterManager.h"
 #include "nsIInputStream.h"
 #include "CNavDTD.h"
@@ -74,6 +41,7 @@
 #include "mozilla/CondVar.h"
 #include "mozilla/Mutex.h"
 #include "nsParserConstants.h"
+#include "nsCharsetSource.h"
 
 using namespace mozilla;
 
@@ -161,7 +129,6 @@ public:
 
 //-------------- End ParseContinue Event Definition ------------------------
 
-nsICharsetAlias* nsParser::sCharsetAliasService = nsnull;
 nsICharsetConverterManager* nsParser::sCharsetConverterManager = nsnull;
 
 /**
@@ -173,15 +140,10 @@ nsParser::Init()
 {
   nsresult rv;
 
-  nsCOMPtr<nsICharsetAlias> charsetAlias =
-    do_GetService(NS_CHARSETALIAS_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   nsCOMPtr<nsICharsetConverterManager> charsetConverter =
     do_GetService(NS_CHARSETCONVERTERMANAGER_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  charsetAlias.swap(sCharsetAliasService);
   charsetConverter.swap(sCharsetConverterManager);
 
   return NS_OK;
@@ -194,7 +156,6 @@ nsParser::Init()
 // static
 void nsParser::Shutdown()
 {
-  NS_IF_RELEASE(sCharsetAliasService);
   NS_IF_RELEASE(sCharsetConverterManager);
 }
 
@@ -245,6 +206,7 @@ nsParser::Initialize(bool aConstructor)
            NS_PARSER_FLAG_CAN_TOKENIZE;
 
   mProcessingNetworkData = false;
+  mIsAboutBlank = false;
 }
 
 void
@@ -414,6 +376,10 @@ nsParser::SetContentSink(nsIContentSink* aSink)
 
   if (mSink) {
     mSink->SetParser(this);
+    nsCOMPtr<nsIHTMLContentSink> htmlSink = do_QueryInterface(mSink);
+    if (htmlSink) {
+      mIsAboutBlank = true;
+    }
   }
 }
 
@@ -1303,19 +1269,14 @@ nsParser::Parse(nsIURI* aURL,
 }
 
 /**
- * Call this method if all you want to do is parse 1 string full of HTML text.
- * In particular, this method should be called by the DOM when it has an HTML
- * string to feed to the parser in real-time.
+ * Used by XML fragment parsing below.
  *
  * @param   aSourceBuffer contains a string-full of real content
- * @param   aMimeType tells us what type of content to expect in the given string
  */
-NS_IMETHODIMP
+nsresult
 nsParser::Parse(const nsAString& aSourceBuffer,
                 void* aKey,
-                const nsACString& aMimeType,
-                bool aLastCall,
-                nsDTDMode aMode)
+                bool aLastCall)
 {
   nsresult result = NS_OK;
 
@@ -1332,11 +1293,6 @@ nsParser::Parse(const nsAString& aSourceBuffer,
     // stuff correctly.
     return result;
   }
-
-  // Hack to pass on to the dtd the caller's desire to
-  // parse a fragment without worrying about containment rules
-  if (aMode == eDTDMode_fragment)
-    mCommand = eViewFragment;
 
   // Maintain a reference to ourselves so we don't go away
   // till we're completely done.
@@ -1360,7 +1316,8 @@ nsParser::Parse(const nsAString& aSourceBuffer,
 
       eAutoDetectResult theStatus = eUnknownDetect;
 
-      if (mParserContext && mParserContext->mMimeType == aMimeType) {
+      if (mParserContext &&
+          mParserContext->mMimeType.EqualsLiteral("application/xml")) {
         // Ref. Bug 90379
         NS_ASSERTION(mDTD, "How come the DTD is null?");
 
@@ -1396,13 +1353,8 @@ nsParser::Parse(const nsAString& aSourceBuffer,
       // end fix for 40143
 
       pc->mContextType=CParserContext::eCTString;
-      pc->SetMimeType(aMimeType);
-      if (pc->mPrevContext && aMode == eDTDMode_autodetect) {
-        // Preserve the DTD mode from the last context, bug 265814.
-        pc->mDTDMode = pc->mPrevContext->mDTDMode;
-      } else {
-        pc->mDTDMode = aMode;
-      }
+      pc->SetMimeType(NS_LITERAL_CSTRING("application/xml"));
+      pc->mDTDMode = eDTDMode_full_standards;
 
       mUnusedInput.Truncate();
 
@@ -1460,9 +1412,7 @@ nsParser::ParseFragment(const nsAString& aSourceBuffer,
   // pass false for the aLastCall parameter.
   result = Parse(theContext,
                  (void*)&theContext,
-                 NS_LITERAL_CSTRING("application/xml"),
-                 false,
-                 eDTDMode_full_standards);
+                 false);
   if (NS_FAILED(result)) {
     mFlags |= NS_PARSER_FLAG_OBSERVERS_ENABLED;
     return result;
@@ -1484,18 +1434,14 @@ nsParser::ParseFragment(const nsAString& aSourceBuffer,
   if (theCount == 0) {
     result = Parse(aSourceBuffer,
                    &theContext,
-                   NS_LITERAL_CSTRING("application/xml"),
-                   true,
-                   eDTDMode_full_standards);
+                   true);
     fragSink->DidBuildContent();
   } else {
     // Add an end tag chunk, so expat will read the whole source buffer,
     // and not worry about ']]' etc.
     result = Parse(aSourceBuffer + NS_LITERAL_STRING("</"),
                    &theContext,
-                   NS_LITERAL_CSTRING("application/xml"),
-                   false,
-                   eDTDMode_full_standards);
+                   false);
     fragSink->DidBuildContent();
 
     if (NS_SUCCEEDED(result)) {
@@ -1520,9 +1466,7 @@ nsParser::ParseFragment(const nsAString& aSourceBuffer,
 
       result = Parse(endContext,
                      &theContext,
-                     NS_LITERAL_CSTRING("application/xml"),
-                     true,
-                     eDTDMode_full_standards);
+                     true);
     }
   }
 
@@ -2024,6 +1968,18 @@ nsParser::DetectMetaTag(const char* aBytes,
   return false;
 }
 
+static NS_METHOD
+NoOpParserWriteFunc(nsIInputStream* in,
+                void* closure,
+                const char* fromRawSegment,
+                PRUint32 toOffset,
+                PRUint32 count,
+                PRUint32 *writeCount)
+{
+  *writeCount = count;
+  return NS_OK;
+}
+
 typedef struct {
   bool mNeedCharsetCheck;
   nsParser* mParser;
@@ -2064,8 +2020,7 @@ ParserWriteFunc(nsIInputStream* in,
         ((count >= 4) &&
          DetectByteOrderMark((const unsigned char*)buf,
                              theNumRead, guess, guessSource))) {
-      nsCOMPtr<nsICharsetAlias> alias(do_GetService(NS_CHARSETALIAS_CONTRACTID));
-      result = alias->GetPreferred(guess, preferred);
+      result = nsCharsetAlias::GetPreferred(guess, preferred);
       // Only continue if it's a recognized charset and not
       // one of a designated set that we ignore.
       if (NS_SUCCEEDED(result) &&
@@ -2116,6 +2071,18 @@ nsParser::OnDataAvailable(nsIRequest *request, nsISupports* aContext,
                   "Must have a buffered input stream");
 
   nsresult rv = NS_OK;
+
+  if (mIsAboutBlank) {
+    MOZ_ASSERT(false, "Must not get OnDataAvailable for about:blank");
+    // ... but if an extension tries to feed us data for about:blank in a
+    // release build, silently ignore the data.
+    PRUint32 totalRead;
+    rv = pIStream->ReadSegments(NoOpParserWriteFunc,
+                                nsnull,
+                                aLength,
+                                &totalRead);
+    return rv;
+  }
 
   CParserContext *theContext = mParserContext;
 

@@ -30,8 +30,6 @@ let TestObserver = {
           "sourceName is correct");
 
     if (++errors == 2) {
-      is(lastWindowId, aSubject.outerWindowID,
-         "same window ID (" + lastWindowId + ") for both errors");
       executeSoon(performTest);
     }
     else {
@@ -41,7 +39,7 @@ let TestObserver = {
 };
 
 function tabLoad(aEvent) {
-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+  browser.removeEventListener(aEvent.type, tabLoad, true);
 
   openConsole();
 
@@ -54,15 +52,20 @@ function tabLoad(aEvent) {
 }
 
 function performTest() {
-  let textContent = hud.outputNode.textContent;
-  isnot(textContent.indexOf("ws://0.0.0.0:81"), -1,
-        "first error message found");
-  isnot(textContent.indexOf("ws://0.0.0.0:82"), -1,
-        "second error message found");
-
   Services.console.unregisterListener(TestObserver);
   Services.prefs.setBoolPref(pref_ws, oldPref_ws);
-  finishTest();
+
+  waitForSuccess({
+    name: "websocket error messages displayed",
+    validatorFn: function()
+    {
+      let textContent = hud.outputNode.textContent;
+      return textContent.indexOf("ws://0.0.0.0:81") > -1 &&
+             textContent.indexOf("ws://0.0.0.0:82") > -1;
+    },
+    successFn: finishTest,
+    failureFn: finishTest,
+  });
 }
 
 function test() {
@@ -70,7 +73,7 @@ function test() {
 
   Services.prefs.setBoolPref(pref_ws, true);
 
-  addTab("data:text/html,Web Console test for bug 603750: Web Socket errors");
+  addTab("data:text/html;charset=utf-8,Web Console test for bug 603750: Web Socket errors");
   browser.addEventListener("load", tabLoad, true);
 }
 

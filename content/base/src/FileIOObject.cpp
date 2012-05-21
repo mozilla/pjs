@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozila.org code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Kyle Huey <me@kylehuey.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "FileIOObject.h"
 #include "nsDOMFile.h"
@@ -119,13 +87,13 @@ FileIOObject::DispatchError(nsresult rv, nsAString& finalEvent)
   // Set the status attribute, and dispatch the error event
   switch (rv) {
   case NS_ERROR_FILE_NOT_FOUND:
-    mError = new nsDOMFileError(nsIDOMFileError::NOT_FOUND_ERR);
+    mError = DOMError::CreateWithName(NS_LITERAL_STRING("NotFoundError"));
     break;
   case NS_ERROR_FILE_ACCESS_DENIED:
-    mError = new nsDOMFileError(nsIDOMFileError::SECURITY_ERR);
+    mError = DOMError::CreateWithName(NS_LITERAL_STRING("SecurityError"));
     break;
   default:
-    mError = new nsDOMFileError(nsIDOMFileError::NOT_READABLE_ERR);
+    mError = DOMError::CreateWithName(NS_LITERAL_STRING("NotReadableError"));
     break;
   }
 
@@ -258,14 +226,17 @@ FileIOObject::OnStopRequest(nsIRequest* aRequest, nsISupports* aContext,
 NS_IMETHODIMP
 FileIOObject::Abort()
 {
-  if (mReadyState != 1)
+  if (mReadyState != 1) {
+    // XXX The spec doesn't say this
     return NS_ERROR_DOM_FILE_ABORT_ERR;
+  }
 
   ClearProgressEventTimer();
 
   mReadyState = 2; // There are DONE constants on multiple interfaces,
                    // but they all have value 2.
-  mError = new nsDOMFileError(nsIDOMFileError::ABORT_ERR);
+  // XXX The spec doesn't say this
+  mError = DOMError::CreateWithName(NS_LITERAL_STRING("AbortError"));
 
   nsString finalEvent;
   nsresult rv = DoAbort(finalEvent);
@@ -285,7 +256,7 @@ FileIOObject::GetReadyState(PRUint16 *aReadyState)
 }
 
 NS_IMETHODIMP
-FileIOObject::GetError(nsIDOMFileError** aError)
+FileIOObject::GetError(nsIDOMDOMError** aError)
 {
   NS_IF_ADDREF(*aError = mError);
   return NS_OK;

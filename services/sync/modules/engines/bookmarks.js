@@ -1,43 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Bookmarks Sync.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dan Mills <thunder@mozilla.com>
- *   Jono DiCarlo <jdicarlo@mozilla.org>
- *   Anant Narayanan <anant@kix.in>
- *   Philipp von Weitershausen <philipp@weitershausen.de>
- *   Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const EXPORTED_SYMBOLS = ['BookmarksEngine', "PlacesItem", "Bookmark",
                           "BookmarkFolder", "BookmarkQuery",
@@ -47,11 +10,19 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+Cu.import("resource://gre/modules/PlacesUtils.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://services-sync/engines.js");
+Cu.import("resource://services-sync/record.js");
+Cu.import("resource://services-common/async.js");
+Cu.import("resource://services-sync/util.js");
+Cu.import("resource://services-sync/constants.js");
+
+Cu.import("resource://services-sync/main.js");      // For access to Service.
+
 const ALLBOOKMARKS_ANNO    = "AllBookmarks";
 const DESCRIPTION_ANNO     = "bookmarkProperties/description";
 const SIDEBAR_ANNO         = "bookmarkProperties/loadInSidebar";
-const FEEDURI_ANNO         = "livemark/feedURI";
-const SITEURI_ANNO         = "livemark/siteURI";
 const MOBILEROOT_ANNO      = "mobile/bookmarksRoot";
 const MOBILE_ANNO          = "MobileBookmarks";
 const EXCLUDEBACKUP_ANNO   = "places/excludeFromBackup";
@@ -59,20 +30,10 @@ const SMART_BOOKMARKS_ANNO = "Places/SmartBookmark";
 const PARENT_ANNO          = "sync/parent";
 const ORGANIZERQUERY_ANNO  = "PlacesOrganizer/OrganizerQuery";
 const ANNOS_TO_TRACK = [DESCRIPTION_ANNO, SIDEBAR_ANNO,
-                        FEEDURI_ANNO, SITEURI_ANNO];
+                        PlacesUtils.LMANNO_FEEDURI, PlacesUtils.LMANNO_SITEURI];
 
 const SERVICE_NOT_SUPPORTED = "Service not supported on this platform";
 const FOLDER_SORTINDEX = 1000000;
-
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://services-sync/engines.js");
-Cu.import("resource://services-sync/record.js");
-Cu.import("resource://services-sync/async.js");
-Cu.import("resource://services-sync/util.js");
-Cu.import("resource://services-sync/constants.js");
-
-Cu.import("resource://services-sync/main.js");      // For access to Service.
 
 function PlacesItem(collection, id, type) {
   CryptoWrapper.call(this, collection, id);
@@ -633,14 +594,17 @@ BookmarksStore.prototype = {
 
     switch (type) {
       case bms.TYPE_FOLDER:
-        if (PlacesUtils.itemIsLivemark(itemId))
+        if (PlacesUtils.annotations
+                       .itemHasAnnotation(itemId, PlacesUtils.LMANNO_FEEDURI)) {
           return "livemark";
+        }
         return "folder";
 
       case bms.TYPE_BOOKMARK:
         let bmkUri = bms.getBookmarkURI(itemId).spec;
-        if (bmkUri.search(/^place:/) == 0)
+        if (bmkUri.indexOf("place:") == 0) {
           return "query";
+        }
         return "bookmark";
 
       case bms.TYPE_SEPARATOR:
@@ -718,7 +682,8 @@ BookmarksStore.prototype = {
         this._log.debug("No feed URI: skipping livemark record " + record.id);
         return;
       }
-      if (PlacesUtils.itemIsLivemark(record._parent)) {
+      if (PlacesUtils.annotations
+                     .itemHasAnnotation(record._parent, PlacesUtils.LMANNO_FEEDURI)) {
         this._log.debug("Invalid parent: skipping livemark record " + record.id);
         return;
       }
@@ -726,14 +691,31 @@ BookmarksStore.prototype = {
       if (record.siteUri != null)
         siteURI = Utils.makeURI(record.siteUri);
 
-      // Use createLivemarkFolderOnly, not createLivemark, to avoid it
-      // automatically updating during a sync.
-      newId = PlacesUtils.livemarks.createLivemarkFolderOnly(
-        record._parent, record.title, siteURI, Utils.makeURI(record.feedUri),
-        PlacesUtils.bookmarks.DEFAULT_INDEX);
-      this._log.debug("Created livemark " + newId + " under " + record._parent +
-                      " as " + record.title + ", " + record.siteUri + ", " + 
-                      record.feedUri + ", GUID " + record.id);
+      // Until this engine can handle asynchronous error reporting, we need to
+      // detect errors on creation synchronously.
+      let spinningCb = Async.makeSpinningCallback();
+
+      let livemarkObj = {title: record.title,
+                         parentId: record._parent,
+                         index: PlacesUtils.bookmarks.DEFAULT_INDEX,
+                         feedURI: Utils.makeURI(record.feedUri),
+                         siteURI: siteURI,
+                         guid: record.id};
+      PlacesUtils.livemarks.addLivemark(livemarkObj,
+        function (aStatus, aLivemark) {
+          spinningCb(null, [aStatus, aLivemark]);
+        });
+
+      let [status, livemark] = spinningCb.wait();
+      if (!Components.isSuccessCode(status)) {
+        throw status;
+      }
+
+      this._log.debug("Created livemark " + livemark.id + " under " +
+                      livemark.parentId + " as " + livemark.title +
+                      ", " + livemark.siteURI.spec + ", " +
+                      livemark.feedURI.spec + ", GUID " +
+                      livemark.guid);
       break;
     case "separator":
       newId = PlacesUtils.bookmarks.insertSeparator(
@@ -748,8 +730,12 @@ BookmarksStore.prototype = {
       return;
     }
 
-    this._log.trace("Setting GUID of new item " + newId + " to " + record.id);
-    this._setGUID(newId, record.id);
+    if (newId) {
+      // Livemarks can set the GUID through the API, so there's no need to
+      // do that here.
+      this._log.trace("Setting GUID of new item " + newId + " to " + record.id);
+      this._setGUID(newId, record.id);
+    }
   },
 
   // Factored out of `remove` to avoid redundant DB queries when the Places ID
@@ -783,6 +769,11 @@ BookmarksStore.prototype = {
       return;
     }
     this.removeById(itemId, record.id);
+  },
+
+  _taggableTypes: ["bookmark", "microsummary", "query"],
+  isTaggable: function isTaggable(recordType) {
+    return this._taggableTypes.indexOf(recordType) != -1;
   },
 
   update: function BStore_update(record) {
@@ -830,7 +821,11 @@ BookmarksStore.prototype = {
         break;
       case "tags":
         if (Array.isArray(val)) {
-          this._tagURI(PlacesUtils.bookmarks.getBookmarkURI(itemId), val);
+          if (this.isTaggable(remoteRecordType)) {
+            this._tagID(itemId, val);
+          } else {
+            this._log.debug("Remote record type is invalid for tags: " + remoteRecordType);
+          }
         }
         break;
       case "keyword":
@@ -858,12 +853,6 @@ BookmarksStore.prototype = {
         PlacesUtils.annotations.setItemAnnotation(
           itemId, SMART_BOOKMARKS_ANNO, val, 0,
           PlacesUtils.annotations.EXPIRE_NEVER);
-        break;
-      case "siteUri":
-        PlacesUtils.livemarks.setSiteURI(itemId, Utils.makeURI(val));
-        break;
-      case "feedUri":
-        PlacesUtils.livemarks.setFeedURI(itemId, Utils.makeURI(val));
         break;
       }
     }
@@ -973,7 +962,7 @@ BookmarksStore.prototype = {
     switch (PlacesUtils.bookmarks.getItemType(placeId)) {
     case PlacesUtils.bookmarks.TYPE_BOOKMARK:
       let bmkUri = PlacesUtils.bookmarks.getBookmarkURI(placeId).spec;
-      if (bmkUri.search(/^place:/) == 0) {
+      if (bmkUri.indexOf("place:") == 0) {
         record = new BookmarkQuery(collection, id);
 
         // Get the actual tag name instead of the local itemId
@@ -1013,14 +1002,14 @@ BookmarksStore.prototype = {
       break;
 
     case PlacesUtils.bookmarks.TYPE_FOLDER:
-      if (PlacesUtils.itemIsLivemark(placeId)) {
+      if (PlacesUtils.annotations
+                     .itemHasAnnotation(placeId, PlacesUtils.LMANNO_FEEDURI)) {
         record = new Livemark(collection, id);
-
-        let siteURI = PlacesUtils.livemarks.getSiteURI(placeId);
-        if (siteURI != null)
-          record.siteUri = siteURI.spec;
-        record.feedUri = PlacesUtils.livemarks.getFeedURI(placeId).spec;
-
+        let as = PlacesUtils.annotations;
+        record.feedUri = as.getItemAnnotation(placeId, PlacesUtils.LMANNO_FEEDURI);
+        try {
+          record.siteUri = as.getItemAnnotation(placeId, PlacesUtils.LMANNO_SITEURI);
+        } catch (ex) {}
       } else {
         record = new BookmarkFolder(collection, id);
       }
@@ -1181,8 +1170,7 @@ BookmarksStore.prototype = {
       node = this._getNode(nodeID);
     }
     
-    if (node.type == node.RESULT_TYPE_FOLDER &&
-        !PlacesUtils.itemIsLivemark(node.itemId)) {
+    if (node.type == node.RESULT_TYPE_FOLDER) {
       node.QueryInterface(Ci.nsINavHistoryQueryResultNode);
       node.containerOpen = true;
       try {
@@ -1201,15 +1189,46 @@ BookmarksStore.prototype = {
     return items;
   },
 
-  _tagURI: function BStore_tagURI(bmkURI, tags) {
+  /**
+   * Associates the URI of the item with the provided ID with the
+   * provided array of tags.
+   * If the provided ID does not identify an item with a URI,
+   * returns immediately.
+   */
+  _tagID: function _tagID(itemID, tags) {
+    if (!itemID || !tags) {
+      return;
+    }
+
+    try {
+      let u = PlacesUtils.bookmarks.getBookmarkURI(itemID);
+      this._tagURI(u, tags);
+    } catch (e) {
+      this._log.warn("Got exception fetching URI for " + itemID + ": not tagging. " +
+                     Utils.exceptionStr(e));
+
+      // I guess it doesn't have a URI. Don't try to tag it.
+      return;
+    }
+  },
+
+  /**
+   * Associate the provided URI with the provided array of tags.
+   * If the provided URI is falsy, returns immediately.
+   */
+  _tagURI: function _tagURI(bookmarkURI, tags) {
+    if (!bookmarkURI || !tags) {
+      return;
+    }
+
     // Filter out any null/undefined/empty tags.
     tags = tags.filter(function(t) t);
 
     // Temporarily tag a dummy URI to preserve tag ids when untagging.
     let dummyURI = Utils.makeURI("about:weave#BStore_tagURI");
     PlacesUtils.tagging.tagURI(dummyURI, tags);
-    PlacesUtils.tagging.untagURI(bmkURI, null);
-    PlacesUtils.tagging.tagURI(bmkURI, tags);
+    PlacesUtils.tagging.untagURI(bookmarkURI, null);
+    PlacesUtils.tagging.tagURI(bookmarkURI, tags);
     PlacesUtils.tagging.untagURI(dummyURI, null);
   },
 
@@ -1312,8 +1331,7 @@ BookmarksTracker.prototype = {
   },
 
   /**
-   * Determine if a change should be ignored: we're ignoring everything or the
-   * folder is for livemarks.
+   * Determine if a change should be ignored.
    *
    * @param itemId
    *        Item under consideration to ignore
@@ -1338,10 +1356,6 @@ BookmarksTracker.prototype = {
         folder = PlacesUtils.bookmarks.getFolderIdForItem(itemId);
       }
     }
-
-    // Ignore livemark children.
-    if (PlacesUtils.itemIsLivemark(folder))
-      return true;
 
     // Ignore changes to tags (folders under the tags folder).
     let tags = kSpecialIds.tags;
@@ -1423,8 +1437,7 @@ BookmarksTracker.prototype = {
 
   // This method is oddly structured, but the idea is to return as quickly as
   // possible -- this handler gets called *every time* a bookmark changes, for
-  // *each change*. That's particularly bad when a bunch of livemarks are
-  // updated.
+  // *each change*.
   onItemChanged: function BMT_onItemChanged(itemId, property, isAnno, value,
                                             lastModified, itemType, parentId,
                                             guid, parentGuid) {

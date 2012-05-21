@@ -39,6 +39,20 @@ function test_histogram(histogram_type, name, min, max, bucket_count) {
   var s = h.snapshot().counts;
   do_check_eq(s[0], 2)
   do_check_eq(s[1], 2)
+
+  // Check that clearing works.
+  h.clear();
+  var s = h.snapshot();
+  for each(var i in s.counts) {
+    do_check_eq(i, 0);
+  }
+  do_check_eq(s.sum, 0);
+
+  h.add(0);
+  h.add(1);
+  var c = h.snapshot().counts;
+  do_check_eq(c[0], 1);
+  do_check_eq(c[1], 1);
 }
 
 function expect_fail(f) {
@@ -85,6 +99,32 @@ function test_boolean_histogram()
   do_check_eq(s.counts[0], 2);
 }
 
+function test_flag_histogram()
+{
+  var h = Telemetry.newHistogram("test::flag histogram", 130, 4, 5, Telemetry.HISTOGRAM_FLAG);
+  var r = h.snapshot().ranges;
+  // Flag histograms ignore numeric parameters.
+  do_check_eq(uneval(r), uneval([0, 1, 2]))
+  // Should already have a 0 counted.
+  var c = h.snapshot().counts;
+  var s = h.snapshot().sum;
+  do_check_eq(uneval(c), uneval([1, 0, 0]));
+  do_check_eq(s, 1);
+  // Should switch counts.
+  h.add(2);
+  var c2 = h.snapshot().counts;
+  var s2 = h.snapshot().sum;
+  do_check_eq(uneval(c2), uneval([0, 1, 0]));
+  do_check_eq(s, 1);
+  // Should only switch counts once.
+  h.add(3);
+  var c3 = h.snapshot().counts;
+  var s3 = h.snapshot().sum;
+  do_check_eq(uneval(c3), uneval([0, 1, 0]));
+  do_check_eq(s3, 1);
+  do_check_eq(h.snapshot().histogram_type, Telemetry.FLAG_HISTOGRAM);
+}
+
 function test_getHistogramById() {
   try {
     Telemetry.getHistogramById("nonexistent");
@@ -97,6 +137,42 @@ function test_getHistogramById() {
   do_check_eq(s.histogram_type, Telemetry.HISTOGRAM_EXPONENTIAL);
   do_check_eq(s.min, 1);
   do_check_eq(s.max, 10000);
+}
+
+function compareHistograms(h1, h2) {
+  let s1 = h1.snapshot();
+  let s2 = h2.snapshot();
+
+  do_check_eq(s1.histogram_type, s2.histogram_type);
+  do_check_eq(s1.min, s2.min);
+  do_check_eq(s1.max, s2.max);
+  do_check_eq(s1.sum, s2.sum);
+
+  do_check_eq(s1.counts.length, s2.counts.length);
+  for (let i = 0; i < s1.counts.length; i++)
+    do_check_eq(s1.counts[i], s2.counts[i]);
+
+  do_check_eq(s1.ranges.length, s2.ranges.length);
+  for (let i = 0; i < s1.ranges.length; i++)
+    do_check_eq(s1.ranges[i], s2.ranges[i]);
+}
+
+function test_histogramFrom() {
+  // Test one histogram of each type.
+  let names = ["CYCLE_COLLECTOR", "GC_REASON", "GC_RESET", "TELEMETRY_TEST_FLAG"];
+
+  for each (let name in names) {
+    let [min, max, bucket_count] = [1, INT_MAX - 1, 10]
+    let original = Telemetry.getHistogramById(name);
+    let clone = Telemetry.histogramFrom("clone" + name, name);
+    compareHistograms(original, clone);
+  }
+
+  // Additionally, set the flag on TELEMETRY_TEST_FLAG, and check it gets set on the clone.
+  let testFlag = Telemetry.getHistogramById("TELEMETRY_TEST_FLAG");
+  testFlag.add(1);
+  let clone = Telemetry.histogramFrom("FlagClone", "TELEMETRY_TEST_FLAG");
+  compareHistograms(testFlag, clone);
 }
 
 function test_getSlowSQL() {
@@ -119,6 +195,9 @@ function test_addons() {
 
   // Check for reflection capabilities.
   var h1 = Telemetry.getAddonHistogram(addon_id, name1);
+  // Verify that although we've created storage for it, we don't reflect it into JS.
+  var snapshots = Telemetry.addonHistogramSnapshots;
+  do_check_false(name1 in snapshots[addon_id]);
   h1.add(1);
   h1.add(3);
   var s1 = h1.snapshot();
@@ -148,10 +227,19 @@ function test_addons() {
   expect_success(function ()
 		 register(extra_addon, name1, 0, 1, 2, Telemetry.HISTOGRAM_BOOLEAN));
 
+  // Check that we can register flag histograms.
+  var flag_addon = "testing-flag-addon";
+  var flag_histogram = "flag-histogram";
+  expect_success(function() 
+                 register(flag_addon, flag_histogram, 0, 1, 2, Telemetry.HISTOGRAM_FLAG))
+  expect_success(function()
+		 register(flag_addon, name2, 2, 4, 4, Telemetry.HISTOGRAM_LINEAR));
+
   // Check that we reflect registered addons and histograms.
   snapshots = Telemetry.addonHistogramSnapshots;
   do_check_true(addon_id in snapshots)
   do_check_true(extra_addon in snapshots);
+  do_check_true(flag_addon in snapshots);
 
   // Check that we have data for our created histograms.
   do_check_true(name1 in snapshots[addon_id]);
@@ -167,6 +255,10 @@ function test_addons() {
 
   // Even though we've registered it, it shouldn't show up until data is added to it.
   do_check_false(name1 in snapshots[extra_addon]);
+
+  // Flag histograms should show up automagically.
+  do_check_true(flag_histogram in snapshots[flag_addon]);
+  do_check_false(name2 in snapshots[flag_addon]);
 
   // Check that we can remove addon histograms.
   Telemetry.unregisterAddonHistograms(addon_id);
@@ -188,6 +280,45 @@ function test_privateMode() {
   do_check_neq(uneval(orig), uneval(h.snapshot()));
 }
 
+function generateUUID() {
+  let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
+  // strip {}
+  return str.substring(1, str.length - 1);
+}
+
+// Check that we do sane things when saving to disk.
+function test_loadSave()
+{
+  let dirService = Cc["@mozilla.org/file/directory_service;1"]
+                    .getService(Ci.nsIProperties);
+  let tmpDir = dirService.get("TmpD", Ci.nsILocalFile);
+  let tmpFile = tmpDir.clone();
+  tmpFile.append("saved-histograms.dat");
+  if (tmpFile.exists()) {
+    tmpFile.remove(true);
+  }
+
+  let saveFinished = false;
+  let loadFinished = false;
+  let uuid = generateUUID();
+  let loadCallback = function(data) {
+    do_check_true(data != null);
+    do_check_eq(uuid, data.uuid);
+    loadFinished = true;
+    do_test_finished();
+  };
+  let saveCallback = function(success) {
+    do_check_true(success);
+    Telemetry.loadHistograms(tmpFile, loadCallback, false);
+    saveFinished = true;
+  };
+  do_test_pending();
+  Telemetry.saveHistograms(tmpFile, uuid, saveCallback, false);
+  do_register_cleanup(function () do_check_true(saveFinished));
+  do_register_cleanup(function () do_check_true(loadFinished));
+  do_register_cleanup(function () tmpFile.remove(true));
+}
+
 function run_test()
 {
   let kinds = [Telemetry.HISTOGRAM_EXPONENTIAL, Telemetry.HISTOGRAM_LINEAR]
@@ -200,9 +331,16 @@ function run_test()
     expect_fail(function () nh("test::bucket_count", min, max, 1, histogram_type));
   }
 
+  // Instantiate the storage for this histogram and make sure it doesn't
+  // get reflected into JS, as it has no interesting data in it.
+  let h = Telemetry.getHistogramById("NEWTAB_PAGE_PINNED_SITES_COUNT");
+  do_check_false("NEWTAB_PAGE_PINNED_SITES_COUNT" in Telemetry.histogramSnapshots);
+
   test_boolean_histogram();
   test_getHistogramById();
+  test_histogramFrom();
   test_getSlowSQL();
   test_privateMode();
   test_addons();
+  test_loadSave();
 }

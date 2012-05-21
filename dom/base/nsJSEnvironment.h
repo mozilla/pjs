@@ -1,44 +1,13 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef nsJSEnvironment_h
 #define nsJSEnvironment_h
 
 #include "nsIScriptContext.h"
 #include "nsIScriptRuntime.h"
+#include "nsIScriptGlobalObject.h"
 #include "nsCOMPtr.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
@@ -47,6 +16,7 @@
 #include "prtime.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIXPConnect.h"
+#include "nsIArray.h"
 
 class nsIXPConnectJSObjectHolder;
 class nsRootedJSValueArray;
@@ -54,6 +24,10 @@ class nsScriptNameSpaceManager;
 namespace mozilla {
 template <class> class Maybe;
 }
+
+// The amount of time we wait between a request to GC (due to leaving
+// a page) and doing the actual GC.
+#define NS_GC_DELAY                 4000 // ms
 
 class nsJSContext : public nsIScriptContext,
                     public nsIXPCScriptNotify
@@ -68,8 +42,10 @@ public:
 
   virtual nsIScriptObjectPrincipal* GetObjectPrincipal();
 
-  virtual PRUint32 GetScriptTypeID()
-    { return nsIProgrammingLanguage::JAVASCRIPT; }
+  virtual void SetGlobalObject(nsIScriptGlobalObject* aGlobalObject)
+  {
+    mGlobalObjectRef = aGlobalObject;
+  }
 
   virtual nsresult EvaluateString(const nsAString& aScript,
                                   JSObject* aScopeObject,
@@ -77,7 +53,7 @@ public:
                                   nsIPrincipal *originPrincipal,
                                   const char *aURL,
                                   PRUint32 aLineNo,
-                                  PRUint32 aVersion,
+                                  JSVersion aVersion,
                                   nsAString *aRetValue,
                                   bool* aIsUndefined);
   virtual nsresult EvaluateStringWithValue(const nsAString& aScript,
@@ -127,6 +103,8 @@ public:
                                    JSObject** aFunctionObject);
 
   virtual nsIScriptGlobalObject *GetGlobalObject();
+  inline nsIScriptGlobalObject *GetGlobalObjectRef() { return mGlobalObjectRef; };
+
   virtual JSContext* GetNativeContext();
   virtual JSObject* GetNativeGlobal();
   virtual nsresult CreateNativeGlobalForInner(
@@ -135,23 +113,17 @@ public:
                                       nsIPrincipal *aPrincipal,
                                       JSObject** aNativeGlobal,
                                       nsISupports **aHolder);
-  virtual nsresult ConnectToInner(nsIScriptGlobalObject *aNewInner,
-                                  JSObject *aOuterGlobal);
   virtual nsresult InitContext();
-  virtual nsresult CreateOuterObject(nsIScriptGlobalObject *aGlobalObject,
-                                     nsIScriptGlobalObject *aCurrentInner);
-  virtual nsresult SetOuterObject(JSObject* aOuterObject);
   virtual nsresult InitOuterWindow();
   virtual bool IsContextInitialized();
-  virtual void FinalizeContext();
 
   virtual void ScriptEvaluated(bool aTerminated);
-  virtual nsresult SetTerminationFunction(nsScriptTerminationFunc aFunc,
-                                          nsISupports* aRef);
+  virtual void SetTerminationFunction(nsScriptTerminationFunc aFunc,
+                                      nsIDOMWindow* aRef);
   virtual bool GetScriptsEnabled();
   virtual void SetScriptsEnabled(bool aEnabled, bool aFireTimeouts);
 
-  virtual nsresult SetProperty(void *aTarget, const char *aPropName, nsISupports *aVal);
+  virtual nsresult SetProperty(JSObject* aTarget, const char* aPropName, nsISupports* aVal);
 
   virtual bool GetProcessingScriptTag();
   virtual void SetProcessingScriptTag(bool aResult);
@@ -161,7 +133,6 @@ public:
   virtual void SetGCOnDestruction(bool aGCOnDestruction);
 
   virtual nsresult InitClasses(JSObject* aGlobalObj);
-  virtual void ClearScope(void* aGlobalObj, bool bClearPolluters);
 
   virtual void WillInitializeContext();
   virtual void DidInitializeContext();
@@ -181,7 +152,9 @@ public:
   static void LoadStart();
   static void LoadEnd();
 
-  static void GarbageCollectNow(js::gcreason::Reason reason, PRUint32 gckind = nsGCNormal);
+  static void GarbageCollectNow(js::gcreason::Reason reason,
+                                PRUint32 aGckind,
+                                bool aGlobal);
   static void ShrinkGCBuffersNow();
   // If aExtraForgetSkippableCalls is -1, forgetSkippable won't be
   // called even if the previous collection was GC.
@@ -196,10 +169,11 @@ public:
 
   static void MaybePokeCC();
   static void KillCCTimer();
+  static void KillFullGCTimer();
 
   virtual void GC(js::gcreason::Reason aReason);
 
-  static bool CleanupSinceLastGC();
+  static PRUint32 CleanupsSinceLastGC();
 
   nsIScriptGlobalObject* GetCachedGlobalObject()
   {
@@ -235,7 +209,7 @@ private:
   nsrefcnt GetCCRefcnt();
 
   JSContext *mContext;
-  PRUint32 mNumEvaluations;
+  bool mActive;
 
 protected:
   struct TerminationFuncHolder;
@@ -304,6 +278,9 @@ private:
   PRTime mModalStateTime;
   PRUint32 mModalStateDepth;
 
+  nsJSContext *mNext;
+  nsJSContext **mPrev;
+
   // mGlobalObjectRef ensures that the outer window stays alive as long as the
   // context does. It is eventually collected by the cycle collector.
   nsCOMPtr<nsIScriptGlobalObject> mGlobalObjectRef;
@@ -325,10 +302,6 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS
 
-  virtual PRUint32 GetScriptTypeID() {
-    return nsIProgrammingLanguage::JAVASCRIPT;
-  }
-
   virtual already_AddRefed<nsIScriptContext> CreateContext();
 
   virtual nsresult ParseVersion(const nsString &aVersionStr, PRUint32 *flags);
@@ -349,11 +322,10 @@ public:
 // nsISupports conversion. If this interface is not supported, the object will
 // be queried for nsIArray, and everything converted via xpcom objects.
 #define NS_IJSARGARRAY_IID \
- { /*{E96FB2AE-CB4F-44a0-81F8-D91C80AFE9A3} */ \
- 0xe96fb2ae, 0xcb4f, 0x44a0, \
- { 0x81, 0xf8, 0xd9, 0x1c, 0x80, 0xaf, 0xe9, 0xa3 } }
+{ 0xb6acdac8, 0xf5c6, 0x432c, \
+  { 0xa8, 0x6e, 0x33, 0xee, 0xb1, 0xb0, 0xcd, 0xdc } }
 
-class nsIJSArgArray: public nsISupports
+class nsIJSArgArray : public nsIArray
 {
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_IJSARGARRAY_IID)

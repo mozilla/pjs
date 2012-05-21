@@ -1,44 +1,8 @@
 /** -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <pavlov@netscape.com>
- *   Federico Mena-Quintero <federico@novell.com>
- *   Joe Drew <joe@drew.ca>
- *   Bobby Holley <bobbyholley@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
@@ -93,7 +57,7 @@ native gfxGraphicsFilter(gfxPattern::GraphicsFilter);
  *
  * Internally, imgIContainer also manages animation of images.
  */
-[scriptable, uuid(2506249c-e0a1-4d8f-846c-2d478247f8d8)]
+[scriptable, uuid(ead94080-cfd6-4a3e-8353-bd45333061d2)]
 interface imgIContainer : nsISupports
 {
   /**
@@ -156,12 +120,16 @@ interface imgIContainer : nsISupports
    * FLAG_DECODE_NO_COLORSPACE_CONVERSION: Do not do any colorspace conversion;
    * ignore any embedded profiles, and don't convert to any particular destination
    * space.
+   *
+   * FLAG_CLAMP: Extend the image to the fill area by clamping image sample
+   * coordinates instead of by tiling. This only affects 'draw'.
    */
 
   const long FLAG_NONE            = 0x0;
   const long FLAG_SYNC_DECODE     = 0x1;
   const long FLAG_DECODE_NO_PREMULTIPLY_ALPHA = 0x2;
   const long FLAG_DECODE_NO_COLORSPACE_CONVERSION = 0x4;
+  const long FLAG_CLAMP           = 0x8;
 
   /**
     * Constants for specifying various "special" frames.
@@ -222,7 +190,9 @@ interface imgIContainer : nsISupports
    * @param aFilter The filter to be used if we're scaling the image.
    * @param aUserSpaceToImageSpace The transformation from user space (e.g.,
    *                               appunits) to image space.
-   * @param aFill The area in the context to draw pixels to. Image will be
+   * @param aFill The area in the context to draw pixels to. When aFlags includes
+   *              FLAG_CLAMP, the image will be extended to this area by clampling
+   *              image sample coordinates. Otherwise, the image will be
    *              automatically tiled as necessary.
    * @param aSubimage The area of the image, in pixels, that we are allowed to
    *                  sample from.
@@ -282,6 +252,12 @@ interface imgIContainer : nsISupports
     * In other words, the lock count is not allowed to be negative.
     */
   void unlockImage();
+
+  /**
+   * If this image is unlocked, discard its decoded data.  If the image is
+   * locked or has already been discarded, do nothing.
+   */
+  void requestDiscard();
 
   /**
     * Indicates that this imgIContainer has been triggered to update

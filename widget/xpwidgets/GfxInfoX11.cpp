@@ -1,46 +1,15 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=8 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at:
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Code.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <sys/utsname.h>
 #include "nsCRTGlue.h"
 #include "prenv.h"
 
@@ -65,12 +34,14 @@ pid_t glxtest_pid = 0;
 nsresult
 GfxInfo::Init()
 {
+    mGLMajorVersion = 0;
     mMajorVersion = 0;
     mMinorVersion = 0;
     mRevisionVersion = 0;
     mIsMesa = false;
     mIsNVIDIA = false;
     mIsFGLRX = false;
+    mIsNouveau = false;
     mHasTextureFromPixmap = false;
     return GfxInfoBase::Init();
 }
@@ -158,6 +129,15 @@ GfxInfo::GetData()
     if (!strcmp(textureFromPixmap.get(), "TRUE"))
         mHasTextureFromPixmap = true;
 
+    // only useful for Linux kernel version check for FGLRX driver.
+    // assumes X client == X server, which is sad.
+    utsname unameobj;
+    if (!uname(&unameobj))
+    {
+      mOS.Assign(unameobj.sysname);
+      mOSRelease.Assign(unameobj.release);
+    }
+
     const char *spoofedVendor = PR_GetEnv("MOZ_GFX_SPOOF_GL_VENDOR");
     if (spoofedVendor)
         mVendor.Assign(spoofedVendor);
@@ -167,11 +147,19 @@ GfxInfo::GetData()
     const char *spoofedVersion = PR_GetEnv("MOZ_GFX_SPOOF_GL_VERSION");
     if (spoofedVersion)
         mVersion.Assign(spoofedVersion);
+    const char *spoofedOS = PR_GetEnv("MOZ_GFX_SPOOF_OS");
+    if (spoofedOS)
+        mOS.Assign(spoofedOS);
+    const char *spoofedOSRelease = PR_GetEnv("MOZ_GFX_SPOOF_OS_RELEASE");
+    if (spoofedOSRelease)
+        mOSRelease.Assign(spoofedOSRelease);
 
     if (error ||
         mVendor.IsEmpty() ||
         mRenderer.IsEmpty() ||
-        mVersion.IsEmpty())
+        mVersion.IsEmpty() ||
+        mOS.IsEmpty() ||
+        mOSRelease.IsEmpty())
     {
         mAdapterDescription.AppendLiteral("GLXtest process failed");
         if (waiting_for_glxtest_process_failed)
@@ -207,6 +195,9 @@ GfxInfo::GetData()
     CrashReporter::AppendAppNotesToCrashReport(note);
 #endif
 
+    // determine the major OpenGL version. That's the first integer in the version string.
+    mGLMajorVersion = strtol(mVersion.get(), 0, 10);
+
     // determine driver type (vendor) and where in the version string
     // the actual driver version numbers should be expected to be found (whereToReadVersionNumbers)
     const char *whereToReadVersionNumbers = nsnull;
@@ -216,6 +207,8 @@ GfxInfo::GetData()
         // with Mesa, the version string contains "Mesa major.minor" and that's all the version information we get:
         // there is no actual driver version info.
         whereToReadVersionNumbers = Mesa_in_version_string + strlen("Mesa");
+        if (strcasestr(mVendor.get(), "nouveau"))
+            mIsNouveau = true;
     } else if (strstr(mVendor.get(), "NVIDIA Corporation")) {
         mIsNVIDIA = true;
         // with the NVIDIA driver, the version string contains "NVIDIA major.minor"
@@ -231,7 +224,7 @@ GfxInfo::GetData()
         whereToReadVersionNumbers = mVersion.get();
     }
 
-    // read major.minor version numbers
+    // read major.minor version numbers of the driver (not to be confused with the OpenGL version)
     if (whereToReadVersionNumbers) {
         // copy into writable buffer, for tokenization
         strncpy(buf, whereToReadVersionNumbers, buf_size);
@@ -276,12 +269,22 @@ GfxInfo::GetFeatureStatusImpl(PRInt32 aFeature,
                               OperatingSystem* aOS /* = nsnull */)
 
 {
+  GetData();
+
   NS_ENSURE_ARG_POINTER(aStatus);
   *aStatus = nsIGfxInfo::FEATURE_STATUS_UNKNOWN;
   aSuggestedDriverVersion.SetIsVoid(true);
   OperatingSystem os = DRIVER_OS_LINUX;
   if (aOS)
     *aOS = os;
+
+  if (mGLMajorVersion == 1) {
+    // We're on OpenGL 1. In most cases that indicates really old hardware.
+    // We better block them, rather than rely on them to fail gracefully, because they don't!
+    // see bug 696636
+    *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+    return NS_OK;
+  }
 
 #ifdef MOZ_PLATFORM_MAEMO
   *aStatus = nsIGfxInfo::FEATURE_NO_INFO;
@@ -295,7 +298,6 @@ GfxInfo::GetFeatureStatusImpl(PRInt32 aFeature,
     if (aFeature == nsIGfxInfo::FEATURE_OPENGL_LAYERS ||
         aFeature == nsIGfxInfo::FEATURE_WEBGL_OPENGL ||
         aFeature == nsIGfxInfo::FEATURE_WEBGL_MSAA) {
-      GetData();
 
       // Disable OpenGL layers when we don't have texture_from_pixmap because it regresses performance. 
       if (aFeature == nsIGfxInfo::FEATURE_OPENGL_LAYERS && !mHasTextureFromPixmap) {
@@ -318,7 +320,10 @@ GfxInfo::GetFeatureStatusImpl(PRInt32 aFeature,
       }
 
       if (mIsMesa) {
-        if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(7,10,3)) {
+        if (mIsNouveau && version(mMajorVersion, mMinorVersion) < version(8,0)) {
+          *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aSuggestedDriverVersion.AssignLiteral("Mesa 8.0");
+        } else if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(7,10,3)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
           aSuggestedDriverVersion.AssignLiteral("Mesa 7.10.3");
         }
@@ -332,6 +337,14 @@ GfxInfo::GetFeatureStatusImpl(PRInt32 aFeature,
         // by requiring OpenGL 3, we effectively require recent drivers.
         if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(3, 0)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aSuggestedDriverVersion.AssignLiteral("<Something recent>");
+        }
+        // Bug 724640: FGLRX + Linux 2.6.32 is a crashy combo
+        bool unknownOS = mOS.IsEmpty() || mOSRelease.IsEmpty();
+        bool badOS = mOS.Find("Linux", true) != -1 &&
+                     mOSRelease.Find("2.6.32") != -1;
+        if (unknownOS || badOS) {
+          *aStatus = nsIGfxInfo::FEATURE_BLOCKED_OS_VERSION;
         }
       } else {
         // like on windows, let's block unknown vendors. Think of virtual machines.

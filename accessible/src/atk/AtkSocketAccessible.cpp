@@ -1,53 +1,24 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Novell, Inc.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brad Taylor <brad@getcoded.net> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <atk/atk.h>
 #include "AtkSocketAccessible.h"
-#include "nsMai.h"
-#include "nsMaiInterfaceComponent.h"
 
-void (*AtkSocketAccessible::g_atk_socket_embed) (AtkSocket*, gchar*) = NULL;
+#include "InterfaceInitFuncs.h"
+#include "nsMai.h"
+
+AtkSocketEmbedType AtkSocketAccessible::g_atk_socket_embed = NULL;
 GType AtkSocketAccessible::g_atk_socket_type = G_TYPE_INVALID;
 const char* AtkSocketAccessible::sATKSocketEmbedSymbol = "atk_socket_embed";
 const char* AtkSocketAccessible::sATKSocketGetTypeSymbol = "atk_socket_get_type";
 
 bool AtkSocketAccessible::gCanEmbed = FALSE;
+
+extern "C" void mai_atk_component_iface_init(AtkComponentIface* aIface);
+extern "C" GType mai_atk_socket_get_type(void);
 
 /* MaiAtkSocket */
 
@@ -65,39 +36,17 @@ bool AtkSocketAccessible::gCanEmbed = FALSE;
                                           MAI_TYPE_ATK_SOCKET,\
                                           MaiAtkSocketClass))
 
-typedef struct _MaiAtkSocket             MaiAtkSocket;
-typedef struct _MaiAtkSocketClass        MaiAtkSocketClass;
-
-struct _MaiAtkSocket
+typedef struct _MaiAtkSocket
 {
   AtkSocket parent;
 
   nsAccessibleWrap* accWrap;
-};
+} MaiAtkSocket;
 
-struct _MaiAtkSocketClass
+typedef struct _MaiAtkSocketClass
 {
   AtkSocketClass parent_class;
-};
-
-G_BEGIN_DECLS
-
-GType mai_atk_socket_get_type(void);
-AtkObject* mai_atk_socket_new(nsAccessibleWrap* aAccWrap);
-
-void mai_atk_component_iface_init(AtkComponentIface* aIface);
-AtkObject* mai_atk_socket_ref_accessible_at_point(AtkComponent *aComponent,
-                                                  gint aAccX,
-                                                  gint aAccY,
-                                                  AtkCoordType aCoordType);
-void mai_atk_socket_get_extents(AtkComponent* aComponent,
-                                gint* aAccX,
-                                gint* aAccY,
-                                gint* aAccWidth,
-                                gint* aAccHeight,
-                                AtkCoordType aCoordType);
-
-G_END_DECLS
+} MaiAtkSocketClass;
 
 G_DEFINE_TYPE_EXTENDED(MaiAtkSocket, mai_atk_socket,
                        AtkSocketAccessible::g_atk_socket_type, 0,
@@ -114,7 +63,7 @@ mai_atk_socket_init(MaiAtkSocket* aAcc)
 {
 }
 
-AtkObject*
+static AtkObject*
 mai_atk_socket_new(nsAccessibleWrap* aAccWrap)
 {
   NS_ENSURE_TRUE(aAccWrap, NULL);
@@ -127,19 +76,10 @@ mai_atk_socket_new(nsAccessibleWrap* aAccWrap)
   return ATK_OBJECT(acc);
 }
 
-void
-mai_atk_component_iface_init(AtkComponentIface* aIface)
-{
-  NS_ASSERTION(aIface, "Invalid Interface");
-
-  aIface->ref_accessible_at_point = mai_atk_socket_ref_accessible_at_point;
-  aIface->get_extents = mai_atk_socket_get_extents;
-}
-
-AtkObject*
-mai_atk_socket_ref_accessible_at_point(AtkComponent* aComponent,
-                                       gint aX, gint aY,
-                                       AtkCoordType aCoordType)
+extern "C" {
+static AtkObject*
+RefAccessibleAtPoint(AtkComponent* aComponent, gint aX, gint aY,
+                     AtkCoordType aCoordType)
 {
   NS_ENSURE_TRUE(MAI_IS_ATK_SOCKET(aComponent), nsnull);
 
@@ -147,10 +87,9 @@ mai_atk_socket_ref_accessible_at_point(AtkComponent* aComponent,
                                     aX, aY, aCoordType);
 }
 
-void
-mai_atk_socket_get_extents(AtkComponent* aComponent,
-                           gint* aX, gint* aY, gint* aWidth, gint* aHeight,
-                           AtkCoordType aCoordType)
+static void
+GetExtents(AtkComponent* aComponent, gint* aX, gint* aY, gint* aWidth,
+           gint* aHeight, AtkCoordType aCoordType)
 {
   *aX = *aY = *aWidth = *aHeight = 0;
 
@@ -159,6 +98,18 @@ mai_atk_socket_get_extents(AtkComponent* aComponent,
 
   getExtentsHelper(MAI_ATK_SOCKET(aComponent)->accWrap,
                    aX, aY, aWidth, aHeight, aCoordType);
+}
+}
+
+void
+mai_atk_component_iface_init(AtkComponentIface* aIface)
+{
+  NS_ASSERTION(aIface, "Invalid Interface");
+  if (NS_UNLIKELY(!aIface))
+    return;
+
+  aIface->ref_accessible_at_point = RefAccessibleAtPoint;
+  aIface->get_extents = GetExtents;
 }
 
 AtkSocketAccessible::AtkSocketAccessible(nsIContent* aContent,

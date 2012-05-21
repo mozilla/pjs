@@ -18,7 +18,7 @@
 #define USE_GS2_LIBCAMERA
 #define CameraHardwareInterface CameraHardwareInterface_SGS2
 #define HAL_openCameraHardware HAL_openCameraHardware_SGS2
-#include "camera/CameraHardwareInterface.h"
+#include "gonk/CameraHardwareInterface.h"
 #undef CameraHardwareInterface
 #undef USE_GS2_LIBCAMERA
 #undef HAL_openCameraHardware
@@ -31,7 +31,7 @@
 #define USE_MAGURO_LIBCAMERA
 #define CameraHardwareInterface CameraHardwareInterface_MAGURO
 #define HAL_openCameraHardware HAL_openCameraHardware_MAGURO
-#include "camera/CameraHardwareInterface.h"
+#include "gonk/CameraHardwareInterface.h"
 #undef CameraHardwareInterface
 #undef USE_MAGURO_LIBCAMERA
 #undef HAL_openCameraHardware
@@ -42,7 +42,7 @@
 #define image_rect_type image_rect_type3
 #define image_rect_struct image_rect_struct3
 #define CameraHardwareInterface CameraHardwareInterface_DEFAULT
-#include "camera/CameraHardwareInterface.h"
+#include "gonk/CameraHardwareInterface.h"
 #undef CameraHardwareInterface
 
 using namespace android;
@@ -71,21 +71,21 @@ class CameraHardwareInterface {
 
     static CameraHardwareInterface* openCamera(PRUint32 aCamera);
     
-    virtual ~CameraHardwareInterface() { };
+    virtual ~CameraHardwareInterface() { }
     
-    virtual bool ok();
-    virtual void enableMsgType(int32_t msgType);
-    virtual void disableMsgType(int32_t msgType);
-    virtual bool msgTypeEnabled(int32_t msgType);
+    virtual bool ok() = 0;
+    virtual void enableMsgType(int32_t msgType) = 0;
+    virtual void disableMsgType(int32_t msgType) = 0;
+    virtual bool msgTypeEnabled(int32_t msgType) = 0;
     virtual void setCallbacks(notify_callback notify_cb,
                               data_callback data_cb,
                               data_callback_timestamp data_cb_timestamp,
-                              void* user);
-    virtual status_t startPreview();
-    virtual void stopPreview();
-    virtual void release();
-    virtual status_t setParameters(const CameraParameters& params);
-    virtual CameraParameters getParameters() const;
+                              void* user) = 0;
+    virtual status_t startPreview() = 0;
+    virtual void stopPreview() = 0;
+    virtual void release() = 0;
+    virtual status_t setParameters(const CameraParameters& params) = 0;
+    virtual CameraParameters getParameters() const = 0;
 
   protected:
     CameraHardwareInterface(PRUint32 aCamera = 0) { };

@@ -1,54 +1,18 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:set ts=2 sts=2 sw=2 et cin:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Jacek Piskozub <piskozub@iopan.gda.pl>
- *   Leon Sha <leon.sha@sun.com>
- *   Roland Mainz <roland.mainz@informatik.med.uni-giessen.de>
- *   Robert O'Callahan <roc+moz@cs.cmu.edu>
- *   Christian Biesinger <cbiesinger@web.de>
- *   Josh Aas <josh@mozilla.com>
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_WIDGET_QT
 #include <QWidget>
 #include <QKeyEvent>
-#ifdef MOZ_X11
+#if defined(MOZ_X11)
+#if defined(Q_WS_X11)
 #include <QX11Info>
+#else
+#include "gfxQtPlatform.h"
+#endif
 #endif
 #undef slots
 #endif
@@ -95,6 +59,8 @@ using mozilla::DefaultXDisplay;
 #include "nsIDOMDragEvent.h"
 #include "nsIScrollableFrame.h"
 #include "nsIImageLoadingContent.h"
+#include "nsIObjectLoadingContent.h"
+#include "nsIDocShell.h"
 
 #include "nsContentCID.h"
 #include "nsWidgetsCID.h"
@@ -115,12 +81,10 @@ static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 #include <gdk/gdk.h>
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
-#include "gfxXlibNativeRenderer.h"
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "ANPBase.h"
-#include "android_npapi.h"
 #include "AndroidBridge.h"
 #include "AndroidMediaLayer.h"
 using namespace mozilla::dom;
@@ -211,9 +175,10 @@ nsPluginInstanceOwner::GetImageContainer()
     mInstance->GetImageContainer(getter_AddRefs(container));
     if (container) {
 #ifdef XP_MACOSX
-      nsRefPtr<Image> image = container->GetCurrentImage();
+      AutoLockImage autoLock(container);
+      Image* image = autoLock.GetImage();
       if (image && image->GetFormat() == Image::MAC_IO_SURFACE && mObjectFrame) {
-        MacIOSurfaceImage *oglImage = static_cast<MacIOSurfaceImage*>(image.get());
+        MacIOSurfaceImage *oglImage = static_cast<MacIOSurfaceImage*>(image);
         NS_ADDREF_THIS();
         oglImage->SetUpdateCallback(&DrawPlugin, this);
         oglImage->SetDestroyCallback(&OnDestroyImage);
@@ -400,10 +365,12 @@ nsPluginInstanceOwner::~nsPluginInstanceOwner()
   }
 }
 
-NS_IMPL_ISUPPORTS3(nsPluginInstanceOwner,
+NS_IMPL_ISUPPORTS5(nsPluginInstanceOwner,
                    nsIPluginInstanceOwner,
                    nsIPluginTagInfo,
-                   nsIDOMEventListener)
+                   nsIDOMEventListener,
+                   nsIPrivacyTransitionObserver,
+                   nsISupportsWeakReference)
 
 nsresult
 nsPluginInstanceOwner::SetInstance(nsNPAPIPluginInstance *aInstance)
@@ -413,10 +380,26 @@ nsPluginInstanceOwner::SetInstance(nsNPAPIPluginInstance *aInstance)
   // If we're going to null out mInstance after use, be sure to call
   // mInstance->InvalidateOwner() here, since it now won't be called
   // from our destructor.  This fixes bug 613376.
-  if (mInstance && !aInstance)
+  if (mInstance && !aInstance) {
     mInstance->InvalidateOwner();
 
+#ifdef MOZ_WIDGET_ANDROID
+    RemovePluginView();
+#endif
+  }
+
   mInstance = aInstance;
+
+  nsCOMPtr<nsIDocument> doc;
+  GetDocument(getter_AddRefs(doc));
+  if (doc) {
+    nsCOMPtr<nsPIDOMWindow> domWindow = doc->GetWindow();
+    if (domWindow) {
+      nsCOMPtr<nsIDocShell> docShell = domWindow->GetDocShell();
+      if (docShell)
+        docShell->AddWeakPrivacyTransitionObserver(this);
+    }
+  }
 
   return NS_OK;
 }
@@ -669,6 +652,15 @@ NS_IMETHODIMP nsPluginInstanceOwner::InvalidateRegion(NPRegion invalidRegion)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
+ 
+NS_IMETHODIMP
+nsPluginInstanceOwner::RedrawPlugin()
+{
+  if (mObjectFrame) {
+    mObjectFrame->InvalidateLayer(mObjectFrame->GetContentRectRelativeToSelf(), nsDisplayItem::TYPE_PLUGIN);
+  }
+  return NS_OK;
+}
 
 NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
 {
@@ -737,7 +729,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
   }
 
   return rv;
-#elif defined(MOZ_WIDGET_GTK2) || defined(MOZ_WIDGET_QT)
+#elif (defined(MOZ_WIDGET_GTK2) || defined(MOZ_WIDGET_QT)) && defined(MOZ_X11)
   // X11 window managers want the toplevel window for WM_TRANSIENT_FOR.
   nsIWidget* win = mObjectFrame->GetNearestWidget();
   if (!win)
@@ -788,6 +780,21 @@ NPBool nsPluginInstanceOwner::ConvertPoint(double sourceX, double sourceY, NPCoo
   // we should implement this for all platforms
   return false;
 #endif
+}
+
+NPError nsPluginInstanceOwner::InitAsyncSurface(NPSize *size, NPImageFormat format,
+                                                void *initData, NPAsyncSurface *surface)
+{
+  return NPERR_INCOMPATIBLE_VERSION_ERROR;
+}
+
+NPError nsPluginInstanceOwner::FinalizeAsyncSurface(NPAsyncSurface *)
+{
+  return NPERR_INCOMPATIBLE_VERSION_ERROR;
+}
+
+void nsPluginInstanceOwner::SetCurrentAsyncSurface(NPAsyncSurface *, NPRect*)
+{
 }
 
 NS_IMETHODIMP nsPluginInstanceOwner::GetTagType(nsPluginTagType *result)
@@ -997,9 +1004,9 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetDocumentEncoding(const char* *result)
     if (!gCharsetMap) {
       const int NUM_CHARSETS = sizeof(charsets) / sizeof(moz2javaCharset);
       gCharsetMap = new nsDataHashtable<nsDepCharHashKey, const char*>();
-      if (!gCharsetMap || !gCharsetMap->Init(NUM_CHARSETS))
+      if (!gCharsetMap)
         return NS_ERROR_OUT_OF_MEMORY;
-
+      gCharsetMap->Init(NUM_CHARSETS);
       for (PRUint16 i = 0; i < NUM_CHARSETS; i++) {
         gCharsetMap->Put(charsets[i].mozName, charsets[i].javaName);
       }
@@ -1195,6 +1202,31 @@ nsresult nsPluginInstanceOwner::EnsureCachedAttrParamArrays()
     mNumCachedAttrs++;
   }
 
+  // Some plugins (java, bug 406541) don't canonicalize the 'codebase' attribute
+  // in a standard way - codebase="" results in / (domain root), but
+  // codebase="blah" results in ./blah; codebase="file:" results in "file:///".
+  // We canonicalize codebase here to ensure the codebase we run security checks
+  // against is the same codebase java uses.
+  // Note that GetObjectBaseURI mimics some of java's quirks for maximal
+  // compatibility.
+  const char* mime = nsnull;
+  bool addCodebase = false;
+  nsCAutoString codebaseSpec;
+  if (mInstance && NS_SUCCEEDED(mInstance->GetMIMEType(&mime)) && mime &&
+      strcmp(mime, "application/x-java-vm") == 0) {
+    addCodebase = true;
+    nsCOMPtr<nsIObjectLoadingContent> objlContent = do_QueryInterface(mContent);
+    nsCOMPtr<nsIURI> codebaseURI;
+    objlContent->GetObjectBaseURI(nsCString(mime), getter_AddRefs(codebaseURI));
+    nsresult rv = codebaseURI->GetSpec(codebaseSpec);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // Make space if codebase isn't already set
+    if (!mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::codebase)) {
+      mNumCachedAttrs++;
+    }
+  }
+
   mCachedAttrParamNames  = (char**)NS_Alloc(sizeof(char*) * (mNumCachedAttrs + 1 + mNumCachedParams));
   NS_ENSURE_TRUE(mCachedAttrParamNames,  NS_ERROR_OUT_OF_MEMORY);
   mCachedAttrParamValues = (char**)NS_Alloc(sizeof(char*) * (mNumCachedAttrs + 1 + mNumCachedParams));
@@ -1248,9 +1280,19 @@ nsresult nsPluginInstanceOwner::EnsureCachedAttrParamArrays()
         mNumCachedAttrs--;
         wmodeSet = true;
       }
+    } else if (addCodebase && 0 == PL_strcasecmp(mCachedAttrParamNames[nextAttrParamIndex], "codebase")) {
+      mCachedAttrParamValues[nextAttrParamIndex] = ToNewUTF8String(NS_ConvertUTF8toUTF16(codebaseSpec));
+      addCodebase = false;
     } else {
       mCachedAttrParamValues[nextAttrParamIndex] = ToNewUTF8String(value);
     }
+    nextAttrParamIndex++;
+  }
+
+  // Pontentially add CODEBASE attribute
+  if (addCodebase) {
+    mCachedAttrParamNames [nextAttrParamIndex] = ToNewUTF8String(NS_LITERAL_STRING("codebase"));
+    mCachedAttrParamValues[nextAttrParamIndex] = ToNewUTF8String(NS_ConvertUTF8toUTF16(codebaseSpec));
     nextAttrParamIndex++;
   }
 
@@ -1691,71 +1733,23 @@ bool nsPluginInstanceOwner::AddPluginView(const gfxRect& aRect)
     return false;
   }
 
-  JNIEnv* env = GetJNIForThread();
-  if (!env)
-    return false;
-
-  AndroidBridge::AutoLocalJNIFrame frame(env, 1);
-
-  jclass cls = env->FindClass("org/mozilla/gecko/GeckoAppShell");
-
-#ifdef MOZ_JAVA_COMPOSITOR
-  nsAutoString metadata;
-  nsCOMPtr<nsIAndroidDrawMetadataProvider> metadataProvider =
-      AndroidBridge::Bridge()->GetDrawMetadataProvider();
-  metadataProvider->GetDrawMetadata(metadata);
-
-  jstring jMetadata = env->NewString(nsPromiseFlatString(metadata).get(), metadata.Length());
-
-  jmethodID method = env->GetStaticMethodID(cls,
-                                            "addPluginView",
-                                            "(Landroid/view/View;IIIILjava/lang/String;)V");
-
-  env->CallStaticVoidMethod(cls,
-                            method,
-                            javaSurface,
-                            (int)aRect.x,
-                            (int)aRect.y,
-                            (int)aRect.width,
-                            (int)aRect.height,
-                            jMetadata);
-#else
-  jmethodID method = env->GetStaticMethodID(cls,
-                                            "addPluginView",
-                                            "(Landroid/view/View;DDDD)V");
-
-  env->CallStaticVoidMethod(cls,
-                            method,
-                            javaSurface,
-                            aRect.x,
-                            aRect.y,
-                            aRect.width,
-                            aRect.height);
-#endif
+  if (AndroidBridge::Bridge())
+    AndroidBridge::Bridge()->AddPluginView((jobject)javaSurface, aRect);
 
   return true;
 }
 
 void nsPluginInstanceOwner::RemovePluginView()
 {
-  if (!mInstance || !mObjectFrame)
+  if (!mInstance)
     return;
 
   void* surface = mInstance->GetJavaSurface();
   if (!surface)
     return;
 
-  JNIEnv* env = GetJNIForThread();
-  if (!env)
-    return;
-
-  AndroidBridge::AutoLocalJNIFrame frame(env, 1);
-
-  jclass cls = env->FindClass("org/mozilla/gecko/GeckoAppShell");
-  jmethodID method = env->GetStaticMethodID(cls,
-                                            "removePluginView",
-                                            "(Landroid/view/View;)V");
-  env->CallStaticVoidMethod(cls, method, surface);
+  if (AndroidBridge::Bridge())
+    AndroidBridge::Bridge()->RemovePluginView((jobject)surface);
 }
 
 void nsPluginInstanceOwner::Invalidate() {
@@ -2051,10 +2045,10 @@ nsPluginInstanceOwner::HandleEvent(nsIDOMEvent* aEvent)
 static unsigned int XInputEventState(const nsInputEvent& anEvent)
 {
   unsigned int state = 0;
-  if (anEvent.isShift) state |= ShiftMask;
-  if (anEvent.isControl) state |= ControlMask;
-  if (anEvent.isAlt) state |= Mod1Mask;
-  if (anEvent.isMeta) state |= Mod4Mask;
+  if (anEvent.IsShift()) state |= ShiftMask;
+  if (anEvent.IsControl()) state |= ControlMask;
+  if (anEvent.IsAlt()) state |= Mod1Mask;
+  if (anEvent.IsMeta()) state |= Mod4Mask;
   return state;
 }
 #endif
@@ -2365,7 +2359,7 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const nsGUIEvent& anEvent)
 #ifdef MOZ_WIDGET_GTK2
         Window root = GDK_ROOT_WINDOW();
 #elif defined(MOZ_WIDGET_QT)
-        Window root = QX11Info::appRootWindow();
+        Window root = RootWindowOfScreen(DefaultScreenOfDisplay(mozilla::DefaultXDisplay()));
 #else
         Window root = None; // Could XQueryTree, but this is not important.
 #endif
@@ -2481,8 +2475,13 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const nsGUIEvent& anEvent)
           event.time = anEvent.time;
 
           QWidget* qWidget = static_cast<QWidget*>(widget->GetNativeData(NS_NATIVE_WINDOW));
+
           if (qWidget)
+#if defined(Q_WS_X11)
             event.root = qWidget->x11Info().appRootWindow();
+#else
+            event.root = RootWindowOfScreen(DefaultScreenOfDisplay(gfxQtPlatform::GetXDisplay(qWidget)));
+#endif
 
           // deduce keycode from the information in the attached QKeyEvent
           const QKeyEvent* qtEvent = static_cast<const QKeyEvent*>(anEvent.pluginEvent);
@@ -2652,33 +2651,13 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const nsGUIEvent& anEvent)
      {
        const nsKeyEvent& keyEvent = static_cast<const nsKeyEvent&>(anEvent);
        LOG("Firing NS_KEY_EVENT %d %d\n", keyEvent.keyCode, keyEvent.charCode);
-       
-       int modifiers = 0;
-       if (keyEvent.isShift)
-         modifiers |= kShift_ANPKeyModifier;
-       if (keyEvent.isAlt)
-         modifiers |= kAlt_ANPKeyModifier;
-
-       ANPEvent event;
-       event.inSize = sizeof(ANPEvent);
-       event.eventType = kKey_ANPEventType;
-       event.data.key.nativeCode = keyEvent.keyCode;
-       event.data.key.virtualCode = keyEvent.charCode;
-       event.data.key.modifiers = modifiers;
-       event.data.key.repeatCount = 0;
-       event.data.key.unichar = 0;
-       switch (anEvent.message)
-         {
-         case NS_KEY_DOWN:
-           event.data.key.action = kDown_ANPKeyAction;
-           mInstance->HandleEvent(&event, nsnull);
-           break;
-           
-         case NS_KEY_UP:
-           event.data.key.action = kUp_ANPKeyAction;
-           mInstance->HandleEvent(&event, nsnull);
-           break;
-         }
+       // pluginEvent is initialized by nsWindow::InitKeyEvent().
+       ANPEvent* pluginEvent = reinterpret_cast<ANPEvent*>(keyEvent.pluginEvent);
+       if (pluginEvent) {
+         MOZ_ASSERT(pluginEvent->inSize == sizeof(ANPEvent));
+         MOZ_ASSERT(pluginEvent->eventType == kKey_ANPEventType);
+         mInstance->HandleEvent(pluginEvent, nsnull);
+       }
      }
     }
     rv = nsEventStatus_eConsumeNoDefault;
@@ -2847,6 +2826,47 @@ void nsPluginInstanceOwner::Paint(const nsRect& aDirtyRect, HPS aHPS)
 
 #ifdef MOZ_WIDGET_ANDROID
 
+// Modified version of nsFrame::GetOffsetToCrossDoc that stops when it
+// hits an element with a displayport (or runs out of frames). This is
+// not really the right thing to do, but it's better than what was here before.
+static nsPoint
+GetOffsetRootContent(nsIFrame* aFrame)
+{
+  // offset will hold the final offset
+  // docOffset holds the currently accumulated offset at the current APD, it
+  // will be converted and added to offset when the current APD changes.
+  nsPoint offset(0, 0), docOffset(0, 0);
+  const nsIFrame* f = aFrame;
+  PRInt32 currAPD = aFrame->PresContext()->AppUnitsPerDevPixel();
+  PRInt32 apd = currAPD;
+  nsRect displayPort;
+  while (f) {
+    if (f->GetContent() && nsLayoutUtils::GetDisplayPort(f->GetContent(), &displayPort))
+      break;
+
+    docOffset += f->GetPosition();
+    nsIFrame* parent = f->GetParent();
+    if (parent) {
+      f = parent;
+    } else {
+      nsPoint newOffset(0, 0);
+      f = nsLayoutUtils::GetCrossDocParentFrame(f, &newOffset);
+      PRInt32 newAPD = f ? f->PresContext()->AppUnitsPerDevPixel() : 0;
+      if (!f || newAPD != currAPD) {
+        // Convert docOffset to the right APD and add it to offset.
+        offset += docOffset.ConvertAppUnits(currAPD, apd);
+        docOffset.x = docOffset.y = 0;
+      }
+      currAPD = newAPD;
+      docOffset += newOffset;
+    }
+  }
+
+  offset += docOffset.ConvertAppUnits(currAPD, apd);
+
+  return offset;
+}
+
 void nsPluginInstanceOwner::Paint(gfxContext* aContext,
                                   const gfxRect& aFrameRect,
                                   const gfxRect& aDirtyRect)
@@ -2856,8 +2876,13 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
 
   PRInt32 model = mInstance->GetANPDrawingModel();
 
+  // Get the offset of the content relative to the page
+  nsRect bounds = mObjectFrame->GetContentRectRelativeToSelf() + GetOffsetRootContent(mObjectFrame);
+  nsIntRect intBounds = bounds.ToNearestPixels(mObjectFrame->PresContext()->AppUnitsPerDevPixel());
+  gfxRect pluginRect(intBounds);
+
   if (model == kSurface_ANPDrawingModel) {
-    if (!AddPluginView(aFrameRect)) {
+    if (!AddPluginView(pluginRect)) {
       Invalidate();
     }
     return;
@@ -2867,11 +2892,13 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
     if (!mLayer)
       mLayer = new AndroidMediaLayer();
 
-    // FIXME: this is gross
-    float zoomLevel = aFrameRect.width / (float)mPluginWindow->width;
-    mLayer->UpdatePosition(aFrameRect, zoomLevel);
+    mLayer->UpdatePosition(pluginRect);
 
-    SendSize((int)aFrameRect.width, (int)aFrameRect.height);
+    float xResolution = mObjectFrame->PresContext()->GetRootPresContext()->PresShell()->GetXResolution();
+    float yResolution = mObjectFrame->PresContext()->GetRootPresContext()->PresShell()->GetYResolution();
+    pluginRect.Scale(xResolution, yResolution);
+
+    SendSize((int)pluginRect.width, (int)pluginRect.height);
     return;
   }
 
@@ -2993,11 +3020,10 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
   Visual* visual = gdk_x11_visual_get_xvisual(gdkVisual);
   Screen* screen =
     gdk_x11_screen_get_xscreen(gdk_visual_get_screen(gdkVisual));
-#endif
-#ifdef MOZ_WIDGET_QT
-  Display* dpy = QX11Info().display();
-  Screen* screen = ScreenOfDisplay(dpy, QX11Info().screen());
-  Visual* visual = static_cast<Visual*>(QX11Info().visual());
+#else
+  Display* dpy = mozilla::DefaultXDisplay();
+  Screen* screen = DefaultScreenOfDisplay(dpy);
+  Visual* visual = DefaultVisualOfScreen(screen);
 #endif
   renderer.Draw(aContext, nsIntSize(window->width, window->height),
                 rendererFlags, screen, visual, nsnull);
@@ -3668,10 +3694,11 @@ void nsPluginInstanceOwner::SetFrame(nsObjectFrame *aFrame)
     nsRefPtr<ImageContainer> container = mObjectFrame->GetImageContainer();
     if (container) {
 #ifdef XP_MACOSX
-      nsRefPtr<Image> image = container->GetCurrentImage();
+      AutoLockImage autoLock(container);
+      Image *image = autoLock.GetImage();
       if (image && (image->GetFormat() == Image::MAC_IO_SURFACE) && mObjectFrame) {
         // Undo what we did to the current image in SetCurrentImage().
-        MacIOSurfaceImage *oglImage = static_cast<MacIOSurfaceImage*>(image.get());
+        MacIOSurfaceImage *oglImage = static_cast<MacIOSurfaceImage*>(image);
         oglImage->SetUpdateCallback(nsnull, nsnull);
         oglImage->SetDestroyCallback(nsnull);
         // If we have a current image here, its destructor hasn't yet been
@@ -3679,6 +3706,9 @@ void nsPluginInstanceOwner::SetFrame(nsObjectFrame *aFrame)
         // to do ourselves what OnDestroyImage() would have done.
         NS_RELEASE_THIS();
       }
+      // Important! Unlock here otherwise SetCurrentImage will deadlock with
+      // our lock if we have a RemoteImage.
+      autoLock.Unlock();
 #endif
       container->SetCurrentImage(nsnull);
     }
@@ -3746,6 +3776,11 @@ void nsPluginInstanceOwner::FixUpURLS(const nsString &name, nsAString &value)
     if (!newURL.IsEmpty())
       value = newURL;
   }
+}
+
+NS_IMETHODIMP nsPluginInstanceOwner::PrivateModeChanged(bool aEnabled)
+{
+  return mInstance ? mInstance->PrivateModeStateChanged(aEnabled) : NS_OK;
 }
 
 // nsPluginDOMContextMenuListener class implementation

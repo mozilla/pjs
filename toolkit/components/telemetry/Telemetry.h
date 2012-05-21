@@ -1,40 +1,7 @@
 /* -*-  Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2; -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation <http://www.mozilla.org/>.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Taras Glek <tglek@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef Telemetry_h__
 #define Telemetry_h__
@@ -42,6 +9,11 @@
 #include "mozilla/GuardObjects.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/StartupTimeline.h"
+#include "nsTArray.h"
+#include "nsStringGlue.h"
+#if defined(MOZ_ENABLE_PROFILER_SPS)
+#include "shared-libraries.h"
+#endif
 
 namespace base {
   class Histogram;
@@ -141,20 +113,39 @@ bool CanRecord();
 
 /**
  * Records slow SQL statements for Telemetry reporting.
- * For privacy reasons, only prepared statements are reported.
  *
  * @param statement - offending SQL statement to record
- * @param dbName - DB filename; reporting is only done for whitelisted DBs
+ * @param dbName - DB filename
  * @param delay - execution time in milliseconds
+ * @param isDynamicString - prepared statement or a dynamic string
  */
 void RecordSlowSQLStatement(const nsACString &statement,
                             const nsACString &dbName,
-                            PRUint32 delay);
+                            PRUint32 delay,
+                            bool isDynamicString);
 
 /**
  * Threshold for a statement to be considered slow, in milliseconds
  */
 const PRUint32 kSlowStatementThreshold = 100;
+
+/**
+ * nsTArray of pointers representing PCs on a call stack
+ */
+typedef nsTArray<uintptr_t> HangStack;
+
+/**
+ * Record the main thread's call stack after it hangs.
+ *
+ * @param duration - Approximate duration of main thread hang in seconds
+ * @param callStack - Array of PCs from the hung call stack
+ * @param moduleMap - Array of info about modules in memory (for symbolication)
+ */
+#if defined(MOZ_ENABLE_PROFILER_SPS)
+void RecordChromeHang(PRUint32 duration,
+                      const HangStack &callStack,
+                      SharedLibraryInfo &moduleMap);
+#endif
 
 } // namespace Telemetry
 } // namespace mozilla

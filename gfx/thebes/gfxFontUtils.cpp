@@ -1,41 +1,12 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is thebes gfx code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007-2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <stuart@mozilla.com>
- *   John Daggett <jdaggett@mozilla.com>
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#ifdef MOZ_LOGGING
+#define FORCE_PR_LOG /* Allow logging in the release build */
+#endif
+#include "prlog.h"
 
 #include "mozilla/Util.h"
 
@@ -51,12 +22,20 @@
 #include "nsICharsetConverterManager.h"
 
 #include "plbase64.h"
+#include "prlog.h"
 
 #include "woff.h"
 
 #ifdef XP_MACOSX
 #include <CoreFoundation/CoreFoundation.h>
 #endif
+
+#ifdef PR_LOGGING
+
+#define LOG(log, args) PR_LOG(gfxPlatform::GetLog(log), \
+                               PR_LOG_DEBUG, args)
+
+#endif // PR_LOGGING
 
 #define NO_RANGE_FOUND 126 // bit 126 in the font unicode ranges is required to be 0
 
@@ -268,6 +247,37 @@ typedef struct {
 } Format12Group;
 
 #pragma pack()
+
+#if PR_LOGGING
+void
+gfxSparseBitSet::Dump(const char* aPrefix, eGfxLog aWhichLog) const
+{
+    NS_ASSERTION(mBlocks.DebugGetHeader(), "mHdr is null, this is bad");
+    PRUint32 b, numBlocks = mBlocks.Length();
+
+    for (b = 0; b < numBlocks; b++) {
+        Block *block = mBlocks[b];
+        if (!block) continue;
+        char outStr[256];
+        int index = 0;
+        index += sprintf(&outStr[index], "%s u+%6.6x [", aPrefix, (b << BLOCK_INDEX_SHIFT));
+        for (int i = 0; i < 32; i += 4) {
+            for (int j = i; j < i + 4; j++) {
+                PRUint8 bits = block->mBits[j];
+                PRUint8 flip1 = ((bits & 0xaa) >> 1) | ((bits & 0x55) << 1);
+                PRUint8 flip2 = ((flip1 & 0xcc) >> 2) | ((flip1 & 0x33) << 2);
+                PRUint8 flipped = ((flip2 & 0xf0) >> 4) | ((flip2 & 0x0f) << 4);
+
+                index += sprintf(&outStr[index], "%2.2x", flipped);
+            }
+            if (i + 4 != 32) index += sprintf(&outStr[index], " ");
+        }
+        index += sprintf(&outStr[index], "]");
+        LOG(aWhichLog, ("%s", outStr));
+    }
+}
+#endif
+
 
 nsresult
 gfxFontUtils::ReadCMAPTableFormat12(const PRUint8 *aBuf, PRUint32 aLength,
@@ -1093,10 +1103,13 @@ gfxFontUtils::ValidateSFNTHeaders(const PRUint8 *aFontData,
     }
     
     // iterate through the table headers to find the head, name and OS/2 tables
-    bool foundHead = false, foundOS2 = false, foundName = false;
+#ifdef XP_WIN
+    bool foundOS2 = false;
+#endif
+    bool foundHead = false, foundName = false;
     bool foundGlyphs = false, foundCFF = false, foundKern = false;
     bool foundLoca = false, foundMaxp = false;
-    PRUint32 headOffset = 0, headLen, nameOffset = 0, nameLen, kernOffset = 0,
+    PRUint32 headOffset = 0, headLen, nameOffset = 0, kernOffset = 0,
         kernLen = 0, glyfLen = 0, locaOffset = 0, locaLen = 0,
         maxpOffset = 0, maxpLen;
     PRUint32 i, numTables;
@@ -1153,11 +1166,12 @@ gfxFontUtils::ValidateSFNTHeaders(const PRUint8 *aFontData,
         case TRUETYPE_TAG('n','a','m','e'):
             foundName = true;
             nameOffset = dirEntry->offset;
-            nameLen = dirEntry->length;
             break;
 
         case TRUETYPE_TAG('O','S','/','2'):
+#ifdef XP_WIN
             foundOS2 = true;
+#endif
             break;
 
         case TRUETYPE_TAG('g','l','y','f'):  // TrueType-style quadratic glyph table
@@ -1379,17 +1393,15 @@ gfxFontUtils::RenameFont(const nsAString& aName, const PRUint8 *aFontData,
         reinterpret_cast<TableDirEntry*>(newFontData + sizeof(SFNTHeader));
 
     PRUint32 numTables = sfntHeader->numTables;
-    bool foundName = false;
     
     for (i = 0; i < numTables; i++, dirEntry++) {
         if (dirEntry->tag == TRUETYPE_TAG('n','a','m','e')) {
-            foundName = true;
             break;
         }
     }
     
     // function only called if font validates, so this should always be true
-    NS_ASSERTION(foundName, "attempt to rename font with no name table");
+    NS_ASSERTION(i < numTables, "attempt to rename font with no name table");
 
     // note: dirEntry now points to name record
     

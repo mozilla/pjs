@@ -62,7 +62,7 @@ void *ExecutableAllocator::computeRandomAllocationAddress()
      * bits of randomness in our selection.
      * x64: [2GiB, 4TiB), with 25 bits of randomness.
      */
-    static const uintN chunkBits = 16;
+    static const unsigned chunkBits = 16;
 #if WTF_CPU_X86_64
     static const uintptr_t base = 0x0000000080000000;
     static const uintptr_t mask = 0x000003ffffff0000;
@@ -94,6 +94,8 @@ RandomizeIsBrokenImpl()
 static bool
 RandomizeIsBroken()
 {
+    // Use the compiler's intrinsic guards for |static type value = expr| to avoid some potential
+    // races if runtimes are created from multiple threads.
     static int result = RandomizeIsBrokenImpl();
     return !!result;
 }
@@ -101,11 +103,15 @@ RandomizeIsBroken()
 ExecutablePool::Allocation ExecutableAllocator::systemAlloc(size_t n)
 {
     void *allocation = NULL;
+    // Randomization disabled to avoid a performance fault on x64 builds.
+    // See bug 728623.
+#ifndef JS_CPU_X64
     if (allocBehavior == AllocationCanRandomize && !RandomizeIsBroken()) {
         void *randomAddress = computeRandomAllocationAddress();
         allocation = VirtualAlloc(randomAddress, n, MEM_COMMIT | MEM_RESERVE,
                                   PAGE_EXECUTE_READWRITE);
     }
+#endif
     if (!allocation)
         allocation = VirtualAlloc(0, n, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     ExecutablePool::Allocation alloc = { reinterpret_cast<char*>(allocation), n };

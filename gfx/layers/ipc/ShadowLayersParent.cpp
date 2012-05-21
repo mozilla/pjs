@@ -1,48 +1,16 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=8 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at:
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Code.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <vector>
 
 #include "ShadowLayersParent.h"
 #include "ShadowLayerParent.h"
 #include "ShadowLayers.h"
+#include "RenderTrace.h"
 
 #include "mozilla/unused.h"
 
@@ -51,6 +19,7 @@
 
 #include "gfxSharedImageSurface.h"
 
+#include "TiledLayerBuffer.h"
 #include "ImageLayers.h"
 
 typedef std::vector<mozilla::layers::EditReply> EditReplyVector;
@@ -145,10 +114,26 @@ ShadowLayersParent::Destroy()
   }
 }
 
+/* virtual */
+bool
+ShadowLayersParent::RecvUpdateNoSwap(const InfallibleTArray<Edit>& cset,
+                 const bool& isFirstPaint)
+{
+  InfallibleTArray<EditReply> noReplies;
+  bool success = RecvUpdate(cset, isFirstPaint, &noReplies);
+  NS_ABORT_IF_FALSE(noReplies.Length() == 0, "RecvUpdateNoSwap requires a sync Update to carry Edits");
+  return success;
+}
+
 bool
 ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
+                               const bool& isFirstPaint,
                                InfallibleTArray<EditReply>* reply)
 {
+#ifdef COMPOSITOR_PERFORMANCE_WARNING
+  TimeStamp updateStart = TimeStamp::Now();
+#endif
+
   MOZ_LAYERS_LOG(("[ParentSide] received txn with %d edits", cset.Length()));
 
   if (mDestroyed || layer_manager()->IsDestroyed()) {
@@ -219,10 +204,14 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       layer->SetOpacity(common.opacity());
       layer->SetClipRect(common.useClipRect() ? &common.clipRect() : NULL);
       layer->SetTransform(common.transform());
-      layer->SetTileSourceRect(common.useTileSourceRect() ? &common.tileSourceRect() : NULL);
       static bool fixedPositionLayersEnabled = getenv("MOZ_ENABLE_FIXED_POSITION_LAYERS") != 0;
       if (fixedPositionLayersEnabled) {
         layer->SetIsFixedPosition(common.isFixedPosition());
+      }
+      if (PLayerParent* maskLayer = common.maskLayerParent()) {
+        layer->SetMaskLayer(cast(maskLayer)->AsLayer());
+      } else {
+        layer->SetMaskLayer(NULL);
       }
 
       typedef SpecificLayerAttributes Specific;
@@ -309,6 +298,20 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       break;
     }
 
+    case Edit::TOpPaintTiledLayerBuffer: {
+      MOZ_LAYERS_LOG(("[ParentSide] Paint TiledLayerBuffer"));
+      const OpPaintTiledLayerBuffer& op = edit.get_OpPaintTiledLayerBuffer();
+      ShadowLayerParent* shadow = AsShadowLayer(op);
+
+      ShadowThebesLayer* shadowLayer = static_cast<ShadowThebesLayer*>(shadow->AsLayer());
+      TiledLayerComposer* tileComposer = shadowLayer->AsTiledLayerComposer();
+
+      NS_ASSERTION(tileComposer, "shadowLayer is not a tile composer");
+
+      BasicTiledLayerBuffer* p = (BasicTiledLayerBuffer*)op.tiledLayerBuffer();
+      tileComposer->PaintedTiledLayerBuffer(p);
+      break;
+    }
     case Edit::TOpPaintThebesBuffer: {
       MOZ_LAYERS_LOG(("[ParentSide] Paint ThebesLayer"));
 
@@ -317,6 +320,8 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       ShadowThebesLayer* thebes =
         static_cast<ShadowThebesLayer*>(shadow->AsLayer());
       const ThebesBuffer& newFront = op.newFrontBuffer();
+
+      RenderTraceInvalidateStart(thebes, "FF00FF", op.updatedRegion().GetBounds());
 
       OptionalThebesBuffer newBack;
       nsIntRegion newValidRegion;
@@ -330,6 +335,8 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
           shadow, NULL,
           newBack, newValidRegion,
           readonlyFront, frontUpdatedRegion));
+
+      RenderTraceInvalidateEnd(thebes, "FF00FF");
       break;
     }
     case Edit::TOpPaintCanvas: {
@@ -340,6 +347,8 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       ShadowCanvasLayer* canvas =
         static_cast<ShadowCanvasLayer*>(shadow->AsLayer());
 
+      RenderTraceInvalidateStart(canvas, "FF00FF", canvas->GetVisibleRegion().GetBounds());
+
       canvas->SetAllocator(this);
       CanvasSurface newBack;
       canvas->Swap(op.newFrontBuffer(), op.needYFlip(), &newBack);
@@ -347,6 +356,7 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       replyv.push_back(OpBufferSwap(shadow, NULL,
                                     newBack));
 
+      RenderTraceInvalidateEnd(canvas, "FF00FF");
       break;
     }
     case Edit::TOpPaintImage: {
@@ -357,12 +367,15 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       ShadowImageLayer* image =
         static_cast<ShadowImageLayer*>(shadow->AsLayer());
 
+      RenderTraceInvalidateStart(image, "FF00FF", image->GetVisibleRegion().GetBounds());
+
       image->SetAllocator(this);
       SharedImage newBack;
       image->Swap(op.newFrontBuffer(), &newBack);
       replyv.push_back(OpImageSwap(shadow, NULL,
                                    newBack));
 
+      RenderTraceInvalidateEnd(image, "FF00FF");
       break;
     }
 
@@ -383,7 +396,14 @@ ShadowLayersParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
   // other's buffer contents.
   ShadowLayerManager::PlatformSyncBeforeReplyUpdate();
 
-  mShadowLayersManager->ShadowLayersUpdated();
+  mShadowLayersManager->ShadowLayersUpdated(isFirstPaint);
+
+#ifdef COMPOSITOR_PERFORMANCE_WARNING
+  int compositeTime = (int)(mozilla::TimeStamp::Now() - updateStart).ToMilliseconds();
+  if (compositeTime > 15) {
+    printf_stderr("Compositor: Layers update took %i ms (blocking gecko).\n", compositeTime);
+  }
+#endif
 
   return true;
 }

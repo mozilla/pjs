@@ -1,41 +1,9 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places Unit Tests Code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Marco Bonardo <mak77@bonardo.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const CURRENT_SCHEMA_VERSION = 18;
+const CURRENT_SCHEMA_VERSION = 20;
 
 const NS_APP_USER_PROFILE_50_DIR = "ProfD";
 const NS_APP_PROFILE_DIR_STARTUP = "ProfDS";
@@ -50,10 +18,6 @@ const TRANSITION_FRAMED_LINK = Ci.nsINavHistoryService.TRANSITION_FRAMED_LINK;
 const TRANSITION_REDIRECT_PERMANENT = Ci.nsINavHistoryService.TRANSITION_REDIRECT_PERMANENT;
 const TRANSITION_REDIRECT_TEMPORARY = Ci.nsINavHistoryService.TRANSITION_REDIRECT_TEMPORARY;
 const TRANSITION_DOWNLOAD = Ci.nsINavHistoryService.TRANSITION_DOWNLOAD;
-
-// This error icon must stay in sync with FAVICON_ERRORPAGE_URL in
-// nsIFaviconService.idl, aboutCertError.xhtml and netError.xhtml.
-const FAVICON_ERRORPAGE_URL = "chrome://global/skin/icons/warning-16.png";
 
 const TITLE_LENGTH_MAX = 4096;
 
@@ -74,18 +38,18 @@ XPCOMUtils.defineLazyGetter(this, "FileUtils", function() {
   return FileUtils;
 });
 
-XPCOMUtils.defineLazyGetter(this, "PlacesUtils", function() {
-  Cu.import("resource://gre/modules/PlacesUtils.jsm");
-  return PlacesUtils;
+Cu.import("resource://gre/modules/PlacesUtils.jsm");
+XPCOMUtils.defineLazyGetter(this, "SMALLPNG_DATA_URI", function() {
+  return NetUtil.newURI(
+         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAA" +
+         "AAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==");
 });
-
 
 function LOG(aMsg) {
   aMsg = ("*** PLACES TESTS: " + aMsg);
   Services.console.logStringMessage(aMsg);
   print(aMsg);
 }
-
 
 let gTestDir = do_get_cwd();
 
@@ -185,6 +149,42 @@ function readFileData(aFile) {
     throw "Didn't read expected number of bytes";
   }
   return bytes;
+}
+
+/**
+ * Reads the data from the named file, verifying the expected file length.
+ *
+ * @param aFileName
+ *        This file should be located in the same folder as the test.
+ * @param aExpectedLength
+ *        Expected length of the file.
+ *
+ * @return The array of bytes read from the file.
+ */
+function readFileOfLength(aFileName, aExpectedLength) {
+  let data = readFileData(do_get_file(aFileName));
+  do_check_eq(data.length, aExpectedLength);
+  return data;
+}
+
+
+/**
+ * Returns the base64-encoded version of the given string.  This function is
+ * similar to window.btoa, but is available to xpcshell tests also.
+ *
+ * @param aString
+ *        Each character in this string corresponds to a byte, and must be a
+ *        code point in the range 0-255.
+ *
+ * @return The base64-encoded string.
+ */
+function base64EncodeString(aString) {
+  var stream = Cc["@mozilla.org/io/string-input-stream;1"]
+               .createInstance(Ci.nsIStringInputStream);
+  stream.setData(aString, aString.length);
+  var encoder = Cc["@mozilla.org/scriptablebase64encoder;1"]
+                .createInstance(Ci.nsIScriptableBase64Encoder);
+  return encoder.encodeToString(stream, aString.length);
 }
 
 
@@ -724,6 +724,53 @@ function do_check_guid_for_uri(aURI,
 }
 
 /**
+ * Retrieves the guid for a given bookmark.
+ *
+ * @param aId
+ *        The bookmark id to check.
+ * @param [optional] aStack
+ *        The stack frame used to report the error.
+ * @return the associated the guid.
+ */
+function do_get_guid_for_bookmark(aId,
+                                  aStack)
+{
+  if (!aStack) {
+    aStack = Components.stack.caller;
+  }
+  let stmt = DBConn().createStatement(
+    "SELECT guid "
+  + "FROM moz_bookmarks "
+  + "WHERE id = :item_id "
+  );
+  stmt.params.item_id = aId;
+  do_check_true(stmt.executeStep(), aStack);
+  let guid = stmt.row.guid;
+  stmt.finalize();
+  do_check_valid_places_guid(guid, aStack);
+  return guid;
+}
+
+/**
+ * Tests that a guid was set in moz_places for a given bookmark.
+ *
+ * @param aId
+ *        The bookmark id to check.
+ * @param [optional] aGUID
+ *        The expected guid in the database.
+ */
+function do_check_guid_for_bookmark(aId,
+                                    aGUID)
+{
+  let caller = Components.stack.caller;
+  let guid = do_get_guid_for_bookmark(aId, caller);
+  if (aGUID) {
+    do_check_valid_places_guid(aGUID, caller);
+    do_check_eq(guid, aGUID, caller);
+  }
+}
+
+/**
  * Logs info to the console in the standard way (includes the filename).
  *
  * @param aMessage
@@ -779,3 +826,95 @@ NavHistoryObserver.prototype = {
     Ci.nsINavHistoryObserver,
   ])
 };
+
+/**
+ * Generic nsINavHistoryResultObserver that doesn't implement anything, but
+ * provides dummy methods to prevent errors about an object not having a certain
+ * method.
+ */
+function NavHistoryResultObserver() {}
+
+NavHistoryResultObserver.prototype = {
+  batching: function () {},
+  containerClosed: function () {},
+  containerOpened: function () {},
+  containerStateChanged: function () {},
+  invalidateContainer: function () {},
+  nodeAnnotationChanged: function () {},
+  nodeDateAddedChanged: function () {},
+  nodeHistoryDetailsChanged: function () {},
+  nodeIconChanged: function () {},
+  nodeInserted: function () {},
+  nodeKeywordChanged: function () {},
+  nodeLastModifiedChanged: function () {},
+  nodeMoved: function () {},
+  nodeRemoved: function () {},
+  nodeReplaced: function () {},
+  nodeTagsChanged: function () {},
+  nodeTitleChanged: function () {},
+  nodeURIChanged: function () {},
+  sortingChanged: function () {},
+  QueryInterface: XPCOMUtils.generateQI([
+    Ci.nsINavHistoryResultObserver,
+  ])
+};
+
+/**
+ * Asynchronously adds visits to a page, invoking a callback function when done.
+ *
+ * @param aPlaceInfo
+ *        Can be an nsIURI, in such a case a single LINK visit will be added.
+ *        Otherwise can be an object describing the visit to add, or an array
+ *        of these objects:
+ *          { uri: nsIURI of the page,
+ *            transition: one of the TRANSITION_* from nsINavHistoryService,
+ *            [optional] title: title of the page,
+ *            [optional] visitDate: visit date in microseconds from the epoch
+ *            [optional] referrer: nsIURI of the referrer for this visit
+ *          }
+ * @param [optional] aCallback
+ *        Function to be invoked on completion.
+ * @param [optional] aStack
+ *        The stack frame used to report errors.
+ */
+function addVisits(aPlaceInfo, aCallback, aStack)
+{
+  let stack = aStack || Components.stack.caller;
+  let places = [];
+  if (aPlaceInfo instanceof Ci.nsIURI) {
+    places.push({ uri: aPlaceInfo });
+  }
+  else if (Array.isArray(aPlaceInfo)) {
+    places = places.concat(aPlaceInfo);
+  } else {
+    places.push(aPlaceInfo)
+  }
+
+  // Create mozIVisitInfo for each entry.
+  let now = Date.now();
+  for (let i = 0; i < places.length; i++) {
+    if (!places[i].title) {
+      places[i].title = "test visit for " + places[i].uri.spec;
+    }
+    places[i].visits = [{
+      transitionType: places[i].transition === undefined ? TRANSITION_LINK
+                                                         : places[i].transition,
+      visitDate: places[i].visitDate || (now++) * 1000,
+      referrerURI: places[i].referrer
+    }];
+  }
+
+  PlacesUtils.asyncHistory.updatePlaces(
+    places,
+    {
+      handleError: function AAV_handleError() {
+        do_throw("Unexpected error in adding visit.", stack);
+      },
+      handleResult: function () {},
+      handleCompletion: function UP_handleCompletion() {
+        if (aCallback)
+          aCallback();
+      }
+    }
+  );
+}

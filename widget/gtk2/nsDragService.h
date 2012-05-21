@@ -1,58 +1,47 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim:expandtab:shiftwidth=4:tabstop=4:
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Christopher Blizzard <blizzard@mozilla.org>.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Christopher Blizzard <blizzard@mozilla.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsDragService_h__
 #define nsDragService_h__
 
 #include "nsBaseDragService.h"
-#include "nsIDragSessionGTK.h"
 #include "nsIObserver.h"
 #include <gtk/gtk.h>
 
+class nsWindow;
+
+#ifndef HAVE_NSGOBJECTREFTRAITS
+#define HAVE_NSGOBJECTREFTRAITS
+template <class T>
+class nsGObjectRefTraits : public nsPointerRefTraits<T> {
+public:
+    static void Release(T *aPtr) { g_object_unref(aPtr); }
+    static void AddRef(T *aPtr) { g_object_ref(aPtr); }
+};
+#endif
+
+#ifndef HAVE_NSAUTOREFTRAITS_GTKWIDGET
+#define HAVE_NSAUTOREFTRAITS_GTKWIDGET
+template <>
+class nsAutoRefTraits<GtkWidget> : public nsGObjectRefTraits<GtkWidget> { };
+#endif
+
+#ifndef HAVE_NSAUTOREFTRAITS_GDKDRAGCONTEXT
+#define HAVE_NSAUTOREFTRAITS_GDKDRAGCONTEXT
+template <>
+class nsAutoRefTraits<GdkDragContext> :
+    public nsGObjectRefTraits<GdkDragContext> { };
+#endif
 
 /**
  * Native GTK DragService wrapper
  */
 
 class nsDragService : public nsBaseDragService,
-                      public nsIDragSessionGTK,
                       public nsIObserver
 {
 public:
@@ -79,16 +68,12 @@ public:
                                       PRUint32 aItemIndex);
     NS_IMETHOD IsDataFlavorSupported (const char *aDataFlavor, bool *_retval);
 
-    // nsIDragSessionGTK
+    // Methods called from nsWindow to handle responding to GTK drag
+    // destination signals
 
-    NS_IMETHOD TargetSetLastContext  (GtkWidget      *aWidget,
-                                      GdkDragContext *aContext,
-                                      guint           aTime);
-    NS_IMETHOD TargetStartDragMotion (void);
-    NS_IMETHOD TargetEndDragMotion   (GtkWidget      *aWidget,
-                                      GdkDragContext *aContext,
-                                      guint           aTime);
-    NS_IMETHOD TargetDataReceived    (GtkWidget         *aWidget,
+    static nsDragService* GetInstance();
+
+    void TargetDataReceived          (GtkWidget         *aWidget,
                                       GdkDragContext    *aContext,
                                       gint               aX,
                                       gint               aY,
@@ -96,7 +81,21 @@ public:
                                       guint              aInfo,
                                       guint32            aTime);
 
-    NS_IMETHOD TargetSetTimeCallback (nsIDragSessionGTKTimeCB aCallback);
+    gboolean ScheduleMotionEvent(nsWindow *aWindow,
+                                 GdkDragContext *aDragContext,
+                                 nsIntPoint aWindowPoint,
+                                 guint aTime);
+    void ScheduleLeaveEvent();
+    gboolean ScheduleDropEvent(nsWindow *aWindow,
+                               GdkDragContext *aDragContext,
+                               nsIntPoint aWindowPoint,
+                               guint aTime);
+
+    nsWindow* GetMostRecentDestWindow()
+    {
+        return mScheduledTask == eDragTaskNone ? mTargetWindow
+            : mPendingWindow;
+    }
 
     //  END PUBLIC API
 
@@ -116,14 +115,48 @@ public:
 
 private:
 
-    // target side vars
+    // mScheduledTask indicates what signal has been received from GTK and
+    // so what needs to be dispatched when the scheduled task is run.  It is
+    // eDragTaskNone when there is no task scheduled (but the
+    // previous task may still not have finished running).
+    enum DragTask {
+        eDragTaskNone,
+        eDragTaskMotion,
+        eDragTaskLeave,
+        eDragTaskDrop,
+        eDragTaskSourceEnd
+    };
+    DragTask mScheduledTask;
+    // mTaskSource is the GSource id for the task that is either scheduled
+    // or currently running.  It is 0 if no task is scheduled or running.
+    guint mTaskSource;
 
-    // the last widget that was the target of a drag
-    GtkWidget      *mTargetWidget;
-    GdkDragContext *mTargetDragContext;
+    // target/destination side vars
+    // These variables keep track of the state of the current drag.
+
+    // mPendingWindow, mPendingWindowPoint, mPendingDragContext, and
+    // mPendingTime, carry information from the GTK signal that will be used
+    // when the scheduled task is run.  mPendingWindow and mPendingDragContext
+    // will be NULL if the scheduled task is eDragTaskLeave.
+    nsRefPtr<nsWindow> mPendingWindow;
+    nsIntPoint mPendingWindowPoint;
+    nsCountedRef<GdkDragContext> mPendingDragContext;
+    guint mPendingTime;
+
+    // mTargetWindow and mTargetWindowPoint record the position of the last
+    // eDragTaskMotion or eDragTaskDrop task that was run or is still running.
+    // mTargetWindow is cleared once the drag has completed or left.
+    nsRefPtr<nsWindow> mTargetWindow;
+    nsIntPoint mTargetWindowPoint;
+    // mTargetWidget and mTargetDragContext are set only while dispatching
+    // motion or drop events.  mTime records the corresponding timestamp.
+    nsCountedRef<GtkWidget> mTargetWidget;
+    nsCountedRef<GdkDragContext> mTargetDragContext;
     guint           mTargetTime;
+
     // is it OK to drop on us?
     bool            mCanDrop;
+
     // have we received our drag data?
     bool            mTargetDragDataReceived;
     // last data received and its length
@@ -141,8 +174,6 @@ private:
 
     // the source of our drags
     GtkWidget     *mHiddenWidget;
-    // the widget receiving mouse events
-    GtkWidget     *mGrabWidget;
     // our source data items
     nsCOMPtr<nsISupportsArray> mSourceDataItems;
 
@@ -159,6 +190,17 @@ private:
                           PRInt32          aYOffset,
                           const nsIntRect &dragRect);
 
+    gboolean Schedule(DragTask aTask, nsWindow *aWindow,
+                      GdkDragContext *aDragContext,
+                      nsIntPoint aWindowPoint, guint aTime);
+
+    // Callback for g_idle_add_full() to run mScheduledTask.
+    static gboolean TaskDispatchCallback(gpointer data);
+    gboolean RunScheduledTask();
+    void UpdateDragAction();
+    void DispatchMotionEvents();
+    void ReplyToDragMotion();
+    gboolean DispatchDropEvent();
 };
 
 #endif // nsDragService_h__

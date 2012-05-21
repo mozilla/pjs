@@ -1,45 +1,14 @@
 /* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Web Workers.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   William Chen <wchen@mozilla.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "File.h"
 
 #include "nsIDOMFile.h"
+#include "nsDOMBlobBuilder.h"
+#include "nsDOMError.h"
 
 #include "jsapi.h"
 #include "jsatom.h"
@@ -57,7 +26,7 @@
 
 USING_WORKERS_NAMESPACE
 
-using mozilla::dom::workers::exceptions::ThrowFileExceptionForCode;
+using mozilla::dom::workers::exceptions::ThrowDOMExceptionForNSResult;
 
 namespace {
 
@@ -110,16 +79,34 @@ private:
     return NULL;
   }
 
-  static JSBool
-  Construct(JSContext* aCx, uintN aArgc, jsval* aVp)
+  static nsIDOMBlob*
+  Unwrap(JSContext* aCx, JSObject* aObj)
   {
-    JS_ReportErrorNumber(aCx, js_GetErrorMessage, NULL, JSMSG_WRONG_CONSTRUCTOR,
-                         sClass.name);
-    return false;
+    return GetPrivate(aObj);
+  }
+
+  static JSBool
+  Construct(JSContext* aCx, unsigned aArgc, jsval* aVp)
+  {
+    nsRefPtr<nsDOMMultipartFile> file = new nsDOMMultipartFile();
+    nsresult rv = file->InitInternal(aCx, aArgc, JS_ARGV(aCx, aVp),
+                                     Unwrap);
+    if (NS_FAILED(rv)) {
+      ThrowDOMExceptionForNSResult(aCx, rv);
+      return false;
+    }
+
+    JSObject* obj = file::CreateBlob(aCx, file);
+    if (!obj) {
+      return false;
+    }
+
+    JS_SET_RVAL(aCx, aVp, OBJECT_TO_JSVAL(obj));
+    return true;
   }
 
   static void
-  Finalize(JSContext* aCx, JSObject* aObj)
+  Finalize(JSFreeOp* aFop, JSObject* aObj)
   {
     JS_ASSERT(JS_GetClass(aObj) == &sClass);
 
@@ -128,7 +115,7 @@ private:
   }
 
   static JSBool
-  GetSize(JSContext* aCx, JSObject* aObj, jsid aIdval, jsval* aVp)
+  GetSize(JSContext* aCx, JSHandleObject aObj, JSHandleId aIdval, jsval* aVp)
   {
     nsIDOMBlob* blob = GetInstancePrivate(aCx, aObj, "size");
     if (!blob) {
@@ -137,10 +124,11 @@ private:
 
     PRUint64 size;
     if (NS_FAILED(blob->GetSize(&size))) {
-      ThrowFileExceptionForCode(aCx, FILE_NOT_READABLE_ERR);
+      ThrowDOMExceptionForNSResult(aCx, NS_ERROR_DOM_FILE_NOT_READABLE_ERR);
+      return false;
     }
 
-    if (!JS_NewNumberValue(aCx, jsdouble(size), aVp)) {
+    if (!JS_NewNumberValue(aCx, double(size), aVp)) {
       return false;
     }
 
@@ -148,7 +136,7 @@ private:
   }
 
   static JSBool
-  GetType(JSContext* aCx, JSObject* aObj, jsid aIdval, jsval* aVp)
+  GetType(JSContext* aCx, JSHandleObject aObj, JSHandleId aIdval, jsval* aVp)
   {
     nsIDOMBlob* blob = GetInstancePrivate(aCx, aObj, "type");
     if (!blob) {
@@ -157,7 +145,8 @@ private:
 
     nsString type;
     if (NS_FAILED(blob->GetType(type))) {
-      ThrowFileExceptionForCode(aCx, FILE_NOT_READABLE_ERR);
+      ThrowDOMExceptionForNSResult(aCx, NS_ERROR_DOM_FILE_NOT_READABLE_ERR);
+      return false;
     }
 
     JSString* jsType = JS_NewUCStringCopyN(aCx, type.get(), type.Length());
@@ -171,7 +160,7 @@ private:
   }
 
   static JSBool
-  Slice(JSContext* aCx, uintN aArgc, jsval* aVp)
+  Slice(JSContext* aCx, unsigned aArgc, jsval* aVp)
   {
     JSObject* obj = JS_THIS_OBJECT(aCx, aVp);
     if (!obj) {
@@ -183,7 +172,7 @@ private:
       return false;
     }
 
-    jsdouble start = 0, end = 0;
+    double start = 0, end = 0;
     JSString* jsContentType = JS_GetEmptyString(JS_GetRuntime(aCx));
     if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "/IIS", &start,
                              &end, &jsContentType)) {
@@ -201,7 +190,7 @@ private:
                               static_cast<PRUint64>(end),
                               contentType, optionalArgc,
                               getter_AddRefs(rtnBlob)))) {
-      ThrowFileExceptionForCode(aCx, FILE_NOT_READABLE_ERR);
+      ThrowDOMExceptionForNSResult(aCx, NS_ERROR_DOM_FILE_NOT_READABLE_ERR);
       return false;
     }
 
@@ -219,8 +208,7 @@ JSClass Blob::sClass = {
   "Blob",
   JSCLASS_HAS_PRIVATE,
   JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Finalize,
-  JSCLASS_NO_OPTIONAL_MEMBERS
+  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Finalize
 };
 
 JSPropertySpec Blob::sProperties[] = {
@@ -301,7 +289,7 @@ private:
   }
 
   static JSBool
-  Construct(JSContext* aCx, uintN aArgc, jsval* aVp)
+  Construct(JSContext* aCx, unsigned aArgc, jsval* aVp)
   {
     JS_ReportErrorNumber(aCx, js_GetErrorMessage, NULL, JSMSG_WRONG_CONSTRUCTOR,
                          sClass.name);
@@ -309,7 +297,7 @@ private:
   }
 
   static void
-  Finalize(JSContext* aCx, JSObject* aObj)
+  Finalize(JSFreeOp* aFop, JSObject* aObj)
   {
     JS_ASSERT(JS_GetClass(aObj) == &sClass);
 
@@ -318,7 +306,7 @@ private:
   }
 
   static JSBool
-  GetMozFullPath(JSContext* aCx, JSObject* aObj, jsid aIdval, jsval* aVp)
+  GetMozFullPath(JSContext* aCx, JSHandleObject aObj, JSHandleId aIdval, jsval* aVp)
   {
     nsIDOMFile* file = GetInstancePrivate(aCx, aObj, "mozFullPath");
     if (!file) {
@@ -329,7 +317,7 @@ private:
 
     if (GetWorkerPrivateFromContext(aCx)->UsesSystemPrincipal() &&
         NS_FAILED(file->GetMozFullPathInternal(fullPath))) {
-      ThrowFileExceptionForCode(aCx, FILE_NOT_READABLE_ERR);
+      ThrowDOMExceptionForNSResult(aCx, NS_ERROR_DOM_FILE_NOT_READABLE_ERR);
       return false;
     }
 
@@ -344,7 +332,7 @@ private:
   }
 
   static JSBool
-  GetName(JSContext* aCx, JSObject* aObj, jsid aIdval, jsval* aVp)
+  GetName(JSContext* aCx, JSHandleObject aObj, JSHandleId aIdval, jsval* aVp)
   {
     nsIDOMFile* file = GetInstancePrivate(aCx, aObj, "name");
     if (!file) {
@@ -370,8 +358,7 @@ JSClass File::sClass = {
   "File",
   JSCLASS_HAS_PRIVATE,
   JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Finalize,
-  JSCLASS_NO_OPTIONAL_MEMBERS
+  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Finalize
 };
 
 JSPropertySpec File::sProperties[] = {

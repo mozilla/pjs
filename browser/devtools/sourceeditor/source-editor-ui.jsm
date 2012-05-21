@@ -1,40 +1,7 @@
 /* vim:set ts=2 sw=2 sts=2 et tw=80:
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Source Editor component.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mihai Sucan <mihai.sucan@gmail.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK *****/
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 
@@ -50,6 +17,7 @@ var EXPORTED_SYMBOLS = ["SourceEditorUI"];
 function SourceEditorUI(aEditor)
 {
   this.editor = aEditor;
+  this._onDirtyChanged = this._onDirtyChanged.bind(this);
 }
 
 SourceEditorUI.prototype = {
@@ -72,6 +40,8 @@ SourceEditorUI.prototype = {
     if (this._ownerWindow.controllers) {
       this._controller = new SourceEditorController(this.editor);
       this._ownerWindow.controllers.insertControllerAt(0, this._controller);
+      this.editor.addEventListener(this.editor.EVENTS.DIRTY_CHANGED,
+                                   this._onDirtyChanged);
     }
   },
 
@@ -178,11 +148,39 @@ SourceEditorUI.prototype = {
   },
 
   /**
+   * This is executed after each undo/redo operation.
+   * @private
+   */
+  _onUndoRedo: function SEU__onUndoRedo()
+  {
+    if (this._ownerWindow.goUpdateCommand) {
+      this._ownerWindow.goUpdateCommand("se-cmd-undo");
+      this._ownerWindow.goUpdateCommand("se-cmd-redo");
+    }
+  },
+
+  /**
+   * The DirtyChanged event handler for the editor. This tracks the editor state
+   * changes to make sure the Source Editor overlay Undo/Redo commands are kept
+   * up to date.
+   * @private
+   */
+  _onDirtyChanged: function SEU__onDirtyChanged()
+  {
+    this._onUndoRedo();
+  },
+
+  /**
    * Destroy the SourceEditorUI instance. This is called by the
    * SourceEditor.destroy() method.
    */
   destroy: function SEU_destroy()
   {
+    if (this._ownerWindow.controllers) {
+      this.editor.removeEventListener(this.editor.EVENTS.DIRTY_CHANGED,
+                                      this._onDirtyChanged);
+    }
+
     this._ownerWindow = null;
     this.editor = null;
     this._controller = null;
@@ -220,6 +218,12 @@ SourceEditorController.prototype = {
       case "cmd_findAgain":
       case "cmd_findPrevious":
       case "cmd_gotoLine":
+      case "se-cmd-undo":
+      case "se-cmd-redo":
+      case "se-cmd-cut":
+      case "se-cmd-paste":
+      case "se-cmd-delete":
+      case "se-cmd-selectAll":
         result = true;
         break;
       default:
@@ -245,12 +249,32 @@ SourceEditorController.prototype = {
     switch (aCommand) {
       case "cmd_find":
       case "cmd_gotoLine":
+      case "se-cmd-selectAll":
         result = true;
         break;
       case "cmd_findAgain":
       case "cmd_findPrevious":
         result = this._editor.lastFind && this._editor.lastFind.lastFound != -1;
         break;
+      case "se-cmd-undo":
+        result = this._editor.canUndo();
+        break;
+      case "se-cmd-redo":
+        result = this._editor.canRedo();
+        break;
+      case "se-cmd-cut":
+      case "se-cmd-delete": {
+        let selection = this._editor.getSelection();
+        result = selection.start != selection.end && !this._editor.readOnly;
+        break;
+      }
+      case "se-cmd-paste": {
+        let window = this._editor._view._frameWindow;
+        let controller = window.controllers.getControllerForCommand("cmd_paste");
+        result = !this._editor.readOnly &&
+                 controller.isCommandEnabled("cmd_paste");
+        break;
+      }
       default:
         result = false;
         break;
@@ -281,6 +305,26 @@ SourceEditorController.prototype = {
       case "cmd_gotoLine":
         this._editor.ui.gotoLine();
         break;
+      case "se-cmd-selectAll":
+        this._editor._view.invokeAction("selectAll");
+        break;
+      case "se-cmd-undo":
+        this._editor.undo();
+        break;
+      case "se-cmd-redo":
+        this._editor.redo();
+        break;
+      case "se-cmd-cut":
+        this._editor.ui._ownerWindow.goDoCommand("cmd_cut");
+        break;
+      case "se-cmd-paste":
+        this._editor.ui._ownerWindow.goDoCommand("cmd_paste");
+        break;
+      case "se-cmd-delete": {
+        let selection = this._editor.getSelection();
+        this._editor.setText("", selection.start, selection.end);
+        break;
+      }
     }
   },
 

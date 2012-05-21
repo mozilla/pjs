@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 "use strict";
 
 const Cc = Components.classes;
@@ -25,21 +29,11 @@ XPCOMUtils.defineLazyGetter(this, "gPrefBranch", function() {
   return Services.prefs.getBranch("browser.panorama.");
 });
 
-XPCOMUtils.defineLazyGetter(this, "gPrivateBrowsing", function() {
-  return Cc["@mozilla.org/privatebrowsing;1"].
-           getService(Ci.nsIPrivateBrowsingService);
-});
+XPCOMUtils.defineLazyServiceGetter(this, "gPrivateBrowsing",
+  "@mozilla.org/privatebrowsing;1", "nsIPrivateBrowsingService");
 
-XPCOMUtils.defineLazyGetter(this, "gFavIconService", function() {
-  return Cc["@mozilla.org/browser/favicon-service;1"].
-           getService(Ci.nsIFaviconService);
-});
-
-XPCOMUtils.defineLazyGetter(this, "gNetUtil", function() {
-  var obj = {};
-  Cu.import("resource://gre/modules/NetUtil.jsm", obj);
-  return obj.NetUtil;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "gPageThumbnails",
+  "resource:///modules/PageThumbs.jsm", "PageThumbs");
 
 var gWindow = window.parent;
 var gBrowser = gWindow.gBrowser;
@@ -60,7 +54,7 @@ let AllTabs = {
   },
 
   get tabs() {
-    return Array.filter(gBrowser.tabs, function (tab) !tab.closing);
+    return Array.filter(gBrowser.tabs, function (tab) Utils.isValidXULTab(tab));
   },
 
   register: function AllTabs_register(eventName, callback) {
@@ -76,12 +70,12 @@ let AllTabs = {
 
 #include iq.js
 #include storage.js
-#include storagePolicy.js
 #include items.js
 #include groupitems.js
 #include tabitems.js
+#include favicons.js
 #include drag.js
 #include trench.js
-#include thumbnailStorage.js
 #include search.js
+#include telemetry.js
 #include ui.js

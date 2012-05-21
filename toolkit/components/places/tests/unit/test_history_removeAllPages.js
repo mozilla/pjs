@@ -1,65 +1,10 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places unit test code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Marco Bonardo <mak77@bonardo.net> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 let mDBConn = DBConn();
-
-function add_fake_livemark() {
-  let lmId = PlacesUtils.livemarks.createLivemarkFolderOnly(
-    PlacesUtils.toolbarFolderId, "Livemark",
-    uri("http://www.mozilla.org/"), uri("http://www.mozilla.org/test.xml"),
-    PlacesUtils.bookmarks.DEFAULT_INDEX
-  );
-  // Add a visited child.
-  PlacesUtils.bookmarks.insertBookmark(lmId,
-                                       uri("http://visited.livemark.com/"),
-                                       PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                       "visited");
-  PlacesUtils.history.addVisit(uri("http://visited.livemark.com/"),
-                               Date.now(), null,
-                               Ci.nsINavHistoryService.TRANSITION_BOOKMARK,
-                               false, 0);
-  // Add an unvisited child.
-  PlacesUtils.bookmarks.insertBookmark(lmId,
-                                       uri("http://unvisited.livemark.com/"),
-                                       PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                       "unvisited");
-}
 
 let historyObserver = {
   onBeginUpdateBatch: function() {},
@@ -75,7 +20,7 @@ let historyObserver = {
     PlacesUtils.history.removeObserver(this, false);
 
     // check browserHistory returns no entries
-    do_check_eq(0, PlacesUtils.bhistory.count);
+    do_check_eq(0, PlacesUtils.history.hasHistoryEntries);
 
     Services.obs.addObserver(function observeExpiration(aSubject, aTopic, aData)
     {
@@ -143,17 +88,6 @@ let historyObserver = {
         do_check_false(stmt.executeStep());
         stmt.finalize();
 
-        // Check that livemarks children don't have frecency <> 0
-        stmt = mDBConn.createStatement(
-          "SELECT h.id FROM moz_places h " +
-          "JOIN moz_bookmarks b ON h.id = b.fk " +
-          "JOIN moz_bookmarks bp ON bp.id = b.parent " +
-          "JOIN moz_items_annos t ON t.item_id = bp.id " +
-          "JOIN moz_anno_attributes n ON t.anno_attribute_id = n.id " +
-          "WHERE n.name = 'livemark/feedURI' AND h.frecency <> 0 LIMIT 1");
-        do_check_false(stmt.executeStep());
-        stmt.finalize();
-
         do_test_finished();
       });
     }, PlacesUtils.TOPIC_EXPIRATION_FINISHED, false);
@@ -178,8 +112,6 @@ function run_test() {
 }
 
 function continue_test() {
-  // Add a livemark with a visited and an unvisited child
-  add_fake_livemark();
   PlacesUtils.history.addVisit(uri("http://typed.mozilla.org/"), Date.now(),
                                null, Ci.nsINavHistoryService.TRANSITION_TYPED,
                                false, 0);

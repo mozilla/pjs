@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: set ts=2 sw=2 et tw=78:
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Novell code.
- *
- * The Initial Developer of the Original Code is Novell Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *     robert@ocallahan.org
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK *****
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 /*
@@ -66,6 +34,9 @@
 #include "nsViewportFrame.h"
 #include "nsSVGEffects.h"
 #include "nsSVGClipPathFrame.h"
+#include "sampler.h"
+
+#include "mozilla/StandardInteger.h"
 
 using namespace mozilla;
 using namespace mozilla::layers;
@@ -77,6 +48,9 @@ nsDisplayListBuilder::nsDisplayListBuilder(nsIFrame* aReferenceFrame,
       mIgnoreScrollFrame(nsnull),
       mCurrentTableItem(nsnull),
       mFinalTransparentRegion(nsnull),
+      mCachedOffsetFrame(aReferenceFrame),
+      mCachedOffset(0, 0),
+      mGlassDisplayItem(nsnull),
       mMode(aMode),
       mBuildCaret(aBuildCaret),
       mIgnoreSuppression(false),
@@ -88,7 +62,6 @@ nsDisplayListBuilder::nsDisplayListBuilder(nsIFrame* aReferenceFrame,
       mInTransform(false),
       mSyncDecodeImages(false),
       mIsPaintingToWindow(false),
-      mSnappingEnabled(mMode != EVENT_DELIVERY),
       mHasDisplayPort(false),
       mHasFixedItems(false)
 {
@@ -230,6 +203,8 @@ static void RecordFrameMetrics(nsIFrame* aForFrame,
     nsSize contentSize =
       scrollableFrame->GetScrollRange().Size() +
       scrollableFrame->GetScrollPortRect().Size();
+    metrics.mCSSContentSize = gfx::Size(nsPresContext::AppUnitsToFloatCSSPixels(contentSize.width),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentSize.height));
     metrics.mContentSize = contentSize.ScaleToNearestPixels(
       aContainerParameters.mXScale, aContainerParameters.mYScale, auPerDevPixel);
     metrics.mViewportScrollOffset = scrollableFrame->GetScrollPosition().ScaleToNearestPixels(
@@ -237,11 +212,17 @@ static void RecordFrameMetrics(nsIFrame* aForFrame,
   }
   else {
     nsSize contentSize = aForFrame->GetSize();
+    metrics.mCSSContentSize = gfx::Size(nsPresContext::AppUnitsToFloatCSSPixels(contentSize.width),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentSize.height));
     metrics.mContentSize = contentSize.ScaleToNearestPixels(
       aContainerParameters.mXScale, aContainerParameters.mYScale, auPerDevPixel);
   }
 
   metrics.mScrollId = aScrollId;
+
+  nsIPresShell* presShell = presContext->GetPresShell();
+  metrics.mResolution = gfxSize(presShell->GetXResolution(), presShell->GetYResolution());
+
   aRoot->SetFrameMetrics(metrics);
 }
 
@@ -381,6 +362,29 @@ nsDisplayListBuilder::MarkFramesForDisplayList(nsIFrame* aDirtyFrame,
   }
 }
 
+void
+nsDisplayListBuilder::MarkPreserve3DFramesForDisplayList(nsIFrame* aDirtyFrame, const nsRect& aDirtyRect) 
+{
+  nsAutoTArray<nsIFrame::ChildList,4> childListArray;
+  aDirtyFrame->GetChildLists(&childListArray);
+  nsIFrame::ChildListArrayIterator lists(childListArray);
+  for (; !lists.IsDone(); lists.Next()) {
+    nsFrameList::Enumerator childFrames(lists.CurrentList());
+    for (; !childFrames.AtEnd(); childFrames.Next()) {
+      nsIFrame *child = childFrames.get();
+      if (child->Preserves3D()) {
+        mFramesMarkedForDisplay.AppendElement(child);
+        nsRect dirty = aDirtyRect - child->GetOffsetTo(aDirtyFrame);
+
+        child->Properties().Set(nsDisplayListBuilder::Preserve3DDirtyRectProperty(),
+                           new nsRect(dirty));
+
+        MarkFrameForDisplay(child, aDirtyFrame);
+      }
+    }
+  }
+}
+
 void*
 nsDisplayListBuilder::Allocate(size_t aSize) {
   void *tmp;
@@ -415,7 +419,8 @@ nsRect
 nsDisplayList::GetBounds(nsDisplayListBuilder* aBuilder) const {
   nsRect bounds;
   for (nsDisplayItem* i = GetBottom(); i != nsnull; i = i->GetAbove()) {
-    bounds.UnionRect(bounds, i->GetBounds(aBuilder));
+    bool snap;
+    bounds.UnionRect(bounds, i->GetBounds(aBuilder, &snap));
   }
   return bounds;
 }
@@ -423,16 +428,17 @@ nsDisplayList::GetBounds(nsDisplayListBuilder* aBuilder) const {
 bool
 nsDisplayList::ComputeVisibilityForRoot(nsDisplayListBuilder* aBuilder,
                                         nsRegion* aVisibleRegion) {
+  SAMPLE_LABEL("nsDisplayList", "ComputeVisibilityForRoot");
   nsRegion r;
   r.And(*aVisibleRegion, GetBounds(aBuilder));
   return ComputeVisibilityForSublist(aBuilder, aVisibleRegion, r.GetBounds(), r.GetBounds());
 }
 
 static nsRegion
-TreatAsOpaque(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder,
-              bool* aTransparentBackground)
+TreatAsOpaque(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder)
 {
-  nsRegion opaque = aItem->GetOpaqueRegion(aBuilder, aTransparentBackground);
+  bool snap;
+  nsRegion opaque = aItem->GetOpaqueRegion(aBuilder, &snap);
   if (aBuilder->IsForPluginGeometry()) {
     // Treat all chrome items as opaque, unless their frames are opacity:0.
     // Since opacity:0 frames generate an nsDisplayOpacity, that item will
@@ -440,7 +446,7 @@ TreatAsOpaque(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder,
     // effectively ignored, as it should be.
     nsIFrame* f = aItem->GetUnderlyingFrame();
     if (f && f->PresContext()->IsChrome() && f->GetStyleDisplay()->mOpacity != 0.0) {
-      opaque = aItem->GetBounds(aBuilder);
+      opaque = aItem->GetBounds(aBuilder, &snap);
     }
   }
   return opaque;
@@ -473,6 +479,7 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
                                            nsRegion* aVisibleRegion,
                                            const nsRect& aListVisibleBounds,
                                            const nsRect& aAllowVisibleRegionExpansion) {
+  bool snap;
 #ifdef DEBUG
   nsRegion r;
   r.And(*aVisibleRegion, GetBounds(aBuilder));
@@ -507,7 +514,7 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
       continue;
     }
 
-    nsRect bounds = item->GetBounds(aBuilder);
+    nsRect bounds = item->GetBounds(aBuilder, &snap);
 
     nsRegion itemVisible;
     if (ForceVisiblityForFixedItem(aBuilder, item)) {
@@ -519,11 +526,13 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
 
     if (item->ComputeVisibility(aBuilder, aVisibleRegion, aAllowVisibleRegionExpansion)) {
       anyVisible = true;
-      bool transparentBackground = false;
-      nsRegion opaque = TreatAsOpaque(item, aBuilder, &transparentBackground);
+      nsRegion opaque = TreatAsOpaque(item, aBuilder);
       // Subtract opaque item from the visible region
       aBuilder->SubtractFromVisibleRegion(aVisibleRegion, opaque);
-      forceTransparentSurface = forceTransparentSurface || transparentBackground;
+      if (aBuilder->NeedToForceTransparentSurfaceForItem(item) ||
+          (list && list->NeedsTransparentSurface())) {
+        forceTransparentSurface = true;
+      }
     }
     AppendToBottom(item);
   }
@@ -539,6 +548,7 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
 void nsDisplayList::PaintRoot(nsDisplayListBuilder* aBuilder,
                               nsRenderingContext* aCtx,
                               PRUint32 aFlags) const {
+  SAMPLE_LABEL("nsDisplayList", "PaintRoot");
   PaintForFrame(aBuilder, aCtx, aBuilder->ReferenceFrame(), aFlags);
 }
 
@@ -742,7 +752,8 @@ void nsDisplayList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
     item = aState->mItemBuffer[i];
     aState->mItemBuffer.SetLength(i);
 
-    if (aRect.Intersects(item->GetBounds(aBuilder))) {
+    bool snap;
+    if (aRect.Intersects(item->GetBounds(aBuilder, &snap))) {
       nsAutoTArray<nsIFrame*, 16> outFrames;
       item->HitTest(aBuilder, aRect, aState, &outFrames);
       
@@ -895,7 +906,8 @@ void nsDisplayList::Sort(nsDisplayListBuilder* aBuilder,
 
 bool nsDisplayItem::RecomputeVisibility(nsDisplayListBuilder* aBuilder,
                                           nsRegion* aVisibleRegion) {
-  nsRect bounds = GetBounds(aBuilder);
+  bool snap;
+  nsRect bounds = GetBounds(aBuilder, &snap);
 
   nsRegion itemVisible;
   if (ForceVisiblityForFixedItem(aBuilder, this)) {
@@ -911,32 +923,16 @@ bool nsDisplayItem::RecomputeVisibility(nsDisplayListBuilder* aBuilder,
   if (!ComputeVisibility(aBuilder, aVisibleRegion, nsRect()))
     return false;
 
-  bool forceTransparentBackground;
-  nsRegion opaque = TreatAsOpaque(this, aBuilder, &forceTransparentBackground);
+  nsRegion opaque = TreatAsOpaque(this, aBuilder);
   aBuilder->SubtractFromVisibleRegion(aVisibleRegion, opaque);
   return true;
 }
 
-// Note that even if the rectangle we draw and snap is smaller than aRect,
-// it's OK to call this to get a bounding rect for what we'll draw, because
-// snapping a rectangle which is contained in R always gives you a
-// rectangle which is contained in the snapped R.
-static nsRect
-SnapBounds(bool aSnappingEnabled, nsPresContext* aPresContext,
-           const nsRect& aRect) {
-  nsRect r = aRect;
-  if (aSnappingEnabled) {
-    nscoord appUnitsPerDevPixel = aPresContext->AppUnitsPerDevPixel();
-    r = r.ToNearestPixels(appUnitsPerDevPixel).ToAppUnits(appUnitsPerDevPixel);
-  }
-  return r;
-}
-
 nsRect
-nsDisplaySolidColor::GetBounds(nsDisplayListBuilder* aBuilder)
+nsDisplaySolidColor::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
-  nsPresContext* presContext = mFrame->PresContext();
-  return SnapBounds(mSnappingEnabled, presContext, mBounds);
+  *aSnap = true;
+  return mBounds;
 }
 
 void
@@ -968,8 +964,7 @@ RegisterThemeGeometry(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
 
 nsDisplayBackground::nsDisplayBackground(nsDisplayListBuilder* aBuilder,
                                          nsIFrame* aFrame)
-  : nsDisplayItem(aBuilder, aFrame),
-    mSnappingEnabled(aBuilder->IsSnappingEnabled() && !aBuilder->IsInTransform())
+  : nsDisplayItem(aBuilder, aFrame)
 {
   MOZ_COUNT_CTOR(nsDisplayBackground);
   const nsStyleDisplay* disp = mFrame->GetStyleDisplay();
@@ -980,6 +975,9 @@ nsDisplayBackground::nsDisplayBackground(nsDisplayListBuilder* aBuilder,
     if (disp->mAppearance == NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR ||
         disp->mAppearance == NS_THEME_TOOLBAR) {
       RegisterThemeGeometry(aBuilder, aFrame);
+    } else if (disp->mAppearance == NS_THEME_WIN_BORDERLESS_GLASS ||
+               disp->mAppearance == NS_THEME_WIN_GLASS) {
+      aBuilder->SetGlassDisplayItem(this);
     }
   } else {
     // Set HasFixedItems if we construct a background-attachment:fixed item
@@ -1086,6 +1084,136 @@ static bool RoundedRectContainsRect(const nsRect& aRoundedRect,
   return rgn.Contains(aContainedRect);
 }
 
+bool
+nsDisplayBackground::TryOptimizeToImageLayer(nsDisplayListBuilder* aBuilder)
+{
+  if (mIsThemed)
+    return false;
+
+  nsPresContext* presContext = mFrame->PresContext();
+  nsStyleContext* bgSC;
+  if (!nsCSSRendering::FindBackground(presContext, mFrame, &bgSC))
+    return false;
+
+  bool drawBackgroundImage;
+  bool drawBackgroundColor;
+  nsCSSRendering::DetermineBackgroundColor(presContext,
+                                           bgSC,
+                                           mFrame,
+                                           drawBackgroundImage,
+                                           drawBackgroundColor);
+
+  // For now we don't know how to draw image layers with a background color.
+  if (!drawBackgroundImage || drawBackgroundColor)
+    return false;
+
+  const nsStyleBackground *bg = bgSC->GetStyleBackground();
+
+  // We could pretty easily support multiple image layers, but for now we
+  // just punt here.
+  if (bg->mLayers.Length() != 1)
+    return false;
+
+  PRUint32 flags = aBuilder->GetBackgroundPaintFlags();
+  nsPoint offset = ToReferenceFrame();
+  nsRect borderArea = nsRect(offset, mFrame->GetSize());
+
+  const nsStyleBackground::Layer &layer = bg->mLayers[0];
+
+  nsBackgroundLayerState state =
+    nsCSSRendering::PrepareBackgroundLayer(presContext,
+                                           mFrame,
+                                           flags,
+                                           borderArea,
+                                           borderArea,
+                                           *bg,
+                                           layer);
+
+  // We only care about images here, not gradients.
+  if (!state.mImageRenderer.IsRasterImage())
+    return false;
+
+  // We currently can't handle tiled or partial backgrounds.
+  if (!state.mDestArea.IsEqualEdges(state.mFillArea)) {
+    return false;
+  }
+
+  // Sub-pixel alignment is hard, lets punt on that.
+  if (state.mAnchor != nsPoint(0.0f, 0.0f)) {
+    return false;
+  }
+
+  PRInt32 appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
+  mDestRect = nsLayoutUtils::RectToGfxRect(state.mDestArea, appUnitsPerDevPixel);
+  mImageContainer = state.mImageRenderer.GetContainer();
+
+  // Ok, we can turn this into a layer if needed.
+  return true;
+}
+
+LayerState
+nsDisplayBackground::GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const FrameLayerBuilder::ContainerParameters& aParameters)
+{
+  if (!aManager->IsCompositingCheap() ||
+      !nsLayoutUtils::GPUImageScalingEnabled() ||
+      !TryOptimizeToImageLayer(aBuilder)) {
+    return LAYER_NONE;
+  }
+
+  gfxSize imageSize = mImageContainer->GetCurrentSize();
+  NS_ASSERTION(imageSize.width != 0 && imageSize.height != 0, "Invalid image size!");
+
+  gfxRect destRect = mDestRect;
+
+  destRect.width *= aParameters.mXScale;
+  destRect.height *= aParameters.mYScale;
+
+  // Calculate the scaling factor for the frame.
+  gfxSize scale = gfxSize(destRect.width / imageSize.width, destRect.height / imageSize.height);
+
+  // If we are not scaling at all, no point in separating this into a layer.
+  if (scale.width == 1.0f && scale.height == 1.0f) {
+    return LAYER_INACTIVE;
+  }
+
+  // If the target size is pretty small, no point in using a layer.
+  if (destRect.width * destRect.height < 64 * 64) {
+    return LAYER_INACTIVE;
+  }
+
+  return LAYER_ACTIVE;
+}
+
+already_AddRefed<Layer>
+nsDisplayBackground::BuildLayer(nsDisplayListBuilder* aBuilder,
+                                LayerManager* aManager,
+                                const ContainerParameters& aParameters)
+{
+  nsRefPtr<ImageLayer> layer = aManager->CreateImageLayer();
+  layer->SetContainer(mImageContainer);
+  ConfigureLayer(layer);
+  return layer.forget();
+}
+
+void
+nsDisplayBackground::ConfigureLayer(ImageLayer* aLayer)
+{
+  aLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(mFrame));
+
+  gfxIntSize imageSize = mImageContainer->GetCurrentSize();
+  NS_ASSERTION(imageSize.width != 0 && imageSize.height != 0, "Invalid image size!");
+
+  gfxMatrix transform;
+  transform.Translate(mDestRect.TopLeft());
+  transform.Scale(mDestRect.width/imageSize.width,
+                  mDestRect.height/imageSize.height);
+  aLayer->SetTransform(gfx3DMatrix::From2D(transform));
+
+  aLayer->SetVisibleRegion(nsIntRect(0, 0, imageSize.width, imageSize.height));
+}
+
 void
 nsDisplayBackground::HitTest(nsDisplayListBuilder* aBuilder,
                              const nsRect& aRect,
@@ -1126,7 +1254,8 @@ nsDisplayBackground::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 
 nsRegion
 nsDisplayBackground::GetInsideClipRegion(nsPresContext* aPresContext,
-                                         PRUint8 aClip, const nsRect& aRect)
+                                         PRUint8 aClip, const nsRect& aRect,
+                                         bool* aSnap)
 {
   nsRegion result;
   if (aRect.IsEmpty())
@@ -1153,50 +1282,41 @@ nsDisplayBackground::GetInsideClipRegion(nsPresContext* aPresContext,
     return result;
   }
 
-  nsRect inputRect = SnapBounds(mSnappingEnabled, aPresContext, aRect);
-  clipRect = SnapBounds(mSnappingEnabled, aPresContext, clipRect);
-
   if (haveRadii) {
-    result = nsLayoutUtils::RoundedRectIntersectRect(clipRect, radii, inputRect);
+    *aSnap = false;
+    result = nsLayoutUtils::RoundedRectIntersectRect(clipRect, radii, aRect);
   } else {
-    nsRect r;
-    r.IntersectRect(clipRect, inputRect);
-    result = r;
+    result = clipRect.Intersect(aRect);
   }
   return result;
 }
 
 nsRegion
 nsDisplayBackground::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                     bool* aForceTransparentSurface) {
+                                     bool* aSnap) {
   nsRegion result;
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+  *aSnap = false;
   // theme background overrides any other background
   if (mIsThemed) {
-    if (aForceTransparentSurface) {
-      const nsStyleDisplay* disp = mFrame->GetStyleDisplay();
-      *aForceTransparentSurface = disp->mAppearance == NS_THEME_WIN_BORDERLESS_GLASS ||
-                                  disp->mAppearance == NS_THEME_WIN_GLASS;
-    }
     if (mThemeTransparency == nsITheme::eOpaque) {
-      result = GetBounds(aBuilder);
+      result = GetBounds(aBuilder, aSnap);
     }
     return result;
   }
 
   nsStyleContext* bgSC;
   nsPresContext* presContext = mFrame->PresContext();
-  if (!nsCSSRendering::FindBackground(mFrame->PresContext(), mFrame, &bgSC))
+  if (!nsCSSRendering::FindBackground(presContext, mFrame, &bgSC))
     return result;
   const nsStyleBackground* bg = bgSC->GetStyleBackground();
   const nsStyleBackground::Layer& bottomLayer = bg->BottomLayer();
 
+  *aSnap = true;
+
   nsRect borderBox = nsRect(ToReferenceFrame(), mFrame->GetSize());
   if (NS_GET_A(bg->mBackgroundColor) == 255 &&
       !nsCSSRendering::IsCanvasFrame(mFrame)) {
-    result = GetInsideClipRegion(presContext, bottomLayer.mClip, borderBox);
+    result = GetInsideClipRegion(presContext, bottomLayer.mClip, borderBox, aSnap);
   }
 
   // For policies other than EACH_BOX, don't try to optimize here, since
@@ -1211,7 +1331,7 @@ nsDisplayBackground::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
       if (layer.mImage.IsOpaque()) {
         nsRect r = nsCSSRendering::GetBackgroundLayerRect(presContext, mFrame,
             borderBox, *bg, layer);
-        result.Or(result, GetInsideClipRegion(presContext, layer.mClip, r));
+        result.Or(result, GetInsideClipRegion(presContext, layer.mClip, r, aSnap));
       }
     }
   }
@@ -1310,7 +1430,8 @@ nsDisplayBackground::ShouldFixToViewport(nsDisplayListBuilder* aBuilder)
   if (nsLayoutUtils::HasNonZeroCorner(mFrame->GetStyleBorder()->mBorderRadius))
     return false;
 
-  nsRect bounds = GetBounds(aBuilder);
+  bool snap;
+  nsRect bounds = GetBounds(aBuilder, &snap);
   nsIFrame* rootScrollFrame = presContext->PresShell()->GetRootScrollFrame();
   if (!rootScrollFrame)
     return false;
@@ -1337,7 +1458,7 @@ nsDisplayBackground::Paint(nsDisplayListBuilder* aBuilder,
 }
 
 nsRect
-nsDisplayBackground::GetBounds(nsDisplayListBuilder* aBuilder) {
+nsDisplayBackground::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
   nsRect r(nsPoint(0,0), mFrame->GetSize());
   nsPresContext* presContext = mFrame->PresContext();
 
@@ -1347,11 +1468,13 @@ nsDisplayBackground::GetBounds(nsDisplayListBuilder* aBuilder) {
                           mFrame->GetStyleDisplay()->mAppearance, &r);
   }
 
-  return SnapBounds(mSnappingEnabled, presContext, r + ToReferenceFrame());
+  *aSnap = true;
+  return r + ToReferenceFrame();
 }
 
 nsRect
-nsDisplayOutline::GetBounds(nsDisplayListBuilder* aBuilder) {
+nsDisplayOutline::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  *aSnap = false;
   return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
@@ -1450,11 +1573,12 @@ nsDisplayBorder::Paint(nsDisplayListBuilder* aBuilder,
 }
 
 nsRect
-nsDisplayBorder::GetBounds(nsDisplayListBuilder* aBuilder)
+nsDisplayBorder::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
   nsRect borderBounds(ToReferenceFrame(), mFrame->GetSize());
   borderBounds.Inflate(mFrame->GetStyleBorder()->GetImageOutset());
-  return SnapBounds(mSnappingEnabled, mFrame->PresContext(), borderBounds);
+  *aSnap = true;
+  return borderBounds;
 }
 
 // Given a region, compute a conservative approximation to it as a list
@@ -1497,6 +1621,7 @@ nsDisplayBoxShadowOuter::Paint(nsDisplayListBuilder* aBuilder,
   nsAutoTArray<nsRect,10> rects;
   ComputeDisjointRectangles(mVisibleRegion, &rects);
 
+  SAMPLE_LABEL("nsDisplayBoxShadowOuter", "Paint");
   for (PRUint32 i = 0; i < rects.Length(); ++i) {
     aCtx->PushState();
     aCtx->IntersectClip(rects[i]);
@@ -1507,7 +1632,8 @@ nsDisplayBoxShadowOuter::Paint(nsDisplayListBuilder* aBuilder,
 }
 
 nsRect
-nsDisplayBoxShadowOuter::GetBounds(nsDisplayListBuilder* aBuilder) {
+nsDisplayBoxShadowOuter::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  *aSnap = false;
   return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
@@ -1548,6 +1674,7 @@ nsDisplayBoxShadowInner::Paint(nsDisplayListBuilder* aBuilder,
   nsAutoTArray<nsRect,10> rects;
   ComputeDisjointRectangles(mVisibleRegion, &rects);
 
+  SAMPLE_LABEL("nsDisplayBoxShadowInner", "Paint");
   for (PRUint32 i = 0; i < rects.Length(); ++i) {
     aCtx->PushState();
     aCtx->IntersectClip(rects[i]);
@@ -1575,17 +1702,22 @@ nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame, nsDisplayList* aList)
   : nsDisplayItem(aBuilder, aFrame) {
   mList.AppendToTop(aList);
+  UpdateBounds(aBuilder);
 }
 
 nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame, nsDisplayItem* aItem)
   : nsDisplayItem(aBuilder, aFrame) {
   mList.AppendToTop(aItem);
+  UpdateBounds(aBuilder);
 }
 
 nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
-                                     nsIFrame* aFrame)
-  : nsDisplayItem(aBuilder, aFrame) {
+                                     nsIFrame* aFrame, nsDisplayItem* aItem,
+                                     const nsPoint& aToReferenceFrame)
+  : nsDisplayItem(aBuilder, aFrame, aToReferenceFrame) {
+  mList.AppendToTop(aItem);
+  mBounds = mList.GetBounds(aBuilder);
 }
 
 nsDisplayWrapList::~nsDisplayWrapList() {
@@ -1599,8 +1731,9 @@ nsDisplayWrapList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
 }
 
 nsRect
-nsDisplayWrapList::GetBounds(nsDisplayListBuilder* aBuilder) {
-  return mList.GetBounds(aBuilder);
+nsDisplayWrapList::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  *aSnap = false;
+  return mBounds;
 }
 
 bool
@@ -1614,13 +1747,12 @@ nsDisplayWrapList::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 
 nsRegion
 nsDisplayWrapList::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                   bool* aForceTransparentSurface) {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+                                   bool* aSnap) {
+  *aSnap = false;
   nsRegion result;
   if (mList.IsOpaque()) {
-    result = GetBounds(aBuilder);
+    // Everything within GetBounds that's visible is opaque.
+    result = GetBounds(aBuilder, aSnap);
   }
   return result;
 }
@@ -1643,9 +1775,10 @@ void nsDisplayWrapList::Paint(nsDisplayListBuilder* aBuilder,
 }
 
 bool nsDisplayWrapList::ChildrenCanBeInactive(nsDisplayListBuilder* aBuilder,
-                                                LayerManager* aManager,
-                                                const nsDisplayList& aList,
-                                                nsIFrame* aActiveScrolledRoot) {
+                                              LayerManager* aManager,
+                                              const ContainerParameters& aParameters,
+                                              const nsDisplayList& aList,
+                                              nsIFrame* aActiveScrolledRoot) {
   for (nsDisplayItem* i = aList.GetBottom(); i; i = i->GetAbove()) {
     nsIFrame* f = i->GetUnderlyingFrame();
     if (f) {
@@ -1655,12 +1788,12 @@ bool nsDisplayWrapList::ChildrenCanBeInactive(nsDisplayListBuilder* aBuilder,
         return false;
     }
 
-    LayerState state = i->GetLayerState(aBuilder, aManager);
+    LayerState state = i->GetLayerState(aBuilder, aManager, aParameters);
     if (state == LAYER_ACTIVE)
       return false;
     if (state == LAYER_NONE) {
       nsDisplayList* list = i->GetList();
-      if (list && !ChildrenCanBeInactive(aBuilder, aManager, *list, aActiveScrolledRoot))
+      if (list && !ChildrenCanBeInactive(aBuilder, aManager, aParameters, *list, aActiveScrolledRoot))
         return false;
     }
   }
@@ -1760,10 +1893,8 @@ nsDisplayOpacity::~nsDisplayOpacity() {
 #endif
 
 nsRegion nsDisplayOpacity::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                           bool* aForceTransparentSurface) {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+                                           bool* aSnap) {
+  *aSnap = false;
   // We are never opaque, if our opacity was < 1 then we wouldn't have
   // been created.
   return nsRegion();
@@ -1801,13 +1932,14 @@ IsItemTooSmallForActiveLayer(nsDisplayItem* aItem)
 
 nsDisplayItem::LayerState
 nsDisplayOpacity::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                LayerManager* aManager) {
+                                LayerManager* aManager,
+                                const ContainerParameters& aParameters) {
   if (mFrame->AreLayersMarkedActive(nsChangeHint_UpdateOpacityLayer) &&
       !IsItemTooSmallForActiveLayer(this))
     return LAYER_ACTIVE;
   nsIFrame* activeScrolledRoot =
     nsLayoutUtils::GetActiveScrolledRootFor(mFrame, nsnull);
-  return !ChildrenCanBeInactive(aBuilder, aManager, mList, activeScrolledRoot)
+  return !ChildrenCanBeInactive(aBuilder, aManager, aParameters, mList, activeScrolledRoot)
       ? LAYER_ACTIVE : LAYER_INACTIVE;
 }
 
@@ -1820,11 +1952,11 @@ nsDisplayOpacity::ComputeVisibility(nsDisplayListBuilder* aBuilder,
   // our children in the temporary compositing buffer, because if our children
   // paint our entire bounds opaquely then we don't need an alpha channel in
   // the temporary compositing buffer.
-  nsRect bounds = GetBounds(aBuilder);
+  bool snap;
+  nsRect bounds = GetBounds(aBuilder, &snap);
   nsRegion visibleUnderChildren;
   visibleUnderChildren.And(*aVisibleRegion, bounds);
-  nsRect allowExpansion;
-  allowExpansion.IntersectRect(bounds, aAllowVisibleRegionExpansion);
+  nsRect allowExpansion = bounds.Intersect(aAllowVisibleRegionExpansion);
   return
     nsDisplayWrapList::ComputeVisibility(aBuilder, &visibleUnderChildren,
                                          allowExpansion);
@@ -1838,7 +1970,7 @@ bool nsDisplayOpacity::TryMerge(nsDisplayListBuilder* aBuilder, nsDisplayItem* a
   // aItem->GetUnderlyingFrame() returns non-null because it's nsDisplayOpacity
   if (aItem->GetUnderlyingFrame()->GetContent() != mFrame->GetContent())
     return false;
-  mList.AppendToBottom(&static_cast<nsDisplayOpacity*>(aItem)->mList);
+  MergeFromTrackingMergedFrames(static_cast<nsDisplayOpacity*>(aItem));
   return true;
 }
 
@@ -1964,10 +2096,9 @@ nsDisplayScrollLayer::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 
     nsRegion childVisibleRegion = displayport + aBuilder->ToReferenceFrame(mScrollFrame);
 
-    nsRect boundedRect;
-    boundedRect.IntersectRect(childVisibleRegion.GetBounds(), mList.GetBounds(aBuilder));
-    nsRect allowExpansion;
-    allowExpansion.IntersectRect(allowExpansion, boundedRect);
+    nsRect boundedRect =
+      childVisibleRegion.GetBounds().Intersect(mList.GetBounds(aBuilder));
+    nsRect allowExpansion = boundedRect.Intersect(aAllowVisibleRegionExpansion);
     bool visible = mList.ComputeVisibilityForSublist(
       aBuilder, &childVisibleRegion, boundedRect, allowExpansion);
     mVisibleRect = boundedRect;
@@ -1982,7 +2113,8 @@ nsDisplayScrollLayer::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 
 LayerState
 nsDisplayScrollLayer::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                    LayerManager* aManager)
+                                    LayerManager* aManager,
+                                    const ContainerParameters& aParameters)
 {
   // Force this as a layer so we can scroll asynchronously.
   // This causes incorrect rendering for rounded clips!
@@ -2006,7 +2138,15 @@ nsDisplayScrollLayer::TryMerge(nsDisplayListBuilder* aBuilder,
   props.Set(nsIFrame::ScrollLayerCount(),
     reinterpret_cast<void*>(GetScrollLayerCount() - 1));
 
-  mList.AppendToBottom(&other->mList);
+  // Swap frames with the other item before doing MergeFrom.
+  // XXX - This ensures that the frame associated with a scroll layer after
+  // merging is the first, rather than the last. This tends to change less,
+  // ensuring we're more likely to retain the associated gfx layer.
+  // See Bug 729534 and Bug 731641.
+  nsIFrame* tmp = mFrame;
+  mFrame = other->mFrame;
+  other->mFrame = tmp;
+  MergeFromTrackingMergedFrames(other);
   return true;
 }
 
@@ -2016,13 +2156,13 @@ nsDisplayScrollLayer::ShouldFlattenAway(nsDisplayListBuilder* aBuilder)
   return GetScrollLayerCount() > 1;
 }
 
-PRWord
+intptr_t
 nsDisplayScrollLayer::GetScrollLayerCount()
 {
   FrameProperties props = mScrolledFrame->Properties();
 #ifdef DEBUG
   bool hasCount = false;
-  PRWord result = reinterpret_cast<PRWord>(
+  intptr_t result = reinterpret_cast<intptr_t>(
     props.Get(nsIFrame::ScrollLayerCount(), &hasCount));
   // If this aborts, then the property was either not added before scroll
   // layers were created or the property was deleted to early. If the latter,
@@ -2031,14 +2171,14 @@ nsDisplayScrollLayer::GetScrollLayerCount()
   NS_ABORT_IF_FALSE(hasCount, "nsDisplayScrollLayer should always be defined");
   return result;
 #else
-  return reinterpret_cast<PRWord>(props.Get(nsIFrame::ScrollLayerCount()));
+  return reinterpret_cast<intptr_t>(props.Get(nsIFrame::ScrollLayerCount()));
 #endif
 }
 
-PRWord
+intptr_t
 nsDisplayScrollLayer::RemoveScrollLayerCount()
 {
-  PRWord result = GetScrollLayerCount();
+  intptr_t result = GetScrollLayerCount();
   FrameProperties props = mScrolledFrame->Properties();
   props.Remove(nsIFrame::ScrollLayerCount());
   return result;
@@ -2065,7 +2205,8 @@ nsDisplayScrollInfoLayer::~nsDisplayScrollInfoLayer()
 
 LayerState
 nsDisplayScrollInfoLayer::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                        LayerManager* aManager)
+                                        LayerManager* aManager,
+                                        const ContainerParameters& aParameters)
 {
   return LAYER_ACTIVE_EMPTY;
 }
@@ -2090,25 +2231,23 @@ nsDisplayScrollInfoLayer::ShouldFlattenAway(nsDisplayListBuilder* aBuilder)
 nsDisplayClip::nsDisplayClip(nsDisplayListBuilder* aBuilder,
                              nsIFrame* aFrame, nsDisplayItem* aItem,
                              const nsRect& aRect)
-   : nsDisplayWrapList(aBuilder, aFrame, aItem) {
+   : nsDisplayWrapList(aBuilder, aFrame, aItem,
+       aFrame == aItem->GetUnderlyingFrame() ? aItem->ToReferenceFrame() : aBuilder->ToReferenceFrame(aFrame)),
+     mClip(aRect) {
   MOZ_COUNT_CTOR(nsDisplayClip);
-  mClip = SnapBounds(aBuilder->IsSnappingEnabled() && !aBuilder->IsInTransform(),
-                     aBuilder->CurrentPresContext(), aRect);
 }
 
 nsDisplayClip::nsDisplayClip(nsDisplayListBuilder* aBuilder,
                              nsIFrame* aFrame, nsDisplayList* aList,
                              const nsRect& aRect)
-   : nsDisplayWrapList(aBuilder, aFrame, aList) {
+   : nsDisplayWrapList(aBuilder, aFrame, aList), mClip(aRect) {
   MOZ_COUNT_CTOR(nsDisplayClip);
-  mClip = SnapBounds(aBuilder->IsSnappingEnabled() && !aBuilder->IsInTransform(),
-                     aBuilder->CurrentPresContext(), aRect);
 }
 
-nsRect nsDisplayClip::GetBounds(nsDisplayListBuilder* aBuilder) {
-  nsRect r = nsDisplayWrapList::GetBounds(aBuilder);
-  r.IntersectRect(mClip, r);
-  return r;
+nsRect nsDisplayClip::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  nsRect r = nsDisplayWrapList::GetBounds(aBuilder, aSnap);
+  *aSnap = false;
+  return mClip.Intersect(r);
 }
 
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -2129,8 +2268,7 @@ bool nsDisplayClip::ComputeVisibility(nsDisplayListBuilder* aBuilder,
   clipped.And(*aVisibleRegion, mClip);
 
   nsRegion finalClipped(clipped);
-  nsRect allowExpansion;
-  allowExpansion.IntersectRect(mClip, aAllowVisibleRegionExpansion);
+  nsRect allowExpansion = mClip.Intersect(aAllowVisibleRegionExpansion);
   bool anyVisible =
     nsDisplayWrapList::ComputeVisibility(aBuilder, &finalClipped,
                                          allowExpansion);
@@ -2143,13 +2281,14 @@ bool nsDisplayClip::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 }
 
 bool nsDisplayClip::TryMerge(nsDisplayListBuilder* aBuilder,
-                               nsDisplayItem* aItem) {
+                             nsDisplayItem* aItem) {
   if (aItem->GetType() != TYPE_CLIP)
     return false;
   nsDisplayClip* other = static_cast<nsDisplayClip*>(aItem);
   if (!other->mClip.IsEqualInterior(mClip))
     return false;
-  mList.AppendToBottom(&other->mList);
+  // No need to track merged frames for clipping
+  MergeFrom(other);
   return true;
 }
 
@@ -2188,11 +2327,9 @@ nsDisplayClipRoundedRect::~nsDisplayClipRoundedRect()
 
 nsRegion
 nsDisplayClipRoundedRect::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                          bool* aForceTransparentSurface)
+                                          bool* aSnap)
 {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+  *aSnap = false;
   return nsRegion();
 }
 
@@ -2244,7 +2381,8 @@ bool nsDisplayClipRoundedRect::TryMerge(nsDisplayListBuilder* aBuilder, nsDispla
   if (!mClip.IsEqualInterior(other->mClip) ||
       memcmp(mRadii, other->mRadii, sizeof(mRadii)) != 0)
     return false;
-  mList.AppendToBottom(&other->mList);
+  // No need to track merged frames for clipping
+  MergeFrom(other);
   return true;
 }
 
@@ -2262,9 +2400,10 @@ nsDisplayZoom::~nsDisplayZoom() {
 }
 #endif
 
-nsRect nsDisplayZoom::GetBounds(nsDisplayListBuilder* aBuilder)
+nsRect nsDisplayZoom::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
-  nsRect bounds = nsDisplayWrapList::GetBounds(aBuilder);
+  nsRect bounds = nsDisplayWrapList::GetBounds(aBuilder, aSnap);
+  *aSnap = false;
   return bounds.ConvertAppUnitsRoundOut(mAPD, mParentAPD);
 }
 
@@ -2292,8 +2431,8 @@ void nsDisplayZoom::Paint(nsDisplayListBuilder* aBuilder,
 }
 
 bool nsDisplayZoom::ComputeVisibility(nsDisplayListBuilder *aBuilder,
-                                        nsRegion *aVisibleRegion,
-                                        const nsRect& aAllowVisibleRegionExpansion)
+                                      nsRegion *aVisibleRegion,
+                                      const nsRect& aAllowVisibleRegionExpansion)
 {
   // Convert the passed in visible region to our appunits.
   nsRegion visibleRegion =
@@ -2351,6 +2490,12 @@ nsRect
 nsDisplayTransform::GetFrameBoundsForTransform(const nsIFrame* aFrame)
 {
   NS_PRECONDITION(aFrame, "Can't get the bounds of a nonexistent frame!");
+
+  if (aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT) {
+    // TODO: SVG needs to define what percentage translations resolve against.
+    return nsRect();
+  }
+
   return nsRect(nsPoint(0, 0), aFrame->GetSize());
 }
 
@@ -2363,6 +2508,11 @@ nsDisplayTransform::GetFrameBoundsForTransform(const nsIFrame* aFrame)
 
   nsRect result;
   
+  if (aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT) {
+    // TODO: SVG needs to define what percentage translations resolve against.
+    return result;
+  }
+
   /* Iterate through the continuation list, unioning together all the
    * bounding rects.
    */
@@ -2392,8 +2542,8 @@ gfxPoint3D GetDeltaToMozTransformOrigin(const nsIFrame* aFrame,
                                         const nsRect* aBoundsOverride)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->GetStyleDisplay()->HasTransform(),
-                  "Can't get a delta for an untransformed frame!");
+  NS_PRECONDITION(aFrame->IsTransformed(),
+                  "Shouldn't get a delta for an untransformed frame!");
 
   /* For both of the coordinates, if the value of -moz-transform is a
    * percentage, it's relative to the size of the frame.  Otherwise, if it's
@@ -2429,6 +2579,14 @@ gfxPoint3D GetDeltaToMozTransformOrigin(const nsIFrame* aFrame,
       *coords[index] =
         NSAppUnitsToFloatPixels(coord.GetCoordValue(), aAppUnitsPerPixel);
     }
+    if ((aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT) &&
+        coord.GetUnit() != eStyleUnit_Percent) {
+      // <length> values represent offsets from the origin of the SVG element's
+      // user space, not the top left of its bounds, so we must adjust for that:
+      nscoord offset =
+        (index == 0) ? aFrame->GetPosition().x : aFrame->GetPosition().y;
+      *coords[index] -= NSAppUnitsToFloatPixels(offset, aAppUnitsPerPixel);
+    }
   }
 
   *coords[2] = NSAppUnitsToFloatPixels(display->mTransformOrigin[2].GetCoordValue(),
@@ -2446,12 +2604,11 @@ gfxPoint3D GetDeltaToMozTransformOrigin(const nsIFrame* aFrame,
  */
 static
 gfxPoint3D GetDeltaToMozPerspectiveOrigin(const nsIFrame* aFrame,
-                                          float aAppUnitsPerPixel,
-                                          const nsRect* aBoundsOverride)
+                                          float aAppUnitsPerPixel)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->GetStyleDisplay()->HasTransform(),
-                  "Can't get a delta for an untransformed frame!");
+  NS_PRECONDITION(aFrame->IsTransformed(),
+                  "Shouldn't get a delta for an untransformed frame!");
   NS_PRECONDITION(aFrame->GetParentStyleContextFrame(), 
                   "Can't get delta without a style parent!");
 
@@ -2463,9 +2620,8 @@ gfxPoint3D GetDeltaToMozPerspectiveOrigin(const nsIFrame* aFrame,
   //TODO: Should this be using our bounds or the parent's bounds?
   // How do we handle aBoundsOverride in the latter case?
   nsIFrame* parent = aFrame->GetParentStyleContextFrame();
-  const nsStyleDisplay* display = aFrame->GetParent()->GetStyleDisplay();
-  nsRect boundingRect = (aBoundsOverride ? *aBoundsOverride :
-                         nsDisplayTransform::GetFrameBoundsForTransform(parent));
+  const nsStyleDisplay* display = parent->GetStyleDisplay();
+  nsRect boundingRect = nsDisplayTransform::GetFrameBoundsForTransform(parent);
 
   /* Allows us to access named variables by index. */
   gfxPoint3D result;
@@ -2542,15 +2698,27 @@ nsDisplayTransform::GetResultingTransformMatrix(const nsIFrame* aFrame,
   /* Get the matrix, then change its basis to factor in the origin. */
   bool dummy;
   gfx3DMatrix result;
+  // Call IsSVGTransformed() regardless of the value of
+  // disp->mSpecifiedTransform, since we still need any transformFromSVGParent.
+  gfxMatrix svgTransform, transformFromSVGParent;
+  bool hasSVGTransforms =
+    aFrame->IsSVGTransformed(&svgTransform, &transformFromSVGParent);
   /* Transformed frames always have a transform, or are preserving 3d (and might still have perspective!) */
   if (disp->mSpecifiedTransform) {
     result = nsStyleTransformMatrix::ReadTransforms(disp->mSpecifiedTransform,
                                                     aFrame->GetStyleContext(),
                                                     aFrame->PresContext(),
                                                     dummy, bounds, aAppUnitsPerPixel);
+  } else if (hasSVGTransforms) {
+    result = gfx3DMatrix::From2D(svgTransform);
   } else {
-     NS_ASSERTION(aFrame->GetStyleDisplay()->mTransformStyle == NS_STYLE_TRANSFORM_STYLE_PRESERVE_3D,
-                  "If we don't have a transform, then we must be at least attempting to preserve the transforms of our children");
+     NS_ASSERTION(aFrame->GetStyleDisplay()->mTransformStyle == NS_STYLE_TRANSFORM_STYLE_PRESERVE_3D ||
+                  aFrame->GetStyleDisplay()->mBackfaceVisibility == NS_STYLE_BACKFACE_VISIBILITY_HIDDEN,
+                  "If we don't have a transform, then we must have another reason to have an nsDisplayTransform created");
+  }
+
+  if (hasSVGTransforms && !transformFromSVGParent.IsIdentity()) {
+    result = result * gfx3DMatrix::From2D(transformFromSVGParent);
   }
 
   const nsStyleDisplay* parentDisp = nsnull;
@@ -2568,7 +2736,7 @@ nsDisplayTransform::GetResultingTransformMatrix(const nsIFrame* aFrame,
     /* At the point when perspective is applied, we have been translated to the transform origin.
      * The translation to the perspective origin is the difference between these values.
      */
-    gfxPoint3D toPerspectiveOrigin = GetDeltaToMozPerspectiveOrigin(aFrame, aAppUnitsPerPixel, aBoundsOverride);
+    gfxPoint3D toPerspectiveOrigin = GetDeltaToMozPerspectiveOrigin(aFrame, aAppUnitsPerPixel);
     result = result * nsLayoutUtils::ChangeMatrixBasis(toPerspectiveOrigin - toMozOrigin, perspective);
   }
 
@@ -2597,7 +2765,14 @@ nsDisplayTransform::ShouldPrerenderTransformedContent(nsDisplayListBuilder* aBui
     // reference frame size (~viewport), allowing a 1/8th fuzz factor
     // for shadows, borders, etc.
     refSize += nsSize(refSize.width / 8, refSize.height / 8);
-    return aFrame->GetVisualOverflowRectRelativeToSelf().Size() <= refSize;
+    if (aFrame->GetVisualOverflowRectRelativeToSelf().Size() <= refSize) {
+      // Bug 717521 - pre-render max 4096 x 4096 device pixels.
+      nscoord max = aFrame->PresContext()->DevPixelsToAppUnits(4096);
+      nsRect visual = aFrame->GetVisualOverflowRect();
+      if (visual.width <= max && visual.height <= max) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -2653,7 +2828,8 @@ already_AddRefed<Layer> nsDisplayTransform::BuildLayer(nsDisplayListBuilder *aBu
 
 nsDisplayItem::LayerState
 nsDisplayTransform::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                  LayerManager* aManager) {
+                                  LayerManager* aManager,
+                                  const ContainerParameters& aParameters) {
   // Here we check if the *post-transform* bounds of this item are big enough
   // to justify an active layer.
   if (mFrame->AreLayersMarkedActive(nsChangeHint_UpdateTransformLayer) &&
@@ -2664,9 +2840,10 @@ nsDisplayTransform::GetLayerState(nsDisplayListBuilder* aBuilder,
   nsIFrame* activeScrolledRoot =
     nsLayoutUtils::GetActiveScrolledRootFor(mFrame, nsnull);
   return !mStoredList.ChildrenCanBeInactive(aBuilder, 
-                                             aManager, 
-                                             *mStoredList.GetList(), 
-                                             activeScrolledRoot)
+                                            aManager, 
+                                            aParameters,
+                                            *mStoredList.GetList(), 
+                                            activeScrolledRoot)
       ? LAYER_ACTIVE : LAYER_INACTIVE;
 }
 
@@ -2789,12 +2966,13 @@ nsDisplayTransform::GetHitDepthAtPoint(const nsPoint& aPoint)
 /* The bounding rectangle for the object is the overflow rectangle translated
  * by the reference point.
  */
-nsRect nsDisplayTransform::GetBounds(nsDisplayListBuilder *aBuilder)
+nsRect nsDisplayTransform::GetBounds(nsDisplayListBuilder *aBuilder, bool* aSnap)
 {
   nsRect untransformedBounds =
     ShouldPrerenderTransformedContent(aBuilder, mFrame) ?
     mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame() :
-    mStoredList.GetBounds(aBuilder);
+    mStoredList.GetBounds(aBuilder, aSnap);
+  *aSnap = false;
   float factor = nsPresContext::AppUnitsPerCSSPixel();
   return nsLayoutUtils::MatrixTransformRect(untransformedBounds,
                                             GetTransform(factor),
@@ -2818,11 +2996,9 @@ nsRect nsDisplayTransform::GetBounds(nsDisplayListBuilder *aBuilder)
  * certainly contains the actual (non-axis-aligned) untransformed rect.
  */
 nsRegion nsDisplayTransform::GetOpaqueRegion(nsDisplayListBuilder *aBuilder,
-                                             bool* aForceTransparentSurface)
+                                             bool* aSnap)
 {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+  *aSnap = false;
   nsRect untransformedVisible;
   float factor = nsPresContext::AppUnitsPerCSSPixel();
   if (!UntransformRectMatrix(mVisibleRect, GetTransform(factor), factor, &untransformedVisible)) {
@@ -2830,12 +3006,13 @@ nsRegion nsDisplayTransform::GetOpaqueRegion(nsDisplayListBuilder *aBuilder,
   }
   
   const gfx3DMatrix& matrix = GetTransform(nsPresContext::AppUnitsPerCSSPixel());
-                
+
   nsRegion result;
   gfxMatrix matrix2d;
+  bool tmpSnap;
   if (matrix.Is2D(&matrix2d) &&
       matrix2d.PreservesAxisAlignedRectangles() &&
-      mStoredList.GetOpaqueRegion(aBuilder).Contains(untransformedVisible)) {
+      mStoredList.GetOpaqueRegion(aBuilder, &tmpSnap).Contains(untransformedVisible)) {
     result = mVisibleRect;
   }
   return result;
@@ -2894,8 +3071,7 @@ nsDisplayTransform::TryMerge(nsDisplayListBuilder *aBuilder,
   /* Now, move everything over to this frame and signal that
    * we merged things!
    */
-  mStoredList.GetList()->
-    AppendToBottom(&static_cast<nsDisplayTransform *>(aItem)->mStoredList);
+  mStoredList.MergeFrom(&static_cast<nsDisplayTransform*>(aItem)->mStoredList);
   return true;
 }
 
@@ -2982,8 +3158,8 @@ bool nsDisplayTransform::UntransformRect(const nsRect &aUntransformedBounds,
 
 nsDisplaySVGEffects::nsDisplaySVGEffects(nsDisplayListBuilder* aBuilder,
                                          nsIFrame* aFrame, nsDisplayList* aList)
-    : nsDisplayWrapList(aBuilder, aFrame, aList), mEffectsFrame(aFrame),
-      mBounds(aFrame->GetVisualOverflowRectRelativeToSelf())
+    : nsDisplayWrapList(aBuilder, aFrame, aList),
+      mEffectsBounds(aFrame->GetVisualOverflowRectRelativeToSelf())
 {
   MOZ_COUNT_CTOR(nsDisplaySVGEffects);
 }
@@ -2996,11 +3172,9 @@ nsDisplaySVGEffects::~nsDisplaySVGEffects()
 #endif
 
 nsRegion nsDisplaySVGEffects::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                              bool* aForceTransparentSurface)
+                                              bool* aSnap)
 {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+  *aSnap = false;
   return nsRegion();
 }
 
@@ -3009,8 +3183,8 @@ nsDisplaySVGEffects::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect
                              HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames)
 {
   nsPoint rectCenter(aRect.x + aRect.width / 2, aRect.y + aRect.height / 2);
-  if (nsSVGIntegrationUtils::HitTestFrameForEffects(mEffectsFrame,
-      rectCenter - aBuilder->ToReferenceFrame(mEffectsFrame))) {
+  if (nsSVGIntegrationUtils::HitTestFrameForEffects(mFrame,
+      rectCenter - ToReferenceFrame())) {
     mList.HitTest(aBuilder, aRect, aState, aOutFrames);
   }
 }
@@ -3019,23 +3193,22 @@ void nsDisplaySVGEffects::Paint(nsDisplayListBuilder* aBuilder,
                                 nsRenderingContext* aCtx)
 {
   nsSVGIntegrationUtils::PaintFramesWithEffects(aCtx,
-          mEffectsFrame, mVisibleRect, aBuilder, &mList);
+          mFrame, mVisibleRect, aBuilder, &mList);
 }
 
 bool nsDisplaySVGEffects::ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                               nsRegion* aVisibleRegion,
                                               const nsRect& aAllowVisibleRegionExpansion) {
-  nsPoint offset = aBuilder->ToReferenceFrame(mEffectsFrame);
+  nsPoint offset = ToReferenceFrame();
   nsRect dirtyRect =
-    nsSVGIntegrationUtils::GetRequiredSourceForInvalidArea(mEffectsFrame,
+    nsSVGIntegrationUtils::GetRequiredSourceForInvalidArea(mFrame,
                                                            mVisibleRect - offset) +
     offset;
 
   // Our children may be made translucent or arbitrarily deformed so we should
   // not allow them to subtract area from aVisibleRegion.
   nsRegion childrenVisible(dirtyRect);
-  nsRect r;
-  r.IntersectRect(dirtyRect, mList.GetBounds(aBuilder));
+  nsRect r = dirtyRect.Intersect(mList.GetBounds(aBuilder));
   mList.ComputeVisibilityForSublist(aBuilder, &childrenVisible, r, nsRect());
   return true;
 }
@@ -3050,9 +3223,9 @@ bool nsDisplaySVGEffects::TryMerge(nsDisplayListBuilder* aBuilder, nsDisplayItem
   if (aItem->GetUnderlyingFrame()->GetContent() != mFrame->GetContent())
     return false;
   nsDisplaySVGEffects* other = static_cast<nsDisplaySVGEffects*>(aItem);
-  mList.AppendToBottom(&other->mList);
-  mBounds.UnionRect(mBounds,
-    other->mBounds + other->mEffectsFrame->GetOffsetTo(mEffectsFrame));
+  MergeFromTrackingMergedFrames(other);
+  mEffectsBounds.UnionRect(mEffectsBounds,
+    other->mEffectsBounds + other->mFrame->GetOffsetTo(mFrame));
   return true;
 }
 
@@ -3061,16 +3234,16 @@ void
 nsDisplaySVGEffects::PrintEffects(FILE* aOutput)
 {
   nsIFrame* firstFrame =
-    nsLayoutUtils::GetFirstContinuationOrSpecialSibling(mEffectsFrame);
+    nsLayoutUtils::GetFirstContinuationOrSpecialSibling(mFrame);
   nsSVGEffects::EffectProperties effectProperties =
     nsSVGEffects::GetEffectProperties(firstFrame);
   bool isOK = true;
   nsSVGClipPathFrame *clipPathFrame = effectProperties.GetClipPathFrame(&isOK);
   bool first = true;
   fprintf(aOutput, " effects=(");
-  if (mEffectsFrame->GetStyleDisplay()->mOpacity != 1.0f) {
+  if (mFrame->GetStyleDisplay()->mOpacity != 1.0f) {
     first = false;
-    fprintf(aOutput, "opacity(%f)", mEffectsFrame->GetStyleDisplay()->mOpacity);
+    fprintf(aOutput, "opacity(%f)", mFrame->GetStyleDisplay()->mOpacity);
   }
   if (clipPathFrame) {
     if (!first) {

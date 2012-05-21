@@ -3,6 +3,10 @@
  *
  * Tests JS_TransplantObject
  */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #include "tests.h"
 #include "jsobj.h"
@@ -36,14 +40,21 @@ wrap(JSContext *cx, JSObject *toWrap, JSObject *target)
 }
 
 static JSObject *
-PreWrap(JSContext *cx, JSObject *scope, JSObject *obj, uintN flags)
+SameCompartmentWrap(JSContext *cx, JSObject *obj)
 {
-    JS_GC(cx);
+    JS_GC(JS_GetRuntime(cx));
     return obj;
 }
 
 static JSObject *
-Wrap(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent, uintN flags)
+PreWrap(JSContext *cx, JSObject *scope, JSObject *obj, unsigned flags)
+{
+    JS_GC(JS_GetRuntime(cx));
+    return obj;
+}
+
+static JSObject *
+Wrap(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent, unsigned flags)
 {
     return js::Wrapper::New(cx, obj, proto, parent, &js::CrossCompartmentWrapper::singleton);
 }
@@ -78,7 +89,7 @@ BEGIN_TEST(testBug604087)
         CHECK(next);
     }
 
-    JS_SetWrapObjectCallbacks(JS_GetRuntime(cx), Wrap, PreWrap);
+    JS_SetWrapObjectCallbacks(JS_GetRuntime(cx), Wrap, SameCompartmentWrap, PreWrap);
     CHECK(JS_TransplantObject(cx, outerObj, next));
     return true;
 }

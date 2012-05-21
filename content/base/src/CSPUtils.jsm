@@ -1,37 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Content Security Policy data structures.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Corporation
- *
- * Contributor(s):
- *   Sid Stamm <sid@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * Content Security Policy Utilities
@@ -87,7 +56,7 @@ function CSPWarning(aMsg, aSource, aScriptSample, aLineNum) {
 
   var consoleMsg = Components.classes["@mozilla.org/scripterror;1"]
                     .createInstance(Components.interfaces.nsIScriptError);
-  consoleMsg.init('CSP: ' + aMsg, aSource, aScriptSample, aLineNum, 0,
+  consoleMsg.init(textMessage, aSource, aScriptSample, aLineNum, 0,
                   Components.interfaces.nsIScriptError.warningFlag,
                   "Content Security Policy");
   Components.classes["@mozilla.org/consoleservice;1"]
@@ -100,7 +69,7 @@ function CSPError(aMsg) {
 
   var consoleMsg = Components.classes["@mozilla.org/scripterror;1"]
                     .createInstance(Components.interfaces.nsIScriptError);
-  consoleMsg.init('CSP: ' + aMsg, null, null, 0, 0,
+  consoleMsg.init(textMessage, null, null, 0, 0,
                   Components.interfaces.nsIScriptError.errorFlag,
                   "Content Security Policy");
   Components.classes["@mozilla.org/consoleservice;1"]
@@ -213,7 +182,7 @@ CSPRep.ALLOW_DIRECTIVE   = "allow";
   * @param aStr
   *        string rep of a CSP
   * @param self (optional)
-  *        string or CSPSource representing the "self" source
+  *        URI representing the "self" source
   * @param docRequest (optional)
   *        request for the parent document which may need to be suspended
   *        while the policy-uri is asynchronously fetched
@@ -231,8 +200,6 @@ CSPRep.fromString = function(aStr, self, docRequest, csp) {
   var selfUri = null;
   if (self instanceof Components.interfaces.nsIURI)
     selfUri = self.clone();
-  else if (self)
-    selfUri = gIoService.newURI(self, null, null);
 
   var dirs = aStr.split(";");
 
@@ -452,8 +419,8 @@ CSPRep.prototype = {
     var dirs = [];
 
     if (this._allowEval || this._allowInlineScripts) {
-      dirs.push("options " + (this._allowEval ? "eval-script" : "")
-                           + (this._allowInlineScripts ? "inline-script" : ""));
+      dirs.push("options" + (this._allowEval ? " eval-script" : "")
+                           + (this._allowInlineScripts ? " inline-script" : ""));
     }
     for (var i in this._directives) {
       if (this._directives[i]) {
@@ -604,7 +571,7 @@ function CSPSourceList() {
  * @param aStr
  *        string rep of a CSP Source List
  * @param self (optional)
- *        string or CSPSource representing the "self" source
+ *        URI or CSPSource representing the "self" source
  * @param enforceSelfChecks (optional)
  *        if present, and "true", will check to be sure "self" has the
  *        appropriate values to inherit when they are omitted from the source.
@@ -617,6 +584,12 @@ CSPSourceList.fromString = function(aStr, self, enforceSelfChecks) {
   //                       | "'none'"
   //    <source-list>    ::= <source>
   //                       | <source-list>" "<source>
+
+  /* If self parameter is passed, convert to CSPSource,
+     unless it is already a CSPSource. */
+  if(self && !(self instanceof CSPSource)) {
+     self = CSPSource.create(self);
+  }
 
   var slObj = new CSPSourceList();
   if (aStr === "'none'")
@@ -810,6 +783,15 @@ function CSPSource() {
  *  - nsURI
  *  - string
  *  - CSPSource (clone)
+ * @param aData 
+ *        string, nsURI, or CSPSource
+ * @param self (optional)
+ *	  if present, string, URI, or CSPSource representing the "self" resource 
+ * @param enforceSelfChecks (optional)
+ *	  if present, and "true", will check to be sure "self" has the
+ *        appropriate values to inherit when they are omitted from the source.
+ * @returns
+ *        an instance of CSPSource
  */
 CSPSource.create = function(aData, self, enforceSelfChecks) {
   if (typeof aData === 'string')
@@ -886,20 +868,18 @@ CSPSource.fromURI = function(aURI, self, enforceSelfChecks) {
   // for port.  In fact, there's no way to represent "*" differently than 
   // a blank port in an nsURI, since "*" turns into -1, and so does an 
   // absence of port declaration.
+
+  // port is never inherited from self -- this gets too confusing.
+  // Instead, whatever scheme is used (an explicit one or the inherited
+  // one) dictates the port if no port is explicitly stated.
+  // Set it to undefined here and the default port will be resolved in the
+  // getter for .port.
+  sObj._port = undefined;
   try {
     // if there's no port, an exception will get thrown
     // (NS_ERROR_FAILURE)
     if (aURI.port > 0) {
       sObj._port = aURI.port;
-    } else {
-      // port is never inherited from self -- this gets too confusing.
-      // Instead, whatever scheme is used (an explicit one or the inherited
-      // one) dictates the port if no port is explicitly stated.
-      if (sObj._scheme) {
-        sObj._port = gIoService.getProtocolHandler(sObj._scheme).defaultPort;
-        if (sObj._port < 1) 
-          sObj._port = undefined;
-      }
     }
   } catch(e) {
     sObj._port = undefined;
@@ -914,7 +894,7 @@ CSPSource.fromURI = function(aURI, self, enforceSelfChecks) {
  * @param aStr
  *        string rep of a CSP Source
  * @param self (optional)
- *        string or CSPSource representing the "self" source
+ *        string, URI, or CSPSource representing the "self" source
  * @param enforceSelfChecks (optional)
  *        if present, and "true", will check to be sure "self" has the
  *        appropriate values to inherit when they are omitted from aURI.
@@ -948,8 +928,8 @@ CSPSource.fromString = function(aStr, self, enforceSelfChecks) {
       CSPError("self keyword used, but no self data specified");
       return null;
     }
-    sObj._isSelf = true;
     sObj._self = self.clone();
+    sObj._isSelf = true;
     return sObj;
   }
 
@@ -1079,35 +1059,39 @@ CSPSource.validSchemeName = function(aStr) {
 CSPSource.prototype = {
 
   get scheme () {
+    if (this._isSelf && this._self)
+      return this._self.scheme;
     if (!this._scheme && this._self)
       return this._self.scheme;
     return this._scheme;
   },
 
   get host () {
+    if (this._isSelf && this._self)
+      return this._self.host;
     if (!this._host && this._self)
       return this._self.host;
     return this._host;
   },
 
   /** 
-   * If 'self' has port hard-defined, and this doesn't have a port
-   * hard-defined, use the self's port.  Otherwise, if both are implicit,
-   * resolve default port for this scheme.
+   * If this doesn't have a nonstandard port (hard-defined), use the default
+   * port for this source's scheme. Should never inherit port from 'self'.
    */
   get port () {
+    if (this._isSelf && this._self)
+      return this._self.port;
     if (this._port) return this._port;
-    // if no port, get the default port for the scheme.
-    if (this._scheme) {
+    // if no port, get the default port for the scheme
+    // (which may be inherited from 'self')
+    if (this.scheme) {
       try {
-        var port = gIoService.getProtocolHandler(this._scheme).defaultPort;
+        var port = gIoService.getProtocolHandler(this.scheme).defaultPort;
         if (port > 0) return port;
       } catch(e) {
         // if any errors happen, fail gracefully.
       }
     }
-    // if there was no scheme (and thus no default scheme), return self.port
-    if (this._self && this._self.port) return this._self.port;
 
     return undefined;
   },
@@ -1121,12 +1105,12 @@ CSPSource.prototype = {
       return this._self.toString();
 
     var s = "";
-    if (this._scheme)
-      s = s + this._scheme + "://";
+    if (this.scheme)
+      s = s + this.scheme + "://";
     if (this._host)
       s = s + this._host;
-    if (this._port)
-      s = s + ":" + this._port;
+    if (this.port)
+      s = s + ":" + this.port;
     return s;
   },
 

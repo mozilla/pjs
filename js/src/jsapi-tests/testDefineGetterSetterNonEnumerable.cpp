@@ -1,12 +1,15 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=99:
  */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #include "tests.h"
-#include "jsxdrapi.h"
 
 static JSBool
-native(JSContext *cx, uintN argc, jsval *vp)
+native(JSContext *cx, unsigned argc, jsval *vp)
 {
     return JS_TRUE;
 }
@@ -45,7 +48,7 @@ BEGIN_TEST(testDefineGetterSetterNonEnumerable)
                             JSPROP_GETTER | JSPROP_SETTER | JSPROP_PERMANENT));
 
     JSBool found = JS_FALSE;
-    uintN attrs = 0;
+    unsigned attrs = 0;
     CHECK(JS_GetPropertyAttributes(cx, JSVAL_TO_OBJECT(vobj), PROPERTY_NAME,
                                    &attrs, &found));
     CHECK(found);

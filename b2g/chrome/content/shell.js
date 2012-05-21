@@ -7,52 +7,43 @@
 const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
-const CC = Components.Constructor;
 const Cr = Components.results;
-
-const LocalFile = CC('@mozilla.org/file/local;1',
-                     'nsILocalFile',
-                     'initWithPath');
 
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
+Cu.import('resource://gre/modules/ContactService.jsm');
+Cu.import('resource://gre/modules/Webapps.jsm');
 
-XPCOMUtils.defineLazyGetter(Services, 'env', function() {
-  return Cc['@mozilla.org/process/environment;1']
-           .getService(Ci.nsIEnvironment);
-});
+XPCOMUtils.defineLazyServiceGetter(Services, 'env',
+                                   '@mozilla.org/process/environment;1',
+                                   'nsIEnvironment');
 
-XPCOMUtils.defineLazyGetter(Services, 'ss', function() {
-  return Cc['@mozilla.org/content/style-sheet-service;1']
-           .getService(Ci.nsIStyleSheetService);
-});
+XPCOMUtils.defineLazyServiceGetter(Services, 'ss',
+                                   '@mozilla.org/content/style-sheet-service;1',
+                                   'nsIStyleSheetService');
 
-XPCOMUtils.defineLazyGetter(Services, 'idle', function() {
-  return Cc['@mozilla.org/widget/idleservice;1']
-           .getService(Ci.nsIIdleService);
-});
+XPCOMUtils.defineLazyServiceGetter(Services, 'idle',
+                                   '@mozilla.org/widget/idleservice;1',
+                                   'nsIIdleService');
 
-XPCOMUtils.defineLazyServiceGetter(Services, 'fm', function(){
-  return Cc['@mozilla.org/focus-managr;1']
-           .getService(Ci.nsFocusManager);
-});
-
-
-#ifndef MOZ_WIDGET_GONK
-// In order to use http:// scheme instead of file:// scheme
-// (that is much more restricted) the following code kick-off
-// a local http server listening on http://127.0.0.1:7777 and
-// http://localhost:7777.
-function startupHttpd(baseDir, port) {
-  const httpdURL = 'chrome://browser/content/httpd.js';
-  let httpd = {};
-  Services.scriptloader.loadSubScript(httpdURL, httpd);
-  let server = new httpd.nsHttpServer();
-  server.registerDirectory('/', new LocalFile(baseDir));
-  server.registerContentType('appcache', 'text/cache-manifest');
-  server.start(port);
-}
+#ifdef MOZ_WIDGET_GONK
+XPCOMUtils.defineLazyServiceGetter(Services, 'audioManager',
+                                   '@mozilla.org/telephony/audiomanager;1',
+                                   'nsIAudioManager');
+#else
+Services.audioManager = {
+  'masterVolume': 0
+};
 #endif
+
+XPCOMUtils.defineLazyServiceGetter(Services, 'fm',
+                                   '@mozilla.org/focus-manager;1',
+                                   'nsIFocusManager');
+
+XPCOMUtils.defineLazyGetter(this, 'DebuggerServer', function() {
+  Cu.import('resource://gre/modules/devtools/dbg-server.jsm');
+  return DebuggerServer;
+});
 
 // FIXME Bug 707625
 // until we have a proper security model, add some rights to
@@ -60,9 +51,13 @@ function startupHttpd(baseDir, port) {
 // XXX never grant 'content-camera' to non-gaia apps
 function addPermissions(urls) {
   let permissions = [
-    'indexedDB', 'indexedDB-unlimited', 'webapps-manage', 'offline-app', 'content-camera'
+    'indexedDB', 'indexedDB-unlimited', 'webapps-manage', 'offline-app', 'pin-app',
+    'websettings-read', 'websettings-readwrite',
+    'content-camera', 'webcontacts-manage', 'wifi-manage', 'desktop-notification',
+    'geolocation', 'device-storage'
   ];
   urls.forEach(function(url) {
+    url = url.trim();
     let uri = Services.io.newURI(url, null, null);
     let allow = Ci.nsIPermissionManager.ALLOW_ACTION;
 
@@ -73,9 +68,6 @@ function addPermissions(urls) {
 }
 
 var shell = {
-  // FIXME/bug 678695: this should be a system setting
-  preferredScreenBrightness: 1.0,
-  
   isDebug: false,
 
   get contentBrowser() {
@@ -90,59 +82,44 @@ var shell = {
         return homeSrc;
     } catch (e) {}
 
-    let urls = Services.prefs.getCharPref('browser.homescreenURL').split(',');
-    for (let i = 0; i < urls.length; i++) {
-      let url = urls[i];
-      if (url.substring(0, 7) != 'file://')
-        return url;
-
-      let file = new LocalFile(url.substring(7, url.length));
-      if (file.exists())
-        return url;
-    }
-    return null;
+    return Services.prefs.getCharPref('browser.homescreenURL');
   },
 
-  start: function shell_init() {
+  start: function shell_start() {
     let homeURL = this.homeURL;
     if (!homeURL) {
-      let msg = 'Fatal error during startup: [No homescreen found]';
-      return alert(msg);
+      let msg = 'Fatal error during startup: No homescreen found: try setting B2G_HOMESCREEN';
+      alert(msg);
+      return;
     }
 
-    window.controllers.appendController(this);
-    window.addEventListener('keypress', this);
+    ['keydown', 'keypress', 'keyup'].forEach((function listenKey(type) {
+      window.addEventListener(type, this, false, true);
+      window.addEventListener(type, this, true, true);
+    }).bind(this));
+
     window.addEventListener('MozApplicationManifest', this);
-    window.addEventListener("AppCommand", this);
     window.addEventListener('mozfullscreenchange', this);
+    window.addEventListener('sizemodechange', this);
     this.contentBrowser.addEventListener('load', this, true);
 
+    // Until the volume can be set from the content side, set it to a
+    // a specific value when the device starts. This way the front-end
+    // can display a notification when the volume change and show a volume
+    // level modified from this point.
+    // try catch block must be used since the emulator fails here. bug 746429
     try {
-      Services.io.offline = false;
-
-      let fileScheme = 'file://';
-      if (homeURL.substring(0, fileScheme.length) == fileScheme) {
-#ifndef MOZ_WIDGET_GONK
-        homeURL = homeURL.replace(fileScheme, '');
-
-        let baseDir = homeURL.split('/');
-        baseDir.pop();
-        baseDir = baseDir.join('/');
-
-        const SERVER_PORT = 7777;
-        startupHttpd(baseDir, SERVER_PORT);
-
-        let baseHost = 'http://localhost';
-        homeURL = homeURL.replace(baseDir, baseHost + ':' + SERVER_PORT);
-#else
-        homeURL = 'http://localhost:7777' + homeURL.replace(fileScheme, '');
-#endif
-      }
-      addPermissions([homeURL]);
-    } catch (e) {
-      let msg = 'Fatal error during startup: [' + e + '[' + homeURL + ']';
-      return alert(msg);
+      Services.audioManager.masterVolume = 0.5;
+    } catch(e) {
+      dump('Error setting master volume: ' + e + '\n');
     }
+
+    let domains = "";
+    try {
+      domains = Services.prefs.getCharPref('b2g.privileged.domains');
+    } catch(e) {}
+
+    addPermissions(domains.split(","));
 
     // Load webapi.js as a frame script
     let frameScriptUrl = 'chrome://browser/content/webapi.js';
@@ -152,41 +129,30 @@ var shell = {
       dump('Error loading ' + frameScriptUrl + ' as a frame script: ' + e + '\n');
     }
 
+    CustomEventManager.init();
+
+    WebappsHelper.init();
+
     let browser = this.contentBrowser;
     browser.homePage = homeURL;
     browser.goHome();
   },
 
   stop: function shell_stop() {
-    window.controllers.removeController(this);
-    window.removeEventListener('keypress', this);
+    ['keydown', 'keypress', 'keyup'].forEach((function unlistenKey(type) {
+      window.removeEventListener(type, this, false, true);
+      window.removeEventListener(type, this, true, true);
+    }).bind(this));
+
+    window.addEventListener('MozApplicationManifest', this);
     window.removeEventListener('MozApplicationManifest', this);
-    window.removeEventListener('AppCommand', this);
-  },
+    window.removeEventListener('mozfullscreenchange', this);
+    window.removeEventListener('sizemodechange', this);
+    this.contentBrowser.removeEventListener('load', this, true);
 
-  supportsCommand: function shell_supportsCommand(cmd) {
-    let isSupported = false;
-    switch (cmd) {
-      case 'cmd_close':
-        isSupported = true;
-        break;
-      default:
-        isSupported = false;
-        break;
-    }
-    return isSupported;
-  },
-
-  isCommandEnabled: function shell_isCommandEnabled(cmd) {
-    return true;
-  },
-
-  doCommand: function shell_doCommand(cmd) {
-    switch (cmd) {
-      case 'cmd_close':
-        content.postMessage('appclose', '*');
-        break;
-    }
+#ifndef MOZ_WIDGET_GONK
+    delete Services.audioManager;
+#endif
   },
 
   toggleDebug: function shell_toggleDebug() {
@@ -201,9 +167,7 @@ var shell = {
     }
   },
  
-  changeVolume: function shell_changeVolume(aDelta) {
-    let audioManager = Cc["@mozilla.org/telephony/audiomanager;1"].getService(Ci.nsIAudioManager);
-
+  changeVolume: function shell_changeVolume(delta) {
     let steps = 10;
     try {
       steps = Services.prefs.getIntPref("media.volume.steps");
@@ -211,7 +175,11 @@ var shell = {
         steps = 1;
     } catch(e) {}
 
-    let volume = audioManager.masterVolume + aDelta / steps;
+    let audioManager = Services.audioManager;
+    if (!audioManager)
+      return;
+
+    let volume = audioManager.masterVolume + delta / steps;
     if (volume > 1)
       volume = 1;
     if (volume < 0)
@@ -219,44 +187,58 @@ var shell = {
     audioManager.masterVolume = volume;
   },
 
+  forwardKeyToHomescreen: function shell_forwardKeyToHomescreen(evt) {
+    let generatedEvent = content.document.createEvent('KeyboardEvent');
+    generatedEvent.initKeyEvent(evt.type, true, true, evt.view, evt.ctrlKey,
+                                evt.altKey, evt.shiftKey, evt.metaKey,
+                                evt.keyCode, evt.charCode);
+
+    content.dispatchEvent(generatedEvent);
+  },
+
   handleEvent: function shell_handleEvent(evt) {
     switch (evt.type) {
+      case 'keydown':
+      case 'keyup':
       case 'keypress':
-        switch (evt.keyCode) {
-          case evt.DOM_VK_HOME:
-            this.sendEvent(content, 'home');
-            break;
-          case evt.DOM_VK_SLEEP:
-            this.toggleScreen();
-
-            let details = {
-              'enabled': screen.mozEnabled
-            };
-            this.sendEvent(content, 'sleep', details);
-            break;
-          case evt.DOM_VK_ESCAPE:
-            if (evt.defaultPrevented)
-              return;
-            this.doCommand('cmd_close');
-            break;
+        // If the home key is pressed, always forward it to the homescreen
+        if (evt.eventPhase == evt.CAPTURING_PHASE) {
+          if (evt.keyCode == evt.VK_DOM_HOME) {
+            window.setTimeout(this.forwardKeyToHomescreen, 0, evt);
+            evt.preventDefault();
+            evt.stopPropagation();
+          } 
+          return;
         }
-        break;
-      case 'AppCommand':
-        switch (evt.command) {
-          case 'Menu':
-            if (Services.prefs.getBoolPref('b2g.keys.menu.enabled'))
-              this.sendEvent(content, 'menu');
-            break;
-          case 'Search':
-            if (Services.prefs.getBoolPref('b2g.keys.search.enabled'))
-              this.toggleDebug();
-            break;
-          case 'VolumeUp':
-            this.changeVolume(1);
-            break;
-          case 'VolumeDown':
-            this.changeVolume(-1);
-            break;
+
+        // If one of the other keys is used in an application and is
+        // cancelled via preventDefault, do nothing.
+        let homescreen = (evt.target.ownerDocument.defaultView == content);
+        if (!homescreen && evt.defaultPrevented)
+          return;
+
+        // If one of the other keys is used in an application and is
+        // not used forward it to the homescreen
+        if (!homescreen)
+          window.setTimeout(this.forwardKeyToHomescreen, 0, evt);
+
+        // For debug purposes and because some of the APIs are not yet exposed
+        // to the content, let's react on some of the keyup events.
+        if (evt.type == 'keyup') {
+          switch (evt.keyCode) {
+            case evt.DOM_VK_F5:
+              if (Services.prefs.getBoolPref('b2g.keys.search.enabled'))
+                this.toggleDebug();
+              break;
+  
+            case evt.DOM_VK_PAGE_DOWN:
+              this.changeVolume(-1);
+              break;
+  
+            case evt.DOM_VK_PAGE_UP:
+              this.changeVolume(1);
+              break;
+          }
         }
         break;
 
@@ -267,9 +249,15 @@ var shell = {
         if (document.mozFullScreen)
           Services.fm.focusedWindow = window;
         break;
+      case 'sizemodechange':
+        if (window.windowState == window.STATE_MINIMIZED) {
+          this.contentBrowser.docShell.isActive = false;
+        } else {
+          this.contentBrowser.docShell.isActive = true;
+        }
+        break;
       case 'load':
         this.contentBrowser.removeEventListener('load', this, true);
-        this.turnScreenOn();
 
         let chromeWindow = window.QueryInterface(Ci.nsIDOMChromeWindow);
         chromeWindow.browserDOMWindow = new nsBrowserAccess();
@@ -316,37 +304,8 @@ var shell = {
     let event = content.document.createEvent('CustomEvent');
     event.initCustomEvent(type, true, true, details ? details : {});
     content.dispatchEvent(event);
-  },
-  toggleScreen: function shell_toggleScreen() {
-    if (screen.mozEnabled)
-      this.turnScreenOff();
-    else
-      this.turnScreenOn();
-  },
-  turnScreenOff: function shell_turnScreenOff() {
-    screen.mozEnabled = false;
-    screen.mozBrightness = 0.0;
-  },
-  turnScreenOn: function shell_turnScreenOn() {
-    screen.mozEnabled = true;
-    screen.mozBrightness = this.preferredScreenBrightness;
   }
 };
-
-(function PowerManager() {
-  let idleHandler = {
-    observe: function(subject, topic, time) {
-      if (topic === "idle") {
-        // TODO: Check wakelock status. See bug 697132.
-        shell.turnScreenOff();
-      }
-    },
-  }
-  let idleTimeout = Services.prefs.getIntPref("power.screen.timeout");
-  if (idleTimeout) {
-    Services.idle.addIdleObserver(idleHandler, idleTimeout);
-  }
-})();
 
 function nsBrowserAccess() {
 }
@@ -432,5 +391,266 @@ Services.obs.addObserver(function onConsoleAPILogEvent(subject, topic, data) {
   serverSocket.init(serverPort, true, -1);
   dump('Opened socket on ' + serverSocket.port + '\n');
   serverSocket.asyncListen(listener);
+})();
+
+var CustomEventManager = {
+  init: function custevt_init() {
+    window.addEventListener("ContentStart", (function(evt) {
+      content.addEventListener("mozContentEvent", this, false, true);
+    }).bind(this), false);
+  },
+
+  handleEvent: function custevt_handleEvent(evt) {
+    let detail = evt.detail;
+    dump("XXX FIXME : Got a mozContentEvent: " + detail.type);
+
+    switch(detail.type) {
+      case "desktop-notification-click":
+      case "desktop-notification-close":
+        AlertsHelper.handleEvent(detail);
+        break;
+      case "webapps-install-granted":
+      case "webapps-install-denied":
+        WebappsHelper.handleEvent(detail);
+        break;
+    }
+  }
+}
+
+var AlertsHelper = {
+  _listeners: {},
+  _count: 0,
+
+  handleEvent: function alert_handleEvent(detail) {
+    if (!detail || !detail.id)
+      return;
+
+    let listener = this._listeners[detail.id];
+    let topic = detail.type == "desktop-notification-click" ? "alertclickcallback" : "alertfinished";
+    listener.observer.observe(null, topic, listener.cookie);
+
+    // we're done with this notification
+    if (topic === "alertfinished")
+      delete this._listeners[detail.id];
+  },
+
+  registerListener: function alert_registerListener(cookie, alertListener) {
+    let id = "alert" + this._count++;
+    this._listeners[id] = { observer: alertListener, cookie: cookie };
+    return id;
+  },
+
+  showAlertNotification: function alert_showAlertNotification(imageUrl, title, text, textClickable, 
+                                                              cookie, alertListener, name) {
+    let id = this.registerListener(cookie, alertListener);
+    shell.sendEvent(content, "mozChromeEvent", { type: "desktop-notification", id: id, icon: imageUrl, 
+                                                 title: title, text: text } );
+  }
+}
+
+var WebappsHelper = {
+  _installers: {},
+  _count: 0,
+
+  init: function webapps_init() {
+    Services.obs.addObserver(this, "webapps-launch", false);
+    Services.obs.addObserver(this, "webapps-ask-install", false);
+  },
+
+  registerInstaller: function webapps_registerInstaller(data) {
+    let id = "installer" + this._count++;
+    this._installers[id] = data;
+    return id;
+  },
+
+  handleEvent: function webapps_handleEvent(detail) {
+    if (!detail || !detail.id)
+      return;
+
+    let installer = this._installers[detail.id];
+    switch (detail.type) {
+      case "webapps-install-granted":
+        DOMApplicationRegistry.confirmInstall(installer);
+        break;
+      case "webapps-install-denied":
+        DOMApplicationRegistry.denyInstall(installer);
+        break;
+    }
+  },
+
+  observe: function webapps_observe(subject, topic, data) {
+    let json = JSON.parse(data);
+    switch(topic) {
+      case "webapps-launch":
+        DOMApplicationRegistry.getManifestFor(json.origin, function(aManifest) {
+          if (!aManifest)
+            return;
+
+          let manifest = new DOMApplicationManifest(aManifest, json.origin);
+          shell.sendEvent(content, "mozChromeEvent", {
+            "type": "webapps-launch",
+            "url": manifest.fullLaunchPath(json.startPoint),
+            "origin": json.origin
+          });
+        });
+        break;
+      case "webapps-ask-install":
+        let id = this.registerInstaller(json);
+        shell.sendEvent(content, "mozChromeEvent", { type: "webapps-ask-install", id: id, app: json.app } );
+        break;
+    }
+  }
+}
+
+// Start the debugger server.
+function startDebugger() {
+  if (!DebuggerServer.initialized) {
+    DebuggerServer.init();
+    DebuggerServer.addActors('chrome://browser/content/dbg-browser-actors.js');
+  }
+
+  let port = Services.prefs.getIntPref('devtools.debugger.port') || 6000;
+  try {
+    DebuggerServer.openListener(port, false);
+  } catch (e) {
+    dump('Unable to start debugger server: ' + e + '\n');
+  }
+}
+
+window.addEventListener('ContentStart', function(evt) {
+  if (Services.prefs.getBoolPref('devtools.debugger.enabled')) {
+    startDebugger();
+  }
+});
+
+
+// Once Bug 731746 - Allow chrome JS object to implement nsIDOMEventTarget
+// is resolved this helper could be removed.
+var SettingsListener = {
+  _callbacks: {},
+
+  init: function sl_init() {
+    if ('mozSettings' in navigator && navigator.mozSettings)
+      navigator.mozSettings.onsettingchange = this.onchange.bind(this);
+  },
+
+  onchange: function sl_onchange(evt) {
+    var callback = this._callbacks[evt.settingName];
+    if (callback) {
+      callback(evt.settingValue);
+    }
+  },
+
+  observe: function sl_observe(name, defaultValue, callback) {
+    var settings = window.navigator.mozSettings;
+    if (!settings) {
+      window.setTimeout(function() { callback(defaultValue); });
+      return;
+    }
+
+    if (!callback || typeof callback !== 'function') {
+      throw new Error('Callback is not a function');
+    }
+
+    var req = settings.getLock().get(name);
+    req.addEventListener('success', (function onsuccess() {
+      callback(typeof(req.result[name]) != 'undefined' ?
+        req.result[name] : defaultValue);
+    }));
+
+    this._callbacks[name] = callback;
+  }
+};
+
+SettingsListener.init();
+
+SettingsListener.observe('language.current', 'en-US', function(value) {
+  Services.prefs.setCharPref('intl.accept_languages', value);
+});
+
+
+(function PowerManager() {
+  // This will eventually be moved to content, so use content API as
+  // much as possible here. TODO: Bug 738530
+  let power = navigator.mozPower;
+  let idleHandler = function idleHandler(subject, topic, time) {
+    if (topic !== 'idle')
+      return;
+
+    if (power.getWakeLockState("screen") != "locked-foreground") {
+      navigator.mozPower.screenEnabled = false;
+    }
+  }
+
+  let wakeLockHandler = function(topic, state) {
+    // Turn off the screen when no one needs the it or all of them are
+    // invisible, otherwise turn the screen on. Note that the CPU
+    // might go to sleep as soon as the screen is turned off and
+    // acquiring wake lock will not bring it back (actually the code
+    // is not executed at all).
+    if (topic === 'screen') {
+      if (state != "locked-foreground") {
+        if (Services.idle.idleTime > idleTimeout*1000) {
+          navigator.mozPower.screenEnabled = false;
+        }
+      } else {
+        navigator.mozPower.screenEnabled = true;
+      }
+    } else if (topic == 'cpu') {
+      navigator.mozPower.cpuSleepAllowed = (state != 'locked-foreground' &&
+                                            state != 'locked-background');
+    }
+  }
+
+  let idleTimeout = Services.prefs.getIntPref('power.screen.timeout');
+  if (!('mozSettings' in navigator))
+    return;
+
+  let request = navigator.mozSettings.getLock().get('power.screen.timeout');
+  request.onsuccess = function onSuccess() {
+    idleTimeout = request.result['power.screen.timeout'] || idleTimeout;
+    if (!idleTimeout)
+      return;
+
+    Services.idle.addIdleObserver(idleHandler, idleTimeout);
+    power.addWakeLockListener(wakeLockHandler);
+  };
+
+  request.onerror = function onError() {
+    if (!idleTimeout)
+      return;
+
+    Services.idle.addIdleObserver(idleHandler, idleTimeout);
+    power.addWakeLockListener(wakeLockHandler);
+  };
+
+  SettingsListener.observe('power.screen.timeout', idleTimeout, function(value) {
+    if (!value)
+      return;
+
+    Services.idle.removeIdleObserver(idleHandler, idleTimeout);
+    idleTimeout = value;
+    Services.idle.addIdleObserver(idleHandler, idleTimeout);
+  });
+
+  window.addEventListener('unload', function removeIdleObjects() {
+    Services.idle.removeIdleObserver(idleHandler, idleTimeout);
+    power.removeWakeLockListener(wakeLockHandler);
+  });
+})();
+
+
+(function RILSettingsToPrefs() {
+  ['ril.data.enabled', 'ril.data.roaming.enabled'].forEach(function(key) {
+    SettingsListener.observe(key, false, function(value) {
+      Services.prefs.setBoolPref(key, value);
+    });
+  });
+
+  ['ril.data.apn', 'ril.data.user', 'ril.data.passwd'].forEach(function(key) {
+    SettingsListener.observe(key, false, function(value) {
+      Services.prefs.setCharPref(key, value);
+    });
+  });
 })();
 

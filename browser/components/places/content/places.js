@@ -1,44 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Places Organizer.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005-2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Goodger <beng@google.com>
- *   Annie Sullivan <annie.sullivan@gmail.com>
- *   Asaf Romano <mano@mozilla.com>
- *   Ehsan Akhgari <ehsan.akhgari@gmail.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *   Steffen Wilberg <steffen.wilberg@web.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+Components.utils.import("resource:///modules/MigrationUtils.jsm");
 
 var PlacesOrganizer = {
   _places: null,
@@ -239,16 +204,13 @@ var PlacesOrganizer = {
     }
 
     // Update the selected folder title where it appears in the UI: the folder
-    // scope button, "Find in <current collection>" command, and the search box
-    // emptytext.  They must be updated even if the selection hasn't changed --
+    // scope button, and the search box emptytext.
+    // They must be updated even if the selection hasn't changed --
     // specifically when node's title changes.  In that case a selection event
     // is generated, this method is called, but the selection does not change.
     var folderButton = document.getElementById("scopeBarFolder");
     var folderTitle = node.title || folderButton.getAttribute("emptytitle");
     folderButton.setAttribute("label", folderTitle);
-    var cmd = document.getElementById("OrganizerCommand_find:current");
-    var label = PlacesUIUtils.getFormattedString("findInPrefix", [folderTitle]);
-    cmd.setAttribute("label", label);
     if (PlacesSearchBox.filterCollection == "collection")
       PlacesSearchBox.updateCollectionTitle(folderTitle);
 
@@ -334,7 +296,7 @@ var PlacesOrganizer = {
         // The command execution function will take care of seeing if the
         // selection is a folder or a different container type, and will
         // load its contents in tabs.
-        PlacesUIUtils.openContainerNodeInTabs(selectedNode, aEvent);
+        PlacesUIUtils.openContainerNodeInTabs(selectedNode, aEvent, currentView);
       }
     }
   },
@@ -361,7 +323,7 @@ var PlacesOrganizer = {
 
   openSelectedNode: function PO_openSelectedNode(aEvent) {
     PlacesUIUtils.openNodeWithEvent(this._content.selectedNode, aEvent,
-                                    this._content.treeBoxObject.view);
+                                    this._content);
   },
 
   /**
@@ -385,20 +347,7 @@ var PlacesOrganizer = {
    * cookies, history, preferences, and bookmarks.
    */
   importFromBrowser: function PO_importFromBrowser() {
-#ifdef XP_MACOSX
-    // On Mac, the window is not modal
-    let win = Services.wm.getMostRecentWindow("Browser:MigrationWizard");
-    if (win) {
-      win.focus();
-      return;
-    }
-
-    let features = "centerscreen,chrome,resizable=no";
-#else
-    let features = "modal,centerscreen,chrome,resizable=no";
-#endif
-    window.openDialog("chrome://browser/content/migration/migration.xul",
-                      "migration", features);
+    MigrationUtils.showMigrationWizard(window);
   },
 
   /**
@@ -411,10 +360,9 @@ var PlacesOrganizer = {
             Ci.nsIFilePicker.modeOpen);
     fp.appendFilters(Ci.nsIFilePicker.filterHTML);
     if (fp.show() != Ci.nsIFilePicker.returnCancel) {
-      if (fp.file) {
-        var importer = Cc["@mozilla.org/browser/places/import-export-service;1"].
-                       getService(Ci.nsIPlacesImportExportService);
-        importer.importHTMLFromFile(fp.file, false);
+      if (fp.fileURL) {
+        Components.utils.import("resource://gre/modules/BookmarkHTMLUtils.jsm");
+        BookmarkHTMLUtils.importFromURL(fp.fileURL.spec, false);
       }
     }
   },
@@ -600,9 +548,7 @@ var PlacesOrganizer = {
       return;
     }
     if (aNode.itemId != -1 &&
-        ((PlacesUtils.nodeIsFolder(aNode) &&
-          !PlacesUtils.nodeIsLivemarkContainer(aNode)) ||
-         PlacesUtils.nodeIsLivemarkItem(aNode))) {
+        PlacesUtils.nodeIsFolder(aNode) && !aNode._feedURI) {
       if (infoBox.getAttribute("minimal") == "true")
         infoBox.setAttribute("wasminimal", "true");
       infoBox.removeAttribute("minimal");
@@ -688,8 +634,10 @@ var PlacesOrganizer = {
       else
         itemId = PlacesUtils._uri(aSelectedNode.uri);
 
-      gEditItemOverlay.initPanel(itemId, { hiddenRows: ["folderPicker"],
-                                           forceReadOnly: readOnly });
+      gEditItemOverlay.initPanel(itemId, { hiddenRows: ["folderPicker"]
+                                         , forceReadOnly: readOnly
+                                         , titleOverride: aSelectedNode.title
+                                         });
 
       // Dynamically generated queries, like history date containers, have
       // itemId !=0 and do not exist in history.  For them the panel is
@@ -828,11 +776,11 @@ var PlacesOrganizer = {
      return;
 
     // Add the place: uri as a bookmark under the bookmarks root.
-    var txn = PlacesUIUtils.ptm.createItem(placeURI,
-                                           PlacesUtils.bookmarksMenuFolderId,
-                                           PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                           input.value);
-    PlacesUIUtils.ptm.doTransaction(txn);
+    var txn = new PlacesCreateBookmarkTransaction(placeURI,
+                                                  PlacesUtils.bookmarksMenuFolderId,
+                                                  PlacesUtils.bookmarks.DEFAULT_INDEX,
+                                                  input.value);
+    PlacesUtils.transactionManager.doTransaction(txn);
 
     // select and load the new query
     this._places.selectPlaceURI(placeSpec);
@@ -937,18 +885,20 @@ var PlacesSearchBox = {
   },
 
   /**
-   * Finds across all bookmarks
+   * Finds across all history, downloads or all bookmarks.
    */
   findAll: function PSB_findAll() {
-    PlacesQueryBuilder.setScope("bookmarks");
-    this.focus();
-  },
-
-  /**
-   * Finds in the currently selected Place.
-   */
-  findCurrent: function PSB_findCurrent() {
-    PlacesQueryBuilder.setScope("collection");
+    switch (this.filterCollection) {
+      case "history":
+        PlacesQueryBuilder.setScope("history");
+        break;
+      case "downloads":
+        PlacesQueryBuilder.setScope("downloads");
+        break;
+      default:
+        PlacesQueryBuilder.setScope("bookmarks");
+        break;
+    }
     this.focus();
   },
 
@@ -959,12 +909,15 @@ var PlacesSearchBox = {
    */
   updateCollectionTitle: function PSB_updateCollectionTitle(aTitle) {
     let title = "";
+    // This is needed when a user performs a folder-specific search
+    // using the scope bar, removes the search-string, and unfocuses
+    // the search box, at least until the removal of the scope bar.
     if (aTitle) {
       title = PlacesUIUtils.getFormattedString("searchCurrentDefault",
                                                [aTitle]);
     }
     else {
-      switch(this.filterCollection) {
+      switch (this.filterCollection) {
         case "history":
           title = PlacesUIUtils.getString("searchHistory");
           break;

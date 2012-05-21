@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jim Mathies <jmathies@mozilla.com> (Original author)
- *   Marco Bonardo <mak77@bonardo.net>
- *   Brian R. Bondy <netzen@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
@@ -141,7 +106,7 @@ var tasksCfg = [
     get title()       _getString("taskbar.tasks.newTab.label"),
     get description() _getString("taskbar.tasks.newTab.description"),
     args:             "-new-tab about:blank",
-    iconIndex:        0, // Fx app icon
+    iconIndex:        3, // New window icon
     open:             true,
     close:            true, // The jump list already has an app launch icon, but
                             // we don't always update the list on shutdown.
@@ -153,7 +118,7 @@ var tasksCfg = [
     get title()       _getString("taskbar.tasks.newWindow.label"),
     get description() _getString("taskbar.tasks.newWindow.description"),
     args:             "-browser",
-    iconIndex:        0, // Fx app icon
+    iconIndex:        2, // New tab icon
     open:             true,
     close:            true, // No point, but we don't always update the list on
                             //  shutdown.  Thus true for consistency.
@@ -174,7 +139,7 @@ var tasksCfg = [
         return _getString("taskbar.tasks.enterPrivacyMode.description");
     },
     args:             "-private-toggle",
-    iconIndex:        0, // Fx app icon
+    iconIndex:        4, // Private browsing mode icon
     get open() {
       // Don't show when inside permanent private browsing mode
       return !_privateBrowsingSvc.autoStarted;
@@ -477,8 +442,6 @@ var WinTaskbarJumpList =
     var options = PlacesUtils.history.getNewQueryOptions();
     options.maxResults = aLimit;
     options.sortingMode = aSortingMode;
-    // We don't want source redirects for these queries.
-    options.redirectsMode = Ci.nsINavHistoryQueryOptions.REDIRECTS_MODE_TARGET;
     var query = PlacesUtils.history.getNewQuery();
 
     // Return the pending statement to the caller, to allow cancelation.

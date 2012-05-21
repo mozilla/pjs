@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=99: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.org code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *         Jonas Sicking <jonas@sicking.cc> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsNodeUtils.h"
 #include "nsContentUtils.h"
@@ -42,11 +10,9 @@
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
 #include "nsIMutationObserver.h"
-#include "nsIMutationObserver2.h"
 #include "nsIDocument.h"
 #include "nsIDOMUserDataHandler.h"
 #include "nsEventListenerManager.h"
-#include "nsIAttribute.h"
 #include "nsIXPConnect.h"
 #include "nsGenericElement.h"
 #include "pldhash.h"
@@ -66,17 +32,20 @@
 #include "jsgc.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsObjectLoadingContent.h"
+#include "nsDOMMutationObserver.h"
 
 using namespace mozilla::dom;
 
 // This macro expects the ownerDocument of content_ to be in scope as
 // |nsIDocument* doc|
-// NOTE: AttributeChildRemoved doesn't use this macro but has a very similar use.
-// If you change how this macro behave please update AttributeChildRemoved.
 #define IMPL_MUTATION_NOTIFICATION(func_, content_, params_)      \
   PR_BEGIN_MACRO                                                  \
+  bool needsEnterLeave = doc->MayHaveDOMMutationObservers();      \
+  if (needsEnterLeave) {                                          \
+    nsDOMMutationObserver::EnterMutationHandling();               \
+  }                                                               \
   nsINode* node = content_;                                       \
-  NS_ASSERTION(node->OwnerDoc() == doc, "Bogus document");     \
+  NS_ASSERTION(node->OwnerDoc() == doc, "Bogus document");        \
   if (doc) {                                                      \
     static_cast<nsIMutationObserver*>(doc->BindingManager())->    \
       func_ params_;                                              \
@@ -92,6 +61,9 @@ using namespace mozilla::dom;
     }                                                             \
     node = node->GetNodeParent();                                 \
   } while (node);                                                 \
+  if (needsEnterLeave) {                                          \
+    nsDOMMutationObserver::LeaveMutationHandling();               \
+  }                                                               \
   PR_END_MACRO
 
 void
@@ -199,49 +171,6 @@ nsNodeUtils::ContentRemoved(nsINode* aContainer,
 }
 
 void
-nsNodeUtils::AttributeChildRemoved(nsINode* aAttribute,
-                                   nsIContent* aChild)
-{
-  NS_PRECONDITION(aAttribute->IsNodeOfType(nsINode::eATTRIBUTE),
-                  "container must be a nsIAttribute");
-
-  // This is a variant of IMPL_MUTATION_NOTIFICATION.
-  do {
-    nsINode::nsSlots* slots = aAttribute->GetExistingSlots();
-    if (slots && !slots->mMutationObservers.IsEmpty()) {
-      // This is a variant of NS_OBSERVER_ARRAY_NOTIFY_OBSERVERS.
-      nsTObserverArray<nsIMutationObserver*>::ForwardIterator iter_ =
-        slots->mMutationObservers;
-      nsCOMPtr<nsIMutationObserver2> obs_;
-      while (iter_.HasMore()) {
-        obs_ = do_QueryInterface(iter_.GetNext());
-        if (obs_) {
-          obs_->AttributeChildRemoved(aAttribute, aChild);
-        }
-      }
-    }
-    aAttribute = aAttribute->GetNodeParent();
-  } while (aAttribute);
-}
-
-void
-nsNodeUtils::ParentChainChanged(nsIContent *aContent)
-{
-  // No need to notify observers on the parents since their parent
-  // chain must have been changed too and so their observers were
-  // notified at that time.
-
-  nsINode::nsSlots* slots = aContent->GetExistingSlots();
-  if (slots && !slots->mMutationObservers.IsEmpty()) {
-    NS_OBSERVER_ARRAY_NOTIFY_OBSERVERS(
-        slots->mMutationObservers,
-        nsIMutationObserver,
-        ParentChainChanged,
-        (aContent));
-  }
-}
-
-void
 nsNodeUtils::LastRelease(nsINode* aNode)
 {
   nsINode::nsSlots* slots = aNode->GetExistingSlots();
@@ -282,7 +211,8 @@ nsNodeUtils::LastRelease(nsINode* aNode)
   }
   aNode->UnsetFlags(NODE_HAS_PROPERTIES);
 
-  if (aNode->HasFlag(NODE_HAS_LISTENERMANAGER)) {
+  if (aNode->NodeType() != nsIDOMNode::DOCUMENT_NODE &&
+      aNode->HasFlag(NODE_HAS_LISTENERMANAGER)) {
 #ifdef DEBUG
     if (nsContentUtils::IsInitialized()) {
       nsEventListenerManager* manager =
@@ -585,8 +515,12 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
     // nsImageLoadingContent needs to know when its document changes
     if (oldDoc != newDoc) {
       nsCOMPtr<nsIImageLoadingContent> imageContent(do_QueryInterface(aNode));
-      if (imageContent)
+      if (imageContent) {
         imageContent->NotifyOwnerDocumentChanged(oldDoc);
+      }
+      if (oldDoc->MayHaveDOMMutationObservers()) {
+        newDoc->SetMayHaveDOMMutationObservers();
+      }
     }
 
     if (elem) {
@@ -596,28 +530,9 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
     if (aCx && wrapper) {
       nsIXPConnect *xpc = nsContentUtils::XPConnect();
       if (xpc) {
-        JSObject *preservedWrapper = nsnull;
-
-        // If reparenting moves us to a new compartment, preserving causes
-        // problems. In that case, we release ourselves and re-preserve after
-        // reparenting so we're sure to have the right JS object preserved.
-        // We use a JSObject stack copy of the wrapper to protect it from GC
-        // under ReparentWrappedNativeIfFound.
-        if (aNode->PreservingWrapper()) {
-          preservedWrapper = wrapper;
-          nsContentUtils::ReleaseWrapper(aNode, aNode);
-          NS_ASSERTION(aNode->GetWrapper(),
-                       "ReleaseWrapper cleared our wrapper, this code needs to "
-                       "be changed to deal with that!");
-        }
-
         nsCOMPtr<nsIXPConnectJSObjectHolder> oldWrapper;
         rv = xpc->ReparentWrappedNativeIfFound(aCx, wrapper, aNewScope, aNode,
                                                getter_AddRefs(oldWrapper));
-
-        if (preservedWrapper) {
-          nsContentUtils::PreserveWrapper(aNode, aNode);
-        }
 
         if (NS_FAILED(rv)) {
           aNode->mNodeInfo.swap(nodeInfo);
@@ -633,32 +548,11 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
   // those handlers. However we currently don't have code to do so without
   // also notifying when it's not safe so we're not doing that at this time.
 
-  // The DOM spec says to always adopt/clone/import the children of attribute
-  // nodes.
-  // XXX The following block is here because our implementation of attribute
-  //     nodes is broken when it comes to inserting children. Instead of cloning
-  //     their children we force creation of the only child by calling
-  //     GetChildAt(0). We can remove this when
-  //     https://bugzilla.mozilla.org/show_bug.cgi?id=56758 is fixed.
-  if (aClone && aNode->IsNodeOfType(nsINode::eATTRIBUTE)) {
-    nsCOMPtr<nsINode> attrChildNode = aNode->GetChildAt(0);
-    // We only need to do this if the child node has properties (because we
-    // might need to call a userdata handler).
-    if (attrChildNode && attrChildNode->HasProperties()) {
-      nsCOMPtr<nsINode> clonedAttrChildNode = clone->GetChildAt(0);
-      if (clonedAttrChildNode) {
-        bool ok = aNodesWithProperties.AppendObject(attrChildNode) &&
-                    aNodesWithProperties.AppendObject(clonedAttrChildNode);
-        NS_ENSURE_TRUE(ok, NS_ERROR_OUT_OF_MEMORY);
-      }
-    }
-  }
-  // XXX End of workaround for broken attribute nodes.
-  else if (aDeep || aNode->IsNodeOfType(nsINode::eATTRIBUTE)) {
+  if (aDeep && (!aClone || !aNode->IsNodeOfType(nsINode::eATTRIBUTE))) {
     // aNode's children.
     for (nsIContent* cloneChild = aNode->GetFirstChild();
          cloneChild;
-       cloneChild = cloneChild->GetNextSibling()) {
+         cloneChild = cloneChild->GetNextSibling()) {
       nsCOMPtr<nsINode> child;
       rv = CloneAndAdopt(cloneChild, aClone, true, nodeInfoManager,
                          aCx, aNewScope, aNodesWithProperties, clone,

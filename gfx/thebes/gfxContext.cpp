@@ -1,40 +1,7 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Oracle Corporation code.
- *
- * The Initial Developer of the Original Code is Oracle Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <pavlov@pavlov.net>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef _MSC_VER
 #define _USE_MATH_DEFINES
@@ -55,6 +22,7 @@
 #include "gfxPattern.h"
 #include "gfxPlatform.h"
 #include "gfxTeeSurface.h"
+#include "sampler.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -73,10 +41,19 @@ public:
     gfxContext::AzureState &state = mContext->CurrentState();
 
     if (state.pattern) {
-      return *state.pattern->GetPattern(mContext->mDT);
+      return *state.pattern->GetPattern(mContext->mDT, state.patternTransformChanged ? &state.patternTransform : nsnull);
     } else if (state.sourceSurface) {
+      Matrix transform = state.surfTransform;
+
+      if (state.patternTransformChanged) {
+        Matrix mat = state.patternTransform;
+        mat.Invert();
+
+        transform = mat * mContext->mDT->GetTransform() * transform;
+      }
+
       mPattern = new (mSurfacePattern.addr())
-        SurfacePattern(state.sourceSurface, EXTEND_CLAMP, state.surfTransform);
+        SurfacePattern(state.sourceSurface, EXTEND_CLAMP, transform);
       return *mPattern;
     } else {
       mPattern = new (mColorPattern.addr())
@@ -96,8 +73,8 @@ private:
 };
 
 gfxContext::gfxContext(gfxASurface *surface)
-  : mSurface(surface)
-  , mRefCairo(NULL)
+  : mRefCairo(NULL)
+  , mSurface(surface)
 {
   MOZ_COUNT_CTOR(gfxContext);
 
@@ -325,6 +302,7 @@ gfxContext::Stroke()
 void
 gfxContext::Fill()
 {
+  SAMPLE_LABEL("gfxContext", "Fill");
   if (mCairo) {
     cairo_fill_preserve(mCairo);
   } else {
@@ -575,6 +553,7 @@ gfxContext::Translate(const gfxPoint& pt)
     MOZ_ASSERT(!mPathBuilder);
 
     Matrix newMatrix = mDT->GetTransform();
+    TransformWillChange();
     mDT->SetTransform(newMatrix.Translate(Float(pt.x), Float(pt.y)));
   }
 }
@@ -588,6 +567,7 @@ gfxContext::Scale(gfxFloat x, gfxFloat y)
     MOZ_ASSERT(!mPathBuilder);
 
     Matrix newMatrix = mDT->GetTransform();
+    TransformWillChange();
     mDT->SetTransform(newMatrix.Scale(Float(x), Float(y)));
   }
 }
@@ -600,6 +580,7 @@ gfxContext::Rotate(gfxFloat angle)
   } else {
     MOZ_ASSERT(!mPathBuilder);
 
+    TransformWillChange();
     Matrix rotation = Matrix::Rotation(Float(angle));
     mDT->SetTransform(rotation * mDT->GetTransform());
   }
@@ -614,6 +595,7 @@ gfxContext::Multiply(const gfxMatrix& matrix)
   } else {
     MOZ_ASSERT(!mPathBuilder);
 
+    TransformWillChange();
     mDT->SetTransform(ToMatrix(matrix) * mDT->GetTransform());
   }
 }
@@ -627,6 +609,7 @@ gfxContext::SetMatrix(const gfxMatrix& matrix)
   } else {
     MOZ_ASSERT(!mPathBuilder);
 
+    TransformWillChange();
     mDT->SetTransform(ToMatrix(matrix));
   }
 }
@@ -639,6 +622,7 @@ gfxContext::IdentityMatrix()
   } else {
     MOZ_ASSERT(!mPathBuilder);
 
+    TransformWillChange();
     mDT->SetTransform(Matrix());
   }
 }
@@ -1266,8 +1250,6 @@ gfxContext::ClipContainsRect(const gfxRect& aRect)
       }
     }
 
-    bool result = true;
-
     // Since we always return false when the clip list contains a
     // non-rectangular clip or a non-rectilinear transform, our 'total' clip
     // is always a rectangle if we hit the end of this function.
@@ -1371,6 +1353,7 @@ gfxContext::SetSource(gfxASurface *surface, const gfxPoint& offset)
   } else {
     CurrentState().surfTransform = Matrix(1.0f, 0, 0, 1.0f, Float(offset.x), Float(offset.y));
     CurrentState().pattern = NULL;
+    CurrentState().patternTransformChanged = false;
     CurrentState().sourceSurface =
       gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(mDT, surface);
   }
@@ -1383,6 +1366,7 @@ gfxContext::SetPattern(gfxPattern *pattern)
     cairo_set_source(mCairo, pattern->CairoPattern());
   } else {
     CurrentState().sourceSurface = NULL;
+    CurrentState().patternTransformChanged = false;
     CurrentState().pattern = pattern;
   }
 }
@@ -1433,6 +1417,7 @@ gfxContext::Mask(gfxPattern *pattern)
 void
 gfxContext::Mask(gfxASurface *surface, const gfxPoint& offset)
 {
+  SAMPLE_LABEL("gfxContext", "Mask");
   if (mCairo) {
     cairo_mask_surface(mCairo, surface->CairoSurface(), offset.x, offset.y);
   } else {
@@ -1450,6 +1435,7 @@ gfxContext::Mask(gfxASurface *surface, const gfxPoint& offset)
 void
 gfxContext::Paint(gfxFloat alpha)
 {
+  SAMPLE_LABEL("gfxContext", "Paint");
   if (mCairo) {
     cairo_paint_with_alpha(mCairo, alpha);
   } else {
@@ -1517,39 +1503,53 @@ gfxContext::PushGroupAndCopyBackground(gfxASurface::gfxContentType content)
 {
   if (mCairo) {
     if (content == gfxASurface::CONTENT_COLOR_ALPHA &&
-        !(GetFlags() & FLAG_DISABLE_COPY_BACKGROUND)) {
-        nsRefPtr<gfxASurface> s = CurrentSurface();
-        if ((s->GetAllowUseAsSource() || s->GetType() == gfxASurface::SurfaceTypeTee) &&
-            (s->GetContentType() == gfxASurface::CONTENT_COLOR ||
-             s->GetOpaqueRect().Contains(GetRoundOutDeviceClipExtents(this)))) {
-            cairo_push_group_with_content(mCairo, CAIRO_CONTENT_COLOR);
-            nsRefPtr<gfxASurface> d = CurrentSurface();
+      !(GetFlags() & FLAG_DISABLE_COPY_BACKGROUND)) {
+      nsRefPtr<gfxASurface> s = CurrentSurface();
+      if ((s->GetAllowUseAsSource() || s->GetType() == gfxASurface::SurfaceTypeTee) &&
+          (s->GetContentType() == gfxASurface::CONTENT_COLOR ||
+              s->GetOpaqueRect().Contains(GetRoundOutDeviceClipExtents(this)))) {
+        cairo_push_group_with_content(mCairo, CAIRO_CONTENT_COLOR);
+        nsRefPtr<gfxASurface> d = CurrentSurface();
 
-            if (d->GetType() == gfxASurface::SurfaceTypeTee) {
-                NS_ASSERTION(s->GetType() == gfxASurface::SurfaceTypeTee, "Mismatched types");
-                nsAutoTArray<nsRefPtr<gfxASurface>,2> ss;
-                nsAutoTArray<nsRefPtr<gfxASurface>,2> ds;
-                static_cast<gfxTeeSurface*>(s.get())->GetSurfaces(&ss);
-                static_cast<gfxTeeSurface*>(d.get())->GetSurfaces(&ds);
-                NS_ASSERTION(ss.Length() == ds.Length(), "Mismatched lengths");
-                gfxPoint translation = d->GetDeviceOffset() - s->GetDeviceOffset();
-                for (PRUint32 i = 0; i < ss.Length(); ++i) {
-                    CopySurface(ss[i], ds[i], translation);
-                }
-            } else {
-                CopySurface(s, d, gfxPoint(0, 0));
-            }
-            d->SetOpaqueRect(s->GetOpaqueRect());
-            return;
+        if (d->GetType() == gfxASurface::SurfaceTypeTee) {
+          NS_ASSERTION(s->GetType() == gfxASurface::SurfaceTypeTee, "Mismatched types");
+          nsAutoTArray<nsRefPtr<gfxASurface>,2> ss;
+          nsAutoTArray<nsRefPtr<gfxASurface>,2> ds;
+          static_cast<gfxTeeSurface*>(s.get())->GetSurfaces(&ss);
+          static_cast<gfxTeeSurface*>(d.get())->GetSurfaces(&ds);
+          NS_ASSERTION(ss.Length() == ds.Length(), "Mismatched lengths");
+          gfxPoint translation = d->GetDeviceOffset() - s->GetDeviceOffset();
+          for (PRUint32 i = 0; i < ss.Length(); ++i) {
+              CopySurface(ss[i], ds[i], translation);
+          }
+        } else {
+          CopySurface(s, d, gfxPoint(0, 0));
         }
+        d->SetOpaqueRect(s->GetOpaqueRect());
+        return;
+      }
     }
-    cairo_push_group_with_content(mCairo, (cairo_content_t) content);
   } else {
-    RefPtr<SourceSurface> source = mDT->Snapshot();
-    PushGroup(content);
-    Rect surfRect(0, 0, Float(mDT->GetSize().width), Float(mDT->GetSize().height));
-    mDT->DrawSurface(source, surfRect, surfRect); 
+    IntRect clipExtents;
+    if (mDT->GetFormat() != FORMAT_B8G8R8X8) {
+      gfxRect clipRect = GetRoundOutDeviceClipExtents(this);
+      clipExtents = IntRect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+    }
+    if (mDT->GetFormat() == FORMAT_B8G8R8X8 ||
+        mDT->GetOpaqueRect().Contains(clipExtents)) {
+      DrawTarget *oldDT = mDT;
+      RefPtr<SourceSurface> source = mDT->Snapshot();
+      PushGroup(content);
+      Rect surfRect(0, 0, Float(mDT->GetSize().width), Float(mDT->GetSize().height));
+      Matrix oldTransform = mDT->GetTransform();
+      mDT->SetTransform(Matrix());
+      mDT->DrawSurface(source, surfRect, surfRect); 
+      mDT->SetTransform(oldTransform);
+      mDT->SetOpaqueRect(oldDT->GetOpaqueRect());
+      return;
+    }
   }
+  PushGroup(content);
 }
 
 already_AddRefed<gfxPattern>
@@ -1584,6 +1584,7 @@ gfxContext::PopGroupToSource()
     Restore();
     CurrentState().sourceSurface = src;
     CurrentState().pattern = NULL;
+    CurrentState().patternTransformChanged = false;
 
     Matrix mat = mDT->GetTransform();
     mat.Invert();
@@ -2055,5 +2056,23 @@ gfxContext::GetOp()
     } else {
       return OP_SOURCE;
     }
+  }
+}
+
+/* SVG font code can change the transform after having set the pattern on the
+ * context. When the pattern is set it is in user space, if the transform is
+ * changed after doing so the pattern needs to be converted back into userspace.
+ * We just store the old pattern here so that we only do the work needed here
+ * if the pattern is actually used.
+ */
+void
+gfxContext::TransformWillChange()
+{
+  AzureState &state = CurrentState();
+
+  if ((state.pattern || state.sourceSurface)
+      && !state.patternTransformChanged) {
+    state.patternTransform = mDT->GetTransform();
+    state.patternTransformChanged = true;
   }
 }

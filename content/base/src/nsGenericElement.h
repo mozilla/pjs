@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * Base class for all element classes; this provides an implementation
@@ -65,6 +33,7 @@
 #include "nsDOMClassInfoID.h" // DOMCI_DATA
 #include "nsIDOMTouchEvent.h"
 #include "nsIInlineEventHandlers.h"
+#include "mozilla/CORSMode.h"
 
 #include "nsISMILAttr.h"
 
@@ -82,6 +51,7 @@ class nsIScrollableFrame;
 class nsAttrValueOrString;
 class nsContentList;
 class nsDOMTokenList;
+class ContentUnbinder;
 struct nsRect;
 
 typedef PRUptrdiff PtrBits;
@@ -98,14 +68,14 @@ public:
   nsChildContentList(nsINode* aNode)
     : mNode(aNode)
   {
-    SetIsProxy();
+    SetIsDOMBinding();
   }
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(nsChildContentList)
 
   // nsWrapperCache
-  virtual JSObject* WrapObject(JSContext *cx, XPCWrappedNativeScope *scope,
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
                                bool *triedToWrap);
 
   // nsIDOMNodeList interface
@@ -246,7 +216,7 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
-  NS_DECL_DOM_MEMORY_REPORTER_SIZEOF
+  NS_DECL_SIZEOF_EXCLUDING_THIS
 
   /**
    * Called during QueryInterface to give the binding manager a chance to
@@ -261,7 +231,7 @@ public:
   virtual PRInt32 IndexOf(nsINode* aPossibleChild) const;
   virtual nsresult InsertChildAt(nsIContent* aKid, PRUint32 aIndex,
                                  bool aNotify);
-  virtual nsresult RemoveChildAt(PRUint32 aIndex, bool aNotify);
+  virtual void RemoveChildAt(PRUint32 aIndex, bool aNotify);
   NS_IMETHOD GetTextContent(nsAString &aTextContent);
   NS_IMETHOD SetTextContent(const nsAString& aTextContent);
 
@@ -325,7 +295,7 @@ public:
   virtual const nsAttrName* GetAttrNameAt(PRUint32 aIndex) const;
   virtual PRUint32 GetAttrCount() const;
   virtual const nsTextFragment *GetText();
-  virtual PRUint32 TextLength();
+  virtual PRUint32 TextLength() const;
   virtual nsresult SetText(const PRUnichar* aBuffer, PRUint32 aLength,
                            bool aNotify);
   // Need to implement this here too to avoid hiding.
@@ -340,9 +310,6 @@ public:
   virtual nsIContent *GetBindingParent() const;
   virtual bool IsNodeOfType(PRUint32 aFlags) const;
   virtual bool IsLink(nsIURI** aURI) const;
-
-  virtual PRUint32 GetScriptTypeID() const;
-  NS_IMETHOD SetScriptTypeID(PRUint32 aLang);
 
   virtual void DestroyContent();
   virtual void SaveSubtreeState();
@@ -369,7 +336,9 @@ public:
   virtual const nsAttrValue* DoGetClasses() const;
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker);
   virtual mozilla::css::StyleRule* GetInlineStyleRule();
-  NS_IMETHOD SetInlineStyleRule(mozilla::css::StyleRule* aStyleRule, bool aNotify);
+  virtual nsresult SetInlineStyleRule(mozilla::css::StyleRule* aStyleRule,
+                                      const nsAString* aSerialized,
+                                      bool aNotify);
   NS_IMETHOD_(bool)
     IsAttributeMapped(const nsIAtom* aAttribute) const;
   virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
@@ -596,7 +565,7 @@ public:
   nsIContent* GetLastElementChild();
   nsIContent* GetPreviousElementSibling();
   nsIContent* GetNextElementSibling();
-  nsIDOMDOMTokenList* GetClassList(nsresult *aResult);
+  nsDOMTokenList* GetClassList(nsresult *aResult);
   bool MozMatchesSelector(const nsAString& aSelector, nsresult* aResult);
 
   /**
@@ -639,6 +608,25 @@ public:
                            void *aData);
   static void MarkUserDataHandler(void* aObject, nsIAtom* aKey, void* aChild,
                                   void* aData);
+
+  /**
+   * Parse a string into an nsAttrValue for a CORS attribute.  This
+   * never fails.  The resulting value is an enumerated value whose
+   * GetEnumValue() returns one of the above constants.
+   */
+  static void ParseCORSValue(const nsAString& aValue, nsAttrValue& aResult);
+
+  /**
+   * Return the CORS mode for a given string
+   */
+  static mozilla::CORSMode StringToCORSMode(const nsAString& aValue);
+  
+  /**
+   * Return the CORS mode for a given nsAttrValue (which may be null,
+   * but if not should have been parsed via ParseCORSValue).
+   */
+  static mozilla::CORSMode AttrValueToCORSMode(const nsAttrValue* aValue);
+
 protected:
   /*
    * Named-bools for use with SetAttrAndNotify to make call sites easier to
@@ -793,6 +781,10 @@ protected:
   {
     return this;
   }
+
+  nsresult GetAttributeNodeNSInternal(const nsAString& aNamespaceURI,
+                                      const nsAString& aLocalName,
+                                      nsIDOMAttr** aReturn);
 
 public:
   // Because of a bug in MS C++ compiler nsDOMSlots must be declared public,
@@ -952,6 +944,7 @@ protected:
    */
   virtual void GetLinkTarget(nsAString& aTarget);
 
+  friend class ContentUnbinder;
   /**
    * Array containing all attributes and children for this element
    */
@@ -1020,6 +1013,25 @@ _elementName::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const        \
   {                                                                     \
     return static_cast<nsXPCClassInfo*>(                                \
       NS_GetDOMClassInfoInstance(eDOMClassInfo_##_interface##_id));     \
+  }
+
+/**
+ * A macro to implement the getter and setter for a given string
+ * valued content property. The method uses the generic GetAttr and
+ * SetAttr methods.  We use the 5-argument form of SetAttr, because
+ * some consumers only implement that one, hiding superclass
+ * 4-argument forms.
+ */
+#define NS_IMPL_STRING_ATTR(_class, _method, _atom)                     \
+  NS_IMETHODIMP                                                         \
+  _class::Get##_method(nsAString& aValue)                               \
+  {                                                                     \
+    return GetAttr(kNameSpaceID_None, nsGkAtoms::_atom, aValue);        \
+  }                                                                     \
+  NS_IMETHODIMP                                                         \
+  _class::Set##_method(const nsAString& aValue)                         \
+  {                                                                     \
+    return SetAttr(kNameSpaceID_None, nsGkAtoms::_atom, nsnull, aValue, true); \
   }
 
 /**

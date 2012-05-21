@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=2 ts=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Robert Sayre <sayrer@gmail.com>
- *   Henri Sivonen <hsivonen@iki.fi>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
 
@@ -55,6 +21,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsNullPrincipal.h"
 #include "nsContentUtils.h"
+#include "nsIParserUtils.h"
 
 using namespace mozilla;
 
@@ -77,6 +44,7 @@ nsIAtom** const kElementsHTML[] = {
   &nsGkAtoms::bdo,
   &nsGkAtoms::big,
   &nsGkAtoms::blockquote,
+  // body checked specially
   &nsGkAtoms::br,
   &nsGkAtoms::button,
   &nsGkAtoms::canvas,
@@ -109,9 +77,11 @@ nsIAtom** const kElementsHTML[] = {
   &nsGkAtoms::h4,
   &nsGkAtoms::h5,
   &nsGkAtoms::h6,
+  // head checked specially
   &nsGkAtoms::header,
   &nsGkAtoms::hgroup,
   &nsGkAtoms::hr,
+  // html checked specially
   &nsGkAtoms::i,
   &nsGkAtoms::img,
   &nsGkAtoms::input,
@@ -155,6 +125,7 @@ nsIAtom** const kElementsHTML[] = {
   &nsGkAtoms::sub,
   &nsGkAtoms::summary,
   &nsGkAtoms::sup,
+  // style checked specially
   &nsGkAtoms::table,
   &nsGkAtoms::tbody,
   &nsGkAtoms::td,
@@ -163,6 +134,7 @@ nsIAtom** const kElementsHTML[] = {
   &nsGkAtoms::th,
   &nsGkAtoms::thead,
   &nsGkAtoms::time,
+  // title checked specially
   &nsGkAtoms::tr,
 #ifdef MOZ_MEDIA
   &nsGkAtoms::track,
@@ -184,7 +156,6 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::acceptcharset,
   &nsGkAtoms::accesskey,
   &nsGkAtoms::action,
-  &nsGkAtoms::align,
   &nsGkAtoms::alt,
   &nsGkAtoms::autocomplete,
   &nsGkAtoms::autofocus,
@@ -192,27 +163,20 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::autoplay,
 #endif
   &nsGkAtoms::axis,
-  &nsGkAtoms::background,
-  &nsGkAtoms::bgcolor,
-  &nsGkAtoms::border,
-  &nsGkAtoms::cellpadding,
-  &nsGkAtoms::cellspacing,
   &nsGkAtoms::_char,
   &nsGkAtoms::charoff,
   &nsGkAtoms::charset,
   &nsGkAtoms::checked,
   &nsGkAtoms::cite,
   &nsGkAtoms::_class,
-  &nsGkAtoms::clear,
   &nsGkAtoms::cols,
   &nsGkAtoms::colspan,
-  &nsGkAtoms::color,
+  &nsGkAtoms::content,
   &nsGkAtoms::contenteditable,
   &nsGkAtoms::contextmenu,
 #ifdef MOZ_MEDIA
   &nsGkAtoms::controls,
 #endif
-  &nsGkAtoms::compact,
   &nsGkAtoms::coords,
   &nsGkAtoms::datetime,
   &nsGkAtoms::dir,
@@ -228,7 +192,6 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::high,
   &nsGkAtoms::href,
   &nsGkAtoms::hreflang,
-  &nsGkAtoms::hspace,
   &nsGkAtoms::icon,
   &nsGkAtoms::id,
   &nsGkAtoms::ismap,
@@ -258,7 +221,6 @@ nsIAtom** const kAttributesHTML[] = {
 #endif
   &nsGkAtoms::name,
   &nsGkAtoms::nohref,
-  &nsGkAtoms::noshade,
   &nsGkAtoms::novalidate,
   &nsGkAtoms::nowrap,
   &nsGkAtoms::open,
@@ -268,7 +230,6 @@ nsIAtom** const kAttributesHTML[] = {
 #ifdef MOZ_MEDIA
   &nsGkAtoms::playbackrate,
 #endif
-  &nsGkAtoms::pointSize,
 #ifdef MOZ_MEDIA
   &nsGkAtoms::poster,
   &nsGkAtoms::preload,
@@ -289,7 +250,6 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::scope,
   &nsGkAtoms::selected,
   &nsGkAtoms::shape,
-  &nsGkAtoms::size,
   &nsGkAtoms::span,
   &nsGkAtoms::spellcheck,
   &nsGkAtoms::src,
@@ -301,11 +261,28 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::title,
   &nsGkAtoms::type,
   &nsGkAtoms::usemap,
-  &nsGkAtoms::valign,
   &nsGkAtoms::value,
-  &nsGkAtoms::vspace,
   &nsGkAtoms::width,
   &nsGkAtoms::wrap,
+  nsnull
+};
+
+nsIAtom** const kPresAttributesHTML[] = {
+  &nsGkAtoms::align,
+  &nsGkAtoms::background,
+  &nsGkAtoms::bgcolor,
+  &nsGkAtoms::border,
+  &nsGkAtoms::cellpadding,
+  &nsGkAtoms::cellspacing,
+  &nsGkAtoms::color,
+  &nsGkAtoms::compact,
+  &nsGkAtoms::clear,
+  &nsGkAtoms::hspace,
+  &nsGkAtoms::noshade,
+  &nsGkAtoms::pointSize,
+  &nsGkAtoms::size,
+  &nsGkAtoms::valign,
+  &nsGkAtoms::vspace,
   nsnull
 };
 
@@ -617,12 +594,13 @@ nsIAtom** const kAttributesSVG[] = {
   // v-ideographic
   // v-mathematical
   &nsGkAtoms::values, // values
+  &nsGkAtoms::vector_effect, // vector-effect
   // vert-adv-y
   // vert-origin-x
   // vert-origin-y
   &nsGkAtoms::viewBox, // viewBox
+  &nsGkAtoms::viewTarget, // viewTarget
   &nsGkAtoms::visibility, // visibility
-  // viewTarget
   &nsGkAtoms::width, // width
   // widths
   &nsGkAtoms::word_spacing, // word-spacing
@@ -979,22 +957,36 @@ nsIAtom** const kAttributesMathML[] = {
 nsIAtom** const kURLAttributesMathML[] = {
   &nsGkAtoms::href,
   &nsGkAtoms::src,
+  &nsGkAtoms::cdgroup_,
+  &nsGkAtoms::altimg_,
   &nsGkAtoms::definitionURL_,
   nsnull
 };
 
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sElementsHTML = nsnull;
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sAttributesHTML = nsnull;
+nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sPresAttributesHTML = nsnull;
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sElementsSVG = nsnull;
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sAttributesSVG = nsnull;
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sElementsMathML = nsnull;
 nsTHashtable<nsISupportsHashKey>* nsTreeSanitizer::sAttributesMathML = nsnull;
 nsIPrincipal* nsTreeSanitizer::sNullPrincipal = nsnull;
 
-nsTreeSanitizer::nsTreeSanitizer(bool aAllowStyles, bool aAllowComments)
- : mAllowStyles(aAllowStyles)
- , mAllowComments(aAllowComments)
+nsTreeSanitizer::nsTreeSanitizer(PRUint32 aFlags)
+ : mAllowStyles(aFlags & nsIParserUtils::SanitizerAllowStyle)
+ , mAllowComments(aFlags & nsIParserUtils::SanitizerAllowComments)
+ , mDropNonCSSPresentation(aFlags &
+     nsIParserUtils::SanitizerDropNonCSSPresentation)
+ , mDropForms(aFlags & nsIParserUtils::SanitizerDropForms)
+ , mCidEmbedsOnly(aFlags &
+     nsIParserUtils::SanitizerCidEmbedsOnly)
+ , mDropMedia(aFlags & nsIParserUtils::SanitizerDropMedia)
+ , mFullDocument(false)
 {
+  if (mCidEmbedsOnly) {
+    // Sanitizing styles for external references is not supported.
+    mAllowStyles = false;
+  }
   if (!sElementsHTML) {
     // Initialize lazily to avoid having to initialize at all if the user
     // doesn't paste HTML or load feeds.
@@ -1006,9 +998,31 @@ bool
 nsTreeSanitizer::MustFlatten(PRInt32 aNamespace, nsIAtom* aLocal)
 {
   if (aNamespace == kNameSpaceID_XHTML) {
+    if (mDropNonCSSPresentation && (nsGkAtoms::font == aLocal ||
+                                    nsGkAtoms::center == aLocal)) {
+      return true;
+    }
+    if (mDropForms && (nsGkAtoms::form == aLocal ||
+                       nsGkAtoms::input == aLocal ||
+                       nsGkAtoms::keygen == aLocal ||
+                       nsGkAtoms::option == aLocal ||
+                       nsGkAtoms::optgroup == aLocal)) {
+      return true;
+    }
+    if (mFullDocument && (nsGkAtoms::title == aLocal ||
+                          nsGkAtoms::html == aLocal ||
+                          nsGkAtoms::head == aLocal ||
+                          nsGkAtoms::body == aLocal)) {
+      return false;
+    }
     return !sElementsHTML->GetEntry(aLocal);
   }
   if (aNamespace == kNameSpaceID_SVG) {
+    if (mCidEmbedsOnly || mDropMedia) {
+      // Sanitizing CSS-based URL references inside SVG presentational
+      // attributes is not supported, so flattening for cid: embed case.
+      return true;
+    }
     return !sElementsSVG->GetEntry(aLocal);
   }
   if (aNamespace == kNameSpaceID_MathML) {
@@ -1042,11 +1056,34 @@ nsTreeSanitizer::MustPrune(PRInt32 aNamespace,
     return true;
   }
   if (aNamespace == kNameSpaceID_XHTML) {
-    if (nsGkAtoms::title == aLocal) {
+    if (nsGkAtoms::title == aLocal && !mFullDocument) {
       // emulate the quirks of the old parser
       return true;
     }
-    if ((nsGkAtoms::meta == aLocal || nsGkAtoms::link == aLocal) &&
+    if (mDropForms && (nsGkAtoms::select == aLocal ||
+                       nsGkAtoms::button == aLocal ||
+                       nsGkAtoms::datalist == aLocal)) {
+      return true;
+    }
+    if (mDropMedia && (nsGkAtoms::img == aLocal
+#ifdef MOZ_MEDIA
+                       ||
+                       nsGkAtoms::video == aLocal ||
+                       nsGkAtoms::audio == aLocal ||
+                       nsGkAtoms::source == aLocal
+#endif
+                       )) {
+      return true;
+    }
+    if (nsGkAtoms::meta == aLocal &&
+        (aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::charset) ||
+         aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::httpEquiv))) {
+      // Throw away charset declarations even if they also have microdata
+      // which they can't validly have.
+      return true;
+    }
+    if (((!mFullDocument && nsGkAtoms::meta == aLocal) ||
+        nsGkAtoms::link == aLocal) &&
         !(aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::itemprop) ||
           aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::itemscope))) {
       // emulate old behavior for non-Microdata <meta> and <link> presumably
@@ -1207,17 +1244,27 @@ nsTreeSanitizer::SanitizeAttributes(mozilla::dom::Element* aElement,
           // the loop again.
           --ac;
           i = ac; // i will be decremented immediately thanks to the for loop
+          continue;
         }
+        // else fall through to see if there's another reason to drop this
+        // attribute (in particular if the attribute is background="" on an
+        // HTML element)
+      }
+      if (!mDropNonCSSPresentation &&
+          (aAllowed == sAttributesHTML) && // element is HTML
+          sPresAttributesHTML->GetEntry(attrLocal)) {
         continue;
       }
       if (aAllowed->GetEntry(attrLocal) &&
-          !(attrLocal == nsGkAtoms::rel &&
-            aElement->IsHTML(nsGkAtoms::link)) &&
-          !(attrLocal == nsGkAtoms::name &&
-            aElement->IsHTML(nsGkAtoms::meta))) {
+          !((attrLocal == nsGkAtoms::rel &&
+             aElement->IsHTML(nsGkAtoms::link)) ||
+            (!mFullDocument &&
+             attrLocal == nsGkAtoms::name &&
+             aElement->IsHTML(nsGkAtoms::meta)))) {
         // name="" and rel="" are whitelisted, but treat them as blacklisted
-        // for <meta name> and <link rel> to avoid document-wide metadata
-        // or styling overrides with non-conforming <meta name itemprop> or
+        // for <meta name> (fragment case) and <link rel> (all cases) to avoid
+        // document-wide metadata or styling overrides with non-conforming
+        // <meta name itemprop> or
         // <link rel itemprop>
         continue;
       }
@@ -1299,8 +1346,32 @@ nsTreeSanitizer::SanitizeURL(mozilla::dom::Element* aElement,
   nsCOMPtr<nsIURI> baseURI = aElement->GetBaseURI();
   nsCOMPtr<nsIURI> attrURI;
   nsresult rv = NS_NewURI(getter_AddRefs(attrURI), v, nsnull, baseURI);
-  if (NS_SUCCEEDED(rv)) {
-    rv = secMan->CheckLoadURIWithPrincipal(sNullPrincipal, attrURI, flags);
+  if (NS_SUCCEEDED(rv)) { 
+    if (mCidEmbedsOnly &&
+        kNameSpaceID_None == aNamespace) {
+      if (nsGkAtoms::src == aLocalName || nsGkAtoms::background == aLocalName) {
+        // comm-central uses a hack that makes nsIURIs created with cid: specs
+        // actually have an about:blank spec. Therefore, nsIURI facilities are
+        // useless for cid: when comm-central code is participating.
+        if (!(v.Length() > 4 &&
+              (v[0] == 'c' || v[0] == 'C') &&
+              (v[1] == 'i' || v[1] == 'I') &&
+              (v[2] == 'd' || v[2] == 'D') &&
+              v[3] == ':')) {
+          rv = NS_ERROR_FAILURE;
+        }
+      } else if (nsGkAtoms::cdgroup_ == aLocalName ||
+                 nsGkAtoms::altimg_ == aLocalName ||
+                 nsGkAtoms::definitionURL_ == aLocalName) {
+        // Gecko doesn't fetch these now and shouldn't in the future, but
+        // in case someone goofs with these in the future, let's drop them.
+        rv = NS_ERROR_FAILURE;
+      } else {
+        rv = secMan->CheckLoadURIWithPrincipal(sNullPrincipal, attrURI, flags);
+      }
+    } else {
+      rv = secMan->CheckLoadURIWithPrincipal(sNullPrincipal, attrURI, flags);
+    }
   }
   if (NS_FAILED(rv)) {
     aElement->UnsetAttr(aNamespace, aLocalName, false);
@@ -1310,7 +1381,8 @@ nsTreeSanitizer::SanitizeURL(mozilla::dom::Element* aElement,
 }
 
 void
-nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
+nsTreeSanitizer::Sanitize(nsIContent* aFragment)
+{
   // If you want to relax these preconditions, be sure to check the code in
   // here that notifies / does not notify or that fires mutation events if
   // in tree.
@@ -1318,7 +1390,31 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
       "Argument was not DOM fragment.");
   NS_PRECONDITION(!aFragment->IsInDoc(), "The fragment is in doc?");
 
-  nsIContent* node = aFragment->GetFirstChild();
+  mFullDocument = false;
+  SanitizeChildren(aFragment);
+}
+
+void
+nsTreeSanitizer::Sanitize(nsIDocument* aDocument)
+{
+  // If you want to relax these preconditions, be sure to check the code in
+  // here that notifies / does not notify or that fires mutation events if
+  // in tree.
+#ifdef DEBUG
+  nsCOMPtr<nsISupports> container = aDocument->GetContainer();
+  NS_PRECONDITION(!container, "The document is in a shell.");
+  nsRefPtr<mozilla::dom::Element> root = aDocument->GetRootElement();
+  NS_PRECONDITION(root->IsHTML(nsGkAtoms::html), "Not HTML root.");
+#endif
+
+  mFullDocument = true;
+  SanitizeChildren(aDocument);
+}
+
+void
+nsTreeSanitizer::SanitizeChildren(nsINode* aRoot)
+{
+  nsIContent* node = aRoot->GetFirstChild();
   while (node) {
     if (node->IsElement()) {
       mozilla::dom::Element* elt = node->AsElement();
@@ -1327,7 +1423,7 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
       PRInt32 ns = nodeInfo->NamespaceID();
 
       if (MustPrune(ns, localName, elt)) {
-        nsIContent* next = node->GetNextNonChildNode(aFragment);
+        nsIContent* next = node->GetNextNonChildNode(aRoot);
         node->GetParent()->RemoveChild(node);
         node = next;
         continue;
@@ -1344,7 +1440,7 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
         nsCOMPtr<nsIURI> baseURI = node->GetBaseURI();
         if (SanitizeStyleSheet(styleText,
                                sanitizedStyle,
-                               aFragment->OwnerDoc(),
+                               aRoot->OwnerDoc(),
                                baseURI)) {
           nsContentUtils::SetNodeTextContent(node, sanitizedStyle, true);
         } else {
@@ -1366,11 +1462,11 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
                              mAllowStyles,
                              false);
         }
-        node = node->GetNextNonChildNode(aFragment);
+        node = node->GetNextNonChildNode(aRoot);
         continue;
       }
       if (MustFlatten(ns, localName)) {
-        nsIContent* next = node->GetNextNode(aFragment);
+        nsIContent* next = node->GetNextNode(aRoot);
         nsIContent* parent = node->GetParent();
         nsCOMPtr<nsIContent> child; // Must keep the child alive during move
         nsresult rv;
@@ -1393,7 +1489,8 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
                            sAttributesHTML,
                            (nsIAtom***)kURLAttributesHTML,
                            false, mAllowStyles,
-                           (nsGkAtoms::img == localName));
+                           (nsGkAtoms::img == localName) &&
+                           !mCidEmbedsOnly);
       } else if (ns == kNameSpaceID_SVG) {
         SanitizeAttributes(elt,
                            sAttributesSVG,
@@ -1409,13 +1506,13 @@ nsTreeSanitizer::Sanitize(nsIContent* aFragment) {
                            false,
                            false);
       }
-      node = node->GetNextNode(aFragment);
+      node = node->GetNextNode(aRoot);
       continue;
     }
     NS_ASSERTION(!node->GetFirstChild(), "How come non-element node had kids?");
-    nsIContent* next = node->GetNextNonChildNode(aFragment);
+    nsIContent* next = node->GetNextNonChildNode(aRoot);
     if (!mAllowComments && node->IsNodeOfType(nsINode::eCOMMENT)) {
-      node->GetParent()->RemoveChild(node);
+      node->GetNodeParent()->RemoveChild(node);
     }
     node = next;
   }
@@ -1436,6 +1533,12 @@ nsTreeSanitizer::InitializeStatics()
   sAttributesHTML->Init(ArrayLength(kAttributesHTML));
   for (PRUint32 i = 0; kAttributesHTML[i]; i++) {
     sAttributesHTML->PutEntry(*kAttributesHTML[i]);
+  }
+
+  sPresAttributesHTML = new nsTHashtable<nsISupportsHashKey> ();
+  sPresAttributesHTML->Init(ArrayLength(kPresAttributesHTML));
+  for (PRUint32 i = 0; kPresAttributesHTML[i]; i++) {
+    sPresAttributesHTML->PutEntry(*kPresAttributesHTML[i]);
   }
 
   sElementsSVG = new nsTHashtable<nsISupportsHashKey> ();
@@ -1475,6 +1578,9 @@ nsTreeSanitizer::ReleaseStatics()
 
   delete sAttributesHTML;
   sAttributesHTML = nsnull;
+
+  delete sPresAttributesHTML;
+  sPresAttributesHTML = nsnull;
 
   delete sElementsSVG;
   sElementsSVG = nsnull;

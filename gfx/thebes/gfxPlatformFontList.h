@@ -1,52 +1,68 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2008-2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFXPLATFORMFONTLIST_H_
 #define GFXPLATFORMFONTLIST_H_
 
 #include "nsDataHashtable.h"
 #include "nsRefPtrHashtable.h"
-#include "nsHashSets.h"
+#include "nsTHashtable.h"
 
 #include "gfxFontUtils.h"
 #include "gfxFont.h"
 #include "gfxPlatform.h"
 
+#include "nsIMemoryReporter.h"
 #include "mozilla/FunctionTimer.h"
+
+class CharMapHashKey : public PLDHashEntryHdr
+{
+public:
+    typedef gfxCharacterMap* KeyType;
+    typedef const gfxCharacterMap* KeyTypePointer;
+
+    CharMapHashKey(const gfxCharacterMap *aCharMap) :
+        mCharMap(const_cast<gfxCharacterMap*>(aCharMap))
+    {
+        MOZ_COUNT_CTOR(CharMapHashKey);
+    }
+    CharMapHashKey(const CharMapHashKey& toCopy) :
+        mCharMap(toCopy.mCharMap)
+    {
+        MOZ_COUNT_CTOR(CharMapHashKey);
+    }
+    ~CharMapHashKey()
+    {
+        MOZ_COUNT_DTOR(CharMapHashKey);
+    }
+
+    gfxCharacterMap* GetKey() const { return mCharMap; }
+
+    bool KeyEquals(const gfxCharacterMap *aCharMap) const {
+        NS_ASSERTION(!aCharMap->mBuildOnTheFly && !mCharMap->mBuildOnTheFly,
+                     "custom cmap used in shared cmap hashtable");
+        // cmaps built on the fly never match
+        if (aCharMap->mHash != mCharMap->mHash)
+        {
+            return false;
+        }
+        return mCharMap->Equals(aCharMap);
+    }
+
+    static const gfxCharacterMap* KeyToPointer(gfxCharacterMap *aCharMap) {
+        return aCharMap;
+    }
+    static PLDHashNumber HashKey(const gfxCharacterMap *aCharMap) {
+        return aCharMap->mHash;
+    }
+
+    enum { ALLOW_MEMMOVE = true };
+
+protected:
+    gfxCharacterMap *mCharMap;
+};
 
 // gfxPlatformFontList is an abstract class for the global font list on the system;
 // concrete subclasses for each platform implement the actual interface to the system fonts.
@@ -55,6 +71,14 @@
 // so we do our own font family/style management here instead.
 
 // Much of this is based on the old gfxQuartzFontCache, but adapted for use on all platforms.
+
+struct FontListSizes {
+    PRUint32 mFontListSize; // size of the font list and dependent objects
+                            // (font family and face names, etc), but NOT
+                            // including the font table cache and the cmaps
+    PRUint32 mFontTableCacheSize; // memory used for the gfxFontEntry table caches
+    PRUint32 mCharMapsSize; // memory used for cmap coverage info
+};
 
 class gfxPlatformFontList : protected gfxFontInfoLoader
 {
@@ -97,7 +121,10 @@ public:
 
     virtual void GetFontFamilyList(nsTArray<nsRefPtr<gfxFontFamily> >& aFamilyArray);
 
-    gfxFontEntry* FindFontForChar(const PRUint32 aCh, gfxFont *aPrevFont);
+    virtual gfxFontEntry*
+    SystemFindFontForChar(const PRUint32 aCh,
+                          PRInt32 aRunScript,
+                          const gfxFontStyle* aStyle);
 
     // TODO: make this virtual, for lazily adding to the font list
     virtual gfxFontFamily* FindFamily(const nsAString& aFamily);
@@ -137,7 +164,30 @@ public:
     // (platforms may override, eg Mac)
     virtual bool GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName);
 
+    virtual void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                     FontListSizes*    aSizes) const;
+    virtual void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+                                     FontListSizes*    aSizes) const;
+
+    // search for existing cmap that matches the input
+    // return the input if no match is found
+    gfxCharacterMap* FindCharMap(gfxCharacterMap *aCmap);
+
+    // add a cmap to the shared cmap set
+    gfxCharacterMap* AddCmap(const gfxCharacterMap *aCharMap);
+
+    // remove the cmap from the shared cmap set
+    void RemoveCmap(const gfxCharacterMap *aCharMap);
+
 protected:
+    class MemoryReporter
+        : public nsIMemoryMultiReporter
+    {
+    public:
+        NS_DECL_ISUPPORTS
+        NS_DECL_NSIMEMORYMULTIREPORTER
+    };
+
     gfxPlatformFontList(bool aNeedFullnamePostscriptNames = true);
 
     static gfxPlatformFontList *sPlatformFontList;
@@ -145,6 +195,21 @@ protected:
     static PLDHashOperator FindFontForCharProc(nsStringHashKey::KeyType aKey,
                                                nsRefPtr<gfxFontFamily>& aFamilyEntry,
                                                void* userArg);
+
+    // returns default font for a given character, null otherwise
+    virtual gfxFontEntry* CommonFontFallback(const PRUint32 aCh,
+                                             PRInt32 aRunScript,
+                                             const gfxFontStyle* aMatchStyle);
+
+    // search fonts system-wide for a given character, null otherwise
+    virtual gfxFontEntry* GlobalFontFallback(const PRUint32 aCh,
+                                             PRInt32 aRunScript,
+                                             const gfxFontStyle* aMatchStyle,
+                                             PRUint32& aCmapCount);
+
+    // whether system-based font fallback is used or not
+    // if system fallback is used, no need to load all cmaps
+    virtual bool UsesSystemFallback() { return false; }
 
     // separate initialization for reading in name tables, since this is expensive
     void InitOtherFamilyNames();
@@ -181,6 +246,13 @@ protected:
     virtual bool RunLoader();
     virtual void FinishLoader();
 
+    // used by memory reporter to accumulate sizes of family names in the hash
+    static size_t
+    SizeOfFamilyNameEntryExcludingThis(const nsAString&               aKey,
+                                       const nsRefPtr<gfxFontFamily>& aFamily,
+                                       nsMallocSizeOfFun              aMallocSizeOf,
+                                       void*                          aUserArg);
+
     // canonical family name ==> family entry (unique, one name per family entry)
     nsRefPtrHashtable<nsStringHashKey, gfxFontFamily> mFontFamilies;
 
@@ -214,7 +286,11 @@ protected:
     // on pages with lots of problems
     nsString mReplacementCharFallbackFamily;
 
-    nsStringHashSet mBadUnderlineFamilyNames;
+    nsTHashtable<nsStringHashKey> mBadUnderlineFamilyNames;
+
+    // character map data shared across families
+    // contains weak ptrs to cmaps shared by font entry objects
+    nsTHashtable<CharMapHashKey> mSharedCmaps;
 
     // data used as part of the font cmap loading process
     nsTArray<nsRefPtr<gfxFontFamily> > mFontFamiliesToLoad;

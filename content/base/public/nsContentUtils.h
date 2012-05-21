@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* A namespace class for static content utilities. */
 
@@ -251,20 +218,6 @@ public:
   static JSContext* GetContextFromDocument(nsIDocument *aDocument);
 
   /**
-   * Get a scope from aNewDocument. Also get a context through the scope of one
-   * of the documents, from the stack or the safe context.
-   *
-   * @param aOldDocument The document to try to get a context from. May be null.
-   * @param aNewDocument The document to get aNewScope from.
-   * @param aCx [out] Context gotten through one of the scopes, from the stack
-   *                  or the safe context.
-   * @param aNewScope [out] Scope gotten from aNewDocument.
-   */
-  static nsresult GetContextAndScope(nsIDocument *aOldDocument,
-                                     nsIDocument *aNewDocument,
-                                     JSContext **aCx, JSObject **aNewScope);
-
-  /**
    * When a document's scope changes (e.g., from document.open(), call this
    * function to move all content wrappers from the old scope to the new one.
    */
@@ -409,9 +362,6 @@ public:
 
   static PRUint32 CopyNewlineNormalizedUnicodeTo(nsReadingIterator<PRUnichar>& aSrcStart, const nsReadingIterator<PRUnichar>& aSrcEnd, nsAString& aDest);
 
-  static nsISupports *
-  GetClassInfoInstance(nsDOMClassInfoID aID);
-
   static const nsDependentSubstring TrimCharsInSet(const char* aSet,
                                                    const nsAString& aValue);
 
@@ -422,8 +372,8 @@ public:
   /**
    * Returns true if aChar is of class Ps, Pi, Po, Pf, or Pe.
    */
-  static bool IsPunctuationMark(PRUint32 aChar);
-  static bool IsPunctuationMarkAt(const nsTextFragment* aFrag, PRUint32 aOffset);
+  static bool IsFirstLetterPunctuation(PRUint32 aChar);
+  static bool IsFirstLetterPunctuationAt(const nsTextFragment* aFrag, PRUint32 aOffset);
  
   /**
    * Returns true if aChar is of class Lu, Ll, Lt, Lm, Lo, Nd, Nl or No
@@ -442,6 +392,16 @@ public:
   static bool IsHTMLWhitespace(PRUnichar aChar);
 
   /**
+   * Is the HTML local name a block element?
+   */
+  static bool IsHTMLBlock(nsIAtom* aLocalName);
+
+  /**
+   * Is the HTML local name a void element?
+   */
+  static bool IsHTMLVoid(nsIAtom* aLocalName);
+
+  /**
    * Parse a margin string of format 'top, right, bottom, left' into
    * an nsIntMargin.
    *
@@ -451,6 +411,15 @@ public:
    */
   static bool ParseIntMarginValue(const nsAString& aString, nsIntMargin& aResult);
 
+  /**
+   * Parse the value of the <font size=""> attribute according to the HTML5
+   * spec as of April 16, 2012.
+   *
+   * @param aValue the value to parse
+   * @return 1 to 7, or 0 if the value couldn't be parsed
+   */
+  static PRInt32 ParseLegacyFontSize(const nsAString& aValue);
+
   static void Shutdown();
 
   /**
@@ -458,6 +427,8 @@ public:
    */
   static nsresult CheckSameOrigin(nsINode* aTrustedNode,
                                   nsIDOMNode* aUnTrustedNode);
+  static nsresult CheckSameOrigin(nsINode* aTrustedNode,
+                                  nsINode* unTrustedNode);
 
   // Check if the (JS) caller can access aNode.
   static bool CanCallerAccess(nsIDOMNode *aNode);
@@ -594,7 +565,8 @@ public:
                               nsIContent *aContent);
 
   static nsresult CheckQName(const nsAString& aQualifiedName,
-                             bool aNamespaceAware = true);
+                             bool aNamespaceAware = true,
+                             const PRUnichar** aColon = nsnull);
 
   static nsresult SplitQName(const nsIContent* aNamespaceResolver,
                              const nsAFlatString& aQName,
@@ -609,10 +581,17 @@ public:
   static void SplitExpatName(const PRUnichar *aExpatName, nsIAtom **aPrefix,
                              nsIAtom **aTagName, PRInt32 *aNameSpaceID);
 
-  // Get a permission-manager setting for the given uri and type.
+  // Get a permission-manager setting for the given principal and type.
   // If the pref doesn't exist or if it isn't ALLOW_ACTION, false is
-  // returned, otherwise true is returned.
-  static bool IsSitePermAllow(nsIURI* aURI, const char* aType);
+  // returned, otherwise true is returned. Always returns true for the
+  // system principal, and false for a null principal.
+  static bool IsSitePermAllow(nsIPrincipal* aPrincipal, const char* aType);
+
+  // Get a permission-manager setting for the given principal and type.
+  // If the pref doesn't exist or if it isn't DENY_ACTION, false is
+  // returned, otherwise true is returned. Always returns false for the
+  // system principal, and true for a null principal.
+  static bool IsSitePermDeny(nsIPrincipal* aPrincipal, const char* aType);
 
   static nsILineBreaker* LineBreaker()
   {
@@ -838,11 +817,22 @@ public:
    * Fill (with the parameters given) the localized string named |aKey| in
    * properties file |aFile|.
    */
+private:
   static nsresult FormatLocalizedString(PropertiesFile aFile,
                                         const char* aKey,
-                                        const PRUnichar **aParams,
+                                        const PRUnichar** aParams,
                                         PRUint32 aParamsLength,
                                         nsXPIDLString& aResult);
+  
+public:
+  template<PRUint32 N>
+  static nsresult FormatLocalizedString(PropertiesFile aFile,
+                                        const char* aKey,
+                                        const PRUnichar* (&aParams)[N],
+                                        nsXPIDLString& aResult)
+  {
+    return FormatLocalizedString(aFile, aKey, aParams, N, aResult);
+  }
 
   /**
    * Returns true if aDocument is a chrome document
@@ -1144,12 +1134,34 @@ public:
    * @param aSourceBuffer the string to parse as an HTML document
    * @param aTargetDocument the document object to parse into. Must not have
    *                        child nodes.
+   * @param aScriptingEnabledForNoscriptParsing whether <noscript> is parsed
+   *                                            as if scripting was enabled
    * @return NS_ERROR_DOM_INVALID_STATE_ERR if a re-entrant attempt to parse
    *         fragments is made, NS_ERROR_OUT_OF_MEMORY if aSourceBuffer is too
    *         long and NS_OK otherwise.
    */
   static nsresult ParseDocumentHTML(const nsAString& aSourceBuffer,
-                                    nsIDocument* aTargetDocument);
+                                    nsIDocument* aTargetDocument,
+                                    bool aScriptingEnabledForNoscriptParsing);
+
+  /**
+   * Converts HTML source to plain text by parsing the source and using the
+   * plain text serializer on the resulting tree.
+   *
+   * @param aSourceBuffer the string to parse as an HTML document
+   * @param aResultBuffer the string where the plain text result appears;
+   *                      may be the same string as aSourceBuffer
+   * @param aFlags Flags from nsIDocumentEncoder.
+   * @param aWrapCol Number of columns after which to line wrap; 0 for no
+   *                 auto-wrapping
+   * @return NS_ERROR_DOM_INVALID_STATE_ERR if a re-entrant attempt to parse
+   *         fragments is made, NS_ERROR_OUT_OF_MEMORY if aSourceBuffer is too
+   *         long and NS_OK otherwise.
+   */
+  static nsresult ConvertToPlainText(const nsAString& aSourceBuffer,
+                                     nsAString& aResultBuffer,
+                                     PRUint32 aFlags,
+                                     PRUint32 aWrapCol);
 
   /**
    * Creates a new XML document, which is marked to be loaded as data.
@@ -1243,66 +1255,10 @@ public:
     }
   }
 
-  static void DropScriptObject(PRUint32 aLangID, void *aObject,
-                               const char *name, void *aClosure)
-  {
-    DropScriptObject(aLangID, aObject, aClosure);
-  }
-
   /**
    * Unbinds the content from the tree and nulls it out if it's not null.
    */
   static void DestroyAnonymousContent(nsCOMPtr<nsIContent>* aContent);
-
-  /**
-   * Keep script object aNewObject, held by aScriptObjectHolder, alive.
-   *
-   * NOTE: This currently only supports objects that hold script objects of one
-   *       scripting language.
-   *
-   * @param aLangID script language ID of aNewObject
-   * @param aScriptObjectHolder the object that holds aNewObject
-   * @param aTracer the tracer for aScriptObject
-   * @param aNewObject the script object to hold
-   * @param aWasHoldingObjects whether aScriptObjectHolder was already holding
-   *                           script objects (ie. HoldScriptObject was called
-   *                           on it before, without a corresponding call to
-   *                           DropScriptObjects)
-   */
-  static nsresult HoldScriptObject(PRUint32 aLangID, void* aScriptObjectHolder,
-                                   nsScriptObjectTracer* aTracer,
-                                   void* aNewObject, bool aWasHoldingObjects)
-  {
-    if (aLangID == nsIProgrammingLanguage::JAVASCRIPT) {
-      return aWasHoldingObjects ? NS_OK :
-                                  HoldJSObjects(aScriptObjectHolder, aTracer);
-    }
-
-    return HoldScriptObject(aLangID, aNewObject);
-  }
-
-  /**
-   * Drop any script objects that aScriptObjectHolder is holding.
-   *
-   * NOTE: This currently only supports objects that hold script objects of one
-   *       scripting language.
-   *
-   * @param aLangID script language ID of the objects that 
-   * @param aScriptObjectHolder the object that holds script object that we want
-   *                            to drop
-   * @param aTracer the tracer for aScriptObject
-   */
-  static nsresult DropScriptObjects(PRUint32 aLangID, void* aScriptObjectHolder,
-                                    nsScriptObjectTracer* aTracer)
-  {
-    if (aLangID == nsIProgrammingLanguage::JAVASCRIPT) {
-      return DropJSObjects(aScriptObjectHolder);
-    }
-
-    aTracer->Trace(aScriptObjectHolder, DropScriptObject, nsnull);
-
-    return NS_OK;
-  }
 
   /**
    * Keep the JS objects held by aScriptObjectHolder alive.
@@ -1391,6 +1347,23 @@ public:
   static bool IsSystemPrincipal(nsIPrincipal* aPrincipal);
 
   /**
+   * *aResourcePrincipal is a principal describing who may access the contents
+   * of a resource. The resource can only be consumed by a principal that
+   * subsumes *aResourcePrincipal. MAKE SURE THAT NOTHING EVER ACTS WITH THE
+   * AUTHORITY OF *aResourcePrincipal.
+   * It may be null to indicate that the resource has no data from any origin
+   * in it yet and anything may access the resource.
+   * Additional data is being mixed into the resource from aExtraPrincipal
+   * (which may be null; if null, no data is being mixed in and this function
+   * will do nothing). Update *aResourcePrincipal to reflect the new data.
+   * If *aResourcePrincipal subsumes aExtraPrincipal, nothing needs to change,
+   * otherwise *aResourcePrincipal is replaced with the system principal.
+   * Returns true if *aResourcePrincipal changed.
+   */
+  static bool CombineResourcePrincipals(nsCOMPtr<nsIPrincipal>* aResourcePrincipal,
+                                        nsIPrincipal* aExtraPrincipal);
+
+  /**
    * Trigger a link with uri aLinkURI. If aClick is false, this triggers a
    * mouseover on the link, otherwise it triggers a load after doing a
    * security check using aContent's principal.
@@ -1471,6 +1444,13 @@ public:
   // filters the drag and drop action to fit within the effects allowed and
   // returns it.
   static PRUint32 FilterDropEffect(PRUint32 aAction, PRUint32 aEffectAllowed);
+
+  /*
+   * Return true if the target of a drop event is a content document that is
+   * an ancestor of the document for the source of the drag.
+   */
+  static bool CheckForSubFrameDrop(nsIDragSession* aDragSession,
+                                   nsDragEvent* aDropEvent);
 
   /**
    * Return true if aURI is a local file URI (i.e. file://).
@@ -1557,6 +1537,15 @@ public:
    */
   static ViewportInfo GetViewportInfo(nsIDocument* aDocument);
 
+  // Call EnterMicroTask when you're entering JS execution.
+  // Usually the best way to do this is to use nsAutoMicroTask.
+  static void EnterMicroTask() { ++sMicroTaskLevel; }
+  static void LeaveMicroTask();
+
+  static bool IsInMicroTask() { return sMicroTaskLevel != 0; }
+  static PRUint32 MicroTaskLevel() { return sMicroTaskLevel; }
+  static void SetMicroTaskLevel(PRUint32 aLevel) { sMicroTaskLevel = aLevel; }
+
   /* Process viewport META data. This gives us information for the scale
    * and zoom of a page on mobile devices. We stick the information in
    * the document header and use it later on after rendering.
@@ -1576,19 +1565,59 @@ public:
    * case for ASCII characters a-z.
    */
   static bool EqualsIgnoreASCIICase(const nsAString& aStr1,
-                                      const nsAString& aStr2);
+                                    const nsAString& aStr2);
+
+  /**
+   * Case insensitive comparison between a string and an ASCII literal.
+   * This must ONLY be applied to an actual literal string. Do not attempt
+   * to use it with a regular char* pointer, or with a char array variable.
+   * The template trick to acquire the array length at compile time without
+   * using a macro is due to Corey Kosak, which much thanks.
+   */
+  static bool EqualsLiteralIgnoreASCIICase(const nsAString& aStr1,
+                                           const char* aStr2,
+                                           const PRUint32 len);
+#ifdef NS_DISABLE_LITERAL_TEMPLATE
+  static inline bool
+  EqualsLiteralIgnoreASCIICase(const nsAString& aStr1,
+                               const char* aStr2)
+  {
+    PRUint32 len = strlen(aStr2);
+    return EqualsLiteralIgnoreASCIICase(aStr1, aStr2, len);
+  }
+#else
+  template<int N>
+  static inline bool
+  EqualsLiteralIgnoreASCIICase(const nsAString& aStr1,
+                               const char (&aStr2)[N])
+  {
+    return EqualsLiteralIgnoreASCIICase(aStr1, aStr2, N-1);
+  }
+  template<int N>
+  static inline bool
+  EqualsLiteralIgnoreASCIICase(const nsAString& aStr1,
+                               char (&aStr2)[N])
+  {
+    const char* s = aStr2;
+    return EqualsLiteralIgnoreASCIICase(aStr1, s, N-1);
+  }
+#endif
 
   /**
    * Convert ASCII A-Z to a-z.
+   * @return NS_OK on success, or NS_ERROR_OUT_OF_MEMORY if making the string
+   * writable needs to allocate memory and that allocation fails.
    */
-  static void ASCIIToLower(nsAString& aStr);
-  static void ASCIIToLower(const nsAString& aSource, nsAString& aDest);
+  static nsresult ASCIIToLower(nsAString& aStr);
+  static nsresult ASCIIToLower(const nsAString& aSource, nsAString& aDest);
 
   /**
    * Convert ASCII a-z to A-Z.
+   * @return NS_OK on success, or NS_ERROR_OUT_OF_MEMORY if making the string
+   * writable needs to allocate memory and that allocation fails.
    */
-  static void ASCIIToUpper(nsAString& aStr);
-  static void ASCIIToUpper(const nsAString& aSource, nsAString& aDest);
+  static nsresult ASCIIToUpper(nsAString& aStr);
+  static nsresult ASCIIToUpper(const nsAString& aSource, nsAString& aDest);
 
   // Returns NS_OK for same origin, error (NS_ERROR_DOM_BAD_URI) if not.
   static nsresult CheckSameOrigin(nsIChannel *aOldChannel, nsIChannel *aNewChannel);
@@ -1598,7 +1627,10 @@ public:
   {
     return sThreadJSContextStack;
   }
-  
+
+  // Trace the safe JS context of the ThreadJSContextStack.
+  static void TraceSafeJSContext(JSTracer* aTrc);
+
 
   /**
    * Get the Origin of the passed in nsIPrincipal or nsIURI. If the passed in
@@ -1785,13 +1817,6 @@ public:
   static bool IsRequestFullScreenAllowed();
 
   /**
-   * Returns true if key input is restricted in DOM full-screen mode
-   * to non-alpha-numeric key codes only. This mirrors the
-   * "full-screen-api.key-input-restricted" pref.
-   */
-  static bool IsFullScreenKeyInputRestricted();
-
-  /**
    * Returns true if the doc tree branch which contains aDoc contains any
    * plugins which we don't control event dispatch for, i.e. do any plugins
    * in the same tab as this document receive key events outside of our
@@ -1918,6 +1943,13 @@ public:
   static nsresult Atob(const nsAString& aAsciiString,
                        nsAString& aBinaryData);
 
+  /** If aJSArray is a Javascript array, this method iterates over its
+   *  elements and appends values to aRetVal as nsIAtoms.
+   *  @throw NS_ERROR_ILLEGAL_VALUE if aJSArray isn't a JS array.
+   */ 
+  static nsresult JSArrayToAtomArray(JSContext* aCx, const JS::Value& aJSArray,
+                                     nsCOMArray<nsIAtom>& aRetVal);
+
   /**
    * Returns whether the input element passed in parameter has the autocomplete
    * functionnality enabled. It is taking into account the form owner.
@@ -1941,15 +1973,36 @@ public:
    */
   static bool URIIsChromeOrInPref(nsIURI *aURI, const char *aPref);
 
+  /**
+   * This will parse aSource, to extract the value of the pseudo attribute
+   * with the name specified in aName. See
+   * http://www.w3.org/TR/xml-stylesheet/#NT-StyleSheetPI for the specification
+   * which is used to parse aSource.
+   *
+   * @param aSource the string to parse
+   * @param aName the name of the attribute to get the value for
+   * @param aValue [out] the value for the attribute with name specified in
+   *                     aAttribute. Empty if the attribute isn't present.
+   * @return true     if the attribute exists and was successfully parsed.
+   *         false if the attribute doesn't exist, or has a malformed
+   *                  value, such as an unknown or unterminated entity.
+   */
+  static bool GetPseudoAttributeValue(const nsString& aSource, nsIAtom *aName,
+                                      nsAString& aValue);
+
+  /**
+   * Returns true if the language name is a version of JavaScript and
+   * false otherwise
+   */
+  static bool IsJavaScriptLanguage(const nsString& aName, PRUint32 *aVerFlags);
+
+  static void SplitMimeType(const nsAString& aValue, nsString& aType,
+                            nsString& aParams);
+
 private:
   static bool InitializeEventTable();
 
   static nsresult EnsureStringBundle(PropertiesFile aFile);
-
-  static nsIDOMScriptObjectFactory *GetDOMScriptObjectFactory();
-
-  static nsresult HoldScriptObject(PRUint32 aLangID, void* aObject);
-  static void DropScriptObject(PRUint32 aLangID, void *aObject, void *aClosure);
 
   static bool CanCallerAccess(nsIPrincipal* aSubjectPrincipal,
                                 nsIPrincipal* aPrincipal);
@@ -2012,8 +2065,6 @@ private:
   static nsILineBreaker* sLineBreaker;
   static nsIWordBreaker* sWordBreaker;
 
-  static nsIScriptRuntime* sScriptRuntimes[NS_STID_ARRAY_UBOUND];
-  static PRInt32 sScriptRootCount[NS_STID_ARRAY_UBOUND];
   static PRUint32 sJSGCThingRootCount;
 
 #ifdef IBMBIDI
@@ -2025,6 +2076,7 @@ private:
 #ifdef DEBUG
   static PRUint32 sDOMNodeRemovedSuppressCount;
 #endif
+  static PRUint32 sMicroTaskLevel;
   // Not an nsCOMArray because removing elements from those is slower
   static nsTArray< nsCOMPtr<nsIRunnable> >* sBlockedScriptRunners;
   static PRUint32 sRunnersCountAtFirstBlocker;
@@ -2036,7 +2088,6 @@ private:
   static bool sAllowXULXBL_for_file;
   static bool sIsFullScreenApiEnabled;
   static bool sTrustedFullScreenOnly;
-  static bool sFullScreenKeyInputRestricted;
   static PRUint32 sHandlingInputTimeout;
 
   static nsHtml5StringParser* sHTMLFragmentParser;
@@ -2127,6 +2178,19 @@ public:
   }
 };
 
+class NS_STACK_CLASS nsAutoMicroTask
+{
+public:
+  nsAutoMicroTask()
+  {
+    nsContentUtils::EnterMicroTask();
+  }
+  ~nsAutoMicroTask()
+  {
+    nsContentUtils::LeaveMicroTask();
+  }
+};
+
 #define NS_INTERFACE_MAP_ENTRY_TEAROFF(_interface, _allocator)                \
   if (aIID.Equals(NS_GET_IID(_interface))) {                                  \
     foundInterface = static_cast<_interface *>(_allocator);                   \
@@ -2135,81 +2199,6 @@ public:
       return NS_ERROR_OUT_OF_MEMORY;                                          \
     }                                                                         \
   } else
-
-/**
- * Macros to workaround math-bugs bugs in various platforms
- */
-
-/**
- * Stefan Hanske <sh990154@mail.uni-greifswald.de> reports:
- *  ARM is a little endian architecture but 64 bit double words are stored
- * differently: the 32 bit words are in little endian byte order, the two words
- * are stored in big endian`s way.
- */
-
-#if defined(__arm) || defined(__arm32__) || defined(__arm26__) || defined(__arm__)
-#if !defined(__VFP_FP__)
-#define FPU_IS_ARM_FPA
-#endif
-#endif
-
-typedef union dpun {
-    struct {
-#if defined(IS_LITTLE_ENDIAN) && !defined(FPU_IS_ARM_FPA)
-        PRUint32 lo, hi;
-#else
-        PRUint32 hi, lo;
-#endif
-    } s;
-    PRFloat64 d;
-public:
-    operator double() const {
-        return d;
-    }
-} dpun;
-
-/**
- * Utility class for doubles
- */
-#if (__GNUC__ == 2 && __GNUC_MINOR__ > 95) || __GNUC__ > 2
-/**
- * This version of the macros is safe for the alias optimizations
- * that gcc does, but uses gcc-specific extensions.
- */
-#define DOUBLE_HI32(x) (__extension__ ({ dpun u; u.d = (x); u.s.hi; }))
-#define DOUBLE_LO32(x) (__extension__ ({ dpun u; u.d = (x); u.s.lo; }))
-
-#else // __GNUC__
-
-/* We don't know of any non-gcc compilers that perform alias optimization,
- * so this code should work.
- */
-
-#if defined(IS_LITTLE_ENDIAN) && !defined(FPU_IS_ARM_FPA)
-#define DOUBLE_HI32(x)        (((PRUint32 *)&(x))[1])
-#define DOUBLE_LO32(x)        (((PRUint32 *)&(x))[0])
-#else
-#define DOUBLE_HI32(x)        (((PRUint32 *)&(x))[0])
-#define DOUBLE_LO32(x)        (((PRUint32 *)&(x))[1])
-#endif
-
-#endif // __GNUC__
-
-#define DOUBLE_HI32_SIGNBIT   0x80000000
-#define DOUBLE_HI32_EXPMASK   0x7ff00000
-#define DOUBLE_HI32_MANTMASK  0x000fffff
-
-#define DOUBLE_IS_NaN(x)                                                \
-((DOUBLE_HI32(x) & DOUBLE_HI32_EXPMASK) == DOUBLE_HI32_EXPMASK && \
- (DOUBLE_LO32(x) || (DOUBLE_HI32(x) & DOUBLE_HI32_MANTMASK)))
-
-#ifdef IS_BIG_ENDIAN
-#define DOUBLE_NaN {{DOUBLE_HI32_EXPMASK | DOUBLE_HI32_MANTMASK,   \
-                        0xffffffff}}
-#else
-#define DOUBLE_NaN {{0xffffffff,                                         \
-                        DOUBLE_HI32_EXPMASK | DOUBLE_HI32_MANTMASK}}
-#endif
 
 /*
  * In the following helper macros we exploit the fact that the result of a

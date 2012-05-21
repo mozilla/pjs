@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <errno.h>
 #include <new>                  // for std::bad_alloc
@@ -53,11 +20,6 @@
 #  include <unistd.h>           // for valloc on *BSD
 #endif //if defined(XP_UNIX)
 
-#if defined(MOZ_MEMORY)
-// jemalloc.h doesn't redeclare symbols if they're provided by the OS
-#  include "jemalloc.h"
-#endif
-
 #if defined(XP_WIN) || (defined(XP_OS2) && defined(__declspec))
 #  define MOZALLOC_EXPORT __declspec(dllexport)
 #endif
@@ -67,6 +29,10 @@
 #include "mozilla/mozalloc.h"
 #include "mozilla/mozalloc_oom.h"  // for mozalloc_handle_oom
 
+/* Windows doesn't have malloc_usable_size, but jemalloc has */
+#if defined(MOZ_MEMORY_WINDOWS)
+extern "C" size_t malloc_usable_size(const void *ptr);
+#endif
 
 #if defined(__GNUC__) && (__GNUC__ > 2)
 #define LIKELY(x)    (__builtin_expect(!!(x), 1))
@@ -74,21 +40,6 @@
 #else
 #define LIKELY(x)    (x)
 #define UNLIKELY(x)  (x)
-#endif
-
-#ifdef MOZ_MEMORY_DARWIN
-#include "jemalloc.h"
-#define malloc(a)               je_malloc(a)
-#define posix_memalign(a, b, c) je_posix_memalign(a, b, c)
-#define valloc(a)               je_valloc(a)
-#define calloc(a, b)            je_calloc(a, b)
-#define memalign(a, b)          je_memalign(a, b)
-#define strdup(a)               je_strdup(a)
-#define strndup(a, b)           je_strndup(a, b)
-/* We omit functions which could be passed a memory region that was not
- * allocated by jemalloc (realloc, free and malloc_usable_size). Instead,
- * we use the system-provided functions, which will in turn call the
- * jemalloc versions when appropriate */
 #endif
 
 void
@@ -179,7 +130,7 @@ moz_strndup(const char* str, size_t strsize)
 }
 #endif  // if defined(HAVE_STRNDUP)
 
-#if defined(HAVE_POSIX_MEMALIGN) || defined(HAVE_JEMALLOC_POSIX_MEMALIGN)
+#if defined(HAVE_POSIX_MEMALIGN)
 int
 moz_xposix_memalign(void **ptr, size_t alignment, size_t size)
 {
@@ -214,7 +165,7 @@ moz_posix_memalign(void **ptr, size_t alignment, size_t size)
 }
 #endif // if defined(HAVE_POSIX_MEMALIGN)
 
-#if defined(HAVE_MEMALIGN) || defined(HAVE_JEMALLOC_MEMALIGN)
+#if defined(HAVE_MEMALIGN)
 void*
 moz_xmemalign(size_t boundary, size_t size)
 {
@@ -233,7 +184,7 @@ moz_memalign(size_t boundary, size_t size)
 }
 #endif // if defined(HAVE_MEMALIGN)
 
-#if defined(HAVE_VALLOC) || defined(HAVE_JEMALLOC_VALLOC)
+#if defined(HAVE_VALLOC)
 void*
 moz_xvalloc(size_t size)
 {
@@ -259,10 +210,8 @@ moz_malloc_usable_size(void *ptr)
 
 #if defined(XP_MACOSX)
     return malloc_size(ptr);
-#elif defined(MOZ_MEMORY) || defined(XP_LINUX)
-    // XXX: the |defined(XP_LINUX)| may be too lax;  some Linux installations
-    // might use a libc that doesn't have malloc_usable_size.  Let's fix this
-    // if/when it happens.
+#elif defined(MOZ_MEMORY) || (defined(XP_LINUX) && !defined(ANDROID))
+    // Android bionic libc doesn't have malloc_usable_size.
     return malloc_usable_size(ptr);
 #elif defined(XP_WIN)
     return _msize(ptr);

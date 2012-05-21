@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *   Masayuki Nakano <masayuki@d-toybox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_PLATFORM_H
 #define GFX_PLATFORM_H
@@ -136,7 +103,9 @@ enum eGfxLog {
     // dump text runs, font matching, system fallback for content
     eGfxLog_textrun          = 2,
     // dump text runs, font matching, system fallback for chrome
-    eGfxLog_textrunui        = 3
+    eGfxLog_textrunui        = 3,
+    // dump cmap coverage data as they are loaded
+    eGfxLog_cmapdata         = 4
 };
 
 // when searching through pref langs, max number of pref langs
@@ -160,10 +129,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
         return "skia";
       case mozilla::gfx::BACKEND_NONE:
         return "none";
-      default:
-        NS_ERROR("Invalid backend type!");
-        return "";
   }
+  MOZ_NOT_REACHED("Incomplet switch");
 }
 
 class THEBES_API gfxPlatform {
@@ -175,10 +142,6 @@ public:
      */
     static gfxPlatform *GetPlatform();
 
-    /**
-     * Start up Thebes.
-     */
-    static void Init();
 
     /**
      * Shut down Thebes.
@@ -211,6 +174,10 @@ public:
 
     virtual mozilla::RefPtr<mozilla::gfx::DrawTarget>
       CreateOffscreenDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
+
+    virtual mozilla::RefPtr<mozilla::gfx::DrawTarget>
+      CreateDrawTargetForData(unsigned char* aData, const mozilla::gfx::IntSize& aSize, 
+                              int32_t aStride, mozilla::gfx::SurfaceFormat aFormat);
 
     virtual bool SupportsAzure(mozilla::gfx::BackendType& aBackend) { return false; }
 
@@ -319,6 +286,11 @@ public:
      */
     virtual bool FontHintingEnabled() { return true; }
 
+    /**
+     * Whether to check all font cmaps during system font fallback
+     */
+    bool UseCmapsDuringSystemFallback();
+
 #ifdef MOZ_GRAPHITE
     /**
      * Whether to use the SIL Graphite rendering engine
@@ -370,6 +342,15 @@ public:
     
     // helper method to add a pref lang to an array, if not already in array
     static void AppendPrefLang(eFontPrefLang aPrefLangs[], PRUint32& aLen, eFontPrefLang aAddLang);
+
+    // returns a list of commonly used fonts for a given character
+    // these are *possible* matches, no cmap-checking is done at this level
+    virtual void GetCommonFallbackFonts(const PRUint32 /*aCh*/,
+                                        PRInt32 /*aRunScript*/,
+                                        nsTArray<const char*>& /*aFontList*/)
+    {
+        // platform-specific override, by default do nothing
+    }
 
     // helper method to indicate if we want to use Azure content drawing
     static bool UseAzureContentDrawing();
@@ -441,6 +422,10 @@ public:
      */
     static PRLogModuleInfo* GetLog(eGfxLog aWhichLog);
 
+    bool WorkAroundDriverBugs() const { return mWorkAroundDriverBugs; }
+
+    virtual int GetScreenDepth() const;
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
@@ -456,6 +441,10 @@ protected:
 
     PRInt8  mBidiNumeralOption;
 
+    // whether to always search font cmaps globally 
+    // when doing system font fallback
+    PRInt8  mFallbackUsesCmaps;
+
     // which scripts should be shaped with harfbuzz
     PRInt32 mUseHarfBuzzScripts;
 
@@ -463,6 +452,11 @@ protected:
     mozilla::gfx::BackendType mPreferredDrawTargetBackend;
 
 private:
+    /**
+     * Start up Thebes.
+     */
+    static void Init();
+
     virtual qcms_profile* GetPlatformCMSOutputProfile();
 
     nsRefPtr<gfxASurface> mScreenReferenceSurface;
@@ -470,6 +464,7 @@ private:
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureBackendCollector;
+    bool mWorkAroundDriverBugs;
 };
 
 #endif /* GFX_PLATFORM_H */

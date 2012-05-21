@@ -4,74 +4,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-dump('======================= webapi+apps.js ======================= \n');
-
 'use strict';
+
+dump('======================= webapi+apps.js ======================= \n');
 
 let { classes: Cc, interfaces: Ci, utils: Cu }  = Components;
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
+Cu.import('resource://gre/modules/Geometry.jsm');
 
-XPCOMUtils.defineLazyGetter(Services, 'fm', function() {
-  return Cc['@mozilla.org/focus-manager;1']
-           .getService(Ci.nsIFocusManager);
-});
-
-(function() {
-  function generateAPI(window) {
-    let navigator = window.navigator;
-
-    XPCOMUtils.defineLazyGetter(navigator, 'mozKeyboard', function() {
-      return new MozKeyboard();
-    });
-  };
-
-  let progressListener = {
-    onStateChange: function onStateChange(progress, request,
-                                          flags, status) {
-    },
-
-    onProgressChange: function onProgressChange(progress, request,
-                                                curSelf, maxSelf,
-                                                curTotal, maxTotal) {
-    },
-
-    onLocationChange: function onLocationChange(progress, request,
-                                                locationURI, flags) {
-      content.addEventListener('appwillopen', function(evt) {
-        let appManager = content.wrappedJSObject.Gaia.AppManager;
-        let topWindow = appManager.foregroundWindow.contentWindow;
-        generateAPI(topWindow);
-      });
-
-      generateAPI(content.wrappedJSObject);
-    },
-
-    onStatusChange: function onStatusChange(progress, request,
-                                            status, message) {
-    },
-
-    onSecurityChange: function onSecurityChange(progress, request,
-                                                state) {
-    },
-
-    QueryInterface: function QueryInterface(aIID) {
-      if (aIID.equals(Ci.nsIWebProgressListener) ||
-          aIID.equals(Ci.nsISupportsWeakReference) ||
-          aIID.equals(Ci.nsISupports)) {
-          return this;
-      }
-
-      throw Components.results.NS_ERROR_NO_INTERFACE;
-    }
-  };
-
-  let flags = Ci.nsIWebProgress.NOTIFY_LOCATION;
-  let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                            .getInterface(Ci.nsIWebProgress);
-  flags = Ci.nsIWebProgress.NOTIFY_ALL;
-  webProgress.addProgressListener(progressListener, flags);
-})();
+XPCOMUtils.defineLazyServiceGetter(Services, 'fm',
+                                   '@mozilla.org/focus-manager;1',
+                                   'nsIFocusManager');
 
 // MozKeyboard
 (function VirtualKeyboardManager() {
@@ -92,6 +36,12 @@ XPCOMUtils.defineLazyGetter(Services, 'fm', function() {
       return false;
 
     let type = targetElement.type;
+    // FIXME/bug 344616 is input type='number'
+    // Until then, let's return 'number' even if the platform returns 'text'
+    let attributeType = targetElement.getAttribute('type');
+    if (attributeType && attributeType.toLowerCase() === 'number')
+      type = 'number';
+
     fireEvent('showime', { type: type });
     return true;
   }
@@ -139,27 +89,6 @@ XPCOMUtils.defineLazyGetter(Services, 'fm', function() {
   });
 })();
 
-
-function MozKeyboard() {
-}
-
-MozKeyboard.prototype = {
-  sendKey: function mozKeyboardSendKey(keyCode, charCode) {
-    charCode = (charCode == undefined) ? keyCode : charCode;
-
-    let utils = content.QueryInterface(Ci.nsIInterfaceRequestor)
-                       .getInterface(Ci.nsIDOMWindowUtils);
-    ['keydown', 'keypress', 'keyup'].forEach(function sendKey(type) {
-      utils.sendKeyEvent(type, keyCode, charCode, null);
-    });
-  }
-};
-
-let { classes: Cc, interfaces: Ci, utils: Cu } = Components;
-
-Cu.import('resource://gre/modules/Geometry.jsm');
-Cu.import('resource://gre/modules/Services.jsm');
-
 const ContentPanning = {
   init: function cp_init() {
     ['mousedown', 'mouseup', 'mousemove'].forEach(function(type) {
@@ -181,7 +110,11 @@ const ContentPanning = {
       case 'click':
         evt.stopPropagation();
         evt.preventDefault();
-        evt.target.removeEventListener('click', this, true);
+        
+        let target = evt.target;
+        let view = target.ownerDocument ? target.ownerDocument.defaultView
+                                        : target;
+        view.removeEventListener('click', this, true, true);
         break;
     }
   },
@@ -190,16 +123,24 @@ const ContentPanning = {
 
   onTouchStart: function cp_onTouchStart(evt) {
     this.dragging = true;
+    this.panning = false;
+
+    let oldTarget = this.target;
+    [this.target, this.scrollCallback] = this.getPannable(evt.target);
 
     // If there is a pan animation running (from a previous pan gesture) and
     // the user touch back the screen, stop this animation immediatly and
-    // prevent the possible click action.
+    // prevent the possible click action if the touch happens on the same
+    // target.
+    this.preventNextClick = false;
     if (KineticPanning.active) {
       KineticPanning.stop();
-      this.preventNextClick = true;
+
+      if (oldTarget && oldTarget == this.target)
+        this.preventNextClick = true;
     }
 
-    this.scrollCallback = this.getPannable(evt.originalTarget);
+
     this.position.set(evt.screenX, evt.screenY);
     KineticPanning.record(new Point(0, 0), evt.timeStamp);
   },
@@ -211,14 +152,15 @@ const ContentPanning = {
 
     this.onTouchMove(evt);
 
-    let pan = KineticPanning.isPan();
     let click = evt.detail;
-    if (click && (pan || this.preventNextClick))
-      evt.target.addEventListener('click', this, true);
+    if (this.target && click && (this.panning || this.preventNextClick)) {
+      let target = this.target;
+      let view = target.ownerDocument ? target.ownerDocument.defaultView
+                                      : target;
+      view.addEventListener('click', this, true, true);
+    }
 
-    this.preventNextClick = false;
-
-    if (pan)
+    if (this.panning)
       KineticPanning.start(this);
   },
 
@@ -232,6 +174,13 @@ const ContentPanning = {
 
     KineticPanning.record(delta, evt.timeStamp);
     this.scrollCallback(delta.scale(-1));
+
+    // If a pan action happens, cancel the active state of the
+    // current target.
+    if (!this.panning && KineticPanning.isPan()) {
+      this.panning = true;
+      this._resetActive();
+    }
   },
 
 
@@ -249,7 +198,7 @@ const ContentPanning = {
 
   getPannable: function cp_getPannable(node) {
     if (!(node instanceof Ci.nsIDOMHTMLElement) || node.tagName == 'HTML')
-      return null;
+      return [null, null];
 
     let content = node.ownerDocument.defaultView;
     while (!(node instanceof Ci.nsIDOMHTMLBodyElement)) {
@@ -266,12 +215,12 @@ const ContentPanning = {
 
       let isScroll = (overflow.indexOf('scroll') != -1);
       if (isScroll || isAuto)
-        return this._generateCallback(node);
+        return [node, this._generateCallback(node)];
 
       node = node.parentNode;
     }
 
-    return this._generateCallback(content);
+    return [content, this._generateCallback(content)];
   },
 
   _generateCallback: function cp_generateCallback(content) {
@@ -290,11 +239,23 @@ const ContentPanning = {
       }
     }
     return scroll;
+  },
+
+  get _domUtils() {
+    delete this._domUtils;
+    return this._domUtils = Cc['@mozilla.org/inspector/dom-utils;1']
+                              .getService(Ci.inIDOMUtils);
+  },
+
+  _resetActive: function cp_resetActive() {
+    let root = this.target.ownerDocument || this.target.document;
+
+    const kStateActive = 0x00000001;
+    this._domUtils.setContentState(root.documentElement, kStateActive);
   }
 };
 
 ContentPanning.init();
-
 
 // Min/max velocity of kinetic panning. This is in pixels/millisecond.
 const kMinVelocity = 0.4;
@@ -370,6 +331,7 @@ const KineticPanning = {
       return;
 
     this.momentums = [];
+    this.distance.set(0, 0);
 
     this.target.onKineticEnd();
     this.target = null;
@@ -378,23 +340,24 @@ const KineticPanning = {
   momentums: [],
   record: function kp_record(delta, timestamp) {
     this.momentums.push({ 'time': timestamp, 'dx' : delta.x, 'dy' : delta.y });
+    this.distance.add(delta.x, delta.y);
   },
 
-  isPan: function cp_isPan() {
+  get threshold() {
     let dpi = content.QueryInterface(Ci.nsIInterfaceRequestor)
                      .getInterface(Ci.nsIDOMWindowUtils)
                      .displayDPI;
 
     let threshold = Services.prefs.getIntPref('ui.dragThresholdX') / 240 * dpi;
 
-    let deltaX = 0;
-    let deltaY = 0;
-    let start = this.momentums[0].time;
-    return this.momentums.slice(1).some(function(momentum) {
-      deltaX += momentum.dx;
-      deltaY += momentum.dy;
-      return (Math.abs(deltaX) > threshold) || (Math.abs(deltaY) > threshold);
-    });
+    delete this.threshold;
+    return this.threshold = threshold;
+  },
+
+  distance: new Point(0, 0),
+  isPan: function cp_isPan() {
+    return (Math.abs(this.distance.x) > this.threshold ||
+            Math.abs(this.distance.y) > this.threshold);
   },
 
   _startAnimation: function kp_startAnimation() {
@@ -462,4 +425,3 @@ const KineticPanning = {
     content.mozRequestAnimationFrame(callback);
   }
 };
-

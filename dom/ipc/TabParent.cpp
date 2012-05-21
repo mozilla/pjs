@@ -1,40 +1,8 @@
 /* -*- Mode: C++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 8; -*- */
 /* vim: set sw=2 ts=8 et tw=80 : */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Content App.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "TabParent.h"
 
@@ -70,6 +38,7 @@
 #include "nsIViewManager.h"
 #include "mozilla/unused.h"
 #include "nsDebug.h"
+#include "nsPrintfCString.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::ipc;
@@ -93,6 +62,7 @@ TabParent::TabParent()
   , mIMESeqno(0)
   , mDPI(0)
   , mActive(false)
+  , mShown(false)
 {
 }
 
@@ -104,13 +74,7 @@ void
 TabParent::SetOwnerElement(nsIDOMElement* aElement)
 {
   mFrameElement = aElement;
-
-  // Cache the DPI of the screen, since we may lose the element/widget later
-  if (aElement) {
-    nsCOMPtr<nsIWidget> widget = GetWidget();
-    NS_ABORT_IF_FALSE(widget, "Non-null OwnerElement must provide a widget!");
-    mDPI = widget->GetDPI();
-  }
+  TryCacheDPI();
 }
 
 void
@@ -197,6 +161,16 @@ TabParent::AnswerCreateWindow(PBrowserParent** retval)
 void
 TabParent::LoadURL(nsIURI* aURI)
 {
+    if (!mShown) {
+      nsCAutoString spec;
+      if (aURI) {
+        aURI->GetSpec(spec);
+      }
+      NS_WARNING(nsPrintfCString("TabParent::LoadURL(%s) called before "
+                                 "Show(). Ignoring LoadURL.\n", spec.get()).get());
+      return;
+    }
+
     nsCString spec;
     aURI->GetSpec(spec);
 
@@ -207,6 +181,7 @@ void
 TabParent::Show(const nsIntSize& size)
 {
     // sigh
+    mShown = true;
     unused << SendShow(size);
 }
 
@@ -621,7 +596,9 @@ TabParent::RecvSetInputContext(const PRInt32& aIMEEnabled,
 bool
 TabParent::RecvGetDPI(float* aValue)
 {
-  NS_ABORT_IF_FALSE(mDPI > 0, 
+  TryCacheDPI();
+
+  NS_ABORT_IF_FALSE(mDPI > 0,
                     "Must not ask for DPI before OwnerElement is received!");
   *aValue = mDPI;
   return true;
@@ -848,6 +825,30 @@ TabParent::GetFrameLoader() const
   return frameLoaderOwner ? frameLoaderOwner->GetFrameLoader() : nsnull;
 }
 
+void
+TabParent::TryCacheDPI()
+{
+  if (mDPI > 0) {
+    return;
+  }
+
+  nsCOMPtr<nsIWidget> widget = GetWidget();
+
+  if (!widget && mFrameElement) {
+    // Even if we don't have a widget (e.g. because we're display:none), there's
+    // probably a widget somewhere in the hierarchy our frame element lives in.
+    nsCOMPtr<nsIDOMDocument> ownerDoc;
+    mFrameElement->GetOwnerDocument(getter_AddRefs(ownerDoc));
+
+    nsCOMPtr<nsIDocument> doc = do_QueryInterface(ownerDoc);
+    widget = nsContentUtils::WidgetForDocument(doc);
+  }
+
+  if (widget) {
+    mDPI = widget->GetDPI();
+  }
+}
+
 already_AddRefed<nsIWidget>
 TabParent::GetWidget() const
 {
@@ -859,7 +860,8 @@ TabParent::GetWidget() const
   if (!frame)
     return nsnull;
 
-  return nsCOMPtr<nsIWidget>(frame->GetNearestWidget()).forget();
+  nsCOMPtr<nsIWidget> widget = frame->GetNearestWidget();
+  return widget.forget();
 }
 
 } // namespace tabs

@@ -1,44 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   David Hyatt (hyatt@netscape.com)
- *   Mats Palmgren <matspal@gmail.com>
- *   Michael Ventnor <m.ventnor@gmail.com>
- *   Jonathon Jongsma <jonathon.jongsma@collabora.co.uk>, Collabora Ltd.
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * structs that contain the data provided by nsStyleContext, the
@@ -233,7 +196,7 @@ nsChangeHint nsStyleFont::CalcFontDifference(const nsFont& aFont1, const nsFont&
       (aFont1.weight == aFont2.weight) &&
       (aFont1.stretch == aFont2.stretch) &&
       (aFont1.name == aFont2.name) &&
-      (aFont1.featureSettings == aFont2.featureSettings) &&
+      (aFont1.fontFeatureSettings == aFont2.fontFeatureSettings) &&
       (aFont1.languageOverride == aFont2.languageOverride)) {
     if ((aFont1.decorations == aFont2.decorations)) {
       return NS_STYLE_HINT_NONE;
@@ -457,9 +420,9 @@ nsStyleBorder::nsStyleBorder(const nsStyleBorder& aSrc)
     mBorderImageSource(aSrc.mBorderImageSource),
     mBorderRadius(aSrc.mBorderRadius),
     mBorderImageSlice(aSrc.mBorderImageSlice),
-    mBorderImageFill(aSrc.mBorderImageFill),
     mBorderImageWidth(aSrc.mBorderImageWidth),
     mBorderImageOutset(aSrc.mBorderImageOutset),
+    mBorderImageFill(aSrc.mBorderImageFill),
     mBorderImageRepeatH(aSrc.mBorderImageRepeatH),
     mBorderImageRepeatV(aSrc.mBorderImageRepeatV),
     mFloatEdge(aSrc.mFloatEdge),
@@ -1042,6 +1005,7 @@ nsStyleSVGReset::nsStyleSVGReset()
     mStopOpacity             = 1.0f;
     mFloodOpacity            = 1.0f;
     mDominantBaseline        = NS_STYLE_DOMINANT_BASELINE_AUTO;
+    mVectorEffect            = NS_STYLE_VECTOR_EFFECT_NONE;
 }
 
 nsStyleSVGReset::~nsStyleSVGReset() 
@@ -1061,6 +1025,7 @@ nsStyleSVGReset::nsStyleSVGReset(const nsStyleSVGReset& aSource)
   mStopOpacity = aSource.mStopOpacity;
   mFloodOpacity = aSource.mFloodOpacity;
   mDominantBaseline = aSource.mDominantBaseline;
+  mVectorEffect = aSource.mVectorEffect;
 }
 
 nsChangeHint nsStyleSVGReset::CalcDifference(const nsStyleSVGReset& aOther) const
@@ -1078,7 +1043,8 @@ nsChangeHint nsStyleSVGReset::CalcDifference(const nsStyleSVGReset& aOther) cons
              mLightingColor    != aOther.mLightingColor ||
              mStopOpacity      != aOther.mStopOpacity   ||
              mFloodOpacity     != aOther.mFloodOpacity  ||
-             mDominantBaseline != aOther.mDominantBaseline)
+             mDominantBaseline != aOther.mDominantBaseline ||
+             mVectorEffect     != aOther.mVectorEffect)
     NS_UpdateHint(hint, nsChangeHint_RepaintFrame);
 
   return hint;
@@ -1977,6 +1943,13 @@ nsStyleBackground::Size::operator==(const Size& aOther) const
          (mHeightType != eLengthPercentage || mHeight == aOther.mHeight);
 }
 
+void
+nsStyleBackground::Repeat::SetInitialValues() 
+{
+  mXRepeat = NS_STYLE_BG_REPEAT_REPEAT;
+  mYRepeat = NS_STYLE_BG_REPEAT_REPEAT;
+}
+
 nsStyleBackground::Layer::Layer()
 {
 }
@@ -1991,7 +1964,7 @@ nsStyleBackground::Layer::SetInitialValues()
   mAttachment = NS_STYLE_BG_ATTACHMENT_SCROLL;
   mClip = NS_STYLE_BG_CLIP_BORDER;
   mOrigin = NS_STYLE_BG_ORIGIN_PADDING;
-  mRepeat = NS_STYLE_BG_REPEAT_XY;
+  mRepeat.SetInitialValues();
   mPosition.SetInitialValues();
   mSize.SetInitialValues();
   mImage.SetNull();
@@ -2817,6 +2790,7 @@ nsStyleText::nsStyleText(void)
   mTextAlignLast = NS_STYLE_TEXT_ALIGN_AUTO;
   mTextTransform = NS_STYLE_TEXT_TRANSFORM_NONE;
   mWhiteSpace = NS_STYLE_WHITESPACE_NORMAL;
+  mWordBreak = NS_STYLE_WORDBREAK_NORMAL;
   mWordWrap = NS_STYLE_WORDWRAP_NORMAL;
   mHyphens = NS_STYLE_HYPHENS_MANUAL;
   mTextSizeAdjust = NS_STYLE_TEXT_SIZE_ADJUST_AUTO;
@@ -2835,14 +2809,15 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
     mTextAlignLast(aSource.mTextAlignLast),
     mTextTransform(aSource.mTextTransform),
     mWhiteSpace(aSource.mWhiteSpace),
+    mWordBreak(aSource.mWordBreak),
     mWordWrap(aSource.mWordWrap),
     mHyphens(aSource.mHyphens),
     mTextSizeAdjust(aSource.mTextSizeAdjust),
     mTabSize(aSource.mTabSize),
+    mWordSpacing(aSource.mWordSpacing),
     mLetterSpacing(aSource.mLetterSpacing),
     mLineHeight(aSource.mLineHeight),
     mTextIndent(aSource.mTextIndent),
-    mWordSpacing(aSource.mWordSpacing),
     mTextShadow(aSource.mTextShadow)
 {
   MOZ_COUNT_CTOR(nsStyleText);
@@ -2864,6 +2839,7 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
       (mTextAlignLast != aOther.mTextAlignLast) ||
       (mTextTransform != aOther.mTextTransform) ||
       (mWhiteSpace != aOther.mWhiteSpace) ||
+      (mWordBreak != aOther.mWordBreak) ||
       (mWordWrap != aOther.mWordWrap) ||
       (mHyphens != aOther.mHyphens) ||
       (mTextSizeAdjust != aOther.mTextSizeAdjust) ||

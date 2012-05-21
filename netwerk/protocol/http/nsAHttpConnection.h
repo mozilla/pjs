@@ -1,46 +1,13 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsAHttpConnection_h__
 #define nsAHttpConnection_h__
 
 #include "nsISupports.h"
+#include "nsAHttpTransaction.h"
 
-class nsAHttpTransaction;
 class nsHttpRequestHead;
 class nsHttpResponseHead;
 class nsHttpConnectionInfo;
@@ -120,12 +87,18 @@ public:
     // persistent... important in determining the end of a response.
     virtual bool IsPersistent() = 0;
 
-    // called to determine if a connection has been reused.
+    // called to determine or set if a connection has been reused.
     virtual bool IsReused() = 0;
-    
+    virtual void DontReuse() = 0;
+
     // called by a transaction when the transaction reads more from the socket
     // than it should have (eg. containing part of the next pipelined response).
     virtual nsresult PushBack(const char *data, PRUint32 length) = 0;
+
+    // Used to determine if the connection wants read events even though
+    // it has not written out a transaction. Used when a connection has issued
+    // a preamble such as a proxy ssl CONNECT sequence.
+    virtual bool IsProxyConnectInProgress() = 0;
 
     // Used by a transaction to manage the state of previous response bodies on
     // the same connection and work around buggy servers.
@@ -139,9 +112,21 @@ public:
     // Get the nsISocketTransport used by the connection without changing
     //  references or ownership.
     virtual nsISocketTransport *Transport() = 0;
+
+    // Cancel and reschedule transactions deeper than the current response.
+    // Returns the number of canceled transactions.
+    virtual PRUint32 CancelPipeline(nsresult originalReason) = 0;
+
+    // Read and write class of transaction that is carried on this connection
+    virtual nsAHttpTransaction::Classifier Classification() = 0;
+    virtual void Classify(nsAHttpTransaction::Classifier newclass) = 0;
+
+    // The number of transaction bytes written out on this HTTP Connection, does
+    // not count CONNECT tunnel setup
+    virtual PRInt64 BytesWritten() = 0;
 };
 
-#define NS_DECL_NSAHTTPCONNECTION \
+#define NS_DECL_NSAHTTPCONNECTION(fwdObject)                    \
     nsresult OnHeadersAvailable(nsAHttpTransaction *, nsHttpRequestHead *, nsHttpResponseHead *, bool *reset); \
     nsresult ResumeSend(); \
     nsresult ResumeRecv(); \
@@ -153,10 +138,17 @@ public:
     void GetSecurityInfo(nsISupports **); \
     bool IsPersistent(); \
     bool IsReused(); \
+    void DontReuse();  \
     nsresult PushBack(const char *, PRUint32); \
+    bool IsProxyConnectInProgress(); \
     bool LastTransactionExpectedNoContent(); \
-    void   SetLastTransactionExpectedNoContent(bool); \
+    void SetLastTransactionExpectedNoContent(bool); \
     nsHttpConnection *TakeHttpConnection(); \
-    nsISocketTransport *Transport();
+    nsISocketTransport *Transport();        \
+    PRUint32 CancelPipeline(nsresult originalReason);   \
+    nsAHttpTransaction::Classifier Classification();    \
+    void Classify(nsAHttpTransaction::Classifier);      \
+    PRInt64 BytesWritten() \
+    {     return fwdObject ? (fwdObject)->BytesWritten() : 0; }
 
 #endif // nsAHttpConnection_h__

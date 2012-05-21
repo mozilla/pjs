@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set sw=4 ts=4 et : */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Plugin App.
- *
- * The Initial Developer of the Original Code is
- * Ben Turner <bent.mozilla@gmail.com>.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_WIDGET_QT
 #include <QtCore/QTimer>
@@ -177,20 +144,9 @@ PluginModuleChild::Init(const std::string& aPluginFilename,
 
     NS_ASSERTION(aChannel, "need a channel");
 
-    if (!mObjectMap.Init()) {
-       NS_WARNING("Failed to initialize object hashtable!");
-       return false;
-    }
-
-    if (!mStringIdentifiers.Init()) {
-       NS_ERROR("Failed to initialize string identifier hashtable!");
-       return false;
-    }
-
-    if (!mIntIdentifiers.Init()) {
-       NS_ERROR("Failed to initialize int identifier hashtable!");
-       return false;
-    }
+    mObjectMap.Init();
+    mStringIdentifiers.Init();
+    mIntIdentifiers.Init();
 
     if (!InitGraphics())
         return false;
@@ -975,6 +931,17 @@ _convertpoint(NPP instance,
 static void NP_CALLBACK
 _urlredirectresponse(NPP instance, void* notifyData, NPBool allow);
 
+static NPError NP_CALLBACK
+_initasyncsurface(NPP instance, NPSize *size,
+                  NPImageFormat format, void *initData,
+                  NPAsyncSurface *surface);
+
+static NPError NP_CALLBACK
+_finalizeasyncsurface(NPP instance, NPAsyncSurface *surface);
+
+static void NP_CALLBACK
+_setcurrentasyncsurface(NPP instance, NPAsyncSurface *surface, NPRect *changed);
+
 } /* namespace child */
 } /* namespace plugins */
 } /* namespace mozilla */
@@ -1036,7 +1003,10 @@ const NPNetscapeFuncs PluginModuleChild::sBrowserFuncs = {
     mozilla::plugins::child::_convertpoint,
     NULL, // handleevent, unimplemented
     NULL, // unfocusinstance, unimplemented
-    mozilla::plugins::child::_urlredirectresponse
+    mozilla::plugins::child::_urlredirectresponse,
+    mozilla::plugins::child::_initasyncsurface,
+    mozilla::plugins::child::_finalizeasyncsurface,
+    mozilla::plugins::child::_setcurrentasyncsurface
 };
 
 PluginInstanceChild*
@@ -1112,8 +1082,7 @@ _getvalue(NPP aNPP,
         case NPNVasdEnabledBool: // Intentional fall-through
         case NPNVisOfflineBool: // Intentional fall-through
         case NPNVSupportsXEmbedBool: // Intentional fall-through
-        case NPNVSupportsWindowless: // Intentional fall-through
-        case NPNVprivateModeBool: {
+        case NPNVSupportsWindowless: { // Intentional fall-through
             NPError result;
             bool value;
             PluginModuleChild::current()->
@@ -1809,6 +1778,26 @@ _urlredirectresponse(NPP instance, void* notifyData, NPBool allow)
     InstCast(instance)->NPN_URLRedirectResponse(notifyData, allow);
 }
 
+NPError NP_CALLBACK
+_initasyncsurface(NPP instance, NPSize *size,
+                  NPImageFormat format, void *initData,
+                  NPAsyncSurface *surface)
+{
+    return InstCast(instance)->NPN_InitAsyncSurface(size, format, initData, surface);
+}
+
+NPError NP_CALLBACK
+_finalizeasyncsurface(NPP instance, NPAsyncSurface *surface)
+{
+    return InstCast(instance)->NPN_FinalizeAsyncSurface(surface);
+}
+
+void NP_CALLBACK
+_setcurrentasyncsurface(NPP instance, NPAsyncSurface *surface, NPRect *changed)
+{
+    InstCast(instance)->NPN_SetCurrentAsyncSurface(surface, changed);
+}
+
 } /* namespace child */
 } /* namespace plugins */
 } /* namespace mozilla */
@@ -1832,10 +1821,12 @@ PluginModuleChild::AnswerNP_GetEntryPoints(NPError* _retval)
 }
 
 bool
-PluginModuleChild::AnswerNP_Initialize(NPError* _retval)
+PluginModuleChild::AnswerNP_Initialize(const uint32_t& aFlags, NPError* _retval)
 {
     PLUGIN_LOG_DEBUG_METHOD;
     AssertPluginThread();
+
+    mAsyncDrawingAllowed = aFlags & kAllowAsyncDrawing;
 
 #ifdef OS_WIN
     SetEventHooks();

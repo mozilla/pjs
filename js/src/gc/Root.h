@@ -1,49 +1,20 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=78:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey global object code.
- *
- * The Initial Developer of the Original Code is
- * the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2012
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsgc_root_h__
 #define jsgc_root_h__
 
-#include "jsapi.h"
-#include "jsprvtd.h"
+#include "jspubtd.h"
 
-namespace js {
+#include "js/Utility.h"
+
+#ifdef __cplusplus
+
+namespace JS {
 
 /*
  * Moving GC Stack Rooting
@@ -92,33 +63,74 @@ namespace js {
  *   fix than when relying on a separate rooting analysis.
  */
 
-template <> struct RootMethods<const jsid>
+template <typename T> class Root;
+template <typename T> class RootedVar;
+
+template <typename T>
+struct RootMethods { };
+
+/*
+ * Reference to a T that has been rooted elsewhere. This is most useful
+ * as a parameter type, which guarantees that the T lvalue is properly
+ * rooted. See "Move GC Stack Rooting" above.
+ */
+template <typename T>
+class Handle
 {
-    static jsid initial() { return JSID_VOID; }
-    static ThingRootKind kind() { return THING_ROOT_ID; }
-    static bool poisoned(jsid id) { return IsPoisonedId(id); }
+  public:
+    /* Copy handles of different types, with implicit coercion. */
+    template <typename S> Handle(Handle<S> handle) {
+        testAssign<S>();
+        ptr = reinterpret_cast<const T *>(handle.address());
+    }
+
+    /*
+     * This may be called only if the location of the T is guaranteed
+     * to be marked (for some reason other than being a Root or RootedVar),
+     * e.g., if it is guaranteed to be reachable from an implicit root.
+     *
+     * Create a Handle from a raw location of a T.
+     */
+    static Handle fromMarkedLocation(const T *p) {
+        Handle h;
+        h.ptr = p;
+        return h;
+    }
+
+    /*
+     * Construct a handle from an explicitly rooted location. This is the
+     * normal way to create a handle.
+     */
+    template <typename S> inline Handle(const Root<S> &root);
+    template <typename S> inline Handle(const RootedVar<S> &root);
+
+    const T *address() const { return ptr; }
+    T value() const { return *ptr; }
+
+    operator T () const { return value(); }
+    T operator ->() const { return value(); }
+
+  private:
+    Handle() {}
+
+    const T *ptr;
+
+    template <typename S>
+    void testAssign() {
+#ifdef DEBUG
+        T a = RootMethods<T>::initial();
+        S b = RootMethods<S>::initial();
+        a = b;
+        (void)a;
+#endif
+    }
 };
 
-template <> struct RootMethods<jsid>
-{
-    static jsid initial() { return JSID_VOID; }
-    static ThingRootKind kind() { return THING_ROOT_ID; }
-    static bool poisoned(jsid id) { return IsPoisonedId(id); }
-};
-
-template <> struct RootMethods<const Value>
-{
-    static Value initial() { return UndefinedValue(); }
-    static ThingRootKind kind() { return THING_ROOT_VALUE; }
-    static bool poisoned(const Value &v) { return IsPoisonedValue(v); }
-};
-
-template <> struct RootMethods<Value>
-{
-    static Value initial() { return UndefinedValue(); }
-    static ThingRootKind kind() { return THING_ROOT_VALUE; }
-    static bool poisoned(const Value &v) { return IsPoisonedValue(v); }
-};
+typedef Handle<JSObject*>    HandleObject;
+typedef Handle<JSFunction*>  HandleFunction;
+typedef Handle<JSString*>    HandleString;
+typedef Handle<jsid>         HandleId;
+typedef Handle<Value>        HandleValue;
 
 template <typename T>
 struct RootMethods<T *>
@@ -142,17 +154,19 @@ template <typename T>
 class Root
 {
   public:
-    Root(JSContext *cx, const T *ptr
+    Root(JSContext *cx_, const T *ptr
          JS_GUARD_OBJECT_NOTIFIER_PARAM)
     {
 #ifdef JSGC_ROOT_ANALYSIS
+        ContextFriendFields *cx = ContextFriendFields::get(cx_);
+
         ThingRootKind kind = RootMethods<T>::kind();
         this->stack = reinterpret_cast<Root<T>**>(&cx->thingGCRooters[kind]);
         this->prev = *stack;
         *stack = this;
-#endif
 
         JS_ASSERT(!RootMethods<T>::poisoned(*ptr));
+#endif
 
         this->ptr = ptr;
 
@@ -191,53 +205,77 @@ Handle<T>::Handle(const Root<S> &root)
     ptr = reinterpret_cast<const T *>(root.address());
 }
 
-typedef Root<JSObject*>          RootObject;
-typedef Root<JSFunction*>        RootFunction;
-typedef Root<Shape*>             RootShape;
-typedef Root<BaseShape*>         RootBaseShape;
-typedef Root<types::TypeObject*> RootTypeObject;
-typedef Root<JSString*>          RootString;
-typedef Root<JSAtom*>            RootAtom;
-typedef Root<jsid>               RootId;
-typedef Root<Value>              RootValue;
+typedef Root<JSObject*>    RootObject;
+typedef Root<JSFunction*>  RootFunction;
+typedef Root<JSString*>    RootString;
+typedef Root<jsid>         RootId;
+typedef Root<Value>        RootValue;
 
-/* Mark a stack location as a root for a rooting analysis. */
-class CheckRoot
+/*
+ * Mark a stack location as a root for the rooting analysis, without actually
+ * rooting it in release builds. This should only be used for stack locations
+ * of GC things that cannot be relocated by a garbage collection, and that
+ * are definitely reachable via another path.
+ */
+class SkipRoot
 {
 #if defined(DEBUG) && defined(JSGC_ROOT_ANALYSIS)
 
-    CheckRoot **stack, *prev;
-    const uint8_t *ptr;
+    SkipRoot **stack, *prev;
+    const uint8_t *start;
+    const uint8_t *end;
+
+    template <typename T>
+    void init(ContextFriendFields *cx, const T *ptr, size_t count)
+    {
+        this->stack = &cx->skipGCRooters;
+        this->prev = *stack;
+        *stack = this;
+        this->start = (const uint8_t *) ptr;
+        this->end = this->start + (sizeof(T) * count);
+    }
 
   public:
     template <typename T>
-    CheckRoot(JSContext *cx, const T *ptr
+    SkipRoot(JSContext *cx, const T *ptr
               JS_GUARD_OBJECT_NOTIFIER_PARAM)
     {
-        this->stack = &cx->checkGCRooters;
-        this->prev = *stack;
-        *stack = this;
-        this->ptr = static_cast<const uint8_t*>(ptr);
+        init(ContextFriendFields::get(cx), ptr, 1);
         JS_GUARD_OBJECT_NOTIFIER_INIT;
     }
 
-    ~CheckRoot()
+    template <typename T>
+    SkipRoot(JSContext *cx, const T *ptr, size_t count
+              JS_GUARD_OBJECT_NOTIFIER_PARAM)
+    {
+        init(ContextFriendFields::get(cx), ptr, count);
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
+    }
+
+    ~SkipRoot()
     {
         JS_ASSERT(*stack == this);
         *stack = prev;
     }
 
-    CheckRoot *previous() { return prev; }
+    SkipRoot *previous() { return prev; }
 
     bool contains(const uint8_t *v, size_t len) {
-        return ptr >= v && ptr < v + len;
+        return v >= start && v + len <= end;
     }
 
 #else /* DEBUG && JSGC_ROOT_ANALYSIS */
 
   public:
     template <typename T>
-    CheckRoot(JSContext *cx, const T *ptr
+    SkipRoot(JSContext *cx, const T *ptr
+              JS_GUARD_OBJECT_NOTIFIER_PARAM)
+    {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
+    }
+
+    template <typename T>
+    SkipRoot(JSContext *cx, const T *ptr, size_t count
               JS_GUARD_OBJECT_NOTIFIER_PARAM)
     {
         JS_GUARD_OBJECT_NOTIFIER_INIT;
@@ -254,18 +292,28 @@ class RootedVar
 {
   public:
     RootedVar(JSContext *cx)
-        : ptr(RootMethods<T>::initial()), root(cx, &ptr)
+      : ptr(RootMethods<T>::initial()), root(cx, &ptr)
     {}
 
     RootedVar(JSContext *cx, T initial)
-        : ptr(initial), root(cx, &ptr)
+      : ptr(initial), root(cx, &ptr)
     {}
 
-    operator T () { return ptr; }
-    T operator ->() { return ptr; }
+    operator T () const { return ptr; }
+    T operator ->() const { return ptr; }
     T * address() { return &ptr; }
     const T * address() const { return &ptr; }
+    T & reference() { return ptr; }
     T raw() { return ptr; }
+
+    /*
+     * This method is only necessary due to an obscure C++98 requirement (that
+     * there be an accessible, usable copy constructor when passing a temporary
+     * to an implicitly-called constructor for use with a const-ref parameter).
+     * (Head spinning yet?)  We can remove this when we build the JS engine
+     * with -std=c++11.
+     */
+    operator Handle<T> () const { return Handle<T>(*this); }
 
     T & operator =(T value)
     {
@@ -274,27 +322,47 @@ class RootedVar
         return ptr;
     }
 
+    T & operator =(const RootedVar &value)
+    {
+        ptr = value;
+        return ptr;
+    }
+
   private:
     T ptr;
     Root<T> root;
+
+    RootedVar() MOZ_DELETE;
+    RootedVar(const RootedVar &) MOZ_DELETE;
 };
 
 template <typename T> template <typename S>
 inline
 Handle<T>::Handle(const RootedVar<S> &root)
 {
+    testAssign<S>();
     ptr = reinterpret_cast<const T *>(root.address());
 }
 
-typedef RootedVar<JSObject*>          RootedVarObject;
-typedef RootedVar<JSFunction*>        RootedVarFunction;
-typedef RootedVar<Shape*>             RootedVarShape;
-typedef RootedVar<BaseShape*>         RootedVarBaseShape;
-typedef RootedVar<types::TypeObject*> RootedVarTypeObject;
-typedef RootedVar<JSString*>          RootedVarString;
-typedef RootedVar<JSAtom*>            RootedVarAtom;
-typedef RootedVar<jsid>               RootedVarId;
-typedef RootedVar<Value>              RootedVarValue;
+typedef RootedVar<JSObject*>    RootedVarObject;
+typedef RootedVar<JSFunction*>  RootedVarFunction;
+typedef RootedVar<JSString*>    RootedVarString;
+typedef RootedVar<jsid>         RootedVarId;
+typedef RootedVar<Value>        RootedVarValue;
 
-}  /* namespace js */
+/*
+ * Hook for dynamic root analysis. Checks the native stack and poisons
+ * references to GC things which have not been rooted.
+ */
+#if defined(JSGC_ROOT_ANALYSIS) && defined(DEBUG) && !defined(JS_THREADSAFE)
+void CheckStackRoots(JSContext *cx);
+inline void MaybeCheckStackRoots(JSContext *cx) { CheckStackRoots(cx); }
+#else
+inline void MaybeCheckStackRoots(JSContext *cx) {}
+#endif
+
+}  /* namespace JS */
+
+#endif  /* __cplusplus */
+
 #endif  /* jsgc_root_h___ */

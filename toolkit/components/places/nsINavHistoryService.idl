@@ -1,45 +1,7 @@
 /* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places code.
- *
- * The Initial Developer of the Original Code is
- * Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Brett Wilson <brett@gmail.com>
- *   Dietrich Ayala <dietrich@mozilla.com>
- *   Marco Bonardo <mak77@bonardo.net>
- *   Asaf Romano <mano@mozilla.com>
- *   Drew Willcoxon <adw@mozilla.com>
- *   Philipp von Weitershausen <philipp@weitershausen.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * Using Places services after quit-application is not reliable, so make
@@ -1040,7 +1002,7 @@ interface nsINavHistoryQuery : nsISupports
 /**
  * This object represents the global options for executing a query.
  */
-[scriptable, uuid(2d8ff86b-f8c2-451c-8a1a-1ff0749a074e)]
+[scriptable, uuid(8198dfa7-8061-4766-95cb-fa86b3c00a47)]
 interface nsINavHistoryQueryOptions : nsISupports
 {
   /**
@@ -1189,15 +1151,6 @@ interface nsINavHistoryQueryOptions : nsISupports
   attribute boolean excludeReadOnlyFolders;
 
   /**
-   * This option excludes items from a bookmarks query
-   * if the parent of the item has this annotation.
-   * An example is to exclude livemark items
-   * (parent folders have the "livemark/feedURI" annotation)
-   * Ignored for queries over history.
-   */
-  attribute AUTF8String excludeItemIfParentHasAnnotation;
-
-  /**
    * When set, allows items with "place:" URIs to appear as containers,
    * with the container's contents filled in from the stored query.
    * If not set, these will appear as normal items. Doesn't do anything if
@@ -1210,36 +1163,12 @@ interface nsINavHistoryQueryOptions : nsISupports
   attribute boolean expandQueries;
 
   /**
-   * Most items in history are marked "hidden." Only toplevel pages that the
-   * user sees in the URL bar are not hidden. Hidden things include the content
-   * of iframes and all images on web pages. Normally, you don't want these
-   * things. If you do, set this flag and you'll get all items, even hidden
-   * ones. Does nothing for bookmark queries. Defaults to false.
+   * Some pages in history are marked "hidden" and thus don't appear by default
+   * in queries.  These include automatic framed visits and redirects.  Setting
+   * this attribute will return all pages, even hidden ones.  Does nothing for
+   * bookmark queries. Defaults to false.
    */
   attribute boolean includeHidden;
-
-  /**
-   * Include both redirected-from and redirected-to pages into results.
-   */
-  const unsigned short REDIRECTS_MODE_ALL = 0;
-  /**
-   * Query results will not include redirected-to pages, but will include
-   * redirected-from pages.
-   */
-  const unsigned short REDIRECTS_MODE_SOURCE = 1;
-  /**
-   * Query results will not include redirected-from pages but will include
-   * redirected-to pages.
-   */
-  const unsigned short REDIRECTS_MODE_TARGET = 2;
-
-  /**
-   * Defines how redirects should be handled, see REDIRECTS_MODE_* constants
-   * above.
-   * Defaults to REDIRECTS_MODE_ALL.
-   * Note: this option is effective only on QUERY_TYPE_HISTORY.
-   */
-  attribute unsigned short redirectsMode;
 
   /**
    * This is the maximum number of results that you want. The query is exeucted,

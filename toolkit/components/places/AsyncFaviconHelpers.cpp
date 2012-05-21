@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Marco Bonardo <mak77@bonardo.net> (original author)
- *   Richard Newman <rnewman@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AsyncFaviconHelpers.h"
 
@@ -78,40 +45,31 @@ FetchPageInfo(nsRefPtr<Database>& aDB,
   NS_PRECONDITION(!NS_IsMainThread(),
                   "This should not be called on the main thread");
 
-  // This query fragment finds the bookmarked uri we want to set the icon for,
-  // walking up to three redirect levels.
-  nsCString redirectedBookmarksFragment =
-    nsPrintfCString(1024,
-      "SELECT h.url "
-      "FROM moz_bookmarks b "
-      "WHERE b.fk = h.id "
+  // This query finds the bookmarked uri we want to set the icon for,
+  // walking up to two redirect levels.
+  nsCString query = nsPrintfCString(
+    "SELECT h.id, h.favicon_id, h.guid, ( "
+      "SELECT h.url FROM moz_bookmarks b WHERE b.fk = h.id "
       "UNION ALL " // Union not directly bookmarked pages.
-      "SELECT (SELECT url FROM moz_places WHERE id = %s) "
-      "FROM moz_historyvisits self "
-      "JOIN moz_bookmarks b ON b.fk = %s "
-      "LEFT JOIN moz_historyvisits parent ON parent.id = self.from_visit "
-      "LEFT JOIN moz_historyvisits grandparent ON parent.from_visit = grandparent.id "
-        "AND parent.visit_type IN (%d, %d) "
-      "LEFT JOIN moz_historyvisits greatgrandparent ON grandparent.from_visit = greatgrandparent.id "
-        "AND grandparent.visit_type IN (%d, %d) "
-      "WHERE self.visit_type IN (%d, %d) "
-        "AND self.place_id = h.id "
-      "LIMIT 1 ",
-      NS_LITERAL_CSTRING("COALESCE(greatgrandparent.place_id, grandparent.place_id, parent.place_id)").get(),
-      NS_LITERAL_CSTRING("COALESCE(greatgrandparent.place_id, grandparent.place_id, parent.place_id)").get(),
-      nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
-      nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY,
-      nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
-      nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY,
-      nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
-      nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY
-    );
+      "SELECT url FROM moz_places WHERE id = ( "
+        "SELECT COALESCE(grandparent.place_id, parent.place_id) as r_place_id "
+        "FROM moz_historyvisits dest "
+        "LEFT JOIN moz_historyvisits parent ON parent.id = dest.from_visit "
+                                          "AND dest.visit_type IN (%d, %d) "
+        "LEFT JOIN moz_historyvisits grandparent ON parent.from_visit = grandparent.id "
+          "AND parent.visit_type IN (%d, %d) "
+        "WHERE dest.place_id = h.id "
+        "AND EXISTS(SELECT 1 FROM moz_bookmarks b WHERE b.fk = r_place_id) "
+        "LIMIT 1 "
+      ") "
+    ") FROM moz_places h WHERE h.url = :page_url",
+    nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
+    nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY,
+    nsINavHistoryService::TRANSITION_REDIRECT_PERMANENT,
+    nsINavHistoryService::TRANSITION_REDIRECT_TEMPORARY
+  );
 
-  nsCOMPtr<mozIStorageStatement> stmt = aDB->GetStatement(NS_LITERAL_CSTRING(
-    "SELECT h.id, h.favicon_id, h.guid, "
-           "(") + redirectedBookmarksFragment + NS_LITERAL_CSTRING(") "
-    "FROM moz_places h WHERE h.url = :page_url"
-  ));
+  nsCOMPtr<mozIStorageStatement> stmt = aDB->GetStatement(query);
   NS_ENSURE_STATE(stmt);
   mozStorageStatementScoper scoper(stmt);
 
@@ -794,37 +752,15 @@ AsyncAssociateIconToPage::Run()
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  // If the page does not have an id, try to insert a new one.
+  // If the page does not have an id, don't try to insert a new one, cause we
+  // don't know where the page comes from.  Not doing so we may end adding
+  // a page that otherwise we'd explicitly ignore, like a POST or an error page.
   if (mPage.id == 0) {
-    nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
-      "INSERT INTO moz_places (url, rev_host, hidden, favicon_id, frecency, guid) "
-      "VALUES (:page_url, :rev_host, 1, :favicon_id, 0, GENERATE_GUID()) "
-    );
-    NS_ENSURE_STATE(stmt);
-    mozStorageStatementScoper scoper(stmt);
-    rv = URIBinder::Bind(stmt, NS_LITERAL_CSTRING("page_url"), mPage.spec);
-    NS_ENSURE_SUCCESS(rv, rv);
-    // The rev_host can be null.
-    if (mPage.revHost.IsEmpty()) {
-      rv = stmt->BindNullByName(NS_LITERAL_CSTRING("rev_host"));
-    }
-    else {
-      rv = stmt->BindStringByName(NS_LITERAL_CSTRING("rev_host"), mPage.revHost);
-    }
-    NS_ENSURE_SUCCESS(rv, rv);
-    rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("favicon_id"), mIcon.id);
-    NS_ENSURE_SUCCESS(rv, rv);
-    rv = stmt->Execute();
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    // Get the new id and GUID.
-    rv = FetchPageInfo(mDB, mPage);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    mIcon.status |= ICON_STATUS_ASSOCIATED;
+    return NS_OK;
   }
+
   // Otherwise just associate the icon to the page, if needed.
-  else if (mPage.iconId != mIcon.id) {
+  if (mPage.iconId != mIcon.id) {
     nsCOMPtr<mozIStorageStatement> stmt;
     if (mPage.id) {
       stmt = mDB->GetStatement(
@@ -911,13 +847,9 @@ AsyncGetFaviconURLForPage::Run()
 
   nsCAutoString iconSpec;
   nsresult rv = FetchIconURL(mDB, mPageSpec, iconSpec);
-  NS_ENSURE_SUCCESS(rv, rv);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-  // No icon was found.
-  if (iconSpec.IsEmpty())
-    return NS_OK;
-
-  // Now notify our callback of the icon spec we retrieved.
+  // Now notify our callback of the icon spec we retrieved, even if empty.
   IconData iconData;
   iconData.spec.Assign(iconSpec);
 
@@ -980,11 +912,7 @@ AsyncGetFaviconDataForPage::Run()
 
   nsCAutoString iconSpec;
   nsresult rv = FetchIconURL(mDB, mPageSpec, iconSpec);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!iconSpec.Length()) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   IconData iconData;
   iconData.spec.Assign(iconSpec);
@@ -992,8 +920,13 @@ AsyncGetFaviconDataForPage::Run()
   PageData pageData;
   pageData.spec.Assign(mPageSpec);
 
-  rv = FetchIconInfo(mDB, iconData);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (!iconSpec.IsEmpty()) {
+    rv = FetchIconInfo(mDB, iconData);
+    if (NS_FAILED(rv)) {
+      iconData.spec.Truncate();
+      MOZ_NOT_REACHED("Fetching favicon information failed unexpectedly.");
+    }
+  }
 
   nsCOMPtr<nsIRunnable> event =
     new NotifyIconObservers(iconData, pageData, mCallback);
@@ -1122,44 +1055,53 @@ NotifyIconObservers::Run()
                   "This should be called on the main thread");
 
   nsCOMPtr<nsIURI> iconURI;
-  nsresult rv = NS_NewURI(getter_AddRefs(iconURI), mIcon.spec);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // Notify observers only if something changed.
-  if (mIcon.status & ICON_STATUS_SAVED ||
-      mIcon.status & ICON_STATUS_ASSOCIATED) {
-    nsCOMPtr<nsIURI> pageURI;
-    rv = NS_NewURI(getter_AddRefs(pageURI), mPage.spec);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsFaviconService* favicons = nsFaviconService::GetFaviconService();
-    NS_ENSURE_STATE(favicons);
-    (void)favicons->SendFaviconNotifications(pageURI, iconURI, mPage.guid);
-
-    // If the page is bookmarked and the bookmarked url is different from the
-    // updated one, start a new task to update its icon as well.
-    if (!mPage.bookmarkedSpec.IsEmpty() &&
-        !mPage.bookmarkedSpec.Equals(mPage.spec)) {
-      // Create a new page struct to avoid polluting it with old data.
-      PageData bookmarkedPage;
-      bookmarkedPage.spec = mPage.bookmarkedSpec;
-
-      // This will be silent, so be sure to not pass in the current callback.
-      nsCOMPtr<nsIFaviconDataCallback> nullCallback;
-      nsRefPtr<AsyncAssociateIconToPage> event =
-          new AsyncAssociateIconToPage(mIcon, bookmarkedPage, nullCallback);
-      mDB->DispatchToAsyncThread(event);
+  if (!mIcon.spec.IsEmpty()) {
+    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_NewURI(getter_AddRefs(iconURI), mIcon.spec)));
+    if (iconURI)
+    {
+      // Notify observers only if something changed.
+      if (mIcon.status & ICON_STATUS_SAVED ||
+          mIcon.status & ICON_STATUS_ASSOCIATED) {
+        SendGlobalNotifications(iconURI);
+      }
     }
   }
 
   if (mCallback) {
-    (void)mCallback->OnFaviconDataAvailable(iconURI,
-                                            mIcon.data.Length(),
-                                            TO_INTBUFFER(mIcon.data),
-                                            mIcon.mimeType);
+    (void)mCallback->OnComplete(iconURI, mIcon.data.Length(),
+                                TO_INTBUFFER(mIcon.data), mIcon.mimeType);
   }
 
   return NS_OK;
+}
+
+void
+NotifyIconObservers::SendGlobalNotifications(nsIURI* aIconURI)
+{
+  nsCOMPtr<nsIURI> pageURI;
+  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_NewURI(getter_AddRefs(pageURI), mPage.spec)));
+  if (pageURI) {
+    nsFaviconService* favicons = nsFaviconService::GetFaviconService();
+    MOZ_ASSERT(favicons);
+    if (favicons) {
+      (void)favicons->SendFaviconNotifications(pageURI, aIconURI, mPage.guid);
+    }
+  }
+
+  // If the page is bookmarked and the bookmarked url is different from the
+  // updated one, start a new task to update its icon as well.
+  if (!mPage.bookmarkedSpec.IsEmpty() &&
+      !mPage.bookmarkedSpec.Equals(mPage.spec)) {
+    // Create a new page struct to avoid polluting it with old data.
+    PageData bookmarkedPage;
+    bookmarkedPage.spec = mPage.bookmarkedSpec;
+
+    // This will be silent, so be sure to not pass in the current callback.
+    nsCOMPtr<nsIFaviconDataCallback> nullCallback;
+    nsRefPtr<AsyncAssociateIconToPage> event =
+        new AsyncAssociateIconToPage(mIcon, bookmarkedPage, nullCallback);
+    mDB->DispatchToAsyncThread(event);
+  }
 }
 
 } // namespace places

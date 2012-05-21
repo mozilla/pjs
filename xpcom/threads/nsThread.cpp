@@ -1,40 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Darin Fisher <darin@meer.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ReentrantMonitor.h"
 #include "nsThread.h"
@@ -296,7 +264,7 @@ nsThread::ThreadFunc(void *arg)
   while (true) {
     {
       MutexAutoLock lock(self->mLock);
-      if (!self->mEvents->HasPendingEvent()) {
+      if (!self->mEvents.HasPendingEvent()) {
         // No events in the queue, so we will stop now. Don't let any more
         // events be added, since they won't be processed. It is critical
         // that no PutEvent can occur between testing that the event queue is
@@ -325,7 +293,6 @@ nsThread::ThreadFunc(void *arg)
 
 nsThread::nsThread(MainThreadFlag aMainThread, PRUint32 aStackSize)
   : mLock("nsThread.mLock")
-  , mEvents(&mEventsRoot)
   , mPriority(PRIORITY_NORMAL)
   , mThread(nsnull)
   , mRunningEvent(0)
@@ -366,7 +333,7 @@ nsThread::Init()
   // that mThread is set properly.
   {
     MutexAutoLock lock(mLock);
-    mEvents->PutEvent(startup);
+    mEvents.PutEvent(startup);
   }
 
   // Wait for thread to call ThreadManager::SetupCurrentThread, which completes
@@ -393,7 +360,7 @@ nsThread::PutEvent(nsIRunnable *event)
       NS_WARNING("An event was posted to a thread that will never run it (rejected)");
       return NS_ERROR_UNEXPECTED;
     }
-    if (!mEvents->PutEvent(event))
+    if (!mEvents.PutEvent(event))
       return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -523,7 +490,7 @@ nsThread::HasPendingEvents(bool *result)
 {
   NS_ENSURE_STATE(PR_GetCurrentThread() == mThread);
 
-  *result = mEvents->GetEvent(false, nsnull);
+  *result = mEvents.GetEvent(false, nsnull);
   return NS_OK;
 }
 
@@ -635,7 +602,7 @@ nsThread::ProcessNextEvent(bool mayWait, bool *result)
 
     // If we are shutting down, then do not wait for new events.
     nsCOMPtr<nsIRunnable> event;
-    mEvents->GetEvent(mayWait && !ShuttingDown(), getter_AddRefs(event));
+    mEvents.GetEvent(mayWait && !ShuttingDown(), getter_AddRefs(event));
 
 #ifdef NS_FUNCTION_TIMER
     char message[1024] = {'\0'};
@@ -736,49 +703,6 @@ nsThread::SetObserver(nsIThreadObserver *obs)
   MutexAutoLock lock(mLock);
   mObserver = obs;
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsThread::PushEventQueue(nsIThreadEventFilter *filter)
-{
-  nsChainedEventQueue *queue = new nsChainedEventQueue(filter);
-
-  MutexAutoLock lock(mLock);
-  queue->mNext = mEvents;
-  mEvents = queue;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsThread::PopEventQueue()
-{
-  MutexAutoLock lock(mLock);
-
-  // Make sure we do not pop too many!
-  NS_ENSURE_STATE(mEvents != &mEventsRoot);
-
-  nsChainedEventQueue *queue = mEvents;
-  mEvents = mEvents->mNext;
-
-  nsCOMPtr<nsIRunnable> event;
-  while (queue->GetEvent(false, getter_AddRefs(event)))
-    mEvents->PutEvent(event);
-
-  delete queue;
-  
-  return NS_OK;
-}
-
-bool
-nsThread::nsChainedEventQueue::PutEvent(nsIRunnable *event)
-{
-  bool val;
-  if (!mFilter || mFilter->AcceptEvent(event)) {
-    val = mQueue.PutEvent(event);
-  } else {
-    val = mNext->PutEvent(event);
-  }
-  return val;
 }
 
 NS_IMETHODIMP

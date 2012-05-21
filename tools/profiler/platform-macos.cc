@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -157,7 +161,10 @@ void Thread::Join() {
 
 class Sampler::PlatformData : public Malloced {
  public:
-  PlatformData() : profiled_thread_(mach_thread_self()) {}
+  PlatformData() : profiled_thread_(mach_thread_self())
+  {
+    profiled_pthread_ = pthread_from_mach_thread_np(profiled_thread_);
+  }
 
   ~PlatformData() {
     // Deallocate Mach port for thread.
@@ -165,12 +172,17 @@ class Sampler::PlatformData : public Malloced {
   }
 
   thread_act_t profiled_thread() { return profiled_thread_; }
+  pthread_t profiled_pthread() { return profiled_pthread_; }
 
  private:
   // Note: for profiled_thread_ Mach primitives are used instead of PThread's
   // because the latter doesn't provide thread manipulation primitives required.
   // For details, consult "Mac OS X Internals" book, Section 7.3.
   thread_act_t profiled_thread_;
+  // we also store the pthread because Mach threads have no concept of stack
+  // and we want to be able to get the stack size when we need to unwind the
+  // stack using frame pointers.
+  pthread_t profiled_pthread_;
 };
 
 
@@ -306,4 +318,10 @@ void Sampler::Stop() {
   ASSERT(IsActive());
   SetActive(false);
   SamplerThread::RemoveActiveSampler(this);
+}
+
+pthread_t
+Sampler::GetProfiledThread(Sampler::PlatformData* aData)
+{
+  return aData->profiled_pthread();
 }

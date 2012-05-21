@@ -1,42 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "nsCOMPtr.h"
 #include "nsTableFrame.h"
 #include "nsRenderingContext.h"
@@ -58,7 +24,6 @@
 
 #include "nsPresContext.h"
 #include "nsCSSRendering.h"
-#include "nsStyleConsts.h"
 #include "nsGkAtoms.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsIPresShell.h"
@@ -66,7 +31,6 @@
 #include "nsIDOMHTMLElement.h"
 #include "nsIDOMHTMLBodyElement.h"
 #include "nsFrameManager.h"
-#include "nsCSSRendering.h"
 #include "nsLayoutErrors.h"
 #include "nsAutoPtr.h"
 #include "nsCSSFrameConstructor.h"
@@ -502,10 +466,7 @@ void nsTableFrame::ResetRowIndices(const nsFrameList::Slice& aRowGroupsToExclude
 
   PRInt32 rowIndex = 0;
   nsTHashtable<nsPtrHashKey<nsTableRowGroupFrame> > excludeRowGroups;
-  if (!excludeRowGroups.Init()) {
-    NS_ERROR("Failed to initialize excludeRowGroups hash.");
-    return;
-  }
+  excludeRowGroups.Init();
   nsFrameList::Enumerator excludeRowGroupsEnumerator(aRowGroupsToExclude);
   while (!excludeRowGroupsEnumerator.AtEnd()) {
     excludeRowGroups.PutEntry(static_cast<nsTableRowGroupFrame*>(excludeRowGroupsEnumerator.get()));
@@ -1047,7 +1008,7 @@ nsTableFrame::InsertRowGroups(const nsFrameList::Slice& aRowGroups)
 /////////////////////////////////////////////////////////////////////////////
 // Child frame enumeration
 
-nsFrameList
+const nsFrameList&
 nsTableFrame::GetChildList(ChildListID aListID) const
 {
   if (aListID == kColGroupList) {
@@ -1064,7 +1025,8 @@ nsTableFrame::GetChildLists(nsTArray<ChildList>* aLists) const
 }
 
 nsRect
-nsDisplayTableItem::GetBounds(nsDisplayListBuilder* aBuilder) {
+nsDisplayTableItem::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
+  *aSnap = false;
   return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
@@ -1251,7 +1213,7 @@ AnyTablePartHasBorderOrBackground(nsIFrame* aStart, nsIFrame* aEnd)
     if (f->GetStyleVisibility()->IsVisible() &&
         (!f->GetStyleBackground()->IsTransparent() ||
          f->GetStyleDisplay()->mAppearance ||
-         f->HasBorder()))
+         f->GetStyleBorder()->HasBorder()))
       return true;
 
     nsTableCellFrame *cellFrame = do_QueryFrame(f);
@@ -1272,36 +1234,35 @@ nsTableFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                const nsRect&           aDirtyRect,
                                const nsDisplayListSet& aLists)
 {
-  if (!IsVisibleInSelection(aBuilder))
-    return NS_OK;
-
   DO_GLOBAL_REFLOW_COUNT_DSP_COLOR("nsTableFrame", NS_RGB(255,128,255));
 
-  if (GetStyleVisibility()->IsVisible()) {
-    nsMargin deflate = GetDeflationForBackground(PresContext());
-    // If 'deflate' is (0,0,0,0) then we can paint the table background
-    // in its own display item, so do that to take advantage of
-    // opacity and visibility optimizations
-    if (deflate == nsMargin(0, 0, 0, 0)) {
-      nsresult rv = DisplayBackgroundUnconditional(aBuilder, aLists, false);
+  nsDisplayTableItem* item = nsnull;
+  if (IsVisibleInSelection(aBuilder)) {
+    if (GetStyleVisibility()->IsVisible()) {
+      nsMargin deflate = GetDeflationForBackground(PresContext());
+      // If 'deflate' is (0,0,0,0) then we can paint the table background
+      // in its own display item, so do that to take advantage of
+      // opacity and visibility optimizations
+      if (deflate == nsMargin(0, 0, 0, 0)) {
+        nsDisplayBackground* bg;
+        nsresult rv = DisplayBackgroundUnconditional(aBuilder, aLists, false, &bg);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+    }
+    
+    // This background is created if any of the table parts are visible,
+    // or if we're doing event handling (since DisplayGenericTablePart
+    // needs the item for the |sortEventBackgrounds|-dependent code).
+    // Specific visibility decisions are delegated to the table background
+    // painter, which handles borders and backgrounds for the table.
+    if (aBuilder->IsForEventDelivery() ||
+        AnyTablePartHasBorderOrBackground(this, GetNextSibling()) ||
+        AnyTablePartHasBorderOrBackground(mColGroups.FirstChild(), nsnull)) {
+      item = new (aBuilder) nsDisplayTableBorderBackground(aBuilder, this);
+      nsresult rv = aLists.BorderBackground()->AppendNewToTop(item);
       NS_ENSURE_SUCCESS(rv, rv);
     }
   }
-
-  nsDisplayTableItem* item = nsnull;
-  // This background is created if any of the table parts are visible,
-  // or if we're doing event handling (since DisplayGenericTablePart
-  // needs the item for the |sortEventBackgrounds|-dependent code).
-  // Specific visibility decisions are delegated to the table background
-  // painter, which handles borders and backgrounds for the table.
-  if (aBuilder->IsForEventDelivery() ||
-      AnyTablePartHasBorderOrBackground(this, GetNextSibling()) ||
-      AnyTablePartHasBorderOrBackground(mColGroups.FirstChild(), nsnull)) {
-    item = new (aBuilder) nsDisplayTableBorderBackground(aBuilder, this);
-    nsresult rv = aLists.BorderBackground()->AppendNewToTop(item);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
   return DisplayGenericTablePart(aBuilder, this, aDirtyRect, aLists, item);
 }
 
@@ -1511,11 +1472,11 @@ nsTableFrame::IntrinsicWidthOffsets(nsRenderingContext* aRenderingContext)
 nsTableFrame::ComputeSize(nsRenderingContext *aRenderingContext,
                           nsSize aCBSize, nscoord aAvailableWidth,
                           nsSize aMargin, nsSize aBorder, nsSize aPadding,
-                          bool aShrinkWrap)
+                          PRUint32 aFlags)
 {
   nsSize result =
     nsContainerFrame::ComputeSize(aRenderingContext, aCBSize, aAvailableWidth,
-                                  aMargin, aBorder, aPadding, aShrinkWrap);
+                                  aMargin, aBorder, aPadding, aFlags);
 
   // If we're a container for font size inflation, then shrink
   // wrapping inside of us should not apply font size inflation.

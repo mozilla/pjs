@@ -14,20 +14,20 @@ function test() {
     gTab = aTab;
     gDebuggee = aDebuggee;
     gPane = aPane;
-    gDebugger = gPane.debuggerWindow;
+    gDebugger = gPane.contentWindow;
 
     testEvalCallResume();
   });
 }
 
 function testEvalCallResume() {
-  gPane.activeThread.addOneTimeListener("framesadded", function() {
+  gDebugger.DebuggerController.activeThread.addOneTimeListener("framesadded", function() {
     Services.tm.currentThread.dispatch({ run: function() {
 
-      let frames = gDebugger.DebuggerView.Stackframes._frames;
+      let frames = gDebugger.DebuggerView.StackFrames._frames;
       let childNodes = frames.childNodes;
 
-      is(gDebugger.StackFrames.activeThread.state, "paused",
+      is(gDebugger.DebuggerController.activeThread.state, "paused",
         "Should only be getting stack frames while paused.");
 
       is(frames.querySelectorAll(".dbg-stackframe").length, 2,
@@ -37,7 +37,7 @@ function testEvalCallResume() {
         "All children should be frames.");
 
 
-      gPane.activeThread.addOneTimeListener("framescleared", function() {
+      gDebugger.DebuggerController.activeThread.addOneTimeListener("framescleared", function() {
 
         is(frames.querySelectorAll(".dbg-stackframe").length, 0,
           "Should have no frames after resume");
@@ -48,13 +48,20 @@ function testEvalCallResume() {
         is(frames.querySelectorAll(".empty").length, 1,
            "Should have the empty list explanation.");
 
-        removeTab(gTab);
-        finish();
+        closeDebuggerAndFinish(gTab);
       });
 
-      gPane.activeThread.resume();
+      gDebugger.DebuggerController.activeThread.resume();
     }}, 0);
   });
 
   gDebuggee.evalCall();
 }
+
+registerCleanupFunction(function() {
+  removeTab(gTab);
+  gPane = null;
+  gTab = null;
+  gDebuggee = null;
+  gDebugger = null;
+});

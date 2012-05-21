@@ -124,6 +124,7 @@ extern "C" {
 }
 
 using namespace mozilla;
+using namespace mozilla::psm;
 
 #ifdef PR_LOGGING
 PRLogModuleInfo* gPIPNSSLog = nsnull;
@@ -437,6 +438,7 @@ nsNSSComponent::~nsNSSComponent()
 
   ShutdownNSS();
   nsSSLIOLayerHelpers::Cleanup();
+  RememberCertErrorsTable::Cleanup();
   --mInstanceCount;
   delete mShutdownObjectList;
 
@@ -1324,14 +1326,41 @@ nsresult nsNSSComponent::getParamsForNextCrlToDownload(nsAutoString *url, PRTime
     PRTime tempTime;
     nsCAutoString timingPrefCString(updateTimePref);
     timingPrefCString.AppendWithConversion(tempCrlKey);
+    // No PRTime/Int64 type in prefs; stored as string; parsed here as PRInt64
     rv = pref->GetCharPref(timingPrefCString.get(), &tempTimeString);
     if (NS_FAILED(rv)){
-      continue;
-    }
-    rv = PR_ParseTimeString(tempTimeString,true, &tempTime);
-    nsMemory::Free(tempTimeString);
-    if (NS_FAILED(rv)){
-      continue;
+      // Assume corrupted. Force download. Pref should be reset after download.
+      tempTime = PR_Now();
+      PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
+             ("get %s failed: forcing download\n", timingPrefCString.get()));
+    } else {
+      tempTime = (PRTime)nsCRT::atoll(tempTimeString);
+      nsMemory::Free(tempTimeString);
+      // nsCRT::atoll parses the first token in the string; three possibilities
+      //  -1- Alpha char: returns 0; change to PR_Now() and force update.
+      //  -2- Number (between epoch and PR_Now(), e.g. 0 - 1332280017 for
+      //      Tue Mar 20, 2012, 2:46pm approx): includes formatted date 
+      //      values (previous method of storing update date, e.g year, month 
+      //      or day, 2012, 1-31, 1-12 etc). Less than PR_Now() forces 
+      //      autoupdate.
+      //  -3- Number (larger than PR_Now()): no forced autoupdate
+      // Note: corrupt values within range of -2- will have an implicit 
+      // unflagged recovery. Corrupt values in range of -3- will be unflagged
+      // and unrecovered by this code.
+      if (tempTime == 0)
+        tempTime = PR_Now();
+#ifdef PR_LOGGING
+      PRExplodedTime explodedTime;
+      PR_ExplodeTime(tempTime, PR_GMTParameters, &explodedTime);
+      // Note: tm_month starts from 0 = Jan, hence +1
+      PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
+             ("%s tempTime(%lli) "
+              "(m/d/y h:m:s = %02d/%02d/%d %02d:%02d:%02d GMT\n",
+              timingPrefCString.get(), tempTime,
+              explodedTime.tm_month+1, explodedTime.tm_mday,
+              explodedTime.tm_year, explodedTime.tm_hour,
+              explodedTime.tm_min, explodedTime.tm_sec));
+#endif
     }
 
     if(nearestUpdateTime == 0 || tempTime < nearestUpdateTime){
@@ -1597,6 +1626,26 @@ nsNSSComponent::TryCFM2MachOMigration(nsIFile *cfmPath, nsIFile *machoPath)
 }
 #endif
 
+static void configureMD5(bool enabled)
+{
+  if (enabled) { // set flags
+    NSS_SetAlgorithmPolicy(SEC_OID_MD5, 
+        NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE, 0);
+    NSS_SetAlgorithmPolicy(SEC_OID_PKCS1_MD5_WITH_RSA_ENCRYPTION,
+        NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE, 0);
+    NSS_SetAlgorithmPolicy(SEC_OID_PKCS5_PBE_WITH_MD5_AND_DES_CBC,
+        NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE, 0);
+  }
+  else { // clear flags
+    NSS_SetAlgorithmPolicy(SEC_OID_MD5,
+        0, NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE);
+    NSS_SetAlgorithmPolicy(SEC_OID_PKCS1_MD5_WITH_RSA_ENCRYPTION,
+        0, NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE);
+    NSS_SetAlgorithmPolicy(SEC_OID_PKCS5_PBE_WITH_MD5_AND_DES_CBC,
+        0, NSS_USE_ALG_IN_CERT_SIGNATURE | NSS_USE_ALG_IN_CMS_SIGNATURE);
+  }
+}
+
 nsresult
 nsNSSComponent::InitializeNSS(bool showWarningBox)
 {
@@ -1605,12 +1654,11 @@ nsNSSComponent::InitializeNSS(bool showWarningBox)
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("nsNSSComponent::InitializeNSS\n"));
 
-  // If we ever run into this assertion, we must update the values
-  // in nsINSSErrorsService.idl
-  PR_STATIC_ASSERT(nsINSSErrorsService::NSS_SEC_ERROR_BASE == SEC_ERROR_BASE
-                   && nsINSSErrorsService::NSS_SEC_ERROR_LIMIT == SEC_ERROR_LIMIT
-                   && nsINSSErrorsService::NSS_SSL_ERROR_BASE == SSL_ERROR_BASE
-                   && nsINSSErrorsService::NSS_SSL_ERROR_LIMIT == SSL_ERROR_LIMIT);
+  MOZ_STATIC_ASSERT(nsINSSErrorsService::NSS_SEC_ERROR_BASE == SEC_ERROR_BASE &&
+                    nsINSSErrorsService::NSS_SEC_ERROR_LIMIT == SEC_ERROR_LIMIT &&
+                    nsINSSErrorsService::NSS_SSL_ERROR_BASE == SSL_ERROR_BASE &&
+                    nsINSSErrorsService::NSS_SSL_ERROR_LIMIT == SSL_ERROR_LIMIT,
+                    "You must update the values in nsINSSErrorsService.idl");
 
   // variables used for flow control within this function
 
@@ -1788,6 +1836,8 @@ nsNSSComponent::InitializeNSS(bool showWarningBox)
       SSL_OptionSetDefault(SSL_ENABLE_SSL3, enabled);
       mPrefBranch->GetBoolPref("security.enable_tls", &enabled);
       SSL_OptionSetDefault(SSL_ENABLE_TLS, enabled);
+      mPrefBranch->GetBoolPref("security.enable_md5_signatures", &enabled);
+      configureMD5(enabled);
 
       // Configure TLS session tickets
       mPrefBranch->GetBoolPref("security.enable_tls_session_tickets", &enabled);
@@ -1980,6 +2030,7 @@ nsNSSComponent::Init()
     return rv;
   }
 
+  RememberCertErrorsTable::Init();
   nsSSLIOLayerHelpers::Init();
   char *unrestricted_hosts=nsnull;
   mPrefBranch->GetCharPref("security.ssl.renego_unrestricted_hosts", &unrestricted_hosts);
@@ -2309,6 +2360,10 @@ nsNSSComponent::Observe(nsISupports *aSubject, const char *aTopic,
     } else if (prefName.Equals("security.enable_tls")) {
       mPrefBranch->GetBoolPref("security.enable_tls", &enabled);
       SSL_OptionSetDefault(SSL_ENABLE_TLS, enabled);
+      clearSessionCache = true;
+    } else if (prefName.Equals("security.enable_md5_signatures")) {
+      mPrefBranch->GetBoolPref("security.enable_md5_signatures", &enabled);
+      configureMD5(enabled);
       clearSessionCache = true;
     } else if (prefName.Equals("security.enable_tls_session_tickets")) {
       mPrefBranch->GetBoolPref("security.enable_tls_session_tickets", &enabled);

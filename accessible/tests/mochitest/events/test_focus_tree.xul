@@ -19,6 +19,8 @@
   <script type="application/javascript"
           src="../common.js" />
   <script type="application/javascript"
+          src="../role.js" />
+  <script type="application/javascript"
           src="../states.js" />
   <script type="application/javascript"
           src="../events.js" />
@@ -28,23 +30,6 @@
 
     ////////////////////////////////////////////////////////////////////////////
     // Invokers
-
-    function setTreeView(aTreeID, aView)
-    {
-      this.DOMNode = getNode(aTreeID);
-
-      this.eventSeq = [
-        new invokerChecker(EVENT_REORDER, this.DOMNode)
-      ];
-
-      this.invoke = function setTreeView_invoke()
-      {
-        this.DOMNode.treeBoxObject.view = aView;
-      }
-
-      this.getID = function setTreeView_getID()
-        { return "set tree view for " + prettyName(aTreeID); }
-    };
 
     function focusTree(aTreeID)
     {
@@ -82,7 +67,6 @@
     {
       gQueue = new eventQueue();
 
-      gQueue.push(new setTreeView("tree", new nsTableTreeView(5)));
       gQueue.push(new focusTree("tree"));
       gQueue.push(new moveToNextItem("tree"));
       gQueue.push(new synthFocus("emptytree"));
@@ -94,7 +78,7 @@
     }
 
     SimpleTest.waitForExplicitFinish();
-    addA11yLoadEvent(doTest);
+    addA11yXULTreeLoadEvent(doTest, "tree", new nsTableTreeView(5));
   ]]>
   </script>
 

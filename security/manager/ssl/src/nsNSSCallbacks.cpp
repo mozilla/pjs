@@ -54,6 +54,7 @@
 #include "PSMRunnable.h"
 #include "nsIConsoleService.h"
 #include "nsIHttpChannelInternal.h"
+#include "nsCRT.h"
 
 #include "ssl.h"
 #include "ocsp.h"
@@ -909,8 +910,8 @@ void PR_CALLBACK HandshakeCallback(PRFileDesc* fd, void* client_data) {
       infoObject->SetSSLStatus(status);
     }
 
-    nsSSLIOLayerHelpers::mHostsWithCertErrors->LookupCertErrorBits(
-      infoObject, status);
+    RememberCertErrorsTable::GetInstance().LookupCertErrorBits(infoObject,
+                                                               status);
 
     CERTCertificate *serverCert = SSL_PeerCertificate(fd);
     if (serverCert) {

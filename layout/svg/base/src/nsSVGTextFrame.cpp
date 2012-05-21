@@ -1,56 +1,22 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla SVG project.
- *
- * The Initial Developer of the Original Code is
- * Crocodile Clips Ltd..
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Alex Fritze <alex.fritze@crocodile-clips.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsIDOMSVGTextElement.h"
+// Main header first:
 #include "nsSVGTextFrame.h"
-#include "SVGLengthList.h"
-#include "nsIDOMSVGLength.h"
-#include "nsIDOMSVGAnimatedNumber.h"
+
+// Keep others in (case-insensitive) order:
+#include "nsGkAtoms.h"
+#include "nsIDOMSVGRect.h"
+#include "nsIDOMSVGTextElement.h"
 #include "nsISVGGlyphFragmentNode.h"
 #include "nsSVGGlyphFrame.h"
-#include "nsSVGOuterSVGFrame.h"
-#include "nsIDOMSVGRect.h"
-#include "nsSVGRect.h"
-#include "nsGkAtoms.h"
-#include "nsSVGTextPathFrame.h"
-#include "nsSVGPathElement.h"
-#include "nsSVGUtils.h"
 #include "nsSVGGraphicElement.h"
+#include "nsSVGPathElement.h"
+#include "nsSVGTextPathFrame.h"
+#include "nsSVGUtils.h"
+#include "SVGLengthList.h"
 
 using namespace mozilla;
 
@@ -181,6 +147,13 @@ nsSVGTextFrame::GetRotationOfChar(PRUint32 charnum, float *_retval)
 void
 nsSVGTextFrame::NotifySVGChanged(PRUint32 aFlags)
 {
+  NS_ABORT_IF_FALSE(!(aFlags & DO_NOT_NOTIFY_RENDERING_OBSERVERS) ||
+                    (GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD),
+                    "Must be NS_STATE_SVG_NONDISPLAY_CHILD!");
+
+  NS_ABORT_IF_FALSE(aFlags & (TRANSFORM_CHANGED | COORD_CONTEXT_CHANGED),
+                    "Invalidation logic may need adjusting");
+
   bool updateGlyphMetrics = false;
   
   if (aFlags & COORD_CONTEXT_CHANGED) {
@@ -209,17 +182,8 @@ nsSVGTextFrame::NotifySVGChanged(PRUint32 aFlags)
   }
 }
 
-void
-nsSVGTextFrame::NotifyRedrawUnsuspended()
-{
-  RemoveStateBits(NS_STATE_SVG_REDRAW_SUSPENDED);
-
-  UpdateGlyphPositioning(false);
-  nsSVGTextFrameBase::NotifyRedrawUnsuspended();
-}
-
 NS_IMETHODIMP
-nsSVGTextFrame::PaintSVG(nsSVGRenderState* aContext,
+nsSVGTextFrame::PaintSVG(nsRenderingContext* aContext,
                          const nsIntRect *aDirtyRect)
 {
   UpdateGlyphPositioning(true);
@@ -235,25 +199,36 @@ nsSVGTextFrame::GetFrameForPoint(const nsPoint &aPoint)
   return nsSVGTextFrameBase::GetFrameForPoint(aPoint);
 }
 
-NS_IMETHODIMP
-nsSVGTextFrame::UpdateCoveredRegion()
+void
+nsSVGTextFrame::UpdateBounds()
 {
-  UpdateGlyphPositioning(true);
-  
-  return nsSVGTextFrameBase::UpdateCoveredRegion();
-}
+  NS_ASSERTION(nsSVGUtils::OuterSVGIsCallingUpdateBounds(this),
+               "This call is probaby a wasteful mistake");
 
-NS_IMETHODIMP
-nsSVGTextFrame::InitialUpdate()
-{
-  nsresult rv = nsSVGTextFrameBase::InitialUpdate();
-  
+  NS_ABORT_IF_FALSE(!(GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD),
+                    "UpdateBounds mechanism not designed for this");
+
+  if (!nsSVGUtils::NeedsUpdatedBounds(this)) {
+    NS_ASSERTION(!mPositioningDirty, "How did this happen?");
+    return;
+  }
+
+  // UpdateGlyphPositioning may have been called under DOM calls and set
+  // mPositioningDirty to false. We may now have better positioning, though, so
+  // set it to true so that UpdateGlyphPositioning will do its work.
+  mPositioningDirty = true;
+
   UpdateGlyphPositioning(false);
 
-  return rv;
-}  
+  // With glyph positions updated, our descendants can invalidate their new
+  // areas correctly:
+  nsSVGTextFrameBase::UpdateBounds();
 
-gfxRect
+  // XXXSDL once we store bounds on containers, call
+  // nsSVGUtils::InvalidateBounds(this) if not first reflow.
+}
+
+SVGBBox
 nsSVGTextFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
                                     PRUint32 aFlags)
 {
@@ -288,8 +263,9 @@ nsSVGTextFrame::GetCanvasTM()
 void
 nsSVGTextFrame::NotifyGlyphMetricsChange()
 {
+  nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
+
   mPositioningDirty = true;
-  UpdateGlyphPositioning(false);
 }
 
 void
@@ -337,7 +313,7 @@ nsSVGTextFrame::SetWhitespaceHandling(nsSVGGlyphFrame *aFrame)
 void
 nsSVGTextFrame::UpdateGlyphPositioning(bool aForceGlobalTransform)
 {
-  if ((GetStateBits() & NS_STATE_SVG_REDRAW_SUSPENDED) || !mPositioningDirty)
+  if (!mPositioningDirty)
     return;
 
   mPositioningDirty = false;
@@ -445,5 +421,4 @@ nsSVGTextFrame::UpdateGlyphPositioning(bool aForceGlobalTransform)
     }
     firstFrame = frame;
   }
-  nsSVGUtils::UpdateGraphic(this);
 }

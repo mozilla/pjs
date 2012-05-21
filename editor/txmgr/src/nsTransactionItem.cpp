@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsITransaction.h"
 #include "nsTransactionStack.h"
@@ -106,8 +74,7 @@ nsTransactionItem::AddChild(nsTransactionItem *aTransactionItem)
   NS_ENSURE_TRUE(aTransactionItem, NS_ERROR_NULL_POINTER);
 
   if (!mUndoStack) {
-    mUndoStack = new nsTransactionStack();
-    NS_ENSURE_TRUE(mUndoStack, NS_ERROR_OUT_OF_MEMORY);
+    mUndoStack = new nsTransactionStack(nsTransactionStack::FOR_UNDO);
   }
 
   mUndoStack->Push(aTransactionItem);
@@ -187,7 +154,9 @@ nsTransactionItem::GetChild(PRInt32 aIndex, nsTransactionItem **aChild)
   if (numItems > 0 && aIndex < numItems) {
     NS_ENSURE_TRUE(mUndoStack, NS_ERROR_FAILURE);
 
-    return mUndoStack->GetItem(aIndex, aChild);
+    nsRefPtr<nsTransactionItem> child = mUndoStack->GetItem(aIndex);
+    child.forget(aChild);
+    return *aChild ? NS_OK : NS_ERROR_FAILURE;
   }
 
   // Adjust the index for the redo stack:
@@ -200,7 +169,9 @@ nsTransactionItem::GetChild(PRInt32 aIndex, nsTransactionItem **aChild)
 
   NS_ENSURE_TRUE(mRedoStack && numItems != 0 && aIndex < numItems, NS_ERROR_FAILURE);
 
-  return mRedoStack->GetItem(numItems - aIndex - 1, aChild);
+  nsRefPtr<nsTransactionItem> child = mRedoStack->GetItem(aIndex);
+  child.forget(aChild);
+  return *aChild ? NS_OK : NS_ERROR_FAILURE;
 }
 
 nsresult
@@ -243,20 +214,17 @@ nsTransactionItem::UndoChildren(nsTransactionManager *aTxMgr)
 
   if (mUndoStack) {
     if (!mRedoStack && mUndoStack) {
-      mRedoStack = new nsTransactionRedoStack();
-      NS_ENSURE_TRUE(mRedoStack, NS_ERROR_OUT_OF_MEMORY);
+      mRedoStack = new nsTransactionStack(nsTransactionStack::FOR_REDO);
     }
 
     /* Undo all of the transaction items children! */
-    result = mUndoStack->GetSize(&sz);
-
-    NS_ENSURE_SUCCESS(result, result);
+    sz = mUndoStack->GetSize();
 
     while (sz-- > 0) {
-      result = mUndoStack->Peek(getter_AddRefs(item));
+      item = mUndoStack->Peek();
 
-      if (NS_FAILED(result) || !item) {
-        return result;
+      if (!item) {
+        return NS_ERROR_FAILURE;
       }
 
       nsCOMPtr<nsITransaction> t;
@@ -282,15 +250,8 @@ nsTransactionItem::UndoChildren(nsTransactionManager *aTxMgr)
       result = item->UndoTransaction(aTxMgr);
 
       if (NS_SUCCEEDED(result)) {
-        result = mUndoStack->Pop(getter_AddRefs(item));
-
-        if (NS_SUCCEEDED(result)) {
-          result = mRedoStack->Push(item);
-
-          /* XXX: If we got an error here, I doubt we can recover!
-           * XXX: Should we just push the item back on the undo stack?
-           */
-        }
+        item = mUndoStack->Pop();
+        mRedoStack->Push(item);
       }
 
       nsresult result2 = aTxMgr->DidUndoNotify(t, result);
@@ -331,22 +292,18 @@ nsTransactionItem::RedoChildren(nsTransactionManager *aTxMgr)
 {
   nsRefPtr<nsTransactionItem> item;
   nsresult result = NS_OK;
-  PRInt32 sz = 0;
 
   if (!mRedoStack)
     return NS_OK;
 
   /* Redo all of the transaction items children! */
-  result = mRedoStack->GetSize(&sz);
-
-  NS_ENSURE_SUCCESS(result, result);
-
+  PRInt32 sz = mRedoStack->GetSize();
 
   while (sz-- > 0) {
-    result = mRedoStack->Peek(getter_AddRefs(item));
+    item = mRedoStack->Peek();
 
-    if (NS_FAILED(result) || !item) {
-      return result;
+    if (!item) {
+      return NS_ERROR_FAILURE;
     }
 
     nsCOMPtr<nsITransaction> t;
@@ -372,14 +329,8 @@ nsTransactionItem::RedoChildren(nsTransactionManager *aTxMgr)
     result = item->RedoTransaction(aTxMgr);
 
     if (NS_SUCCEEDED(result)) {
-      result = mRedoStack->Pop(getter_AddRefs(item));
-
-      if (NS_SUCCEEDED(result)) {
-        result = mUndoStack->Push(item);
-
-        // XXX: If we got an error here, I doubt we can recover!
-        // XXX: Should we just push the item back on the redo stack?
-      }
+      item = mRedoStack->Pop();
+      mUndoStack->Push(item);
     }
 
     nsresult result2 = aTxMgr->DidUndoNotify(t, result);
@@ -402,7 +353,8 @@ nsTransactionItem::GetNumberOfUndoItems(PRInt32 *aNumItems)
     return NS_OK;
   }
 
-  return mUndoStack->GetSize(aNumItems);
+  *aNumItems = mUndoStack->GetSize();
+  return *aNumItems ? NS_OK : NS_ERROR_FAILURE;
 }
 
 nsresult
@@ -415,7 +367,8 @@ nsTransactionItem::GetNumberOfRedoItems(PRInt32 *aNumItems)
     return NS_OK;
   }
 
-  return mRedoStack->GetSize(aNumItems);
+  *aNumItems = mRedoStack->GetSize();
+  return *aNumItems ? NS_OK : NS_ERROR_FAILURE;
 }
 
 nsresult

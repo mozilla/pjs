@@ -1,38 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Android code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Michael Wu <mwu@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * This custom library loading code is only meant to be called
@@ -66,6 +34,7 @@
 #include "Zip.h"
 #include "sqlite3.h"
 #include "SQLiteBridge.h"
+#include "NSSBridge.h"
 #ifndef MOZ_OLD_LINKER
 #include "ElfLoader.h"
 #endif
@@ -75,6 +44,24 @@
 #ifndef RUSAGE_THREAD
 #define RUSAGE_THREAD 1
 #endif
+
+extern "C" {
+/*
+ * To work around http://code.google.com/p/android/issues/detail?id=23203
+ * we don't link with the crt objects. In some configurations, this means
+ * a lack of the __dso_handle symbol because it is defined there, and
+ * depending on the android platform and ndk versions used, it may or may
+ * not be defined in libc.so. In the latter case, we fail to link. Defining
+ * it here as weak makes us provide the symbol when it's not provided by
+ * the crt objects, making the change transparent for future NDKs that
+ * would fix the original problem. On older NDKs, it is not a problem
+ * either because the way __dso_handle was used was already broken (and
+ * the custom linker works around it).
+ */
+  NS_EXPORT __attribute__((weak)) void *__dso_handle;
+}
+
+typedef int mozglueresult;
 
 enum StartupEvent {
 #define mozilla_StartupTimeline_Event(ev, z) ev,
@@ -97,6 +84,23 @@ NS_EXPORT const struct mapping_info *
 getLibraryMapping()
 {
   return lib_mapping;
+}
+
+void
+JNI_Throw(JNIEnv* jenv, const char* classname, const char* msg)
+{
+    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Throw\n");
+    jclass cls = jenv->FindClass(classname);
+    if (cls == NULL) {
+        __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't find exception class (or exception pending) %s\n", classname);
+        exit(FAILURE);
+    }
+    int rc = jenv->ThrowNew(cls, msg);
+    if (rc < 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Error throwing exception %s\n", msg);
+        exit(FAILURE);
+    }
+    jenv->DeleteLocalRef(cls);
 }
 
 #ifdef MOZ_OLD_LINKER
@@ -286,7 +290,7 @@ SHELL_WRAPPER0(nativeInit)
 SHELL_WRAPPER1(notifyGeckoOfEvent, jobject)
 SHELL_WRAPPER0(processNextNativeEvent)
 SHELL_WRAPPER1(setSurfaceView, jobject)
-SHELL_WRAPPER1(setSoftwareLayerClient, jobject)
+SHELL_WRAPPER2(setLayerClient, jobject, jint)
 SHELL_WRAPPER0(onResume)
 SHELL_WRAPPER0(onLowMemory)
 SHELL_WRAPPER3(callObserver, jstring, jstring, jstring)
@@ -298,6 +302,9 @@ SHELL_WRAPPER1(cameraCallbackBridge, jbyteArray)
 SHELL_WRAPPER3(notifyBatteryChange, jdouble, jboolean, jdouble)
 SHELL_WRAPPER3(notifySmsReceived, jstring, jstring, jlong)
 SHELL_WRAPPER0(bindWidgetTexture)
+SHELL_WRAPPER0(scheduleComposite)
+SHELL_WRAPPER0(schedulePauseComposition)
+SHELL_WRAPPER2(scheduleResumeComposition, jint, jint)
 SHELL_WRAPPER3_WITH_RETURN(saveMessageInSentbox, jint, jstring, jstring, jlong)
 SHELL_WRAPPER6(notifySmsSent, jint, jstring, jstring, jlong, jint, jlong)
 SHELL_WRAPPER4(notifySmsDelivered, jint, jstring, jstring, jlong)
@@ -310,9 +317,16 @@ SHELL_WRAPPER2(notifyNoMessageInList, jint, jlong)
 SHELL_WRAPPER8(notifyListCreated, jint, jint, jstring, jstring, jstring, jlong, jint, jlong)
 SHELL_WRAPPER7(notifyGotNextMessage, jint, jstring, jstring, jstring, jlong, jint, jlong)
 SHELL_WRAPPER3(notifyReadingMessageListFailed, jint, jint, jlong)
+SHELL_WRAPPER2(notifyFilePickerResult, jstring, jlong)
+SHELL_WRAPPER1_WITH_RETURN(getSurfaceBits, jobject, jobject)
 
 static void * xul_handle = NULL;
 static void * sqlite_handle = NULL;
+static void * nss_handle = NULL;
+static void * nspr_handle = NULL;
+static void * plc_handle = NULL;
+static bool simple_linker_initialized = false;
+
 #ifdef MOZ_OLD_LINKER
 static time_t apk_mtime = 0;
 #ifdef DEBUG
@@ -387,6 +401,7 @@ extractFile(const char * path, Zip::Stream &s)
 }
 #endif
 
+#if defined(MOZ_CRASHREPORTER) || defined(MOZ_OLD_LINKER)
 static void
 extractLib(Zip::Stream &s, void * dest)
 {
@@ -414,10 +429,10 @@ extractLib(Zip::Stream &s, void * dest)
     __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "inflateEnd failed: %s", strm.msg);
 
   if (strm.total_out != s.GetUncompressedSize())
-    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "File not fully uncompressed! %d / %d", strm.total_out, s.GetUncompressedSize());
+    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "File not fully uncompressed! %lu / %d", strm.total_out, s.GetUncompressedSize());
 }
+#endif
 
-static int cache_count = 0;
 static struct lib_cache_info *cache_mapping = NULL;
 
 NS_EXPORT const struct lib_cache_info *
@@ -427,6 +442,9 @@ getLibraryCache()
 }
 
 #ifdef MOZ_OLD_LINKER
+
+static int cache_count = 0;
+
 static void
 ensureLibCache()
 {
@@ -637,7 +655,7 @@ report_mapping(char *name, void *base, uint32_t len, uint32_t offset)
 extern "C" void simple_linker_init(void);
 #endif
 
-static void
+static mozglueresult
 loadGeckoLibs(const char *apkName)
 {
   chdir(getenv("GRE_HOME"));
@@ -669,18 +687,8 @@ loadGeckoLibs(const char *apkName)
 #else
 #define MOZLOAD(name) mozload("lib" name ".so", zip)
   MOZLOAD("mozalloc");
-  MOZLOAD("nspr4");
-  MOZLOAD("plc4");
-  MOZLOAD("plds4");
-  MOZLOAD("nssutil3");
-  MOZLOAD("nss3");
-  MOZLOAD("ssl3");
-  MOZLOAD("smime3");
   xul_handle = MOZLOAD("xul");
   MOZLOAD("xpcom");
-  MOZLOAD("nssckbi");
-  MOZLOAD("freebl3");
-  MOZLOAD("softokn3");
 #undef MOZLOAD
 #endif
 
@@ -689,15 +697,17 @@ loadGeckoLibs(const char *apkName)
   file_ids = NULL;
 #endif
 
-  if (!xul_handle)
+  if (!xul_handle) {
     __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't get a handle to libxul!");
+    return FAILURE;
+  }
 
 #define GETFUNC(name) f_ ## name = (name ## _t) __wrap_dlsym(xul_handle, "Java_org_mozilla_gecko_GeckoAppShell_" #name)
   GETFUNC(nativeInit);
   GETFUNC(notifyGeckoOfEvent);
   GETFUNC(processNextNativeEvent);
   GETFUNC(setSurfaceView);
-  GETFUNC(setSoftwareLayerClient);
+  GETFUNC(setLayerClient);
   GETFUNC(onResume);
   GETFUNC(onLowMemory);
   GETFUNC(callObserver);
@@ -709,6 +719,9 @@ loadGeckoLibs(const char *apkName)
   GETFUNC(notifyBatteryChange);
   GETFUNC(notifySmsReceived);
   GETFUNC(bindWidgetTexture);
+  GETFUNC(scheduleComposite);
+  GETFUNC(schedulePauseComposition);
+  GETFUNC(scheduleResumeComposition);
   GETFUNC(saveMessageInSentbox);
   GETFUNC(notifySmsSent);
   GETFUNC(notifySmsDelivered);
@@ -721,12 +734,14 @@ loadGeckoLibs(const char *apkName)
   GETFUNC(notifyListCreated);
   GETFUNC(notifyGotNextMessage);
   GETFUNC(notifyReadingMessageListFailed);
+  GETFUNC(notifyFilePickerResult);
+  GETFUNC(getSurfaceBits);
 #undef GETFUNC
   sStartupTimeline = (uint64_t *)__wrap_dlsym(xul_handle, "_ZN7mozilla15StartupTimeline16sStartupTimelineE");
   gettimeofday(&t1, 0);
   struct rusage usage2;
   getrusage(RUSAGE_THREAD, &usage2);
-  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Loaded libs in %dms total, %dms user, %dms system, %d faults",
+  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Loaded libs in %ldms total, %ldms user, %ldms system, %ld faults",
                       (t1.tv_sec - t0.tv_sec)*1000 + (t1.tv_usec - t0.tv_usec)/1000, 
                       (usage2.ru_utime.tv_sec - usage1.ru_utime.tv_sec)*1000 + (usage2.ru_utime.tv_usec - usage1.ru_utime.tv_usec)/1000,
                       (usage2.ru_stime.tv_sec - usage1.ru_stime.tv_sec)*1000 + (usage2.ru_stime.tv_usec - usage1.ru_stime.tv_usec)/1000,
@@ -734,14 +749,18 @@ loadGeckoLibs(const char *apkName)
 
   StartupTimeline_Record(LINKER_INITIALIZED, &t0);
   StartupTimeline_Record(LIBRARIES_LOADED, &t1);
+  return SUCCESS;
 }
 
-static void loadSQLiteLibs(const char *apkName)
+static int loadSQLiteLibs(const char *apkName)
 {
   chdir(getenv("GRE_HOME"));
 
 #ifdef MOZ_OLD_LINKER
-  simple_linker_init();
+  if (!simple_linker_initialized) {
+    simple_linker_init();
+    simple_linker_initialized = true;
+  }
 
   struct stat status;
   if (!stat(apkName, &status))
@@ -749,7 +768,9 @@ static void loadSQLiteLibs(const char *apkName)
 #endif
 
   RefPtr<Zip> zip = new Zip(apkName);
-  lib_mapping = (struct mapping_info *)calloc(MAX_MAPPING_INFO, sizeof(*lib_mapping));
+  if (!lib_mapping) {
+    lib_mapping = (struct mapping_info *)calloc(MAX_MAPPING_INFO, sizeof(*lib_mapping));
+  }
 
 #ifdef MOZ_CRASHREPORTER
   file_ids = (char *)extractBuf("lib.id", zip);
@@ -771,10 +792,91 @@ static void loadSQLiteLibs(const char *apkName)
   file_ids = NULL;
 #endif
 
-  if (!sqlite_handle)
+  if (!sqlite_handle) {
     __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't get a handle to libmozsqlite3!");
+    return FAILURE;
+  }
 
   setup_sqlite_functions(sqlite_handle);
+  return SUCCESS;
+}
+
+static mozglueresult
+loadNSSLibs(const char *apkName)
+{
+  chdir(getenv("GRE_HOME"));
+
+#ifdef MOZ_OLD_LINKER
+  if (!simple_linker_initialized) {
+    simple_linker_init();
+    simple_linker_initialized = true;
+  }
+
+  struct stat status;
+  if (!stat(apkName, &status))
+    apk_mtime = status.st_mtime;
+#endif
+
+  RefPtr<Zip> zip = new Zip(apkName);
+  if (!lib_mapping) {
+    lib_mapping = (struct mapping_info *)calloc(MAX_MAPPING_INFO, sizeof(*lib_mapping));
+  }
+
+#ifdef MOZ_CRASHREPORTER
+  file_ids = (char *)extractBuf("lib.id", zip);
+#endif
+
+#ifndef MOZ_OLD_LINKER
+  char *file = new char[strlen(apkName) + sizeof("!/libnss3.so")];
+  sprintf(file, "%s!/libnss3.so", apkName);
+  nss_handle = __wrap_dlopen(file, RTLD_GLOBAL | RTLD_LAZY);
+  delete [] file;
+
+  file = new char[strlen(apkName) + sizeof("!/libnspr4.so")];
+  sprintf(file, "%s!/libnspr4.so", apkName);
+  nspr_handle = __wrap_dlopen(file, RTLD_GLOBAL | RTLD_LAZY);
+  delete [] file;
+
+  file = new char[strlen(apkName) + sizeof("!/libplc4.so")];
+  sprintf(file, "%s!/libplc4.so", apkName);
+  plc_handle = __wrap_dlopen(file, RTLD_GLOBAL | RTLD_LAZY);
+  delete [] file;
+#else
+#define MOZLOAD(name) mozload("lib" name ".so", zip)
+  nspr_handle = MOZLOAD("nspr4");
+  plc_handle = MOZLOAD("plc4");
+  MOZLOAD("plds4");
+  MOZLOAD("nssutil3");
+  nss_handle = MOZLOAD("nss3");
+  MOZLOAD("ssl3");
+  MOZLOAD("smime3");
+  MOZLOAD("nssckbi");
+  MOZLOAD("freebl3");
+  MOZLOAD("softokn3");
+#undef MOZLOAD
+#endif
+
+#ifdef MOZ_CRASHREPORTER
+  free(file_ids);
+  file_ids = NULL;
+#endif
+
+  if (!nss_handle) {
+    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't get a handle to libnss3!");
+    return FAILURE;
+  }
+
+  if (!nspr_handle) {
+    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't get a handle to libnspr4!");
+    return FAILURE;
+  }
+
+  if (!plc_handle) {
+    __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Couldn't get a handle to libplc4!");
+    return FAILURE;
+  }
+
+  return setup_nss_functions(nss_handle, nspr_handle, plc_handle);
 }
 
 extern "C" NS_EXPORT void JNICALL
@@ -787,7 +889,10 @@ Java_org_mozilla_gecko_GeckoAppShell_loadGeckoLibsNative(JNIEnv *jenv, jclass jG
   if (str == NULL)
     return;
 
-  loadGeckoLibs(str);
+  int res = loadGeckoLibs(str);
+  if (res != SUCCESS) {
+    JNI_Throw(jenv, "java/lang/Exception", "Error loading gecko libraries");
+  }
   jenv->ReleaseStringUTFChars(jApkName, str);
 }
 
@@ -808,7 +913,38 @@ Java_org_mozilla_gecko_GeckoAppShell_loadSQLiteLibsNative(JNIEnv *jenv, jclass j
   if (str == NULL)
     return;
 
-  loadSQLiteLibs(str);
+  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Load sqlite start\n");
+  mozglueresult rv = loadSQLiteLibs(str);
+  if (rv != SUCCESS) {
+      JNI_Throw(jenv, "java/lang/Exception", "Error loading sqlite libraries");
+  }
+  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Load sqlite done\n");
+  jenv->ReleaseStringUTFChars(jApkName, str);
+}
+
+extern "C" NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_loadNSSLibsNative(JNIEnv *jenv, jclass jGeckoAppShellClass, jstring jApkName, jboolean jShouldExtract) {
+  if (jShouldExtract) {
+#ifdef MOZ_OLD_LINKER
+    extractLibs = 1;
+#else
+    putenv("MOZ_LINKER_EXTRACT=1");
+#endif
+  }
+
+  const char* str;
+  // XXX: java doesn't give us true UTF8, we should figure out something
+  // better to do here
+  str = jenv->GetStringUTFChars(jApkName, NULL);
+  if (str == NULL)
+    return;
+
+  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Load nss start\n");
+  mozglueresult rv = loadNSSLibs(str);
+  if (rv != SUCCESS) {
+    JNI_Throw(jenv, "java/lang/Exception", "Error loading nss libraries");
+  }
+  __android_log_print(ANDROID_LOG_ERROR, "GeckoLibLoad", "Load nss done\n");
   jenv->ReleaseStringUTFChars(jApkName, str);
 }
 
@@ -832,9 +968,8 @@ Java_org_mozilla_gecko_GeckoAppShell_nativeRun(JNIEnv *jenv, jclass jc, jstring 
 }
 
 typedef int GeckoProcessType;
-typedef int nsresult;
 
-extern "C" NS_EXPORT int
+extern "C" NS_EXPORT mozglueresult
 ChildProcessInit(int argc, char* argv[])
 {
   int i;
@@ -849,14 +984,21 @@ ChildProcessInit(int argc, char* argv[])
 #ifdef MOZ_OLD_LINKER
   fillLibCache(argv[argc - 1]);
 #endif
-  loadSQLiteLibs(argv[i]);
-  loadGeckoLibs(argv[i]);
+  if (loadNSSLibs(argv[i]) != SUCCESS) {
+    return FAILURE;
+  }
+  if (loadSQLiteLibs(argv[i]) != SUCCESS) {
+    return FAILURE;
+  }
+  if (loadGeckoLibs(argv[i]) != SUCCESS) {
+    return FAILURE;
+  }
 
   // don't pass the last arg - it's only recognized by the lib cache
   argc--;
 
   typedef GeckoProcessType (*XRE_StringToChildProcessType_t)(char*);
-  typedef nsresult (*XRE_InitChildProcess_t)(int, char**, GeckoProcessType);
+  typedef mozglueresult (*XRE_InitChildProcess_t)(int, char**, GeckoProcessType);
   XRE_StringToChildProcessType_t fXRE_StringToChildProcessType =
     (XRE_StringToChildProcessType_t)__wrap_dlsym(xul_handle, "XRE_StringToChildProcessType");
   XRE_InitChildProcess_t fXRE_InitChildProcess =
@@ -864,10 +1006,6 @@ ChildProcessInit(int argc, char* argv[])
 
   GeckoProcessType proctype = fXRE_StringToChildProcessType(argv[--argc]);
 
-  nsresult rv = fXRE_InitChildProcess(argc, argv, proctype);
-  if (rv != 0)
-    return 1;
-
-  return 0;
+  return fXRE_InitChildProcess(argc, argv, proctype);
 }
 

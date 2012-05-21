@@ -1,4 +1,8 @@
 #filter substitution
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 
 @AB_CD@.jar:
   locale/@AB_CD@/global/css.properties                         (%chrome/layout/css.properties)
@@ -26,3 +30,4 @@
   locale/@AB_CD@/global-platform/win/accessible.properties     (%chrome/accessibility/win/accessible.properties)
   locale/@AB_CD@/global-platform/mac/accessible.properties     (%chrome/accessibility/mac/accessible.properties)
   locale/@AB_CD@/global-platform/unix/accessible.properties    (%chrome/accessibility/unix/accessible.properties)
+  locale/@AB_CD@/global/AccessFu.properties                    (%chrome/accessibility/AccessFu.properties)

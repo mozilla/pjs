@@ -1,39 +1,6 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Marco Bonardo <mak77@bonardo.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * Tests Library Left pane view for liveupdate.
@@ -95,11 +62,6 @@ function startTest() {
                          "bmf1");
   addedBookmarks.push(id);
   bs.moveItem(id, bs.bookmarksMenuFolder, 0);
-  id = PlacesUtils.livemarks.createLivemarkFolderOnly(
-    bs.bookmarksMenuFolder, "bml",
-    PlacesUtils._uri("http://bml.siteuri.mozilla.org/"),
-    PlacesUtils._uri("http://bml.feeduri.mozilla.org/"), bs.DEFAULT_INDEX);
-  addedBookmarks.push(id);
 
   // TOOLBAR
   ok(true, "*** Acting on toolbar bookmarks");
@@ -128,10 +90,6 @@ function startTest() {
                          "bmf1");
   addedBookmarks.push(id);
   bs.moveItem(id, bs.toolbarFolder, 0);
-  id = PlacesUtils.livemarks.createLivemarkFolderOnly(
-    bs.toolbarFolder, "tbl", PlacesUtils._uri("http://tbl.siteuri.mozilla.org/"),
-    PlacesUtils._uri("http://tbl.feeduri.mozilla.org/"), bs.DEFAULT_INDEX);
-  addedBookmarks.push(id);
 
   // UNSORTED
   ok(true, "*** Acting on unsorted bookmarks");
@@ -160,11 +118,6 @@ function startTest() {
                          "ubf1");
   addedBookmarks.push(id);
   bs.moveItem(id, bs.unfiledBookmarksFolder, 0);
-  id = PlacesUtils.livemarks.createLivemarkFolderOnly(
-    bs.unfiledBookmarksFolder, "bubl",
-    PlacesUtils._uri("http://bubl.siteuri.mozilla.org/"),
-    PlacesUtils._uri("http://bubl.feeduri.mozilla.org/"), bs.DEFAULT_INDEX);
-  addedBookmarks.push(id);
 
   // Remove all added bookmarks.
   addedBookmarks.forEach(function (aItem) {
@@ -201,27 +154,7 @@ var bookmarksObserver = {
   ]),
 
   // nsIAnnotationObserver
-  onItemAnnotationSet: function(aItemId, aAnnotationName) {
-    if (aAnnotationName == PlacesUtils.LMANNO_FEEDURI) {
-      // Check that item is recognized as a livemark.
-      let validator = function(aTreeRowIndex) {
-        let tree = gLibrary.PlacesOrganizer._places;
-        let livemarkAtom = Cc["@mozilla.org/atom-service;1"].
-                           getService(Ci.nsIAtomService).
-                           getAtom("livemark");
-        let properties = Cc["@mozilla.org/supports-array;1"].
-                         createInstance(Ci.nsISupportsArray);
-        tree.view.getCellProperties(aTreeRowIndex,
-                                    tree.columns.getColumnAt(0),
-                                    properties);
-        return properties.GetIndexOf(livemarkAtom) != -1;
-      };
-
-      var [node, index, valid] = getNodeForTreeItem(aItemId, gLibrary.PlacesOrganizer._places, validator);
-      isnot(node, null, "Found new Places node in left pane at " + index);
-      ok(valid, "Node is recognized as a livemark");
-    }
-  },
+  onItemAnnotationSet: function() {},
   onItemAnnotationRemoved: function() {},
   onPageAnnotationSet: function() {},
   onPageAnnotationRemoved: function() {},

@@ -1,42 +1,8 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Nick Fitzgerald <nfitzgerald@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef TokenStream_h__
 #define TokenStream_h__
@@ -322,7 +288,7 @@ struct Token {
             PropertyName *target;       /* non-empty */
             JSAtom       *data;         /* maybe empty, never null */
         } xmlpi;
-        jsdouble        number;         /* floating point number */
+        double          number;         /* floating point number */
         RegExpFlag      reflags;        /* regexp flags, use tokenbuf to access
                                            regexp chars */
     } u;
@@ -336,12 +302,14 @@ struct Token {
 
     void setName(JSOp op, PropertyName *name) {
         JS_ASSERT(op == JSOP_NAME);
+        JS_ASSERT(!IsPoisonedPtr(name));
         u.s.op = op;
         u.s.n.name = name;
     }
 
     void setAtom(JSOp op, JSAtom *atom) {
         JS_ASSERT(op == JSOP_STRING || op == JSOP_XMLCOMMENT || JSOP_XMLCDATA);
+        JS_ASSERT(!IsPoisonedPtr(atom));
         u.s.op = op;
         u.s.n.atom = atom;
     }
@@ -350,6 +318,8 @@ struct Token {
         JS_ASSERT(target);
         JS_ASSERT(data);
         JS_ASSERT(!target->empty());
+        JS_ASSERT(!IsPoisonedPtr(target));
+        JS_ASSERT(!IsPoisonedPtr(data));
         u.xmlpi.target = target;
         u.xmlpi.data = data;
     }
@@ -359,7 +329,7 @@ struct Token {
         u.reflags = flags;
     }
 
-    void setNumber(jsdouble n) {
+    void setNumber(double n) {
         u.number = n;
     }
 
@@ -396,7 +366,7 @@ struct Token {
         return u.reflags;
     }
 
-    jsdouble number() const {
+    double number() const {
         JS_ASSERT(type == TOK_NUMBER);
         return u.number;
     }
@@ -451,7 +421,7 @@ class TokenStream
 
     static const size_t ntokens = 4;                /* 1 current + 2 lookahead, rounded
                                                        to power of 2 to avoid divmod by 3 */
-    static const uintN ntokensMask = ntokens - 1;
+    static const unsigned ntokensMask = ntokens - 1;
 
   public:
     typedef Vector<jschar, 32> CharBuffer;
@@ -472,7 +442,7 @@ class TokenStream
      * Create a new token stream from an input buffer.
      * Return false on memory-allocation failure.
      */
-    bool init(const jschar *base, size_t length, const char *filename, uintN lineno,
+    bool init(const jschar *base, size_t length, const char *filename, unsigned lineno,
               JSVersion version);
     ~TokenStream();
 
@@ -489,7 +459,7 @@ class TokenStream
     }
     const CharBuffer &getTokenbuf() const { return tokenbuf; }
     const char *getFilename() const { return filename; }
-    uintN getLineno() const { return lineno; }
+    unsigned getLineno() const { return lineno; }
     /* Note that the version and hasXML can get out of sync via setXML. */
     JSVersion versionNumber() const { return VersionNumber(version); }
     JSVersion versionWithFlags() const { return version; }
@@ -526,7 +496,7 @@ class TokenStream
     bool isEOF() const { return !!(flags & TSF_EOF); }
     bool hasOctalCharacterEscape() const { return flags & TSF_OCTAL_CHAR; }
 
-    bool reportCompileErrorNumberVA(ParseNode *pn, uintN flags, uintN errorNumber, va_list ap);
+    bool reportCompileErrorNumberVA(ParseNode *pn, unsigned flags, unsigned errorNumber, va_list ap);
 
   private:
     static JSAtom *atomize(JSContext *cx, CharBuffer &cb);
@@ -538,9 +508,9 @@ class TokenStream
      */
     class Flagger {
         TokenStream * const parent;
-        uintN       flags;
+        unsigned       flags;
       public:
-        Flagger(TokenStream *parent, uintN withFlags) : parent(parent), flags(withFlags) {
+        Flagger(TokenStream *parent, unsigned withFlags) : parent(parent), flags(withFlags) {
             parent->flags |= flags;
         }
 
@@ -575,7 +545,7 @@ class TokenStream
     }
 
     /* Similar, but also sets flags. */
-    TokenKind getToken(uintN withFlags) {
+    TokenKind getToken(unsigned withFlags) {
         Flagger flagger(this, withFlags);
         return getToken();
     }
@@ -599,12 +569,12 @@ class TokenStream
         return tt;
     }
 
-    TokenKind peekToken(uintN withFlags) {
+    TokenKind peekToken(unsigned withFlags) {
         Flagger flagger(this, withFlags);
         return peekToken();
     }
 
-    TokenKind peekTokenSameLine(uintN withFlags = 0) {
+    TokenKind peekTokenSameLine(unsigned withFlags = 0) {
         if (!onCurrentLine(currentToken().pos))
             return TOK_EOL;
 
@@ -637,7 +607,7 @@ class TokenStream
         return false;
     }
 
-    bool matchToken(TokenKind tt, uintN withFlags) {
+    bool matchToken(TokenKind tt, unsigned withFlags) {
         Flagger flagger(this, withFlags);
         return matchToken(tt);
     }
@@ -772,7 +742,7 @@ class TokenStream
     bool peekUnicodeEscape(int32_t *c);
     bool matchUnicodeEscapeIdStart(int32_t *c);
     bool matchUnicodeEscapeIdent(int32_t *c);
-    bool peekChars(intN n, jschar *cp);
+    bool peekChars(int n, jschar *cp);
     bool getAtLine();
     bool getAtSourceMappingURL();
 
@@ -799,7 +769,7 @@ class TokenStream
         return c;
     }
 
-    void skipChars(intN n) {
+    void skipChars(int n) {
         while (--n >= 0)
             getChar();
     }
@@ -808,20 +778,24 @@ class TokenStream
     void updateFlagsForEOL();
 
     Token               tokens[ntokens];/* circular token buffer */
-    uintN               cursor;         /* index of last parsed token */
-    uintN               lookahead;      /* count of lookahead tokens */
-    uintN               lineno;         /* current line number */
-    uintN               flags;          /* flags -- see above */
+    JS::SkipRoot        tokensRoot;     /* prevent overwriting of token buffer */
+    unsigned            cursor;         /* index of last parsed token */
+    unsigned            lookahead;      /* count of lookahead tokens */
+    unsigned            lineno;         /* current line number */
+    unsigned            flags;          /* flags -- see above */
     const jschar        *linebase;      /* start of current line;  points into userbuf */
     const jschar        *prevLinebase;  /* start of previous line;  NULL if on the first line */
+    JS::SkipRoot        linebaseRoot;
+    JS::SkipRoot        prevLinebaseRoot;
     TokenBuf            userbuf;        /* user input buffer */
+    JS::SkipRoot        userbufRoot;
     const char          *filename;      /* input filename or null */
     jschar              *sourceMap;     /* source map's filename or null */
     void                *listenerTSData;/* listener data for this TokenStream */
     CharBuffer          tokenbuf;       /* current token string buffer */
     int8_t              oneCharTokens[128];  /* table of one-char tokens */
-    JSPackedBool        maybeEOL[256];       /* probabilistic EOL lookup table */
-    JSPackedBool        maybeStrSpecial[256];/* speeds up string scanning */
+    bool                maybeEOL[256];       /* probabilistic EOL lookup table */
+    bool                maybeStrSpecial[256];/* speeds up string scanning */
     JSVersion           version;        /* (i.e. to identify keywords) */
     bool                xml;            /* see JSOPTION_XML */
     JSContext           *const cx;
@@ -861,8 +835,8 @@ IsIdentifier(JSLinearString *str);
  * Otherwise use ts, which must not be null.
  */
 bool
-ReportCompileErrorNumber(JSContext *cx, TokenStream *ts, ParseNode *pn, uintN flags,
-                         uintN errorNumber, ...);
+ReportCompileErrorNumber(JSContext *cx, TokenStream *ts, ParseNode *pn, unsigned flags,
+                         unsigned errorNumber, ...);
 
 /*
  * Report a condition that should elicit a warning with JSOPTION_STRICT,
@@ -874,16 +848,16 @@ ReportCompileErrorNumber(JSContext *cx, TokenStream *ts, ParseNode *pn, uintN fl
  * One could have ReportCompileErrorNumber recognize the
  * JSREPORT_STRICT_MODE_ERROR flag instead of having a separate function
  * like this one.  However, the strict mode code flag we need to test is
- * in the TreeContext structure for that code; we would have to change
+ * in the ShareContext structure for that code; we would have to change
  * the ~120 ReportCompileErrorNumber calls to pass the additional
  * argument, even though many of those sites would never use it.  Using
- * ts's TSF_STRICT_MODE_CODE flag instead of tc's would be brittle: at some
- * points ts's flags don't correspond to those of the tc relevant to the
+ * ts's TSF_STRICT_MODE_CODE flag instead of sc's would be brittle: at some
+ * points ts's flags don't correspond to those of the sc relevant to the
  * error.
  */
 bool
-ReportStrictModeError(JSContext *cx, TokenStream *ts, TreeContext *tc, ParseNode *pn,
-                      uintN errorNumber, ...);
+ReportStrictModeError(JSContext *cx, TokenStream *ts, SharedContext *sc, ParseNode *pn,
+                      unsigned errorNumber, ...);
 
 } /* namespace js */
 

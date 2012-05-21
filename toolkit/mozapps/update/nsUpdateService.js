@@ -1,47 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /*
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is the Update Service.
-#
-# The Initial Developer of the Original Code is Ben Goodger.
-# Portions created by the Initial Developer are Copyright (C) 2004
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#  Ben Goodger <ben@mozilla.org> (Original Author)
-#  Darin Fisher <darin@meer.net>
-#  Ben Turner <bent.mozilla@gmail.com>
-#  Jeff Walden <jwalden+code@mit.edu>
-#  Alexander J. Vincent <ajvincent@gmail.com>
-#  Dão Gottwald <dao@mozilla.com>
-#  Robert Strong <robert.bugzilla@gmail.com>
-#  Brian R. Bondy <netzen@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK ***** */
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/FileUtils.jsm");
@@ -115,7 +76,7 @@ const KEY_UPDROOT         = "UpdRootD";
 const DIR_UPDATES         = "updates";
 const FILE_UPDATE_STATUS  = "update.status";
 const FILE_UPDATE_VERSION = "update.version";
-#ifdef ANDROID
+#ifdef MOZ_WIDGET_ANDROID
 const FILE_UPDATE_ARCHIVE = "update.apk";
 #else
 const FILE_UPDATE_ARCHIVE = "update.mar";
@@ -143,22 +104,15 @@ const UNEXPECTED_ERROR   = 8;
 const ELEVATION_CANCELED = 9;
 
 // Windows service specific errors
-const SERVICE_UPDATER_COULD_NOT_BE_STARTED = 16000;
-const SERVICE_NOT_ENOUGH_COMMAND_LINE_ARGS = 16001;
-const SERVICE_UPDATER_SIGN_ERROR           = 16002;
-const SERVICE_UPDATER_COMPARE_ERROR        = 16003;
-const SERVICE_UPDATER_IDENTITY_ERROR       = 16004;
-const SERVICE_STILL_APPLYING_ON_SUCCESS    = 16005;
-const SERVICE_STILL_APPLYING_ON_FAILURE    = 16006;
-
-// Updater MAR security errors
-const CERT_LOAD_ERROR                         = 17;
-const CERT_HANDLING_ERROR                     = 18;
-const CERT_VERIFY_ERROR                       = 19;
-const ARCHIVE_NOT_OPEN                        = 20;
-const COULD_NOT_READ_PRODUCT_INFO_BLOCK_ERROR = 21;
-const MAR_CHANNEL_MISMATCH_ERROR              = 22;
-const VERSION_DOWNGRADE_ERROR                 = 23;
+const SERVICE_UPDATER_COULD_NOT_BE_STARTED = 24;
+const SERVICE_NOT_ENOUGH_COMMAND_LINE_ARGS = 25;
+const SERVICE_UPDATER_SIGN_ERROR           = 26;
+const SERVICE_UPDATER_COMPARE_ERROR        = 27;
+const SERVICE_UPDATER_IDENTITY_ERROR       = 28;
+const SERVICE_STILL_APPLYING_ON_SUCCESS    = 29;
+const SERVICE_STILL_APPLYING_ON_FAILURE    = 30;
+const SERVICE_UPDATER_NOT_FIXED_DRIVE      = 31;
+const SERVICE_COULD_NOT_LOCK_UPDATER       = 32;
 
 const CERT_ATTR_CHECK_FAILED_NO_UPDATE  = 100;
 const CERT_ATTR_CHECK_FAILED_HAS_UPDATE = 101;
@@ -1425,13 +1379,9 @@ UpdateService.prototype = {
             update.errorCode == SERVICE_UPDATER_IDENTITY_ERROR ||
             update.errorCode == SERVICE_STILL_APPLYING_ON_SUCCESS ||
             update.errorCode == SERVICE_STILL_APPLYING_ON_FAILURE ||
-            update.errorCode == CERT_LOAD_ERROR ||
-            update.errorCode == CERT_HANDLING_ERROR ||
-            update.errorCode == CERT_VERIFY_ERROR ||
-            update.errorCode == ARCHIVE_NOT_OPEN ||
-            update.errorCode == COULD_NOT_READ_PRODUCT_INFO_BLOCK_ERROR ||
-            update.errorCode == MAR_CHANNEL_MISMATCH_ERROR ||
-            update.errorCode == VERSION_DOWNGRADE_ERROR) {
+            update.errorCode == SERVICE_UPDATER_NOT_FIXED_DRIVE ||
+            update.errorCode == SERVICE_COULD_NOT_LOCK_UPDATER) {
+
           var failCount = getPref("getIntPref", 
                                   PREF_APP_UPDATE_SERVICE_ERRORS, 0);
           var maxFail = getPref("getIntPref", 
@@ -1498,7 +1448,7 @@ UpdateService.prototype = {
       if (parts.length > 1) {
         result = parseInt(parts[1]) || UNEXPECTED_ERROR;
       }
-      Services.telemetry.getHistogramById("UPDATE_STATUS").add(result);
+      Services.telemetry.getHistogramById("UPDATER_STATUS_CODES").add(result);
     } catch(e) {
       // Don't allow any exception to be propagated.
       Components.utils.reportError(e);
@@ -2464,6 +2414,7 @@ Checker.prototype = {
       this._callback.onError(request, update);
     }
 
+    this._callback = null;
     this._request = null;
   },
 
@@ -2513,6 +2464,8 @@ Checker.prototype = {
       Services.prefs.setBoolPref(PREF_APP_UPDATE_ENABLED, this._enabled);
       break;
     }
+
+    this._callback = null;
   },
 
   classID: Components.ID("{898CDC9B-E43F-422F-9CC4-2F6291B415A3}"),

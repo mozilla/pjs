@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsNPAPIPlugin_h_
 #define nsNPAPIPlugin_h_
@@ -103,7 +71,6 @@ public:
   
   static bool RunPluginOOP(const nsPluginTag *aPluginTag);
 
-  nsresult CreatePluginInstance(nsNPAPIPluginInstance **aResult);
   nsresult Shutdown();
 
   static nsresult RetainStream(NPStream *pstream, nsISupports **aRetainedPeer);
@@ -157,14 +124,14 @@ NPIdentifierIsInt(NPIdentifier id)
     return JSID_IS_INT(NPIdentifierToJSId(id));
 }
 
-inline jsint
+inline int
 NPIdentifierToInt(NPIdentifier id)
 {
     return JSID_TO_INT(NPIdentifierToJSId(id));
 }
 
 inline NPIdentifier
-IntToNPIdentifier(jsint i)
+IntToNPIdentifier(int i)
 {
     return JSIdToNPIdentifier(INT_TO_JSID(i));
 }
@@ -296,6 +263,15 @@ _unscheduletimer(NPP instance, uint32_t timerID);
 
 NPError NP_CALLBACK
 _popupcontextmenu(NPP instance, NPMenu* menu);
+
+NPError NP_CALLBACK
+_initasyncsurface(NPP instance, NPSize *size, NPImageFormat format, void *initData, NPAsyncSurface *surface);
+
+NPError NP_CALLBACK
+_finalizeasyncsurface(NPP instance, NPAsyncSurface *surface);
+
+void NP_CALLBACK
+_setcurrentasyncsurface(NPP instance, NPAsyncSurface *surface, NPRect *changed);
 
 NPBool NP_CALLBACK
 _convertpoint(NPP instance, double sourceX, double sourceY, NPCoordinateSpace sourceSpace, double *destX, double *destY, NPCoordinateSpace destSpace);

@@ -1,42 +1,8 @@
 /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Debug Protocol Client code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dave Camp <dcamp@mozilla.com> (original author)
- *   Panos Astithas <past@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 const Ci = Components.interfaces;
@@ -50,14 +16,19 @@ var EXPORTED_SYMBOLS = ["DebuggerTransport",
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                    "@mozilla.org/network/socket-transport-service;1",
                                    "nsISocketTransportService");
 
+let wantLogging = Services.prefs.getBoolPref("devtools.debugger.log");
+
 function dumpn(str)
 {
-  dump("DBG-CLIENT: " + str + "\n");
+  if (wantLogging) {
+    dump("DBG-CLIENT: " + str + "\n");
+  }
 }
 
 let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
@@ -369,10 +340,10 @@ DebuggerClient.prototype = {
    */
   request: function DC_request(aRequest, aOnResponse) {
     if (!this._connected) {
-      throw "Have not yet received a hello packet from the server.";
+      throw Error("Have not yet received a hello packet from the server.");
     }
     if (!aRequest.to) {
-      throw "Request packet has no destination.";
+      throw Error("Request packet has no destination.");
     }
 
     this._pendingRequests.push({ to: aRequest.to,
@@ -443,7 +414,7 @@ DebuggerClient.prototype = {
         onResponse(aPacket);
       }
     } catch(ex) {
-      dumpn("Error handling response: " + ex + " - " + ex.stack);
+      dumpn("Error handling response: " + ex + " - stack:\n" + ex.stack);
       Cu.reportError(ex);
     }
 
@@ -530,17 +501,21 @@ ThreadClient.prototype = {
 
   _assertPaused: function TC_assertPaused(aCommand) {
     if (!this.paused) {
-      throw aCommand + " command sent while not paused.";
+      throw Error(aCommand + " command sent while not paused.");
     }
   },
 
   /**
-   * Resume a paused thread.
+   * Resume a paused thread. If the optional aLimit parameter is present, then
+   * the thread will also pause when that limit is reached.
    *
    * @param function aOnResponse
    *        Called with the response packet.
+   * @param [optional] object aLimit
+   *        An object with a type property set to the appropriate limit (next,
+   *        step, or finish) per the remote debugging protocol specification.
    */
-  resume: function TC_resume(aOnResponse) {
+  resume: function TC_resume(aOnResponse, aLimit) {
     this._assertPaused("resume");
 
     // Put the client in a tentative "resuming" state so we can prevent
@@ -548,7 +523,8 @@ ThreadClient.prototype = {
     this._state = "resuming";
 
     let self = this;
-    let packet = { to: this._actor, type: DebugProtocolTypes.resume };
+    let packet = { to: this._actor, type: DebugProtocolTypes.resume,
+                   resumeLimit: aLimit };
     this._client.request(packet, function(aResponse) {
       if (aResponse.error) {
         // There was an error resuming, back to paused state.
@@ -558,6 +534,36 @@ ThreadClient.prototype = {
         aOnResponse(aResponse);
       }
     });
+  },
+
+  /**
+   * Step over a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  stepOver: function TC_stepOver(aOnResponse) {
+    this.resume(aOnResponse, { type: "next" });
+  },
+
+  /**
+   * Step into a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  stepIn: function TC_stepIn(aOnResponse) {
+    this.resume(aOnResponse, { type: "step" });
+  },
+
+  /**
+   * Step out of a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  stepOut: function TC_stepOut(aOnResponse) {
+    this.resume(aOnResponse, { type: "finish" });
   },
 
   /**
@@ -644,7 +650,8 @@ ThreadClient.prototype = {
               }
               return;
             }
-            let bpClient = new BreakpointClient(this._client, aResponse.actor);
+            let bpClient = new BreakpointClient(this._client, aResponse.actor,
+                                                aLocation);
             if (aCallback) {
               aCallback(aOnResponse(aResponse, bpClient));
             } else {
@@ -951,10 +958,14 @@ GripClient.prototype = {
  *        The debugger client parent.
  * @param aActor string
  *        The actor ID for this breakpoint.
+ * @param aLocation object
+ *        The location of the breakpoint. This is an object with two properties:
+ *        url and line.
  */
-function BreakpointClient(aClient, aActor) {
+function BreakpointClient(aClient, aActor, aLocation) {
   this._client = aClient;
   this._actor = aActor;
+  this.location = aLocation;
 }
 
 BreakpointClient.prototype = {

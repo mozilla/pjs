@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set sw=4 ts=8 et tw=80 : */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Content App.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Frederic Plourde <frederic.plourde@collabora.co.uk>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_WIDGET_GTK2
 #include <gtk/gtk.h>
@@ -76,6 +43,7 @@
 #include "nsIConsoleService.h"
 #include "nsJSEnvironment.h"
 #include "SandboxHal.h"
+#include "nsDebugImpl.h"
 
 #include "History.h"
 #include "nsDocShellCID.h"
@@ -95,8 +63,6 @@
 #include "nsPermission.h"
 #include "nsPermissionManager.h"
 #endif
-
-#include "nsDeviceMotion.h"
 
 #if defined(MOZ_WIDGET_ANDROID)
 #include "APKOpen.h"
@@ -234,11 +200,14 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
 ContentChild* ContentChild::sSingleton;
 
 ContentChild::ContentChild()
+ : mID(PRUint64(-1))
 #ifdef ANDROID
- : mScreenSize(0, 0)
- , mID(PRUint64(-1))
+ , mScreenSize(0, 0)
 #endif
 {
+    // This process is a content process, so it's clearly running in
+    // multiprocess mode!
+    nsDebugImpl::SetMultiprocessMode("Child");
 }
 
 ContentChild::~ContentChild()
@@ -364,8 +333,7 @@ ContentChild::RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* chi
 
     InfallibleTArray<MemoryReport> reports;
 
-    static const int maxLength = 31;   // big enough; pid is only a few chars
-    nsPrintfCString process(maxLength, "Content (%d)", getpid());
+    nsPrintfCString process("Content (%d)", getpid());
 
     // First do the vanilla memory reporters.
     nsCOMPtr<nsISimpleEnumerator> e;
@@ -380,14 +348,16 @@ ContentChild::RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* chi
       PRInt32 units;
       PRInt64 amount;
       nsCString desc;
-      r->GetPath(path);
-      r->GetKind(&kind);
-      r->GetUnits(&units);
-      r->GetAmount(&amount);
-      r->GetDescription(desc);
 
-      MemoryReport memreport(process, path, kind, units, amount, desc);
-      reports.AppendElement(memreport);
+      if (NS_SUCCEEDED(r->GetPath(path)) &&
+          NS_SUCCEEDED(r->GetKind(&kind)) &&
+          NS_SUCCEEDED(r->GetUnits(&units)) &&
+          NS_SUCCEEDED(r->GetAmount(&amount)) &&
+          NS_SUCCEEDED(r->GetDescription(desc)))
+      {
+        MemoryReport memreport(process, path, kind, units, amount, desc);
+        reports.AppendElement(memreport);
+      }
     }
 
     // Then do the memory multi-reporters, by calling CollectReports on each
@@ -742,18 +712,6 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
 }
 
 bool
-ContentChild::RecvDeviceMotionChanged(const long int& type,
-                                      const double& x, const double& y,
-                                      const double& z)
-{
-    nsCOMPtr<nsIDeviceMotionUpdate> dmu = 
-        do_GetService(NS_DEVICE_MOTION_CONTRACTID);
-    if (dmu)
-        dmu->DeviceMotionChanged(type, x, y, z);
-    return true;
-}
-
-bool
 ContentChild::RecvScreenSizeChanged(const gfxIntSize& size)
 {
 #ifdef ANDROID
@@ -800,14 +758,14 @@ ContentChild::GetIndexedDBPath()
 bool
 ContentChild::RecvGarbageCollect()
 {
-    nsJSContext::GarbageCollectNow(js::gcreason::DOM_IPC);
+    nsJSContext::GarbageCollectNow(js::gcreason::DOM_IPC, nsGCNormal, true);
     return true;
 }
 
 bool
 ContentChild::RecvCycleCollect()
 {
-    nsJSContext::GarbageCollectNow(js::gcreason::DOM_IPC);
+    nsJSContext::GarbageCollectNow(js::gcreason::DOM_IPC, nsGCNormal, true);
     nsJSContext::CycleCollectNow();
     return true;
 }
@@ -827,6 +785,14 @@ ContentChild::RecvSetID(const PRUint64 &id)
         NS_WARNING("Setting content child's ID twice?");
     }
     mID = id;
+    return true;
+}
+
+bool
+ContentChild::RecvLastPrivateDocShellDestroyed()
+{
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    obs->NotifyObservers(nsnull, "last-pb-context-exited", nsnull);
     return true;
 }
 

@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Alexander Surkov <surkov.alexander@gmail.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCoreUtils.h"
 
@@ -296,18 +263,19 @@ nsCoreUtils::ScrollSubstringTo(nsIFrame *aFrame,
                                nsIDOMNode *aEndNode, PRInt32 aEndIndex,
                                PRUint32 aScrollType)
 {
-  PRInt16 vPercent, hPercent;
-  ConvertScrollTypeToPercents(aScrollType, &vPercent, &hPercent);
+  nsIPresShell::ScrollAxis vertical, horizontal;
+  ConvertScrollTypeToPercents(aScrollType, &vertical, &horizontal);
 
   return ScrollSubstringTo(aFrame, aStartNode, aStartIndex, aEndNode, aEndIndex,
-                           vPercent, hPercent);
+                           vertical, horizontal);
 }
 
 nsresult
 nsCoreUtils::ScrollSubstringTo(nsIFrame *aFrame,
                                nsIDOMNode *aStartNode, PRInt32 aStartIndex,
                                nsIDOMNode *aEndNode, PRInt32 aEndIndex,
-                               PRInt16 aVPercent, PRInt16 aHPercent)
+                               nsIPresShell::ScrollAxis aVertical,
+                               nsIPresShell::ScrollAxis aHorizontal)
 {
   if (!aFrame || !aStartNode || !aEndNode)
     return NS_ERROR_FAILURE;
@@ -330,8 +298,9 @@ nsCoreUtils::ScrollSubstringTo(nsIFrame *aFrame,
   selection->RemoveAllRanges();
   selection->AddRange(scrollToRange);
 
-  privSel->ScrollIntoView(nsISelectionController::SELECTION_ANCHOR_REGION,
-                          true, aVPercent, aHPercent);
+  privSel->ScrollIntoViewInternal(
+    nsISelectionController::SELECTION_ANCHOR_REGION,
+    true, aVertical, aHorizontal);
 
   selection->CollapseToStart();
 
@@ -365,39 +334,57 @@ nsCoreUtils::ScrollFrameToPoint(nsIFrame *aScrollableFrame,
 
 void
 nsCoreUtils::ConvertScrollTypeToPercents(PRUint32 aScrollType,
-                                         PRInt16 *aVPercent,
-                                         PRInt16 *aHPercent)
+                                         nsIPresShell::ScrollAxis *aVertical,
+                                         nsIPresShell::ScrollAxis *aHorizontal)
 {
+  PRInt16 whereY, whereX;
+  nsIPresShell::WhenToScroll whenY, whenX;
   switch (aScrollType)
   {
     case nsIAccessibleScrollType::SCROLL_TYPE_TOP_LEFT:
-      *aVPercent = NS_PRESSHELL_SCROLL_TOP;
-      *aHPercent = NS_PRESSHELL_SCROLL_LEFT;
+      whereY = nsIPresShell::SCROLL_TOP;
+      whenY  = nsIPresShell::SCROLL_ALWAYS;
+      whereX = nsIPresShell::SCROLL_LEFT;
+      whenX  = nsIPresShell::SCROLL_ALWAYS;
       break;
     case nsIAccessibleScrollType::SCROLL_TYPE_BOTTOM_RIGHT:
-      *aVPercent = NS_PRESSHELL_SCROLL_BOTTOM;
-      *aHPercent = NS_PRESSHELL_SCROLL_RIGHT;
+      whereY = nsIPresShell::SCROLL_BOTTOM;
+      whenY  = nsIPresShell::SCROLL_ALWAYS;
+      whereX = nsIPresShell::SCROLL_RIGHT;
+      whenX  = nsIPresShell::SCROLL_ALWAYS;
       break;
     case nsIAccessibleScrollType::SCROLL_TYPE_TOP_EDGE:
-      *aVPercent = NS_PRESSHELL_SCROLL_TOP;
-      *aHPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
+      whereY = nsIPresShell::SCROLL_TOP;
+      whenY  = nsIPresShell::SCROLL_ALWAYS;
+      whereX = nsIPresShell::SCROLL_MINIMUM;
+      whenX  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
       break;
     case nsIAccessibleScrollType::SCROLL_TYPE_BOTTOM_EDGE:
-      *aVPercent = NS_PRESSHELL_SCROLL_BOTTOM;
-      *aHPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
+      whereY = nsIPresShell::SCROLL_BOTTOM;
+      whenY  = nsIPresShell::SCROLL_ALWAYS;
+      whereX = nsIPresShell::SCROLL_MINIMUM;
+      whenX  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
       break;
     case nsIAccessibleScrollType::SCROLL_TYPE_LEFT_EDGE:
-      *aVPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
-      *aHPercent = NS_PRESSHELL_SCROLL_LEFT;
+      whereY = nsIPresShell::SCROLL_MINIMUM;
+      whenY  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
+      whereX = nsIPresShell::SCROLL_LEFT;
+      whenX  = nsIPresShell::SCROLL_ALWAYS;
       break;
     case nsIAccessibleScrollType::SCROLL_TYPE_RIGHT_EDGE:
-      *aVPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
-      *aHPercent = NS_PRESSHELL_SCROLL_RIGHT;
+      whereY = nsIPresShell::SCROLL_MINIMUM;
+      whenY  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
+      whereX = nsIPresShell::SCROLL_RIGHT;
+      whenX  = nsIPresShell::SCROLL_ALWAYS;
       break;
     default:
-      *aVPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
-      *aHPercent = NS_PRESSHELL_SCROLL_ANYWHERE;
+      whereY = nsIPresShell::SCROLL_MINIMUM;
+      whenY  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
+      whereX = nsIPresShell::SCROLL_MINIMUM;
+      whenX  = nsIPresShell::SCROLL_IF_NOT_FULLY_VISIBLE;
   }
+  *aVertical = nsIPresShell::ScrollAxis(whereY, whenY);
+  *aHorizontal = nsIPresShell::ScrollAxis(whereX, whenX);
 }
 
 nsIntPoint
@@ -503,17 +490,6 @@ nsCoreUtils::IsErrorPage(nsIDocument *aDocument)
   return StringBeginsWith(path, neterror) || StringBeginsWith(path, certerror);
 }
 
-bool
-nsCoreUtils::IsCorrectFrameType(nsIFrame *aFrame, nsIAtom *aAtom)
-{
-  NS_ASSERTION(aFrame != nsnull,
-               "aFrame is null in call to IsCorrectFrameType!");
-  NS_ASSERTION(aAtom != nsnull,
-               "aAtom is null in call to IsCorrectFrameType!");
-  
-  return aFrame->GetType() == aAtom;
-}
-
 already_AddRefed<nsIDOMNode>
 nsCoreUtils::GetDOMNodeForContainer(nsIDocShellTreeItem *aContainer)
 {
@@ -579,26 +555,6 @@ nsCoreUtils::GetLanguageFor(nsIContent *aContent, nsIContent *aRootContent,
   while (walkUp && walkUp != aRootContent &&
          !walkUp->GetAttr(kNameSpaceID_None, nsGkAtoms::lang, aLanguage))
     walkUp = walkUp->GetParent();
-}
-
-already_AddRefed<nsIDOMCSSStyleDeclaration>
-nsCoreUtils::GetComputedStyleDeclaration(const nsAString& aPseudoElt,
-                                         nsIContent *aContent)
-{
-  nsIContent* content = GetDOMElementFor(aContent);
-  if (!content)
-    return nsnull;
-
-  // Returns number of items in style declaration
-  nsCOMPtr<nsIDOMWindow> window =
-    do_QueryInterface(content->OwnerDoc()->GetWindow());
-  if (!window)
-    return nsnull;
-
-  nsCOMPtr<nsIDOMCSSStyleDeclaration> cssDecl;
-  nsCOMPtr<nsIDOMElement> domElement(do_QueryInterface(content));
-  window->GetComputedStyle(domElement, aPseudoElt, getter_AddRefs(cssDecl));
-  return cssDecl.forget();
 }
 
 already_AddRefed<nsIBoxObject>
@@ -736,6 +692,17 @@ nsCoreUtils::IsColumnHidden(nsITreeColumn *aColumn)
   return content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
                               nsGkAtoms::_true, eCaseMatters);
 }
+
+void
+nsCoreUtils::ScrollTo(nsIPresShell* aPresShell, nsIContent* aContent,
+                      PRUint32 aScrollType)
+{
+  nsIPresShell::ScrollAxis vertical, horizontal;
+  ConvertScrollTypeToPercents(aScrollType, &vertical, &horizontal);
+  aPresShell->ScrollContentIntoView(aContent, vertical, horizontal,
+                                    nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsAccessibleDOMStringList

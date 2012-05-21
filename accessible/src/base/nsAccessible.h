@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   John Gaunt (jgaunt@netscape.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef _nsAccessible_H_
 #define _nsAccessible_H_
@@ -50,7 +17,6 @@
 #include "nsIAccessibleRole.h"
 #include "nsIAccessibleStates.h"
 
-#include "nsARIAMap.h"
 #include "nsStringGlue.h"
 #include "nsTArray.h"
 #include "nsRefPtrHashtable.h"
@@ -62,10 +28,34 @@ class KeyBinding;
 class nsAccessible;
 class nsHyperTextAccessible;
 class nsHTMLImageAccessible;
-class nsHTMLLIAccessible;
+class nsHTMLImageMapAccessible;
 struct nsRoleMapEntry;
 class Relation;
+
+namespace mozilla {
+namespace a11y {
+
+class HTMLLIAccessible;
+class TableAccessible;
+
+/**
+ * Name type flags.
+ */
+enum ENameValueFlag {
+  /**
+   * Name either
+   *  a) present (not empty): !name.IsEmpty()
+   *  b) no name (was missed): name.IsVoid()
+   *  c) was left empty by the author on demand: name.IsEmpty() && !name.IsVoid()
+   */
+ eNameOK,
+ eNameFromTooltip // Tooltip was used as a name
+};
+
+}
+}
 class nsTextAccessible;
+class nsXULTreeAccessible;
 
 struct nsRect;
 class nsIContent;
@@ -73,7 +63,7 @@ class nsIFrame;
 class nsIAtom;
 class nsIView;
 
-typedef nsRefPtrHashtable<nsVoidPtrHashKey, nsAccessible>
+typedef nsRefPtrHashtable<nsPtrHashKey<const void>, nsAccessible>
   nsAccessibleHashtable;
 
 // see nsAccessible::GetAttrValue
@@ -125,9 +115,19 @@ public:
   // Public methods
 
   /**
-   * get the description of this accessible
+   * Get the description of this accessible.
    */
   virtual void Description(nsString& aDescription);
+
+  /**
+   * Get the value of this accessible.
+   */
+  virtual void Value(nsString& aValue);
+
+  /**
+   * Get the name of this accessible.
+   */
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName);
 
   /**
    * Return DOM node associated with this accessible.
@@ -152,7 +152,7 @@ public:
    *
    * @param  [in/out] where to fill the states into.
    */
-  virtual void ApplyARIAState(PRUint64* aState);
+  virtual void ApplyARIAState(PRUint64* aState) const;
 
   /**
    * Returns the accessible name provided by native markup. It doesn't take
@@ -169,33 +169,19 @@ public:
   /**
    * Return enumerated accessible role (see constants in Role.h).
    */
-  inline mozilla::a11y::role Role()
-  {
-    if (!mRoleMapEntry || mRoleMapEntry->roleRule != kUseMapRole)
-      return NativeRole();
-
-    return ARIARoleInternal();
-  }
+  mozilla::a11y::role Role();
 
   /**
    * Return true if ARIA role is specified on the element.
    */
-  inline bool HasARIARole() const
-  {
-    return mRoleMapEntry;
-  }
+  bool HasARIARole() const
+    { return mRoleMapEntry; }
 
   /**
    * Return accessible role specified by ARIA (see constants in
    * roles).
    */
-  inline mozilla::a11y::role ARIARole()
-  {
-    if (!mRoleMapEntry || mRoleMapEntry->roleRule != kUseMapRole)
-      return mozilla::a11y::roles::NOTHING;
-
-    return ARIARoleInternal();
-  }
+  mozilla::a11y::role ARIARole();
 
   /**
    * Returns enumerated accessible role from native markup (see constants in
@@ -209,10 +195,30 @@ public:
   virtual PRUint64 State();
 
   /**
+   * Return link states present on the accessible.
+   */
+  PRUint64 LinkState() const
+  {
+    PRUint64 state = NativeLinkState();
+    ApplyARIAState(&state);
+    return state;
+  }
+
+  /**
    * Return the states of accessible, not taking into account ARIA states.
    * Use State() to get complete set of states.
    */
   virtual PRUint64 NativeState();
+
+  /**
+   * Return native link states present on the accessible.
+   */
+  virtual PRUint64 NativeLinkState() const;
+
+  /**
+   * Return bit set of invisible and offscreen states.
+   */
+  PRUint64 VisibilityState();
 
   /**
    * Returns attributes for accessible without explicitly setted ARIA
@@ -274,7 +280,7 @@ public:
    * @param aRoleMapEntry The ARIA nsRoleMapEntry* for the accessible, or 
    *                      nsnull if none.
    */
-  virtual void SetRoleMapEntry(nsRoleMapEntry *aRoleMapEntry);
+  virtual void SetRoleMapEntry(nsRoleMapEntry* aRoleMapEntry);
 
   /**
    * Update the children cache.
@@ -422,6 +428,11 @@ public:
    */
   void TestChildCache(nsAccessible* aCachedChild) const;
 
+  /**
+   * Return boundaries rect relative the bounding frame.
+   */
+  virtual void GetBoundsRect(nsRect& aRect, nsIFrame** aRelativeFrame);
+
   //////////////////////////////////////////////////////////////////////////////
   // Downcasting and types
 
@@ -448,10 +459,16 @@ public:
   inline bool IsHTMLFileInput() const { return mFlags & eHTMLFileInputAccessible; }
 
   inline bool IsHTMLListItem() const { return mFlags & eHTMLListItemAccessible; }
-  nsHTMLLIAccessible* AsHTMLListItem();
-  
+  mozilla::a11y::HTMLLIAccessible* AsHTMLListItem();
+
   inline bool IsImageAccessible() const { return mFlags & eImageAccessible; }
   nsHTMLImageAccessible* AsImage();
+
+  bool IsImageMapAccessible() const { return mFlags & eImageMapAccessible; }
+  nsHTMLImageMapAccessible* AsImageMap();
+
+  inline bool IsXULTree() const { return mFlags & eXULTreeAccessible; }
+  nsXULTreeAccessible* AsXULTree();
 
   inline bool IsListControl() const { return mFlags & eListControlAccessible; }
 
@@ -460,7 +477,9 @@ public:
   inline bool IsMenuPopup() const { return mFlags & eMenuPopupAccessible; }
 
   inline bool IsRoot() const { return mFlags & eRootAccessible; }
-  nsRootAccessible* AsRoot();
+  mozilla::a11y::RootAccessible* AsRoot();
+
+  virtual mozilla::a11y::TableAccessible* AsTable() { return nsnull; }
 
   inline bool IsTextLeaf() const { return mFlags & eTextLeafAccessible; }
   nsTextAccessible* AsTextLeaf();
@@ -625,7 +644,12 @@ public:
   /**
    * Return the localized string for the given key.
    */
-  static void TranslateString(const nsAString& aKey, nsAString& aStringOut);
+  static void TranslateString(const nsString& aKey, nsAString& aStringOut);
+
+  /**
+   * Return true if the accessible is defunct.
+   */
+  bool IsDefunct() const { return mFlags & eIsDefunct; }
 
 protected:
 
@@ -641,7 +665,7 @@ protected:
    * Set accessible parent and index in parent.
    */
   virtual void BindToParent(nsAccessible* aParent, PRUint32 aIndexInParent);
-  void UnbindFromParent();
+  virtual void UnbindFromParent();
 
   /**
    * Return sibling accessible at the given offset.
@@ -671,24 +695,34 @@ protected:
     { mFlags = (mFlags & ~kChildrenFlagsMask) | aFlag; }
 
   /**
-   * Flags describing the accessible itself.
+   * Flags used to describe the state of this accessible.
    * @note keep these flags in sync with ChildrenFlags
    */
+  enum StateFlags {
+    eIsDefunct = 1 << 2 // accessible is defunct
+  };
+
+  /**
+   * Flags describing the type of this accessible.
+   * @note keep these flags in sync with ChildrenFlags and StateFlags
+   */
   enum AccessibleTypes {
-    eApplicationAccessible = 1 << 2,
-    eAutoCompleteAccessible = 1 << 3,
-    eAutoCompletePopupAccessible = 1 << 4,
-    eComboboxAccessible = 1 << 5,
-    eDocAccessible = 1 << 6,
-    eHyperTextAccessible = 1 << 7,
-    eHTMLFileInputAccessible = 1 << 8,
-    eHTMLListItemAccessible = 1 << 9,
-    eImageAccessible = 1 << 10,
-    eListControlAccessible = 1 << 11,
-    eMenuButtonAccessible = 1 << 12,
-    eMenuPopupAccessible = 1 << 13,
-    eRootAccessible = 1 << 14,
-    eTextLeafAccessible = 1 << 15
+    eApplicationAccessible = 1 << 3,
+    eAutoCompleteAccessible = 1 << 4,
+    eAutoCompletePopupAccessible = 1 << 5,
+    eComboboxAccessible = 1 << 6,
+    eDocAccessible = 1 << 7,
+    eHyperTextAccessible = 1 << 8,
+    eHTMLFileInputAccessible = 1 << 9,
+    eHTMLListItemAccessible = 1 << 10,
+    eImageAccessible = 1 << 11,
+    eImageMapAccessible = 1 << 12,
+    eListControlAccessible = 1 << 13,
+    eMenuButtonAccessible = 1 << 14,
+    eMenuPopupAccessible = 1 << 15,
+    eRootAccessible = 1 << 16,
+    eTextLeafAccessible = 1 << 17,
+    eXULTreeAccessible = 1 << 18
   };
 
   //////////////////////////////////////////////////////////////////////////////
@@ -697,12 +731,7 @@ protected:
   /**
    * Return ARIA role (helper method).
    */
-  mozilla::a11y::role ARIARoleInternal();
-
-  virtual nsIFrame* GetBoundsFrame();
-  virtual void GetBoundsRect(nsRect& aRect, nsIFrame** aRelativeFrame);
-
-  PRUint64 VisibilityState(); 
+  mozilla::a11y::role ARIATransformRole(mozilla::a11y::role aRole);
 
   //////////////////////////////////////////////////////////////////////////////
   // Name helpers
@@ -813,8 +842,11 @@ protected:
 
   nsAutoPtr<AccGroupInfo> mGroupInfo;
   friend class AccGroupInfo;
-
-  nsRoleMapEntry *mRoleMapEntry; // Non-null indicates author-supplied role; possibly state & value as well
+  
+  /**
+   * Non-null indicates author-supplied role; possibly state & value as well
+   */
+  nsRoleMapEntry* mRoleMapEntry;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsAccessible,

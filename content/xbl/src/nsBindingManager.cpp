@@ -1,53 +1,16 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 sw=2 et tw=79: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Original Author: David W. Hyatt (hyatt@netscape.com)
- *   Alec Flett <alecf@netscape.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsCOMPtr.h"
 #include "nsIXBLService.h"
 #include "nsIInputStream.h"
-#include "nsDoubleHashtable.h"
 #include "nsIURI.h"
 #include "nsIURL.h"
 #include "nsIChannel.h"
 #include "nsXPIDLString.h"
-#include "nsIParser.h"
-#include "nsParserCIID.h"
 #include "nsNetUtil.h"
 #include "plstr.h"
 #include "nsIContent.h"
@@ -114,7 +77,7 @@ public:
   nsXBLInsertionPoint* GetInsertionPointAt(PRInt32 i) { return static_cast<nsXBLInsertionPoint*>(mElements->ElementAt(i)); }
   void RemoveInsertionPointAt(PRInt32 i) { mElements->RemoveElementAt(i); }
 
-  virtual JSObject* WrapObject(JSContext *cx, XPCWrappedNativeScope *scope,
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
                                bool *triedToWrap)
   {
     return mozilla::dom::binding::NodeList::create(cx, scope, this,
@@ -139,7 +102,7 @@ nsAnonymousContentList::nsAnonymousContentList(nsIContent *aContent,
 
   // We don't reference count our Anonymous reference (to avoid circular
   // references). We'll be told when the Anonymous goes away.
-  SetIsProxy();
+  SetIsDOMBinding();
 }
 
 nsAnonymousContentList::~nsAnonymousContentList()
@@ -557,8 +520,7 @@ nsresult
 nsBindingManager::SetBinding(nsIContent* aContent, nsXBLBinding* aBinding)
 {
   if (!mBindingTable.IsInitialized()) {
-    if (!mBindingTable.Init())
-      return NS_ERROR_OUT_OF_MEMORY;
+    mBindingTable.Init();
   }
 
   // After this point, aBinding will be the most-derived binding for aContent.
@@ -587,11 +549,9 @@ nsBindingManager::SetBinding(nsIContent* aContent, nsXBLBinding* aBinding)
     }
   }
   
-  bool result = true;
-
   if (aBinding) {
     aContent->SetFlags(NODE_MAY_BE_IN_BINDING_MNGR);
-    result = mBindingTable.Put(aContent, aBinding);
+    mBindingTable.Put(aContent, aBinding);
   } else {
     mBindingTable.Remove(aContent);
 
@@ -606,7 +566,7 @@ nsBindingManager::SetBinding(nsIContent* aContent, nsXBLBinding* aBinding)
     }
   }
 
-  return result ? NS_OK : NS_ERROR_FAILURE;
+  return NS_OK;
 }
 
 nsIContent*
@@ -1104,12 +1064,11 @@ nsBindingManager::PutXBLDocumentInfo(nsXBLDocumentInfo* aDocumentInfo)
 {
   NS_PRECONDITION(aDocumentInfo, "Must have a non-null documentinfo!");
   
-  NS_ENSURE_TRUE(mDocumentTable.IsInitialized() || mDocumentTable.Init(16),
-                 NS_ERROR_OUT_OF_MEMORY);
+  if (!mDocumentTable.IsInitialized())
+    mDocumentTable.Init(16);
 
-  NS_ENSURE_TRUE(mDocumentTable.Put(aDocumentInfo->DocumentURI(),
-                                    aDocumentInfo),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mDocumentTable.Put(aDocumentInfo->DocumentURI(),
+                     aDocumentInfo);
 
   return NS_OK;
 }
@@ -1136,11 +1095,10 @@ nsBindingManager::PutLoadingDocListener(nsIURI* aURL, nsIStreamListener* aListen
 {
   NS_PRECONDITION(aListener, "Must have a non-null listener!");
   
-  NS_ENSURE_TRUE(mLoadingDocTable.IsInitialized() || mLoadingDocTable.Init(16),
-                 NS_ERROR_OUT_OF_MEMORY);
+  if (!mLoadingDocTable.IsInitialized())
+    mLoadingDocTable.Init(16);
   
-  NS_ENSURE_TRUE(mLoadingDocTable.Put(aURL, aListener),
-                 NS_ERROR_OUT_OF_MEMORY);
+  mLoadingDocTable.Put(aURL, aListener);
 
   return NS_OK;
 }
@@ -1347,7 +1305,7 @@ nsBindingManager::WalkRules(nsIStyleRuleProcessor::EnumFunc aFunc,
   return NS_OK;
 }
 
-typedef nsTHashtable<nsVoidPtrHashKey> RuleProcessorSet;
+typedef nsTHashtable<nsPtrHashKey<nsIStyleRuleProcessor> > RuleProcessorSet;
 
 static PLDHashOperator
 EnumRuleProcessors(nsISupports *aKey, nsXBLBinding *aBinding, void* aClosure)
@@ -1358,8 +1316,9 @@ EnumRuleProcessors(nsISupports *aKey, nsXBLBinding *aBinding, void* aClosure)
     nsIStyleRuleProcessor *ruleProc =
       binding->PrototypeBinding()->GetRuleProcessor();
     if (ruleProc) {
-      if (!set->IsInitialized() && !set->Init(16))
-        return PL_DHASH_STOP;
+      if (!set->IsInitialized()) {
+        set->Init(16);
+      }
       set->PutEntry(ruleProc);
     }
   }
@@ -1372,10 +1331,10 @@ struct WalkAllRulesData {
 };
 
 static PLDHashOperator
-EnumWalkAllRules(nsVoidPtrHashKey *aKey, void* aClosure)
+EnumWalkAllRules(nsPtrHashKey<nsIStyleRuleProcessor> *aKey, void* aClosure)
 {
-  nsIStyleRuleProcessor *ruleProcessor =
-    static_cast<nsIStyleRuleProcessor*>(const_cast<void*>(aKey->GetKey()));
+  nsIStyleRuleProcessor *ruleProcessor = aKey->GetKey();
+    
   WalkAllRulesData *data = static_cast<WalkAllRulesData*>(aClosure);
 
   (*(data->mFunc))(ruleProcessor, data->mData);
@@ -1405,10 +1364,10 @@ struct MediumFeaturesChangedData {
 };
 
 static PLDHashOperator
-EnumMediumFeaturesChanged(nsVoidPtrHashKey *aKey, void* aClosure)
+EnumMediumFeaturesChanged(nsPtrHashKey<nsIStyleRuleProcessor> *aKey, void* aClosure)
 {
-  nsIStyleRuleProcessor *ruleProcessor =
-    static_cast<nsIStyleRuleProcessor*>(const_cast<void*>(aKey->GetKey()));
+  nsIStyleRuleProcessor *ruleProcessor = aKey->GetKey();
+    
   MediumFeaturesChangedData *data =
     static_cast<MediumFeaturesChangedData*>(aClosure);
 

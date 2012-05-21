@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Alexander Surkov <surkov.alexander@gmail.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsCoreUtils_h_
 #define nsCoreUtils_h_
@@ -181,13 +148,14 @@ public:
    * @param aStartOffset  an offset inside the start node
    * @param aEndNode      end node of a range
    * @param aEndOffset    an offset inside the end node
-   * @param aVPercent     how to align vertically, specified in percents
-   * @param aHPercent     how to align horizontally, specified in percents
+   * @param aVertical     how to align vertically, specified in percents, and when.
+   * @param aHorizontal     how to align horizontally, specified in percents, and when.
    */
   static nsresult ScrollSubstringTo(nsIFrame *aFrame,
                                     nsIDOMNode *aStartNode, PRInt32 aStartIndex,
                                     nsIDOMNode *aEndNode, PRInt32 aEndIndex,
-                                    PRInt16 aVPercent, PRInt16 aHPercent);
+                                    nsIPresShell::ScrollAxis aVertical,
+                                    nsIPresShell::ScrollAxis aHorizontal);
 
   /**
    * Scrolls the given frame to the point, used for implememntation of
@@ -202,11 +170,11 @@ public:
 
   /**
    * Converts scroll type constant defined in nsIAccessibleScrollType to
-   * vertical and horizontal percents.
+   * vertical and horizontal parameters.
    */
   static void ConvertScrollTypeToPercents(PRUint32 aScrollType,
-                                          PRInt16 *aVPercent,
-                                          PRInt16 *aHPercent);
+                                          nsIPresShell::ScrollAxis *aVertical,
+                                          nsIPresShell::ScrollAxis *aHorizontal);
 
   /**
    * Returns coordinates relative screen for the top level window.
@@ -240,14 +208,6 @@ public:
    * Return true if the given document is an error page.
    */
   static bool IsErrorPage(nsIDocument *aDocument);
-
-  /**
-   * Retrun true if the type of given frame equals to the given frame type.
-   *
-   * @param aFrame  the frame
-   * @param aAtom   the frame type
-   */
-  static bool IsCorrectFrameType(nsIFrame* aFrame, nsIAtom* aAtom);
 
   /**
    * Return presShell for the document containing the given DOM node.
@@ -297,13 +257,6 @@ public:
                              nsAString& aLanguage);
 
   /**
-   * Return computed styles declaration for the given node.
-   */
-  static already_AddRefed<nsIDOMCSSStyleDeclaration>
-    GetComputedStyleDeclaration(const nsAString& aPseudoElt,
-                                nsIContent *aContent);
-
-  /**
    * Return box object for XUL treechildren element by tree box object.
    */
   static already_AddRefed<nsIBoxObject>
@@ -348,6 +301,12 @@ public:
    * Return true if the given column is hidden (i.e. not sensible).
    */
   static bool IsColumnHidden(nsITreeColumn *aColumn);
+
+  /**
+   * Scroll content into view.
+   */
+  static void ScrollTo(nsIPresShell* aPresShell, nsIContent* aContent,
+                       PRUint32 aScrollType);
 
   /**
    * Return true if the given node is table header element.

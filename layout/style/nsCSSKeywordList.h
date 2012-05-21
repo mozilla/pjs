@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* keywords used within CSS property values */
 
@@ -211,6 +178,7 @@ CSS_KEY(both, both)
 CSS_KEY(bottom, bottom)
 CSS_KEY(bottom-outside, bottom_outside)
 CSS_KEY(bounding-box, bounding_box)
+CSS_KEY(break-all, break_all)
 CSS_KEY(break-word, break_word)
 CSS_KEY(button, button)
 CSS_KEY(buttonface, buttonface)
@@ -315,6 +283,7 @@ CSS_KEY(italic, italic)
 CSS_KEY(justify, justify)
 CSS_KEY(katakana, katakana)
 CSS_KEY(katakana-iroha, katakana_iroha)
+CSS_KEY(keep-all, keep_all)
 CSS_KEY(khz, khz)
 CSS_KEY(landscape, landscape)
 CSS_KEY(large, large)
@@ -419,7 +388,6 @@ CSS_KEY(semi-condensed, semi_condensed)
 CSS_KEY(semi-expanded, semi_expanded)
 CSS_KEY(separate, separate)
 CSS_KEY(show, show)
-CSS_KEY(skew, skew)
 CSS_KEY(skewx, skewx)
 CSS_KEY(skewy, skewy)
 CSS_KEY(small, small)
@@ -615,6 +583,7 @@ CSS_KEY(mathematical, mathematical)
 //CSS_KEY(middle, middle)
 CSS_KEY(miter, miter)
 CSS_KEY(no-change, no_change)
+CSS_KEY(non-scaling-stroke, non_scaling_stroke)
 CSS_KEY(nonzero, nonzero)
 CSS_KEY(optimizelegibility, optimizelegibility)
 CSS_KEY(optimizequality, optimizequality)

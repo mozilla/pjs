@@ -1,45 +1,12 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 #include "nsXMLDocument.h"
 #include "nsParserCIID.h"
-#include "nsIParser.h"
+#include "nsCharsetSource.h"
 #include "nsIXMLContentSink.h"
 #include "nsPresContext.h" 
 #include "nsIContent.h"
@@ -59,8 +26,6 @@
 #include "nsIHttpChannel.h"
 #include "nsIURI.h"
 #include "nsIServiceManager.h"
-#include "nsICharsetAlias.h"
-#include "nsICharsetAlias.h"
 #include "nsNetUtil.h"
 #include "nsDOMError.h"
 #include "nsIScriptSecurityManager.h"
@@ -69,7 +34,6 @@
 #include "nsDOMAttribute.h"
 #include "nsGUIEvent.h"
 #include "nsCExternalHandlerService.h"
-#include "nsNetUtil.h"
 #include "nsMimeTypes.h"
 #include "nsEventListenerManager.h"
 #include "nsContentUtils.h"
@@ -460,6 +424,14 @@ nsXMLDocument::Load(const nsAString& aUrl, bool *aReturn)
     return rv;
   }
 
+  // StartDocumentLoad asserts that readyState is uninitialized, so
+  // uninitialize it. SetReadyStateInternal make this transition invisible to
+  // Web content. But before doing that, assert that the current readyState
+  // is complete as it should be after the call to ResetToURI() above.
+  MOZ_ASSERT(GetReadyStateEnum() == nsIDocument::READYSTATE_COMPLETE,
+             "Bad readyState");
+  SetReadyStateInternal(nsIDocument::READYSTATE_UNINITIALIZED);
+
   // Prepare for loading the XML document "into oneself"
   nsCOMPtr<nsIStreamListener> listener;
   if (NS_FAILED(rv = StartDocumentLoad(kLoadAsData, channel, 
@@ -483,6 +455,7 @@ nsXMLDocument::Load(const nsAString& aUrl, bool *aReturn)
   if (!mAsync) {
     nsCOMPtr<nsIThread> thread = do_GetCurrentThread();
 
+    nsAutoSyncOperation sync(this);
     mLoopingForSyncLoad = true;
     while (mLoopingForSyncLoad) {
       if (!NS_ProcessNextEvent(thread))
@@ -532,7 +505,7 @@ nsXMLDocument::StartDocumentLoad(const char* aCommand,
 
   PRInt32 charsetSource = kCharsetFromDocTypeDefault;
   nsCAutoString charset(NS_LITERAL_CSTRING("UTF-8"));
-  TryChannelCharset(aChannel, charsetSource, charset);
+  TryChannelCharset(aChannel, charsetSource, charset, nsnull);
 
   nsCOMPtr<nsIURI> aUrl;
   rv = aChannel->GetURI(getter_AddRefs(aUrl));
@@ -595,6 +568,12 @@ nsXMLDocument::EndLoad()
   }    
 }
  
+/* virtual */ void
+nsXMLDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
+{
+  nsDocument::DocSizeOfExcludingThis(aWindowSizes);
+}
+
 // nsIDOMDocument interface
 
 nsresult

@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  * vim: sw=2 ts=8 et :
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at:
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Code.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Jones <jones.chris.g@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * This "puppet widget" isn't really a platform widget.  It's intended
@@ -48,7 +15,9 @@
 #ifndef mozilla_widget_PuppetWidget_h__
 #define mozilla_widget_PuppetWidget_h__
 
+#include "nsBaseScreen.h"
 #include "nsBaseWidget.h"
+#include "nsIScreenManager.h"
 #include "nsThreadUtils.h"
 #include "nsWeakReference.h"
 
@@ -176,6 +145,11 @@ public:
   NS_IMETHOD OnIMESelectionChange(void);
 
   NS_IMETHOD SetCursor(nsCursor aCursor);
+  NS_IMETHOD SetCursor(imgIContainer* aCursor,
+                       PRUint32 aHotspotX, PRUint32 aHotspotY)
+  {
+    return nsBaseWidget::SetCursor(aCursor, aHotspotX, aHotspotY);
+  }
 
   // Gets the DPI of the screen corresponding to this widget.
   // Contacts the parent process which gets the DPI from the
@@ -230,6 +204,33 @@ private:
 
   // The DPI of the screen corresponding to this widget
   float mDPI;
+};
+
+class PuppetScreen : public nsBaseScreen
+{
+public:
+    PuppetScreen(void* nativeScreen);
+    ~PuppetScreen();
+
+    NS_IMETHOD GetRect(PRInt32* aLeft, PRInt32* aTop, PRInt32* aWidth, PRInt32* aHeight) MOZ_OVERRIDE;
+    NS_IMETHOD GetAvailRect(PRInt32* aLeft, PRInt32* aTop, PRInt32* aWidth, PRInt32* aHeight) MOZ_OVERRIDE;
+    NS_IMETHOD GetPixelDepth(PRInt32* aPixelDepth) MOZ_OVERRIDE;
+    NS_IMETHOD GetColorDepth(PRInt32* aColorDepth) MOZ_OVERRIDE;
+    NS_IMETHOD GetRotation(PRUint32* aRotation) MOZ_OVERRIDE;
+    NS_IMETHOD SetRotation(PRUint32  aRotation) MOZ_OVERRIDE;
+};
+
+class PuppetScreenManager : public nsIScreenManager
+{
+public:
+    PuppetScreenManager();
+    ~PuppetScreenManager();
+
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSISCREENMANAGER
+
+protected:
+    nsCOMPtr<nsIScreen> mOneScreen;
 };
 
 }  // namespace widget

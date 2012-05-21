@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: sw=4 ts=4 et :
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Plugin App.
- *
- * The Initial Developer of the Original Code is
- *   Chris Jones <jones.chris.g@gmail.com>
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Jim Mathies <jmathies@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "PluginInstanceParent.h"
 #include "BrowserStreamParent.h"
@@ -50,6 +17,7 @@
 #include "gfxContext.h"
 #include "gfxPlatform.h"
 #include "gfxSharedImageSurface.h"
+#include "nsNPAPIPluginInstance.h"
 #ifdef MOZ_X11
 #include "gfxXlibSurface.h"
 #endif
@@ -91,6 +59,7 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
     , mNPP(npp)
     , mNPNIface(npniface)
     , mWindowType(NPWindowTypeWindow)
+    , mDrawingModel(kDefaultDrawingModel)
 #if defined(OS_WIN)
     , mPluginHWND(NULL)
     , mPluginWndProc(NULL)
@@ -100,7 +69,6 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
     , mShWidth(0)
     , mShHeight(0)
     , mShColorSpace(nsnull)
-    , mDrawingModel(NPDrawingModelCoreGraphics)
 #endif
 {
 }
@@ -121,12 +89,23 @@ PluginInstanceParent::~PluginInstanceParent()
     if (mShColorSpace)
         ::CGColorSpaceRelease(mShColorSpace);
 #endif
+    if (mRemoteImageDataShmem.IsWritable()) {
+        ImageContainer *container =
+            GetImageContainer();
+
+        if (container) {
+            container->SetRemoteImageData(nsnull, nsnull);
+            container->SetCompositionNotifySink(nsnull);
+            DeallocShmem(mRemoteImageDataShmem);
+        }
+    }
 }
 
 bool
 PluginInstanceParent::Init()
 {
-    return !!mScriptableObjects.Init();
+    mScriptableObjects.Init();
+    return true;
 }
 
 void
@@ -282,6 +261,12 @@ PluginInstanceParent::InternalGetValueForNPObject(
 }
 
 bool
+PluginInstanceParent::IsAsyncDrawing()
+{
+  return IsDrawingModelAsync(mDrawingModel);
+}
+
+bool
 PluginInstanceParent::AnswerNPN_GetValue_NPNVWindowNPObject(
                                          PPluginScriptableObjectParent** aValue,
                                          NPError* aResult)
@@ -349,9 +334,20 @@ PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginUsesDOMForCursor(
     return true;
 }
 
+class NotificationSink : public CompositionNotifySink
+{
+public:
+  NotificationSink(PluginInstanceParent *aInstance) : mInstance(aInstance)
+  { }
+
+  virtual void DidComposite() { mInstance->DidComposite(); }
+private:
+  PluginInstanceParent *mInstance;
+};
+
 bool
 PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginDrawingModel(
-    const int& drawingModel, NPError* result)
+    const int& drawingModel, OptionalShmem *shmem, CrossProcessMutexHandle *mutex, NPError* result)
 {
 #ifdef XP_MACOSX
     if (drawingModel == NPDrawingModelCoreAnimation ||
@@ -362,16 +358,74 @@ PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginDrawingModel(
         mDrawingModel = drawingModel;
         *result = mNPNIface->setvalue(mNPP, NPPVpluginDrawingModel,
                                   (void*)NPDrawingModelCoreGraphics);
-    } else {
+        *shmem = null_t();
+    } else
+#endif
+    if (drawingModel == NPDrawingModelAsyncBitmapSurface) {
+        ImageContainer *container = GetImageContainer();
+        if (!container) {
+            *result = NPERR_GENERIC_ERROR;
+            return true;
+        }
+
         mDrawingModel = drawingModel;
         *result = mNPNIface->setvalue(mNPP, NPPVpluginDrawingModel,
-                                  (void*)drawingModel);
+                                        (void*)drawingModel);
+
+
+        if (*result != NPERR_NO_ERROR) {
+            return true;
+        }
+
+        AllocUnsafeShmem(sizeof(RemoteImageData), SharedMemory::TYPE_BASIC, &mRemoteImageDataShmem);
+
+        *shmem = mRemoteImageDataShmem;
+
+        mRemoteImageDataMutex = new CrossProcessMutex("PluginInstanceParent.mRemoteImageDataMutex");
+
+        *mutex = mRemoteImageDataMutex->ShareToProcess(OtherProcess());
+        container->SetRemoteImageData(mRemoteImageDataShmem.get<RemoteImageData>(), mRemoteImageDataMutex);
+
+        mNotifySink = new NotificationSink(this);
+
+        container->SetCompositionNotifySink(mNotifySink);
+    } else if (
+#if defined(XP_WIN)
+               drawingModel == NPDrawingModelSyncWin
+#elif defined(XP_MACOSX)
+#ifndef NP_NO_QUICKDRAW
+               drawingModel == NPDrawingModelQuickDraw ||
+#endif
+               drawingModel == NPDrawingModelOpenGL ||
+               drawingModel == NPDrawingModelCoreGraphics
+#elif defined(MOZ_X11)
+               drawingModel == NPDrawingModelSyncX
+#else
+               false
+#endif
+               ) {
+        *shmem = null_t();
+
+        ImageContainer *container = GetImageContainer();
+        if (!container) {
+            *result = NPERR_GENERIC_ERROR;
+            return true;
+        }
+
+        mDrawingModel = drawingModel;
+        *result = mNPNIface->setvalue(mNPP, NPPVpluginDrawingModel,
+                                      (void*)drawingModel);
+
+        if (mRemoteImageDataShmem.IsWritable()) {
+            container->SetRemoteImageData(nsnull, nsnull);
+            container->SetCompositionNotifySink(nsnull);
+            DeallocShmem(mRemoteImageDataShmem);
+            mRemoteImageDataMutex = NULL;
+        }
+    } else {
+        *result = NPERR_GENERIC_ERROR;
     }
     return true;
-#else
-    *result = NPERR_GENERIC_ERROR;
-    return true;
-#endif
 }
 
 bool
@@ -645,6 +699,12 @@ PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 
     if (!container) {
         return NS_ERROR_FAILURE;
+    }
+
+    if (IsAsyncDrawing()) {
+      NS_IF_ADDREF(container);
+      *aContainer = container;
+      return NS_OK;
     }
 
     nsRefPtr<Image> image;
@@ -1101,9 +1161,14 @@ PluginInstanceParent::NPP_HandleEvent(void* event)
 
 #if defined(OS_WIN)
     if (mWindowType == NPWindowTypeDrawable) {
+        if (IsAsyncDrawing()) {
+            if (npevent->event == WM_PAINT || npevent->event == DoublePassRenderingEvent()) {
+                // This plugin maintains its own async drawing.
+                return handled;
+            }
+        }
         if (DoublePassRenderingEvent() == npevent->event) {
-            CallPaint(npremoteevent, &handled);
-            return handled;
+            return CallPaint(npremoteevent, &handled) && handled;
         }
 
         switch (npevent->event) {
@@ -1111,7 +1176,9 @@ PluginInstanceParent::NPP_HandleEvent(void* event)
             {
                 RECT rect;
                 SharedSurfaceBeforePaint(rect, npremoteevent);
-                CallPaint(npremoteevent, &handled);
+                if (!CallPaint(npremoteevent, &handled)) {
+                    handled = false;
+                }
                 SharedSurfaceAfterPaint(npevent);
                 return handled;
             }
@@ -1139,10 +1206,7 @@ PluginInstanceParent::NPP_HandleEvent(void* event)
             case WM_WINDOWPOSCHANGED:
             {
                 // We send this in nsObjectFrame just before painting
-                SendWindowPosChanged(npremoteevent);
-                // nsObjectFrame doesn't care whether we handle this
-                // or not, just returning 1 for good hygiene
-                return 1;
+                return SendWindowPosChanged(npremoteevent);
             }
             break;
         }
@@ -1369,7 +1433,7 @@ struct ActorSearchData
 };
 
 PLDHashOperator
-ActorSearch(const void* aKey,
+ActorSearch(NPObject* aKey,
             PluginScriptableObjectParent* aData,
             void* aUserData)
 {
@@ -1446,7 +1510,8 @@ PluginInstanceParent::RegisterNPObjectForActor(
     NS_ASSERTION(aObject && aActor, "Null pointers!");
     NS_ASSERTION(mScriptableObjects.IsInitialized(), "Hash not initialized!");
     NS_ASSERTION(!mScriptableObjects.Get(aObject, nsnull), "Duplicate entry!");
-    return !!mScriptableObjects.Put(aObject, aActor);
+    mScriptableObjects.Put(aObject, aActor);
+    return true;
 }
 
 void
@@ -1603,14 +1668,57 @@ PluginInstanceParent::AnswerNPN_ConvertPoint(const double& sourceX,
 }
 
 bool
+PluginInstanceParent::AnswerNPN_InitAsyncSurface(const gfxIntSize& size,
+                                                 const NPImageFormat& format,
+                                                 NPRemoteAsyncSurface* surfData,
+                                                 bool* result)
+{
+    if (!IsAsyncDrawing()) {
+        *result = false;
+        return true;
+    }
+
+    switch (mDrawingModel) {
+    case NPDrawingModelAsyncBitmapSurface: {
+            Shmem sharedMem;
+            if (!AllocUnsafeShmem(size.width * size.height * 4, SharedMemory::TYPE_BASIC, &sharedMem)) {
+                *result = false;
+                return true;
+            }
+
+            surfData->size() = size;
+            surfData->hostPtr() = (uintptr_t)sharedMem.get<unsigned char>();
+            surfData->stride() = size.width * 4;
+            surfData->format() = format;
+            surfData->data() = sharedMem;
+            *result = true;
+        }
+    }
+
+    return true;
+}
+
+bool
+PluginInstanceParent::RecvRedrawPlugin()
+{
+    nsNPAPIPluginInstance *inst = static_cast<nsNPAPIPluginInstance*>(mNPP->ndata);
+    if (!inst) {
+        return false;
+    }
+
+    inst->RedrawPlugin();
+    return true;
+}
+
+bool
 PluginInstanceParent::RecvNegotiatedCarbon()
 {
-  nsNPAPIPluginInstance *inst = static_cast<nsNPAPIPluginInstance*>(mNPP->ndata);
-  if (!inst) {
-    return false;
-  }
-  inst->CarbonNPAPIFailure();
-  return true;
+    nsNPAPIPluginInstance *inst = static_cast<nsNPAPIPluginInstance*>(mNPP->ndata);
+    if (!inst) {
+        return false;
+    }
+    inst->CarbonNPAPIFailure();
+    return true;
 }
 
 #if defined(OS_WIN)
@@ -1651,7 +1759,7 @@ PluginInstanceParent::PluginWindowHookProc(HWND hWnd,
     switch (message) {
         case WM_SETFOCUS:
         // Let the child plugin window know it should take focus.
-        self->CallSetPluginFocus();
+        unused << self->CallSetPluginFocus();
         break;
 
         case WM_CLOSE:
@@ -1680,7 +1788,7 @@ PluginInstanceParent::SubclassPluginWindow(HWND aWnd)
         mPluginWndProc = 
             (WNDPROC)::SetWindowLongPtrA(mPluginHWND, GWLP_WNDPROC,
                          reinterpret_cast<LONG_PTR>(PluginWindowHookProc));
-        bool bRes = ::SetPropW(mPluginHWND, kPluginInstanceParentProperty, this);
+        DebugOnly<bool> bRes = ::SetPropW(mPluginHWND, kPluginInstanceParentProperty, this);
         NS_ASSERTION(mPluginWndProc,
           "PluginInstanceParent::SubclassPluginWindow failed to set subclass!");
         NS_ASSERTION(bRes,

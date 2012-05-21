@@ -57,8 +57,7 @@ function run_test() {
 
     // The XPCShell test wiki indicates this is the preferred way for 
     // Windows detection.
-    var isWindows = ("@mozilla.org/windows-registry-key;1" 
-                     in Cc);
+    var isWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
 
     // Setup the command line arguments to create the MAR.
     // Windows vs. Linux/Mac/... have different command line for verification 
@@ -138,13 +137,13 @@ function run_test() {
   let tests = {
     // Test signing a MAR file
     test_sign: function() {
-      let inMAR = do_get_file("data/binary_data_mar.mar");
+      let inMAR = do_get_file("data/" + refMARPrefix + "binary_data_mar.mar");
       let outMAR = do_get_file("signed_out.mar", true);
       do_check_false(outMAR.exists());
       signMAR(inMAR, outMAR);
       do_check_true(outMAR.exists());
       let outMARData = getBinaryFileData(outMAR);
-      let refMAR = do_get_file("data/signed_pib_mar.mar");
+      let refMAR = do_get_file("data/" + refMARPrefix + "signed_pib_mar.mar");
       let refMARData = getBinaryFileData(refMAR);
       compareBinaryData(outMARData, refMARData);
     }, 
@@ -166,7 +165,9 @@ function run_test() {
     }, 
     // Test to make sure a stripped MAR is the same as the original MAR
     test_strip_signature: function() {
-      let originalMAR = do_get_file("data/binary_data_mar.mar");
+      let originalMAR = do_get_file("data/" + 
+                                    refMARPrefix + 
+                                    "binary_data_mar.mar");
       let signedMAR = do_get_file("signed_out.mar");
       let outMAR = do_get_file("out.mar", true);
       stripMARSignature(signedMAR, outMAR);

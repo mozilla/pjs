@@ -1,46 +1,13 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Foundation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2005-2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <stuart@mozilla.com>
- *   John Daggett <jdaggett@mozilla.com>
- *   Jonathan Kew <jfkthame@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_FONT_UTILS_H
 #define GFX_FONT_UTILS_H
 
 #include "gfxTypes.h"
+#include "gfxPlatform.h"
 
 #include "prtypes.h"
 #include "nsAlgorithm.h"
@@ -56,6 +23,8 @@
 #include "nsTArray.h"
 #include "nsAutoPtr.h"
 #include "nsIStreamBufferAccess.h"
+
+#include "zlib.h"
 
 /* Bug 341128 - w32api defines min/max which causes problems with <bitset> */
 #ifdef __MINGW32__
@@ -86,6 +55,28 @@ public:
                 mBlocks[i] = new Block(*block);
         }
     }
+
+    bool Equals(const gfxSparseBitSet *aOther) const {
+        if (mBlocks.Length() != aOther->mBlocks.Length()) {
+            return false;
+        }
+        size_t n = mBlocks.Length();
+        for (size_t i = 0; i < n; ++i) {
+            const Block *b1 = mBlocks[i];
+            const Block *b2 = aOther->mBlocks[i];
+            if (!b1 != !b2) {
+                return false;
+            }
+            if (!b1) {
+                continue;
+            }
+            if (memcmp(&b1->mBits, &b2->mBits, BLOCK_SIZE) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool test(PRUint32 aIndex) const {
         NS_ASSERTION(mBlocks.DebugGetHeader(), "mHdr is null, this is bad");
         PRUint32 blockIndex = aIndex/BLOCK_SIZE_BITS;
@@ -96,6 +87,11 @@ public:
             return false;
         return ((block->mBits[(aIndex>>3) & (BLOCK_SIZE - 1)]) & (1 << (aIndex & 0x7))) != 0;
     }
+
+#if PR_LOGGING
+    // dump out contents of bitmap
+    void Dump(const char* aPrefix, eGfxLog aWhichLog) const;
+#endif
 
     bool TestRange(PRUint32 aStart, PRUint32 aEnd) {
         PRUint32 startBlock, endBlock, blockLen;
@@ -258,14 +254,18 @@ public:
         }
     }
 
-    PRUint32 GetSize() {
-        PRUint32 size = 0;
+    size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const {
+        size_t total = mBlocks.SizeOfExcludingThis(aMallocSizeOf);
         for (PRUint32 i = 0; i < mBlocks.Length(); i++) {
-            if (mBlocks[i])
-                size += sizeof(Block);
-            size += sizeof(nsAutoPtr<Block>);
+            if (mBlocks[i]) {
+                total += aMallocSizeOf(mBlocks[i]);
+            }
         }
-        return size;
+        return total;
+    }
+
+    size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const {
+        return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
     }
 
     // clear out all blocks in the array
@@ -309,6 +309,18 @@ public:
 
     void Compact() {
         mBlocks.Compact();
+    }
+
+    PRUint32 GetChecksum() const {
+        PRUint32 check = adler32(0, Z_NULL, 0);
+        for (PRUint32 i = 0; i < mBlocks.Length(); i++) {
+            if (mBlocks[i]) {
+                const Block *block = mBlocks[i];
+                check = adler32(check, (PRUint8*) (&i), 4);
+                check = adler32(check, (PRUint8*) block, sizeof(Block));
+            }
+        }
+        return check;
     }
 
 private:

@@ -1,58 +1,29 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:expandtab:shiftwidth=2:tabstop=2:
  */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is IBM Corporation
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Aaron Leventhal <aleventh@us.ibm.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsARIAMap.h"
 
-#include "nsIAccessibleRole.h"
+#include "nsCoreUtils.h"
 #include "Role.h"
 #include "States.h"
 
 #include "nsIContent.h"
+#include "nsWhitespaceTokenizer.h"
 
+using namespace mozilla;
 using namespace mozilla::a11y;
+using namespace mozilla::a11y::aria;
 
 /**
  *  This list of WAI-defined roles are currently hardcoded.
  *  Eventually we will most likely be loading an RDF resource that contains this information
  *  Using RDF will also allow for role extensibility. See bug 280138.
  *
- *  Definition of nsRoleMapEntry and nsStateMapEntry contains comments explaining this table.
+ *  Definition of nsRoleMapEntry contains comments explaining this table.
  *
  *  When no nsIAccessibleRole enum mapping exists for an ARIA role, the
  *  role will be exposed via the object attribute "xml-roles".
@@ -62,7 +33,7 @@ using namespace mozilla::a11y;
  *    banner, contentinfo, main, navigation, note, search, secondary, seealso, breadcrumbs
  */
 
-nsRoleMapEntry nsARIAMap::gWAIRoleMap[] = 
+static nsRoleMapEntry sWAIRoleMaps[] =
 {
   {
     "alert",
@@ -98,7 +69,8 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
     eNoValue,
     eNoAction,
     eNoLiveAttr,
-    states::READONLY
+    kNoReqStates,
+    eReadonlyUntilEditable
   },
   {
     "button",
@@ -136,7 +108,7 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
     "combobox",
     roles::COMBOBOX,
     kUseMapRole,
-    eHasValueMinMax,
+    eNoValue,
     eOpenCloseAction,
     eNoLiveAttr,
     states::COLLAPSED | states::HASPOPUP,
@@ -168,7 +140,17 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
     eNoValue,
     eNoAction,
     eNoLiveAttr,
-    states::READONLY
+    kNoReqStates,
+    eReadonlyUntilEditable
+  },
+  {
+    "form",
+    roles::FORM,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kNoReqStates
   },
   {
     "grid",
@@ -334,6 +316,15 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
     eARIACheckableBool
   },
   {
+    "note",
+    roles::NOTE,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kNoReqStates
+  },
+  {
     "option",
     roles::OPTION,
     kUseMapRole,
@@ -360,7 +351,8 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
     eHasValueMinMax,
     eNoAction,
     eNoLiveAttr,
-    states::READONLY
+    states::READONLY,
+    eIndeterminateIfNoValue
   },
   {
     "radio",
@@ -565,9 +557,7 @@ nsRoleMapEntry nsARIAMap::gWAIRoleMap[] =
   }
 };
 
-PRUint32 nsARIAMap::gWAIRoleMapLength = NS_ARRAY_LENGTH(nsARIAMap::gWAIRoleMap);
-
-nsRoleMapEntry nsARIAMap::gLandmarkRoleMap = {
+static nsRoleMapEntry sLandmarkRoleMap = {
   "",
   roles::NOTHING,
   kUseNativeRole,
@@ -587,89 +577,12 @@ nsRoleMapEntry nsARIAMap::gEmptyRoleMap = {
   kNoReqStates
 };
 
-nsStateMapEntry nsARIAMap::gWAIStateMap[] = {
-  // eARIANone
-  nsStateMapEntry(),
-
-  // eARIAAutoComplete
-  nsStateMapEntry(&nsGkAtoms::aria_autocomplete,
-                  "inline", states::SUPPORTS_AUTOCOMPLETION,
-                  "list", states::HASPOPUP | states::SUPPORTS_AUTOCOMPLETION,
-                  "both", states::HASPOPUP | states::SUPPORTS_AUTOCOMPLETION),
-
-  // eARIABusy
-  nsStateMapEntry(&nsGkAtoms::aria_busy,
-                  "true", states::BUSY,
-                  "error", states::INVALID),
-
-  // eARIACheckableBool
-  nsStateMapEntry(&nsGkAtoms::aria_checked, kBoolType,
-                  states::CHECKABLE, states::CHECKED, 0, true),
-
-  // eARIACheckableMixed
-  nsStateMapEntry(&nsGkAtoms::aria_checked, kMixedType,
-                  states::CHECKABLE, states::CHECKED, 0, true),
-
-  // eARIACheckedMixed
-  nsStateMapEntry(&nsGkAtoms::aria_checked, kMixedType,
-                  states::CHECKABLE, states::CHECKED, 0),
-
-  // eARIADisabled
-  nsStateMapEntry(&nsGkAtoms::aria_disabled, kBoolType,
-                  0, states::UNAVAILABLE),
-
-  // eARIAExpanded
-  nsStateMapEntry(&nsGkAtoms::aria_expanded, kBoolType,
-                  0, states::EXPANDED, states::COLLAPSED),
-
-  // eARIAHasPopup
-  nsStateMapEntry(&nsGkAtoms::aria_haspopup, kBoolType,
-                  0, states::HASPOPUP),
-
-  // eARIAInvalid
-  nsStateMapEntry(&nsGkAtoms::aria_invalid, kBoolType,
-                  0, states::INVALID),
-
-  // eARIAMultiline
-  nsStateMapEntry(&nsGkAtoms::aria_multiline, kBoolType,
-                  0, states::MULTI_LINE, states::SINGLE_LINE, true),
-
-  // eARIAMultiSelectable
-  nsStateMapEntry(&nsGkAtoms::aria_multiselectable, kBoolType,
-                  0, states::MULTISELECTABLE | states::EXTSELECTABLE),
-
-  // eARIAOrientation
-  nsStateMapEntry(&nsGkAtoms::aria_orientation, eUseFirstState,
-                  "horizontal", states::HORIZONTAL,
-                  "vertical", states::VERTICAL),
-
-  // eARIAPressed
-  nsStateMapEntry(&nsGkAtoms::aria_pressed, kMixedType,
-                  states::CHECKABLE, states::PRESSED),
-
-  // eARIAReadonly
-  nsStateMapEntry(&nsGkAtoms::aria_readonly, kBoolType,
-                  0, states::READONLY),
-
-  // eARIAReadonlyOrEditable
-  nsStateMapEntry(&nsGkAtoms::aria_readonly, kBoolType,
-                  0, states::READONLY, states::EDITABLE, true),
-
-  // eARIARequired
-  nsStateMapEntry(&nsGkAtoms::aria_required, kBoolType,
-                  0, states::REQUIRED),
-
-  // eARIASelectable
-  nsStateMapEntry(&nsGkAtoms::aria_selected, kBoolType,
-                  states::SELECTABLE, states::SELECTED, 0, true)
-};
-
 /**
  * Universal (Global) states:
  * The following state rules are applied to any accessible element,
  * whether there is an ARIA role or not:
  */
-eStateMapEntryID nsARIAMap::gWAIUnivStateMap[] = {
+EStateRule nsARIAMap::gWAIUnivStateMap[] = {
   eARIABusy,
   eARIADisabled,
   eARIAExpanded,  // Currently under spec review but precedent exists
@@ -724,154 +637,38 @@ nsAttributeCharacteristics nsARIAMap::gWAIUnivAttrMap[] = {
 
 PRUint32 nsARIAMap::gWAIUnivAttrMapLength = NS_ARRAY_LENGTH(nsARIAMap::gWAIUnivAttrMap);
 
-
-////////////////////////////////////////////////////////////////////////////////
-// nsStateMapEntry
-
-nsStateMapEntry::nsStateMapEntry() :
-  mAttributeName(nsnull),
-  mIsToken(false),
-  mPermanentState(0),
-  mValue1(nsnull),
-  mState1(0),
-  mValue2(nsnull),
-  mState2(0),
-  mValue3(nsnull),
-  mState3(0),
-  mDefaultState(0),
-  mDefinedIfAbsent(false)
-{}
-
-nsStateMapEntry::nsStateMapEntry(nsIAtom** aAttrName, eStateValueType aType,
-                                 PRUint64 aPermanentState,
-                                 PRUint64 aTrueState,
-                                 PRUint64 aFalseState,
-                                 bool aDefinedIfAbsent) :
-  mAttributeName(aAttrName),
-  mIsToken(true),
-  mPermanentState(aPermanentState),
-  mValue1("false"),
-  mState1(aFalseState),
-  mValue2(nsnull),
-  mState2(0),
-  mValue3(nsnull),
-  mState3(0),
-  mDefaultState(aTrueState),
-  mDefinedIfAbsent(aDefinedIfAbsent)
+nsRoleMapEntry*
+aria::GetRoleMap(nsINode* aNode)
 {
-  if (aType == kMixedType) {
-    mValue2 = "mixed";
-    mState2 = states::MIXED;
-  }
-}
-
-nsStateMapEntry::nsStateMapEntry(nsIAtom** aAttrName,
-                                 const char* aValue1, PRUint64 aState1,
-                                 const char* aValue2, PRUint64 aState2,
-                                 const char* aValue3, PRUint64 aState3) :
-  mAttributeName(aAttrName), mIsToken(false), mPermanentState(0),
-  mValue1(aValue1), mState1(aState1),
-  mValue2(aValue2), mState2(aState2),
-  mValue3(aValue3), mState3(aState3),
-  mDefaultState(0), mDefinedIfAbsent(false)
-{
-}
-
-nsStateMapEntry::nsStateMapEntry(nsIAtom** aAttrName,
-                                 EDefaultStateRule aDefaultStateRule,
-                                 const char* aValue1, PRUint64 aState1,
-                                 const char* aValue2, PRUint64 aState2,
-                                 const char* aValue3, PRUint64 aState3) :
-  mAttributeName(aAttrName), mIsToken(true), mPermanentState(0),
-  mValue1(aValue1), mState1(aState1),
-  mValue2(aValue2), mState2(aState2),
-  mValue3(aValue3), mState3(aState3),
-  mDefaultState(0), mDefinedIfAbsent(true)
-{
-  if (aDefaultStateRule == eUseFirstState)
-    mDefaultState = aState1;
-}
-
-bool
-nsStateMapEntry::MapToStates(nsIContent* aContent, PRUint64* aState,
-                             eStateMapEntryID aStateMapEntryID)
-{
-  // Return true if we should continue.
-  if (aStateMapEntryID == eARIANone)
-    return false;
-
-  const nsStateMapEntry& entry = nsARIAMap::gWAIStateMap[aStateMapEntryID];
-
-  if (entry.mIsToken) {
-    // If attribute is considered as defined when it's absent then let's act
-    // attribute value is "false" supposedly.
-    bool hasAttr = aContent->HasAttr(kNameSpaceID_None, *entry.mAttributeName);
-    if (entry.mDefinedIfAbsent && !hasAttr) {
-      if (entry.mPermanentState)
-        *aState |= entry.mPermanentState;
-      if (entry.mState1)
-        *aState |= entry.mState1;
-      return true;
-    }
-
-    // We only have attribute state mappings for NMTOKEN (and boolean) based
-    // ARIA attributes. According to spec, a value of "undefined" is to be
-    // treated equivalent to "", or the absence of the attribute. We bail out
-    // for this case here.
-    // Note: If this method happens to be called with a non-token based
-    // attribute, for example: aria-label="" or aria-label="undefined", we will
-    // bail out and not explore a state mapping, which is safe.
-    if (!hasAttr ||
-        aContent->AttrValueIs(kNameSpaceID_None, *entry.mAttributeName,
-                              nsGkAtoms::_empty, eCaseMatters) ||
-        aContent->AttrValueIs(kNameSpaceID_None, *entry.mAttributeName,
-                              nsGkAtoms::_undefined, eCaseMatters)) {
-
-      if (entry.mPermanentState)
-        *aState &= ~entry.mPermanentState;
-      return true;
-    }
-
-    if (entry.mPermanentState)
-      *aState |= entry.mPermanentState;
+  nsIContent* content = nsCoreUtils::GetRoleContent(aNode);
+  nsAutoString roleString;
+  if (!content ||
+      !content->GetAttr(kNameSpaceID_None, nsGkAtoms::role, roleString) ||
+      roleString.IsEmpty()) {
+    // We treat role="" as if the role attribute is absent (per aria spec:8.1.1)
+    return nsnull;
   }
 
-  nsAutoString attrValue;
-  if (!aContent->GetAttr(kNameSpaceID_None, *entry.mAttributeName, attrValue))
-    return true;
+  nsWhitespaceTokenizer tokenizer(roleString);
+  while (tokenizer.hasMoreTokens()) {
+    // Do a binary search through table for the next role in role list
+    NS_LossyConvertUTF16toASCII role(tokenizer.nextToken());
+    PRUint32 low = 0;
+    PRUint32 high = ArrayLength(sWAIRoleMaps);
+    while (low < high) {
+      PRUint32 idx = (low + high) / 2;
+      PRInt32 compare = strcmp(role.get(), sWAIRoleMaps[idx].roleString);
+      if (compare == 0) 
+        return sWAIRoleMaps + idx;
 
-  // Apply states for matched value. If no values was matched then apply default
-  // states.
-  bool applyDefaultStates = true;
-  if (entry.mValue1) {
-    if (attrValue.EqualsASCII(entry.mValue1)) {
-      applyDefaultStates = false;
-
-      if (entry.mState1)
-        *aState |= entry.mState1;
-    } else if (entry.mValue2) {
-      if (attrValue.EqualsASCII(entry.mValue2)) {
-        applyDefaultStates = false;
-
-        if (entry.mState2)
-          *aState |= entry.mState2;
-
-      } else if (entry.mValue3) {
-        if (attrValue.EqualsASCII(entry.mValue3)) {
-          applyDefaultStates = false;
-
-          if (entry.mState3)
-            *aState |= entry.mState3;
-
-        }
-      }
+      if (compare < 0)
+        high = idx;
+      else
+        low = idx + 1;
     }
   }
 
-  if (applyDefaultStates) {
-    if (entry.mDefaultState)
-      *aState |= entry.mDefaultState;
-  }
-
-  return true;
+  // Always use some entry if there is a non-empty role string
+  // To ensure an accessible object is created
+  return &sLandmarkRoleMap;
 }

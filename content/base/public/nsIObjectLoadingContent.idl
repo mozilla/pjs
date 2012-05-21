@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org object loading code.
- *
- * The Initial Developer of the Original Code is
- * Christian Biesinger <cbiesinger@web.de>.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
 
@@ -42,6 +10,7 @@ interface nsIObjectFrame;
 interface nsIPluginTag;
 interface nsIDOMElement;
 interface nsIDOMClientRect;
+interface nsIURI;
 
 %{C++
 #include "nsNPAPIPluginInstance.h"
@@ -51,7 +20,7 @@ interface nsIDOMClientRect;
 /**
  * This interface represents a content node that loads objects.
  */
-[scriptable, uuid(6D8914C7-0E22-4452-8962-11B69BBE84D7)]
+[scriptable, uuid(fd56fda8-d3c3-4368-8cf3-67dbc992aec9)]
 interface nsIObjectLoadingContent : nsISupports
 {
   const unsigned long TYPE_LOADING  = 0;
@@ -78,6 +47,14 @@ interface nsIObjectLoadingContent : nsISupports
    * TYPE_NULL will be returned.
    */
   unsigned long getContentTypeForMIMEType(in AUTF8String aMimeType);
+
+  /**
+  * Gets the base URI to be used for this object. This differs from
+  * nsIContent::GetBaseURI in that it takes codebase attributes into
+  * account. The MIME type is required as some plugins (java) calculate
+  * this differently.
+  */
+  nsIURI getObjectBaseURI(in ACString aMimeType);
 
   /**
    * Returns the plugin instance if it has already been instantiated. This
@@ -116,8 +93,20 @@ interface nsIObjectLoadingContent : nsISupports
    */
   void playPlugin();
 
+  /**
+   * This attribute will return true if the plugin has been activated
+   * and false if the plugin is still in the click-to-play state.
+   */
+  readonly attribute boolean activated;
+
   [noscript] void stopPluginInstance();
 
   [noscript] void syncStartPluginInstance();
   [noscript] void asyncStartPluginInstance();
+
+  /**
+   * The URL of the data/src loaded in the object. This may be null (i.e.
+   * an <embed> with no src).
+   */
+  readonly attribute nsIURI srcURI;
 };

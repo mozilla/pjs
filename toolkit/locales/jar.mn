@@ -1,4 +1,8 @@
 #filter substitution
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 
 @AB_CD@.jar:
 % locale global @AB_CD@ %locale/@AB_CD@/global/
@@ -52,6 +56,7 @@
   locale/@AB_CD@/global/printdialog.properties          (%chrome/global/printdialog.properties)
 + locale/@AB_CD@/global/printProgress.dtd               (%chrome/global/printProgress.dtd)
 + locale/@AB_CD@/global/regionNames.properties          (%chrome/global/regionNames.properties)
+  locale/@AB_CD@/global/resetProfile.dtd                (%chrome/global/resetProfile.dtd)
 + locale/@AB_CD@/global/dialog.properties               (%chrome/global/dialog.properties)
 + locale/@AB_CD@/global/tree.dtd                        (%chrome/global/tree.dtd)
 + locale/@AB_CD@/global/textcontext.dtd                 (%chrome/global/textcontext.dtd)

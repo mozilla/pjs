@@ -1,54 +1,8 @@
 <?xml version="1.0"?>
 
-<!-- ***** BEGIN LICENSE BLOCK *****
-   - Version: MPL 1.1/GPL 2.0/LGPL 2.1
-   -
-   - The contents of this file are subject to the Mozilla Public License Version
-   - 1.1 (the "License"); you may not use this file except in compliance with
-   - the License. You may obtain a copy of the License at
-   - http://www.mozilla.org/MPL/
-   -
-   - Software distributed under the License is distributed on an "AS IS" basis,
-   - WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-   - for the specific language governing rights and limitations under the
-   - License.
-   -
-   - The Original Code is this file as it was released on March 28, 2001.
-   -
-   - The Initial Developer of the Original Code is
-   - David Hyatt.
-   - Portions created by the Initial Developer are Copyright (C) 2001
-   - the Initial Developer. All Rights Reserved.
-   -
-   - Contributor(s):
-   -   David Hyatt <hyatt@netscape.com> (Original Author of <tabbrowser>)
-   -   Mike Connor <mconnor@steelgryphon.com>
-   -   Peter Parente <parente@cs.unc.edu>
-   -   Giorgio Maone <g.maone@informaction.com>
-   -   Asaf Romano <mozilla.mano@sent.com>
-   -   Seth Spitzer <sspitzer@mozilla.org>
-   -   Simon Bünzli <zeniko@gmail.com>
-   -   Michael Ventnor <ventnor.bugzilla@yahoo.com.au>
-   -   Mark Pilgrim <pilgrim@gmail.com>
-   -   Dão Gottwald <dao@mozilla.com>
-   -   Paul O’Shannessy <paul@oshannessy.com>
-   -   Rob Arnold <tellrob@gmail.com>
-   -   Frank Yan <fyan@mozilla.com>
-   -   Patrick Walton <pcwalton@mozilla.com>
-   -
-   - Alternatively, the contents of this file may be used under the terms of
-   - either the GNU General Public License Version 2 or later (the "GPL"), or
-   - the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-   - in which case the provisions of the GPL or the LGPL are applicable instead
-   - of those above. If you wish to allow use of your version of this file only
-   - under the terms of either the GPL or the LGPL, and not to allow others to
-   - use your version of this file under the terms of the MPL, indicate your
-   - decision by deleting the provisions above and replace them with the notice
-   - and other provisions required by the GPL or the LGPL. If you do not delete
-   - the provisions above, a recipient may use your version of this file under
-   - the terms of any one of the MPL, the GPL or the LGPL.
-   -
-   - ***** END LICENSE BLOCK ***** -->
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
 <!DOCTYPE bindings [
 <!ENTITY % tabBrowserDTD SYSTEM "chrome://browser/locale/tabbrowser.dtd" >
@@ -92,13 +46,17 @@
       <field name="tabs" readonly="true">
         this.tabContainer.childNodes;
       </field>
+
       <property name="visibleTabs" readonly="true">
         <getter><![CDATA[
-          return Array.filter(this.tabs, function(tab) {
-            return !tab.hidden && !tab.closing;
-          });
+          if (!this._visibleTabs)
+            this._visibleTabs = Array.filter(this.tabs,
+                                             function (tab) !tab.hidden && !tab.closing);
+          return this._visibleTabs;
         ]]></getter>
       </property>
+      <field name="_visibleTabs">null</field>
+
       <field name="mURIFixup" readonly="true">
         Components.classes["@mozilla.org/docshell/urifixup;1"]
                   .getService(Components.interfaces.nsIURIFixup);
@@ -150,9 +108,6 @@
 #else
         false
 #endif
-      </field>
-      <field name="_browsers">
-        null
       </field>
 
       <field name="_autoScrollPopup">
@@ -546,20 +501,6 @@
               }
               else if (aStateFlags & nsIWebProgressListener.STATE_STOP &&
                        aStateFlags & nsIWebProgressListener.STATE_IS_NETWORK) {
-                if (aWebProgress.DOMWindow == this.mBrowser.contentWindow) {
-                  // The document is done loading, we no longer want the
-                  // value cleared.
-                  if (this.mBrowser.userTypedClear > 1)
-                    this.mBrowser.userTypedClear -= 2;
-                  else if (this.mBrowser.userTypedClear > 0)
-                    this.mBrowser.userTypedClear--;
-
-                  if (!this.mBrowser.mIconURL)
-                    this.mTabBrowser.useDefaultIcon(this.mTab);
-                }
-
-                if (this.mBlank)
-                  this.mBlank = false;
 
                 if (this.mTab.hasAttribute("busy")) {
                   this.mTab.removeAttribute("busy");
@@ -568,6 +509,34 @@
                     this.mTab.setAttribute("unread", "true");
                 }
                 this.mTab.removeAttribute("progress");
+
+                if (aWebProgress.DOMWindow == this.mBrowser.contentWindow) {
+                  if (!Components.isSuccessCode(aStatus) &&
+                      !isTabEmpty(this.mTab)) {
+                    // Restore the current document's location in case the
+                    // request was stopped (possibly from a content script)
+                    // before the location changed.
+
+                    this.mBrowser.userTypedValue = null;
+
+                    if (this.mTab.selected && gURLBar)
+                      URLBarSetURI();
+                  } else {
+                    // The document is done loading, we no longer want the
+                    // value cleared.
+
+                    if (this.mBrowser.userTypedClear > 1)
+                      this.mBrowser.userTypedClear -= 2;
+                    else if (this.mBrowser.userTypedClear > 0)
+                      this.mBrowser.userTypedClear--;
+                  }
+
+                  if (!this.mBrowser.mIconURL)
+                    this.mTabBrowser.useDefaultIcon(this.mTab);
+                }
+
+                if (this.mBlank)
+                  this.mBlank = false;
 
                 var location = aRequest.QueryInterface(nsIChannel).URI;
 
@@ -615,7 +584,7 @@
               if (topLevel) {
                 // The document loaded correctly, clear the value if we should
                 if (this.mBrowser.userTypedClear > 0 ||
-                    (aRequest && !Components.isSuccessCode(aRequest.status)))
+                    (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_ERROR_PAGE))
                   this.mBrowser.userTypedValue = null;
 
                 // Clear out the missing plugins list since it's related to the
@@ -693,8 +662,8 @@
             if (aURI && this.mFaviconService) {
               if (!(aURI instanceof Ci.nsIURI))
                 aURI = makeURI(aURI);
-              this.mFaviconService.setAndLoadFaviconForPage(browser.currentURI,
-                                                            aURI, false);
+              this.mFaviconService.setAndFetchFaviconForPage(browser.currentURI,
+                                                             aURI, false);
             }
 
             if ((browser.mIconURL || "") != aTab.getAttribute("image")) {
@@ -910,6 +879,7 @@
 
             if (!this._previewMode) {
               this.mCurrentTab.removeAttribute("unread");
+              this.selectedTab.lastAccessed = Date.now();
 
 #ifdef MOZ_E10S_COMPAT
               // Bug 666816 - TypeAheadFind support for e10s
@@ -1225,8 +1195,6 @@
               aIsUTF8               = params.isUTF8;
             }
 
-            this._browsers = null; // invalidate cache
-
             // if we're adding tabs, we're past interrupt mode, ditch the owner
             if (this.mCurrentTab.owner)
               this.mCurrentTab.owner = null;
@@ -1276,10 +1244,11 @@
               }, 0, this.tabContainer);
             }
 
-            this.tabContainer.appendChild(t);
-
-            // invalidate cache, because tabContainer is about to change
+            // invalidate caches
             this._browsers = null;
+            this._visibleTabs = null;
+
+            this.tabContainer.appendChild(t);
 
             // If this new tab is owned by another, assert that relationship
             if (aOwner)
@@ -1418,7 +1387,9 @@
       <parameter name="aAll"/>
       <body>
         <![CDATA[
-          var tabsToClose = (aAll ? this.tabs.length : this.visibleTabs.length - 1)
+          var tabsToClose = (aAll ?
+                               this.tabs.length - this._removingTabs.length :
+                               this.visibleTabs.length - 1)
                             - gBrowser._numPinnedTabs;
           if (tabsToClose <= 1)
             return true;
@@ -1526,6 +1497,7 @@
             if (!animate /* the caller didn't opt in */ ||
                 isLastTab ||
                 aTab.pinned ||
+                aTab.hidden ||
                 this._removingTabs.length > 3 /* don't want lots of concurrent animations */ ||
                 aTab.getAttribute("fadein") != "true" /* fade-in transition hasn't been triggered yet */ ||
                 window.getComputedStyle(aTab).maxWidth == "0.1px" /* fade-in transition hasn't moved yet */ ||
@@ -1607,6 +1579,7 @@
 
             aTab.closing = true;
             this._removingTabs.push(aTab);
+            this._visibleTabs = null; // invalidate cache
             if (newTab)
               this.addTab(BROWSER_NEW_TAB_URL, {skipAnimation: true});
             else
@@ -1991,7 +1964,10 @@
         <![CDATA[
           if (aTab.hidden) {
             aTab.removeAttribute("hidden");
+            this._visibleTabs = null; // invalidate cache
+
             this.tabContainer.adjustTabstrip();
+
             let event = document.createEvent("Events");
             event.initEvent("TabShow", true, false);
             aTab.dispatchEvent(event);
@@ -2007,7 +1983,10 @@
           if (!aTab.hidden && !aTab.pinned && !aTab.selected &&
               !aTab.closing) {
             aTab.setAttribute("hidden", "true");
+            this._visibleTabs = null; // invalidate cache
+
             this.tabContainer.adjustTabstrip();
+
             let event = document.createEvent("Events");
             event.initEvent("TabHide", true, false);
             aTab.dispatchEvent(event);
@@ -2063,6 +2042,7 @@
           ]]>
         </getter>
       </property>
+      <field name="_browsers">null</field>
 
       <!-- Moves a tab to a new browser window, unless it's already the only tab
            in the current window, in which case this will do nothing. -->
@@ -2108,11 +2088,14 @@
 
           aIndex = aIndex < aTab._tPos ? aIndex: aIndex+1;
           this.mCurrentTab._selected = false;
+
+          // invalidate caches
+          this._browsers = null;
+          this._visibleTabs = null;
+
           // use .item() instead of [] because dragging to the end of the strip goes out of
           // bounds: .item() returns null (so it acts like appendChild), but [] throws
           this.tabContainer.insertBefore(aTab, this.tabs.item(aIndex));
-          // invalidate cache, because tabContainer is about to change
-          this._browsers = null;
 
           for (let i = 0; i < this.tabs.length; i++) {
             this.tabs[i]._tPos = i;
@@ -2776,9 +2759,7 @@
 
           Services.prefs.addObserver("browser.tabs.", this._prefObserver, false);
           window.addEventListener("resize", this, false);
-
-          this.updateVisibility();
-          this._propagateVisibility();
+          window.addEventListener("load", this, false);
         ]]>
       </constructor>
 
@@ -2838,15 +2819,19 @@
         this.parentNode && this.parentNode.localName == "toolbar" ? this.parentNode : this;
       ]]></field>
 
+      <field name="_propagatedVisibilityOnce">false</field>
+
       <property name="visible"
                 onget="return !this._container.collapsed;">
         <setter><![CDATA[
-          if (val == this.visible)
+          if (val == this.visible &&
+              this._propagatedVisibilityOnce)
             return val;
 
           this._container.collapsed = !val;
 
           this._propagateVisibility();
+          this._propagatedVisibilityOnce = true;
 
           return val;
         ]]></setter>
@@ -3077,6 +3062,9 @@
         <parameter name="aEvent"/>
         <body><![CDATA[
           switch (aEvent.type) {
+            case "load":
+              this.updateVisibility();
+              break;
             case "resize":
               if (aEvent.target != window)
                 break;
@@ -3772,7 +3760,6 @@
                      role="presentation"/>
           <xul:toolbarbutton anonid="close-button"
                              xbl:inherits="fadein,pinned,selected"
-                             clickthrough="never"
                              class="tab-close-button"/>
         </xul:hbox>
       </xul:stack>
@@ -3794,6 +3781,7 @@
       <field name="mCorrespondingMenuitem">null</field>
       <field name="_fullyOpen">false</field>
       <field name="closing">false</field>
+      <field name="lastAccessed">0</field>
     </implementation>
 
     <handlers>
@@ -4014,8 +4002,10 @@
 
       <property name="label">
         <setter><![CDATA[
-          if (!this.label)
+          if (!this.label) {
             this.removeAttribute("mirror");
+            this.removeAttribute("sizelimit");
+          }
 
           this.style.minWidth = this.getAttribute("type") == "status" &&
                                 this.getAttribute("previoustype") == "status"
@@ -4093,6 +4083,11 @@
             this.removeAttribute("mirror");
           else
             this.setAttribute("mirror", "true");
+
+          if (!this.hasAttribute("sizelimit")) {
+            this.setAttribute("sizelimit", "true");
+            this._calcMouseTargetRect();
+          }
         </body>
       </method>
     </implementation>

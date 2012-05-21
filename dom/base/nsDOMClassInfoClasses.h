@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2000
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Johnny Stenback <jst@netscape.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 DOMCI_CLASS(Window)
 DOMCI_CLASS(Location)
@@ -79,6 +46,9 @@ DOMCI_CLASS(DragEvent)
 DOMCI_CLASS(KeyboardEvent)
 DOMCI_CLASS(CompositionEvent)
 DOMCI_CLASS(PopupBlockedEvent)
+DOMCI_CLASS(DeviceLightEvent)
+DOMCI_CLASS(DeviceProximityEvent)
+DOMCI_CLASS(UserProximityEvent)
 DOMCI_CLASS(DeviceOrientationEvent)
 DOMCI_CLASS(DeviceMotionEvent)
 DOMCI_CLASS(DeviceAcceleration)
@@ -197,8 +167,6 @@ DOMCI_CLASS(ChromeWindow)
 // RGBColor object used by getComputedStyle
 DOMCI_CLASS(CSSRGBColor)
 
-DOMCI_CLASS(RangeException)
-
 // CSSValueList object that represents an nsIDOMCSSValueList, used
 // by DOM CSS
 DOMCI_CLASS(CSSValueList)
@@ -295,6 +263,7 @@ DOMCI_CLASS(SVGTitleElement)
 DOMCI_CLASS(SVGTSpanElement)
 DOMCI_CLASS(SVGUnknownElement)
 DOMCI_CLASS(SVGUseElement)
+DOMCI_CLASS(SVGViewElement)
 
 // other SVG classes
 DOMCI_CLASS(SVGAngle)
@@ -352,6 +321,7 @@ DOMCI_CLASS(CanvasRenderingContext2D)
 DOMCI_CLASS(CanvasGradient)
 DOMCI_CLASS(CanvasPattern)
 DOMCI_CLASS(TextMetrics)
+DOMCI_CLASS(ImageData)
 
 // SmartCard Events
 DOMCI_CLASS(SmartCardEvent)
@@ -375,10 +345,8 @@ DOMCI_CLASS(XPathResult)
 // WhatWG WebApps Objects
 DOMCI_CLASS(StorageObsolete)
 DOMCI_CLASS(Storage)
-DOMCI_CLASS(StorageList)
 DOMCI_CLASS(StorageItem)
 DOMCI_CLASS(StorageEvent)
-DOMCI_CLASS(StorageEventObsolete)
 
 // DOMParser, XMLSerializer
 DOMCI_CLASS(DOMParser)
@@ -403,8 +371,6 @@ DOMCI_CLASS(OfflineResourceList)
 DOMCI_CLASS(FileList)
 DOMCI_CLASS(Blob)
 DOMCI_CLASS(File)
-DOMCI_CLASS(FileException)
-DOMCI_CLASS(FileError)
 DOMCI_CLASS(FileReader)
 DOMCI_CLASS(MozURLProperty)
 DOMCI_CLASS(MozBlobBuilder)
@@ -425,12 +391,12 @@ DOMCI_CLASS(MessageEvent)
 DOMCI_CLASS(GeoGeolocation)
 DOMCI_CLASS(GeoPosition)
 DOMCI_CLASS(GeoPositionCoords)
-DOMCI_CLASS(GeoPositionAddress)
 DOMCI_CLASS(GeoPositionError)
 
 DOMCI_CLASS(MozBatteryManager)
 
 DOMCI_CLASS(MozPowerManager)
+DOMCI_CLASS(MozWakeLock)
 
 DOMCI_CLASS(MozSmsManager)
 DOMCI_CLASS(MozSmsMessage)
@@ -440,6 +406,7 @@ DOMCI_CLASS(MozSmsFilter)
 DOMCI_CLASS(MozSmsCursor)
 
 DOMCI_CLASS(MozConnection)
+DOMCI_CLASS(MozMobileConnection)
 
 // @font-face in CSS
 DOMCI_CLASS(CSSFontFaceRule)
@@ -452,6 +419,9 @@ DOMCI_CLASS(HTMLSourceElement)
 DOMCI_CLASS(MediaError)
 DOMCI_CLASS(HTMLAudioElement)
 DOMCI_CLASS(TimeRanges)
+
+// Media streams
+DOMCI_CLASS(MediaStream)
 #endif
 
 DOMCI_CLASS(ProgressEvent)
@@ -488,6 +458,7 @@ DOMCI_CLASS(WebGLExtension)
 DOMCI_CLASS(WebGLExtensionStandardDerivatives)
 DOMCI_CLASS(WebGLExtensionTextureFilterAnisotropic)
 DOMCI_CLASS(WebGLExtensionLoseContext)
+DOMCI_CLASS(WebGLExtensionCompressedTextureS3TC)
 
 DOMCI_CLASS(PaintRequest)
 DOMCI_CLASS(PaintRequestList)
@@ -523,7 +494,6 @@ DOMCI_CLASS(IDBKeyRange)
 DOMCI_CLASS(IDBIndex)
 DOMCI_CLASS(IDBVersionChangeEvent)
 DOMCI_CLASS(IDBOpenDBRequest)
-DOMCI_CLASS(IDBDatabaseException)
 
 DOMCI_CLASS(Touch)
 DOMCI_CLASS(TouchList)
@@ -534,6 +504,11 @@ DOMCI_CLASS(MozCSSKeyframesRule)
 
 DOMCI_CLASS(MediaQueryList)
 DOMCI_CLASS(CustomEvent)
+
+DOMCI_CLASS(MozMutationObserver)
+DOMCI_CLASS(MutationRecord)
+
+DOMCI_CLASS(MozSettingsEvent)
 
 #ifdef MOZ_B2G_RIL
 DOMCI_CLASS(Telephony)

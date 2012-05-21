@@ -40,15 +40,17 @@ function test()
   testNew();
   testSavedFile();
 
+  gBrowser.selectedTab = gBrowser.addTab();
   content.location = "data:text/html,<p>test scratchpad save file prompt on closing";
 }
 
 function testNew()
 {
   openScratchpad(function(win) {
-    win.Scratchpad.close();
-    ok(win.closed, "new scratchpad window should close without prompting")
-    done();
+    win.Scratchpad.close(function() {
+      ok(win.closed, "new scratchpad window should close without prompting")
+      done();
+    });
   }, {noFocus: true});
 }
 
@@ -56,11 +58,11 @@ function testSavedFile()
 {
   openScratchpad(function(win) {
     win.Scratchpad.filename = "test.js";
-    win.Scratchpad.saved = true;
-    win.Scratchpad.close();
-
-    ok(win.closed, "scratchpad from file with no changes should close")
-    done();
+    win.Scratchpad.editor.dirty = false;
+    win.Scratchpad.close(function() {
+      ok(win.closed, "scratchpad from file with no changes should close")
+      done();
+    });
   }, {noFocus: true});
 }
 
@@ -74,17 +76,16 @@ function testUnsaved()
 function testUnsavedFileCancel()
 {
   openScratchpad(function(win) {
-    win.Scratchpad.filename = "test.js";
-    win.Scratchpad.saved = false;
+    win.Scratchpad.setFilename("test.js");
+    win.Scratchpad.editor.dirty = true;
 
     promptButton = win.BUTTON_POSITION_CANCEL;
 
-    win.Scratchpad.close();
-
-    ok(!win.closed, "cancelling dialog shouldn't close scratchpad");
-
-    win.close();
-    done();
+    win.Scratchpad.close(function() {
+      ok(!win.closed, "cancelling dialog shouldn't close scratchpad");
+      win.close();
+      done();
+    });
   }, {noFocus: true});
 }
 
@@ -92,8 +93,7 @@ function testUnsavedFileSave()
 {
   openScratchpad(function(win) {
     win.Scratchpad.importFromFile(gFile, true, function(status, content) {
-      win.Scratchpad.filename = gFile.path;
-      win.Scratchpad.onTextSaved();
+      win.Scratchpad.setFilename(gFile.path);
 
       let text = "new text";
       win.Scratchpad.setText(text);
@@ -101,13 +101,12 @@ function testUnsavedFileSave()
       promptButton = win.BUTTON_POSITION_SAVE;
 
       win.Scratchpad.close(function() {
+        ok(win.closed, 'pressing "Save" in dialog should close scratchpad');
         readFile(gFile, function(savedContent) {
           is(savedContent, text, 'prompted "Save" worked when closing scratchpad');
           done();
         });
       });
-
-      ok(win.closed, 'pressing "Save" in dialog should close scratchpad');
     });
   }, {noFocus: true});
 }
@@ -115,15 +114,15 @@ function testUnsavedFileSave()
 function testUnsavedFileDontSave()
 {
   openScratchpad(function(win) {
-    win.Scratchpad.filename = gFile.path;
-    win.Scratchpad.saved = false;
+    win.Scratchpad.setFilename(gFile.path);
+    win.Scratchpad.editor.dirty = true;
 
     promptButton = win.BUTTON_POSITION_DONT_SAVE;
 
-    win.Scratchpad.close();
-
-    ok(win.closed, 'pressing "Don\'t Save" in dialog should close scratchpad');
-    done();
+    win.Scratchpad.close(function() {
+      ok(win.closed, 'pressing "Don\'t Save" in dialog should close scratchpad');
+      done();
+    });
   }, {noFocus: true});
 }
 

@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Olli Pettay (Olli.Pettay@helsinki.fi)
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsEventDispatcher.h"
 #include "nsDOMEvent.h"
@@ -53,6 +21,8 @@
 #include "nsDOMHashChangeEvent.h"
 #include "nsFrameLoader.h"
 #include "nsDOMTouchEvent.h"
+#include "nsDOMStorage.h"
+#include "sampler.h"
 
 #define NS_TARGET_CHAIN_FORCE_CONTENT_DISPATCH  (1 << 0)
 #define NS_TARGET_CHAIN_WANTS_WILL_HANDLE_EVENT (1 << 1)
@@ -421,7 +391,7 @@ public:
         static const size_t kBucketSizes[] = { sizeof(nsEventTargetChainItem) };
         static const PRInt32 kNumBuckets = sizeof(kBucketSizes) / sizeof(size_t);
         static const PRInt32 kInitialPoolSize =
-          NS_SIZE_IN_HEAP(sizeof(nsEventTargetChainItem)) * NS_CHAIN_POOL_SIZE;
+          sizeof(nsEventTargetChainItem) * NS_CHAIN_POOL_SIZE;
         nsresult rv = sEtciPool->Init("EventTargetChainItem Pool", kBucketSizes,
                                       kNumBuckets, kInitialPoolSize);
         if (NS_FAILED(rv)) {
@@ -479,6 +449,7 @@ nsEventDispatcher::Dispatch(nsISupports* aTarget,
                             nsDispatchingCallback* aCallback,
                             nsCOMArray<nsIDOMEventTarget>* aTargets)
 {
+  SAMPLE_LABEL("nsEventDispatcher", "Dispatch");
   NS_ASSERTION(aEvent, "Trying to dispatch without nsEvent!");
   NS_ENSURE_TRUE(!NS_IS_EVENT_IN_DISPATCH(aEvent),
                  NS_ERROR_ILLEGAL_VALUE);
@@ -527,17 +498,8 @@ nsEventDispatcher::Dispatch(nsISupports* aTarget,
     if (!nsContentUtils::IsChromeDoc(doc)) {
       nsPIDOMWindow* win = doc ? doc->GetInnerWindow() : nsnull;
       // If we can't dispatch the event to chrome, do nothing.
-      nsIDOMEventTarget* piTarget = win ? win->GetChromeEventHandler() : nsnull;
+      nsIDOMEventTarget* piTarget = win ? win->GetParentTarget() : nsnull;
       NS_ENSURE_TRUE(piTarget, NS_OK);
-
-      nsCOMPtr<nsIFrameLoaderOwner> flo = do_QueryInterface(piTarget);
-      if (flo) {
-        nsRefPtr<nsFrameLoader> fl = flo->GetFrameLoader();
-        if (fl) {
-          nsIDOMEventTarget* t = fl->GetTabChildGlobalAsEventTarget();
-          piTarget = t ? t : piTarget;
-        }
-      }
       
       // Set the target to be the original dispatch target,
       aEvent->target = target;
@@ -913,6 +875,11 @@ nsEventDispatcher::CreateEvent(nsPresContext* aPresContext,
     return NS_NewDOMCustomEvent(aDOMEvent, aPresContext, nsnull);
   if (aEventType.LowerCaseEqualsLiteral("mozsmsevent"))
     return NS_NewDOMSmsEvent(aDOMEvent, aPresContext, nsnull);
+  if (aEventType.LowerCaseEqualsLiteral("storageevent")) {
+    NS_ADDREF(*aDOMEvent = static_cast<nsDOMEvent*>(new nsDOMStorageEvent()));
+    return NS_OK;
+  }
+    
 
   return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
 }

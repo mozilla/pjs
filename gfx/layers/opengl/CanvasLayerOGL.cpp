@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Corporation code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/layers/PLayers.h"
 #include "mozilla/layers/ShadowLayers.h"
@@ -116,7 +84,7 @@ CanvasLayerOGL::Initialize(const Data& aData)
     mCanvasGLContext = aData.mGLContext;
     mGLBufferIsPremultiplied = aData.mGLBufferIsPremultiplied;
 
-    mNeedsYFlip = true;
+    mNeedsYFlip = mCanvasGLContext->GetOffscreenTexture() != 0;
   } else {
     NS_WARNING("CanvasLayerOGL::Initialize called without surface or GL context!");
     return;
@@ -178,6 +146,8 @@ CanvasLayerOGL::UpdateSurface()
   if (mCanvasGLContext &&
       mCanvasGLContext->GetContextType() == gl()->GetContextType())
   {
+    DiscardTempSurface();
+
     // Can texture share, just make sure it's resolved first
     mCanvasGLContext->MakeCurrent();
     mCanvasGLContext->GuaranteeResolve();
@@ -190,6 +160,7 @@ CanvasLayerOGL::UpdateSurface()
     }
   } else {
     nsRefPtr<gfxASurface> updatedAreaSurface;
+
     if (mDrawTarget) {
       // TODO: This is suboptimal - We should have direct handling for the surface types instead of
       // going via a gfxASurface.
@@ -197,23 +168,24 @@ CanvasLayerOGL::UpdateSurface()
     } else if (mCanvasSurface) {
       updatedAreaSurface = mCanvasSurface;
     } else if (mCanvasGLContext) {
+      gfxIntSize size(mBounds.width, mBounds.height);
       nsRefPtr<gfxImageSurface> updatedAreaImageSurface =
-        new gfxImageSurface(gfxIntSize(mBounds.width, mBounds.height),
-                            gfxASurface::ImageFormatARGB32);
+        GetTempSurface(size, gfxASurface::ImageFormatARGB32);
+
       mCanvasGLContext->ReadPixelsIntoImageSurface(0, 0,
                                                    mBounds.width,
                                                    mBounds.height,
                                                    updatedAreaImageSurface);
+
       updatedAreaSurface = updatedAreaImageSurface;
     }
 
     mOGLManager->MakeCurrent();
-    mLayerProgram =
-      gl()->UploadSurfaceToTexture(updatedAreaSurface,
-                                   mBounds,
-                                   mTexture,
-                                   false,
-                                   nsIntPoint(0, 0));
+    mLayerProgram = gl()->UploadSurfaceToTexture(updatedAreaSurface,
+                                                 mBounds,
+                                                 mTexture,
+                                                 false,
+                                                 nsIntPoint(0, 0));
   }
 }
 
@@ -236,7 +208,7 @@ CanvasLayerOGL::RenderLayer(int aPreviousDestination,
     gl()->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
   }
 
-  ColorTextureLayerProgram *program = nsnull;
+  ShaderProgramOGL *program = nsnull;
 
   bool useGLContext = mCanvasGLContext &&
     mCanvasGLContext->GetContextType() == gl()->GetContextType();
@@ -245,7 +217,9 @@ CanvasLayerOGL::RenderLayer(int aPreviousDestination,
 
   if (useGLContext) {
     gl()->BindTex2DOffscreen(mCanvasGLContext);
-    program = mOGLManager->GetBasicLayerProgram(CanUseOpaqueSurface(), true);
+    program = mOGLManager->GetBasicLayerProgram(CanUseOpaqueSurface(),
+                                                true,
+                                                GetMaskLayer() ? Mask2d : MaskNone);
   } else if (mDelayedUpdates) {
     NS_ABORT_IF_FALSE(mCanvasSurface || mDrawTarget, "WebGL canvases should always be using full texture upload");
     
@@ -265,7 +239,7 @@ CanvasLayerOGL::RenderLayer(int aPreviousDestination,
   }
 
   if (!program) {
-    program = mOGLManager->GetColorTextureLayerProgram(mLayerProgram);
+    program = mOGLManager->GetProgram(mLayerProgram, GetMaskLayer());
   }
 
 #if defined(MOZ_WIDGET_GTK2) && !defined(MOZ_PLATFORM_MAEMO)
@@ -282,8 +256,13 @@ CanvasLayerOGL::RenderLayer(int aPreviousDestination,
   program->SetLayerOpacity(GetEffectiveOpacity());
   program->SetRenderOffset(aOffset);
   program->SetTextureUnit(0);
+  program->LoadMask(GetMaskLayer());
 
-  mOGLManager->BindAndDrawQuad(program, mNeedsYFlip ? true : false);
+  if (gl()->CanUploadNonPowerOfTwo()) {
+    mOGLManager->BindAndDrawQuad(program, mNeedsYFlip ? true : false);
+  } else {
+    mOGLManager->BindAndDrawQuadWithTextureRect(program, drawRect, drawRect.Size());
+  }
 
 #if defined(MOZ_WIDGET_GTK2) && !defined(MOZ_PLATFORM_MAEMO)
   if (mPixmap && !mDelayedUpdates) {
@@ -300,9 +279,8 @@ void
 CanvasLayerOGL::CleanupResources()
 {
   if (mTexture) {
-    GLContext* cx = mOGLManager->glForResources();
-    cx->MakeCurrent();
-    cx->fDeleteTextures(1, &mTexture);
+    gl()->MakeCurrent();
+    gl()->fDeleteTextures(1, &mTexture);
   }
 }
 
@@ -329,10 +307,12 @@ ShadowCanvasLayerOGL::Init(const CanvasSurface& aNewFront, bool needYFlip)
 {
   nsRefPtr<gfxASurface> surf = ShadowLayerForwarder::OpenDescriptor(aNewFront);
 
+  mNeedsYFlip = needYFlip;
+
   mTexImage = gl()->CreateTextureImage(surf->GetSize(),
                                        surf->GetContentType(),
-                                       LOCAL_GL_CLAMP_TO_EDGE);
-  mNeedsYFlip = needYFlip;
+                                       LOCAL_GL_CLAMP_TO_EDGE,
+                                       mNeedsYFlip ? TextureImage::NeedsYFlip : TextureImage::NoFlags);
 }
 
 void
@@ -387,8 +367,9 @@ ShadowCanvasLayerOGL::RenderLayer(int aPreviousFrameBuffer,
 {
   mOGLManager->MakeCurrent();
 
-  ColorTextureLayerProgram *program =
-    mOGLManager->GetColorTextureLayerProgram(mTexImage->GetShaderProgramType());
+  ShaderProgramOGL *program =
+    mOGLManager->GetProgram(mTexImage->GetShaderProgramType(),
+                            GetMaskLayer());
 
 
   gfx3DMatrix effectiveTransform = GetEffectiveTransform();
@@ -413,13 +394,32 @@ ShadowCanvasLayerOGL::RenderLayer(int aPreviousFrameBuffer,
   program->SetLayerOpacity(GetEffectiveOpacity());
   program->SetRenderOffset(aOffset);
   program->SetTextureUnit(0);
+  program->LoadMask(GetMaskLayer());
 
   mTexImage->BeginTileIteration();
-  do {
-    TextureImage::ScopedBindTextureAndApplyFilter texBind(mTexImage, LOCAL_GL_TEXTURE0);
-    program->SetLayerQuadRect(mTexImage->GetTileRect());
-    mOGLManager->BindAndDrawQuad(program, mNeedsYFlip); // FIXME flip order of tiles?
-  } while (mTexImage->NextTile());
+  if (gl()->CanUploadNonPowerOfTwo()) {
+    do {
+      TextureImage::ScopedBindTextureAndApplyFilter texBind(mTexImage, LOCAL_GL_TEXTURE0);
+      program->SetLayerQuadRect(mTexImage->GetTileRect());
+      mOGLManager->BindAndDrawQuad(program, mNeedsYFlip); // FIXME flip order of tiles?
+    } while (mTexImage->NextTile());
+  } else {
+    do {
+      TextureImage::ScopedBindTextureAndApplyFilter texBind(mTexImage, LOCAL_GL_TEXTURE0);
+      program->SetLayerQuadRect(mTexImage->GetTileRect());
+      // We can't use BindAndDrawQuad because that always uploads the whole texture from 0.0f -> 1.0f
+      // in x and y. We use BindAndDrawQuadWithTextureRect to actually draw a subrect of the texture
+      // We need to reset the origin to 0,0 from the tile rect because the tile originates at 0,0 in the
+      // actual texture, even though its origin in the composed (tiled) texture is not 0,0
+      // FIXME: we need to handle mNeedsYFlip, Bug #728625
+      mOGLManager->BindAndDrawQuadWithTextureRect(program,
+                                                  nsIntRect(0, 0, mTexImage->GetTileRect().width,
+                                                                  mTexImage->GetTileRect().height),
+                                                  mTexImage->GetTileRect().Size(),
+                                                  mTexImage->GetWrapMode(),
+                                                  mNeedsYFlip);
+    } while (mTexImage->NextTile());
+  }
 }
 
 void

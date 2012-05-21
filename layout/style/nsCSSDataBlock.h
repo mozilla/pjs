@@ -1,39 +1,7 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is nsCSSDataBlock.h.
- *
- * The Initial Developer of the Original Code is L. David Baron.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   L. David Baron <dbaron@dbaron.org> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * compact representation of the property-value pairs within a CSS
@@ -55,16 +23,6 @@ class Declaration;
 }
 }
 
-/*
- * nsCSSCompressedDataBlock holds property-value pairs corresponding
- * to CSS declaration blocks.  Each pair is stored in a CDBValueStorage
- * object; these objects form an array at the end of the data block.
- */
-struct CDBValueStorage {
-    nsCSSProperty property;
-    nsCSSValue value;
-};
-
 /**
  * An |nsCSSCompressedDataBlock| holds a usually-immutable chunk of
  * property-value data for a CSS declaration block (which we misname a
@@ -77,7 +35,9 @@ private:
 
     // Only this class (via |CreateEmptyBlock|) or nsCSSExpandedDataBlock
     // (in |Compress|) can create compressed data blocks.
-    nsCSSCompressedDataBlock() : mStyleBits(0) {}
+    nsCSSCompressedDataBlock(PRUint32 aNumProps)
+      : mStyleBits(0), mNumProps(aNumProps)
+    {}
 
 public:
     ~nsCSSCompressedDataBlock();
@@ -124,47 +84,87 @@ public:
     size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
 
 private:
-    void* operator new(size_t aBaseSize, size_t aDataSize) {
+    void* operator new(size_t aBaseSize, PRUint32 aNumProps) {
         NS_ABORT_IF_FALSE(aBaseSize == sizeof(nsCSSCompressedDataBlock),
                           "unexpected size for nsCSSCompressedDataBlock");
-        return ::operator new(aBaseSize + aDataSize);
+        return ::operator new(aBaseSize + DataSize(aNumProps));
     }
 
-    /**
-     * Delete all the data stored in this block, and the block itself.
-     */
-    void Destroy();
+public:
+    // Ideally, |nsCSSProperty| would be |enum nsCSSProperty : PRInt16|.  But
+    // not all of the compilers we use are modern enough to support small
+    // enums.  So we manually squeeze nsCSSProperty into 16 bits ourselves.
+    // The static assertion below ensures it fits.
+    typedef PRInt16 CompressedCSSProperty;
+    static const size_t MaxCompressedCSSProperty = PR_INT16_MAX;
+
+private:
+    static size_t DataSize(PRUint32 aNumProps) {
+        return size_t(aNumProps) *
+               (sizeof(nsCSSValue) + sizeof(CompressedCSSProperty));
+    }
 
     PRInt32 mStyleBits; // the structs for which we have data, according to
                         // |nsCachedStyleData::GetBitForSID|.
-    PRUint32 mDataSize;
-    // CDBValueStorage elements are stored after these fields.  Space for them
+    PRUint32 mNumProps;
+    // nsCSSValue elements are stored after these fields, and
+    // nsCSSProperty elements are stored -- each one compressed as a
+    // CompressedCSSProperty -- after the nsCSSValue elements.  Space for them
     // is allocated in |operator new| above.  The static assertions following
-    // this class make sure that the CDBValueStorage elements are aligned
+    // this class make sure that the value and property elements are aligned
     // appropriately.
-    
-    char* Block() { return (char*)this + sizeof(*this); }
-    char* BlockEnd() { return Block() + mDataSize; }
-    const char* Block() const { return (char*)this + sizeof(*this); }
-    const char* BlockEnd() const { return Block() + mDataSize; }
-    void SetBlockEnd(char *blockEnd) { 
-        /*
-         * Note:  if we ever change nsCSSDeclaration to store the declarations
-         * in order and also store repeated declarations of the same property,
-         * then we need to worry about checking for integer overflow here.
-         */
-        NS_ABORT_IF_FALSE(size_t(blockEnd - Block()) <= size_t(PR_UINT32_MAX),
-                          "overflow of mDataSize");
-        mDataSize = PRUint32(blockEnd - Block());
+
+    nsCSSValue* Values() const {
+        return (nsCSSValue*)(this + 1);
     }
-    ptrdiff_t DataSize() const { return mDataSize; }
+
+    CompressedCSSProperty* CompressedProperties() const {
+        return (CompressedCSSProperty*)(Values() + mNumProps);
+    }
+
+    nsCSSValue* ValueAtIndex(PRUint32 i) const {
+        NS_ABORT_IF_FALSE(i < mNumProps, "value index out of range");
+        return Values() + i;
+    }
+
+    nsCSSProperty PropertyAtIndex(PRUint32 i) const {
+        NS_ABORT_IF_FALSE(i < mNumProps, "property index out of range");
+        nsCSSProperty prop = (nsCSSProperty)CompressedProperties()[i];
+        NS_ABORT_IF_FALSE(!nsCSSProps::IsShorthand(prop), "out of range");
+        return prop;
+    }
+
+    void CopyValueToIndex(PRUint32 i, nsCSSValue* aValue) {
+        new (ValueAtIndex(i)) nsCSSValue(*aValue);
+    }
+
+    void RawCopyValueToIndex(PRUint32 i, nsCSSValue* aValue) {
+        memcpy(ValueAtIndex(i), aValue, sizeof(nsCSSValue));
+    }
+
+    void SetPropertyAtIndex(PRUint32 i, nsCSSProperty aProperty) {
+        NS_ABORT_IF_FALSE(i < mNumProps, "set property index out of range");
+        CompressedProperties()[i] = (CompressedCSSProperty)aProperty;
+    }
+
+    void SetNumPropsToZero() {
+        mNumProps = 0;
+    }
 };
 
-/* Make sure the CDBValueStorage elements are aligned appropriately. */
+// Make sure the values and properties are aligned appropriately.  (These
+// assertions are stronger than necessary to keep them simple.)
 MOZ_STATIC_ASSERT(sizeof(nsCSSCompressedDataBlock) == 8,
                   "nsCSSCompressedDataBlock's size has changed");
-MOZ_STATIC_ASSERT(NS_ALIGNMENT_OF(CDBValueStorage) <= 8,
-                  "CDBValueStorage needs too much alignment");
+MOZ_STATIC_ASSERT(NS_ALIGNMENT_OF(nsCSSValue) == 4 || NS_ALIGNMENT_OF(nsCSSValue) == 8,
+                  "nsCSSValue doesn't align with nsCSSCompressedDataBlock"); 
+MOZ_STATIC_ASSERT(NS_ALIGNMENT_OF(nsCSSCompressedDataBlock::CompressedCSSProperty) == 2,
+                  "CompressedCSSProperty doesn't align with nsCSSValue"); 
+
+// Make sure that sizeof(CompressedCSSProperty) is big enough.
+MOZ_STATIC_ASSERT(eCSSProperty_COUNT_no_shorthands <=
+                  nsCSSCompressedDataBlock::MaxCompressedCSSProperty,
+                  "nsCSSProperty doesn't fit in StoredSizeOfCSSProperty");
 
 class nsCSSExpandedDataBlock {
     friend class nsCSSCompressedDataBlock;
@@ -251,14 +251,12 @@ public:
 
 private:
     /**
-     * Compute the size that will be occupied by the result of
-     * |Compress|.
+     * Compute the number of properties that will be present in the
+     * result of |Compress|.
      */
-    struct ComputeSizeResult {
-        PRUint32 normal, important;
-    };
-    ComputeSizeResult ComputeSize();
-
+    void ComputeNumProps(PRUint32* aNumPropsNormal,
+                         PRUint32* aNumPropsImportant);
+    
     void DoExpand(nsCSSCompressedDataBlock *aBlock, bool aImportant);
 
     /**

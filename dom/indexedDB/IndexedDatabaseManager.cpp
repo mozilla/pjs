@@ -1,47 +1,17 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Indexed Database.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "base/basictypes.h"
 
 #include "IndexedDatabaseManager.h"
 #include "DatabaseInfo.h"
 
 #include "nsIDOMScriptObjectFactory.h"
 #include "nsIFile.h"
+#include "nsILocalFile.h"
 #include "nsIObserverService.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptSecurityManager.h"
@@ -53,7 +23,10 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/storage.h"
+#include "mozilla/dom/ContentChild.h"
+#include "nsAppDirectoryServiceDefs.h"
 #include "nsContentUtils.h"
+#include "nsDirectoryServiceUtils.h"
 #include "nsThreadUtils.h"
 #include "nsXPCOM.h"
 #include "nsXPCOMPrivate.h"
@@ -119,7 +92,7 @@ GetBaseFilename(const nsAString& aFilename,
   return true;
 }
 
-class QuotaCallback : public mozIStorageQuotaCallback
+class QuotaCallback MOZ_FINAL : public mozIStorageQuotaCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -222,12 +195,9 @@ IndexedDatabaseManager::GetOrCreate()
 
     instance = new IndexedDatabaseManager();
 
-    if (!instance->mLiveDatabases.Init() ||
-        !instance->mQuotaHelperHash.Init() ||
-        !instance->mFileManagers.Init()) {
-      NS_WARNING("Out of memory!");
-      return nsnull;
-    }
+    instance->mLiveDatabases.Init();
+    instance->mQuotaHelperHash.Init();
+    instance->mFileManagers.Init();
 
     // We need a thread-local to hold the current window.
     NS_ASSERTION(instance->mCurrentWindowIndex == BAD_TLS_INDEX, "Huh?");
@@ -239,6 +209,18 @@ IndexedDatabaseManager::GetOrCreate()
       return nsnull;
     }
 
+    nsCOMPtr<nsIFile> dbBaseDirectory;
+    nsresult rv =
+      NS_GetSpecialDirectory(NS_APP_USER_PROFILE_50_DIR,
+                             getter_AddRefs(dbBaseDirectory));
+    NS_ENSURE_SUCCESS(rv, nsnull);
+
+    rv = dbBaseDirectory->Append(NS_LITERAL_STRING("indexedDB"));
+    NS_ENSURE_SUCCESS(rv, nsnull);
+
+    rv = dbBaseDirectory->GetPath(instance->mDatabaseBasePath);
+    NS_ENSURE_SUCCESS(rv, nsnull);
+
     // Make a timer here to avoid potential failures later. We don't actually
     // initialize the timer until shutdown.
     instance->mShutdownTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
@@ -248,8 +230,7 @@ IndexedDatabaseManager::GetOrCreate()
     NS_ENSURE_TRUE(obs, nsnull);
 
     // We need this callback to know when to shut down all our threads.
-    nsresult rv = obs->AddObserver(instance, NS_XPCOM_SHUTDOWN_OBSERVER_ID,
-                                   false);
+    rv = obs->AddObserver(instance, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
     NS_ENSURE_SUCCESS(rv, nsnull);
 
     // Make a lazy thread for any IO we need (like clearing or enumerating the
@@ -284,6 +265,32 @@ IndexedDatabaseManager::FactoryCreate()
   return GetOrCreate().get();
 }
 
+nsresult
+IndexedDatabaseManager::GetDirectoryForOrigin(const nsACString& aASCIIOrigin,
+                                              nsIFile** aDirectory) const
+{
+  nsresult rv;
+  nsCOMPtr<nsILocalFile> directory =
+    do_CreateInstance(NS_LOCAL_FILE_CONTRACTID, &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  const nsString& path = XRE_GetProcessType() == GeckoProcessType_Default ?
+                         GetBaseDirectory() :
+                         ContentChild::GetSingleton()->GetIndexedDBPath();
+
+  rv = directory->InitWithPath(path);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  NS_ConvertASCIItoUTF16 originSanitized(aASCIIOrigin);
+  originSanitized.ReplaceChar(":/", '+');
+
+  rv = directory->Append(originSanitized);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  directory.forget(reinterpret_cast<nsILocalFile**>(aDirectory));
+  return NS_OK;
+}
+
 bool
 IndexedDatabaseManager::RegisterDatabase(IDBDatabase* aDatabase)
 {
@@ -299,10 +306,7 @@ IndexedDatabaseManager::RegisterDatabase(IDBDatabase* aDatabase)
   nsTArray<IDBDatabase*>* array;
   if (!mLiveDatabases.Get(aDatabase->Origin(), &array)) {
     nsAutoPtr<nsTArray<IDBDatabase*> > newArray(new nsTArray<IDBDatabase*>());
-    if (!mLiveDatabases.Put(aDatabase->Origin(), newArray)) {
-      NS_WARNING("Out of memory?");
-      return false;
-    }
+    mLiveDatabases.Put(aDatabase->Origin(), newArray);
     array = newArray.forget();
   }
   if (!array->AppendElement(aDatabase)) {
@@ -631,8 +635,7 @@ IndexedDatabaseManager::EnsureOriginIsInitialized(const nsACString& aOrigin,
 #endif
 
   nsCOMPtr<nsIFile> directory;
-  nsresult rv = IDBFactory::GetDirectoryForOrigin(aOrigin,
-                                                  getter_AddRefs(directory));
+  nsresult rv = GetDirectoryForOrigin(aOrigin, getter_AddRefs(directory));
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool exists;
@@ -688,7 +691,7 @@ IndexedDatabaseManager::EnsureOriginIsInitialized(const nsACString& aOrigin,
     new nsTArray<nsRefPtr<FileManager> >());
 
   nsTHashtable<nsStringHashKey> validSubdirs;
-  NS_ENSURE_TRUE(validSubdirs.Init(20), NS_ERROR_OUT_OF_MEMORY);
+  validSubdirs.Init(20);
   
   nsCOMPtr<nsISimpleEnumerator> entries;
   rv = directory->GetDirectoryEntries(getter_AddRefs(entries));
@@ -766,10 +769,7 @@ IndexedDatabaseManager::EnsureOriginIsInitialized(const nsACString& aOrigin,
     rv = ss->UpdateQuotaInformationForFile(file);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!validSubdirs.PutEntry(dbBaseFilename)) {
-      NS_WARNING("Out of memory?");
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
+    validSubdirs.PutEntry(dbBaseFilename);
   }
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -802,11 +802,7 @@ IndexedDatabaseManager::EnsureOriginIsInitialized(const nsACString& aOrigin,
     }
   }
 
-  if (!mFileManagers.Put(aOrigin, fileManagers)) {
-    NS_WARNING("Out of memory?");
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
+  mFileManagers.Put(aOrigin, fileManagers);
   fileManagers.forget();
 
   NS_ADDREF(*aDirectory = directory);
@@ -836,8 +832,7 @@ IndexedDatabaseManager::QuotaIsLiftedInternal()
     helper = new CheckQuotaHelper(window, mQuotaHelperMutex);
     createdHelper = true;
 
-    bool result = mQuotaHelperHash.Put(window, helper);
-    NS_ENSURE_TRUE(result, result);
+    mQuotaHelperHash.Put(window, helper);
 
     // Unlock while calling out to XPCOM
     {
@@ -924,10 +919,7 @@ IndexedDatabaseManager::GetOrCreateFileManager(const nsACString& aOrigin,
   if (!mFileManagers.Get(aOrigin, &array)) {
     nsAutoPtr<nsTArray<nsRefPtr<FileManager> > > newArray(
       new nsTArray<nsRefPtr<FileManager> >());
-    if (!mFileManagers.Put(aOrigin, newArray)) {
-      NS_WARNING("Out of memory?");
-      return nsnull;
-    }
+    mFileManagers.Put(aOrigin, newArray);
     array = newArray.forget();
   }
 
@@ -1282,6 +1274,9 @@ NS_IMPL_THREADSAFE_ISUPPORTS1(IndexedDatabaseManager::OriginClearRunnable,
 NS_IMETHODIMP
 IndexedDatabaseManager::OriginClearRunnable::Run()
 {
+  IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get();
+  NS_ASSERTION(mgr, "This should never fail!");
+
   if (NS_IsMainThread()) {
     // On the first time on the main thread we dispatch to the IO thread.
     if (mFirstCallback) {
@@ -1303,9 +1298,6 @@ IndexedDatabaseManager::OriginClearRunnable::Run()
 
     NS_ASSERTION(!mThread, "Should have been cleared already!");
 
-    IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get();
-    NS_ASSERTION(mgr, "This should never fail!");
-
     mgr->InvalidateFileManagersForOrigin(mOrigin);
 
     // Tell the IndexedDatabaseManager that we're done.
@@ -1318,8 +1310,7 @@ IndexedDatabaseManager::OriginClearRunnable::Run()
 
   // Remove the directory that contains all our databases.
   nsCOMPtr<nsIFile> directory;
-  nsresult rv = IDBFactory::GetDirectoryForOrigin(mOrigin,
-                                                  getter_AddRefs(directory));
+  nsresult rv = mgr->GetDirectoryForOrigin(mOrigin, getter_AddRefs(directory));
   if (NS_SUCCEEDED(rv)) {
     bool exists;
     rv = directory->Exists(&exists);
@@ -1377,6 +1368,9 @@ IncrementUsage(PRUint64* aUsage, PRUint64 aDelta)
 nsresult
 IndexedDatabaseManager::AsyncUsageRunnable::RunInternal()
 {
+  IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get();
+  NS_ASSERTION(mgr, "This should never fail!");
+
   if (NS_IsMainThread()) {
     // Call the callback unless we were canceled.
     if (!mCanceled) {
@@ -1390,10 +1384,7 @@ IndexedDatabaseManager::AsyncUsageRunnable::RunInternal()
     mCallback = nsnull;
 
     // And tell the IndexedDatabaseManager that we're done.
-    IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get();
-    if (mgr) {
-      mgr->OnUsageCheckComplete(this);
-    }
+    mgr->OnUsageCheckComplete(this);
 
     return NS_OK;
   }
@@ -1404,8 +1395,7 @@ IndexedDatabaseManager::AsyncUsageRunnable::RunInternal()
 
   // Get the directory that contains all the database files we care about.
   nsCOMPtr<nsIFile> directory;
-  nsresult rv = IDBFactory::GetDirectoryForOrigin(mOrigin,
-                                                  getter_AddRefs(directory));
+  nsresult rv = mgr->GetDirectoryForOrigin(mOrigin, getter_AddRefs(directory));
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool exists;

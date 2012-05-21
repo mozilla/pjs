@@ -13,14 +13,14 @@ function test() {
     gTab = aTab;
     gDebuggee = aDebuggee;
     gPane = aPane;
-    gDebugger = gPane.debuggerWindow;
+    gDebugger = gPane.contentWindow;
 
     testSimpleCall();
   });
 }
 
 function testSimpleCall() {
-  gPane.activeThread.addOneTimeListener("framesadded", function() {
+  gDebugger.DebuggerController.activeThread.addOneTimeListener("framesadded", function() {
     Services.tm.currentThread.dispatch({ run: function() {
 
       let testScope = gDebugger.DebuggerView.Properties._addScope("test");
@@ -116,16 +116,19 @@ function testSimpleCall() {
       ok(!testScope.expanded,
         "Clicking again the testScope tilte should collapse it.");
 
-      resumeAndFinish();
+      gDebugger.DebuggerController.activeThread.resume(function() {
+        closeDebuggerAndFinish(gTab);
+      });
     }}, 0);
   });
 
   gDebuggee.simpleCall();
 }
 
-function resumeAndFinish() {
-  gDebugger.StackFrames.activeThread.resume(function() {
-    removeTab(gTab);
-    finish();
-  });
-}
+registerCleanupFunction(function() {
+  removeTab(gTab);
+  gPane = null;
+  gTab = null;
+  gDebuggee = null;
+  gDebugger = null;
+});

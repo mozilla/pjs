@@ -1,61 +1,24 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: ML 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *  Chris Pearce <chris@pearce.org.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #if !defined(nsBuiltinDecoderReader_h_)
 #define nsBuiltinDecoderReader_h_
 
 #include <nsDeque.h>
-#include "Layers.h"
 #include "ImageLayers.h"
-#include "nsClassHashtable.h"
-#include "mozilla/TimeStamp.h"
 #include "nsSize.h"
-#include "nsRect.h"
 #include "mozilla/ReentrantMonitor.h"
-
-class nsBuiltinDecoderStateMachine;
+#include "MediaStreamGraph.h"
+#include "SharedBuffer.h"
 
 // Stores info relevant to presenting media frames.
 class nsVideoInfo {
 public:
   nsVideoInfo()
-    : mAudioRate(0),
-      mAudioChannels(0),
+    : mAudioRate(44100),
+      mAudioChannels(2),
       mDisplay(0,0),
       mStereoMode(mozilla::layers::STEREO_MODE_MONO),
       mHasAudio(false),
@@ -119,6 +82,8 @@ typedef float AudioDataValue;
 // Holds chunk a decoded audio frames.
 class AudioData {
 public:
+  typedef mozilla::SharedBuffer SharedBuffer;
+
   AudioData(PRInt64 aOffset,
             PRInt64 aTime,
             PRInt64 aDuration,
@@ -140,6 +105,11 @@ public:
     MOZ_COUNT_DTOR(AudioData);
   }
 
+  // If mAudioBuffer is null, creates it from mAudioData.
+  void EnsureAudioBuffer();
+
+  PRInt64 GetEnd() { return mTime + mDuration; }
+
   // Approximate byte offset of the end of the page on which this chunk
   // ends.
   const PRInt64 mOffset;
@@ -148,6 +118,10 @@ public:
   const PRInt64 mDuration; // In usecs.
   const PRUint32 mFrames;
   const PRUint32 mChannels;
+  // At least one of mAudioBuffer/mAudioData must be non-null.
+  // mChannels channels, each with mFrames frames
+  nsRefPtr<SharedBuffer> mAudioBuffer;
+  // mFrames frames, each with mChannels values
   nsAutoArrayPtr<AudioDataValue> mAudioData;
 };
 
@@ -203,6 +177,8 @@ public:
   {
     MOZ_COUNT_DTOR(VideoData);
   }
+
+  PRInt64 GetEnd() { return mEndTime; }
 
   // Dimensions at which to display the video frame. The picture region
   // will be scaled to this size. This is should be the picture region's
@@ -376,6 +352,25 @@ template <class T> class MediaQueue : private nsDeque {
     ForEach(aFunctor);
   }
 
+  // Extracts elements from the queue into aResult, in order.
+  // Elements whose start time is before aTime are ignored.
+  void GetElementsAfter(PRInt64 aTime, nsTArray<T*>* aResult) {
+    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    if (!GetSize())
+      return;
+    PRInt32 i;
+    for (i = GetSize() - 1; i > 0; --i) {
+      T* v = static_cast<T*>(ObjectAt(i));
+      if (v->GetEnd() < aTime)
+        break;
+    }
+    // Elements less than i have a end time before aTime. It's also possible
+    // that the element at i has a end time before aTime, but that's OK.
+    for (; i < GetSize(); ++i) {
+      aResult->AppendElement(static_cast<T*>(ObjectAt(i)));
+    }
+  }
+
 private:
   mutable ReentrantMonitor mReentrantMonitor;
 
@@ -395,7 +390,7 @@ public:
   typedef mozilla::VideoFrameContainer VideoFrameContainer;
 
   nsBuiltinDecoderReader(nsBuiltinDecoder* aDecoder);
-  ~nsBuiltinDecoderReader();
+  virtual ~nsBuiltinDecoderReader();
 
   // Initializes the reader, returns NS_OK on success, or NS_ERROR_FAILURE
   // on failure.
@@ -414,7 +409,7 @@ public:
   // than aTimeThreshold will be decoded (unless they're not keyframes
   // and aKeyframeSkip is true), but will not be added to the queue.
   virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
-                                  PRInt64 aTimeThreshold) = 0;
+                                PRInt64 aTimeThreshold) = 0;
 
   virtual bool HasAudio() = 0;
   virtual bool HasVideo() = 0;
@@ -451,6 +446,9 @@ public:
   // should only be called on the main thread.
   virtual nsresult GetBuffered(nsTimeRanges* aBuffered,
                                PRInt64 aStartTime) = 0;
+
+  // True if we can seek using only buffered ranges. This is backend dependant.
+  virtual bool IsSeekableInBufferedRanges() = 0;
 
   class VideoQueueMemoryFunctor : public nsDequeFunctor {
   public:

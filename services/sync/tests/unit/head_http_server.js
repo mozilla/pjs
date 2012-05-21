@@ -4,7 +4,7 @@ const TEST_CLUSTER_URL = "http://localhost:8080/";
 const TEST_SERVER_URL  = "http://localhost:8080/";
 
 // Shared logging for all HTTP server functions.
-Cu.import("resource://services-sync/log4moz.js");
+Cu.import("resource://services-common/log4moz.js");
 const SYNC_HTTP_LOGGER = "Sync.Test.Server";
 const SYNC_API_VERSION = "1.1";
 
@@ -26,46 +26,17 @@ function return_timestamp(request, response, timestamp) {
   return timestamp;
 }
 
-function httpd_setup (handlers, port) {
-  let port   = port || 8080;
-  let server = new nsHttpServer();
-  for (let path in handlers) {
-    server.registerPathHandler(path, handlers[path]);
-  }
-  try {
-    server.start(port);
-  } catch (ex) {
-    _("==========================================");
-    _("Got exception starting HTTP server on port " + port);
-    _("Error: " + Utils.exceptionStr(ex));
-    _("Is there a process already listening on port " + port + "?");
-    _("==========================================");
-    do_throw(ex);
-  }
-
-  return server;
-}
-
-function httpd_handler(statusCode, status, body) {
-  return function handler(request, response) {
-    // Allow test functions to inspect the request.
-    request.body = readBytesFromInputStream(request.bodyInputStream);
-    handler.request = request;
-
-    response.setStatusLine(request.httpVersion, statusCode, status);
-    if (body) {
-      response.bodyOutputStream.write(body, body.length);
-    }
-  };
-}
-
 function basic_auth_header(user, password) {
   return "Basic " + btoa(user + ":" + Utils.encodeUTF8(password));
 }
 
 function basic_auth_matches(req, user, password) {
-  return req.hasHeader("Authorization") &&
-         (req.getHeader("Authorization") == basic_auth_header(user, password));
+  if (!req.hasHeader("Authorization")) {
+    return false;
+  }
+
+  let expected = basic_auth_header(user, Utils.encodeUTF8(password));
+  return req.getHeader("Authorization") == expected;
 }
 
 function httpd_basic_auth_handler(body, metadata, response) {
@@ -78,21 +49,6 @@ function httpd_basic_auth_handler(body, metadata, response) {
     response.setHeader("WWW-Authenticate", 'Basic realm="secret"', false);
   }
   response.bodyOutputStream.write(body, body.length);
-}
-
-/*
- * Read bytes string from an nsIInputStream.  If 'count' is omitted,
- * all available input is read.
- */
-function readBytesFromInputStream(inputStream, count) {
-  var BinaryInputStream = Components.Constructor(
-      "@mozilla.org/binaryinputstream;1",
-      "nsIBinaryInputStream",
-      "setInputStream");
-  if (!count) {
-    count = inputStream.available();
-  }
-  return new BinaryInputStream(inputStream).readBytes(count);
 }
 
 /*
@@ -293,6 +249,16 @@ ServerCollection.prototype = {
    */
   insert: function insert(id, payload, modified) {
     return this.insertWBO(new ServerWBO(id, payload, modified));
+  },
+
+  /**
+   * Removes an object entirely from the collection.
+   *
+   * @param id
+   *        (string) ID to remove.
+   */
+  remove: function remove(id) {
+    delete this._wbos[id];
   },
 
   _inResultSet: function(wbo, options) {
@@ -514,7 +480,8 @@ function track_collections_helper() {
       default:
         throw "Non-GET on info_collections.";
     }
-        
+
+    response.setHeader("Content-Type", "application/json");
     response.setHeader("X-Weave-Timestamp",
                        "" + new_timestamp(),
                        false);
@@ -543,7 +510,15 @@ function track_collections_helper() {
  */
 let SyncServerCallback = {
   onCollectionDeleted: function onCollectionDeleted(user, collection) {},
-  onItemDeleted: function onItemDeleted(user, collection, wboID) {}
+  onItemDeleted: function onItemDeleted(user, collection, wboID) {},
+
+  /**
+   * Called at the top of every request.
+   *
+   * Allows the test to inspect the request. Hooks should be careful not to
+   * modify or change state of the request or they may impact future processing.
+   */
+  onRequest: function onRequest(request) {},
 };
 
 /**
@@ -808,7 +783,24 @@ SyncServer.prototype = {
    * TODO: check username in path against username in BasicAuth. 
    */
   handleDefault: function handleDefault(handler, req, resp) {
+    try {
+      this._handleDefault(handler, req, resp);
+    } catch (e) {
+      if (e instanceof HttpError) {
+        this.respond(req, resp, e.code, e.description, "", {});
+      } else {
+        throw e;
+      }
+    }
+  },
+
+  _handleDefault: function _handleDefault(handler, req, resp) {
     this._log.debug("SyncServer: Handling request: " + req.method + " " + req.path);
+
+    if (this.callback.onRequest) {
+      this.callback.onRequest(req);
+    }
+
     let parts = this.pathRE.exec(req.path);
     if (!parts) {
       this._log.debug("SyncServer: Unexpected request: bad URL " + req.path);
@@ -1003,52 +995,4 @@ function serverForUsers(users, contents, callback) {
   }
   server.start();
   return server;
-}
-
-/**
- * Proxy auth helpers.
- */
-
-/**
- * Fake a PAC to prompt a channel replacement.
- */
-let PACSystemSettings = {
-  CID: Components.ID("{5645d2c1-d6d8-4091-b117-fe7ee4027db7}"),
-  contractID: "@mozilla.org/system-proxy-settings;1",
-
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIFactory,
-                                         Ci.nsISystemProxySettings]),
-
-  createInstance: function createInstance(outer, iid) {
-    if (outer) {
-      throw Cr.NS_ERROR_NO_AGGREGATION;
-    }
-    return this.QueryInterface(iid);
-  },
-
-  lockFactory: function lockFactory(lock) {
-    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
-  },
-  
-  // Replace this URI for each test to avoid caching. We want to ensure that
-  // each test gets a completely fresh setup.
-  PACURI: null,
-  getProxyForURI: function getProxyForURI(aURI) {
-    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
-  }
-};
-
-function installFakePAC() {
-  _("Installing fake PAC.");
-  Cm.nsIComponentRegistrar
-    .registerFactory(PACSystemSettings.CID,
-                     "Fake system proxy-settings",
-                     PACSystemSettings.contractID,
-                     PACSystemSettings);
-}
-
-function uninstallFakePAC() {
-  _("Uninstalling fake PAC.");
-  let CID = PACSystemSettings.CID;
-  Cm.nsIComponentRegistrar.unregisterFactory(CID, PACSystemSettings);
 }

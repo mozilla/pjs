@@ -1,40 +1,8 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim:set ts=2 sw=2 sts=2 et: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Places Test Code.
- *
- * The Initial Developer of the Original Code is Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Clint Talbert <ctalbert@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
@@ -107,18 +75,42 @@ function populateDB(aArray) {
             }
           }
 
+          if (qdata.isRedirect) {
+            // Redirect sources added through the docshell are properly marked
+            // as redirects and get hidden state, the API doesn't have that
+            // power (And actually doesn't make much sense to add redirects
+            // through the API).
+            // This must be async cause otherwise the updateFrecency call
+            // done by addVisits may randomly happen after it, overwriting the
+            // value.
+            let stmt = DBConn().createAsyncStatement(
+              "UPDATE moz_places SET hidden = 1 WHERE url = :url");
+            stmt.params.url = qdata.uri;
+            try {
+              stmt.executeAsync();
+            }
+            catch (ex) {
+              print("Error while setting hidden.");
+            }
+            finally {
+              stmt.finalize();
+            }
+          }
+
           if (qdata.isDetails) {
             // Then we add extraneous page details for testing
-            PlacesUtils.history.addPageWithDetails(uri(qdata.uri),
-                                                   qdata.title, qdata.lastVisit);
+            PlacesUtils.history.addVisit(uri(qdata.uri),
+                                         qdata.lastVisit,
+                                         null,
+                                         TRANSITION_LINK,
+                                         false,
+                                         0);
+            PlacesUtils.ghistory2.setPageTitle(uri(qdata.uri),
+                                               qdata.title);
           }
 
           if (qdata.markPageAsTyped){
             PlacesUtils.bhistory.markPageAsTyped(uri(qdata.uri));
-          }
-
-          if (qdata.hidePage){
-            PlacesUtils.bhistory.hidePage(uri(qdata.uri));
           }
 
           if (qdata.isPageAnnotation) {
@@ -177,20 +169,6 @@ function populateDB(aArray) {
             }
           }
 
-          if (qdata.isFavicon) {
-            // Not planning on doing deep testing of favIcon service so these two
-            // calls should be sufficient to get favicons into the database
-            try {
-              PlacesUtils.favicons.setFaviconData(uri(qdata.faviconURI),
-                                                  qdata.favicon,
-                                                  qdata.faviconLen,
-                                                  qdata.faviconMimeType,
-                                                  qdata.faviconExpiration);
-            } catch (ex) {}
-            PlacesUtils.favicons.setFaviconUrlForPage(uri(qdata.uri),
-                                                      uri(qdata.faviconURI));
-          }
-
           if (qdata.isFolder) {
             let folderId = PlacesUtils.bookmarks.createFolder(qdata.parentFolder,
                                                               qdata.title,
@@ -200,11 +178,12 @@ function populateDB(aArray) {
           }
 
           if (qdata.isLivemark) {
-            PlacesUtils.livemarks.createLivemark(qdata.parentFolder,
-                                                 qdata.title,
-                                                 uri(qdata.uri),
-                                                 uri(qdata.feedURI),
-                                                 qdata.index);
+            PlacesUtils.livemarks.addLivemark({ title: qdata.title
+                                              , parentId: qdata.parentFolder
+                                              , index: qdata.index
+                                              , feedURI: uri(qdata.feedURI)
+                                              , siteURI: uri(qdata.uri)
+                                              });
           }
 
           if (qdata.isBookmark) {
@@ -267,7 +246,6 @@ function queryData(obj) {
   this.isDetails = obj.isDetails ? obj.isDetails : false;
   this.title = obj.title ? obj.title : "";
   this.markPageAsTyped = obj.markPageAsTyped ? obj.markPageAsTyped : false;
-  this.hidePage = obj.hidePage ? obj.hidePage : false;
   this.isPageAnnotation = obj.isPageAnnotation ? obj.isPageAnnotation : false;
   this.removeAnnotation= obj.removeAnnotation ? true : false;
   this.annoName = obj.annoName ? obj.annoName : "";
@@ -285,12 +263,6 @@ function queryData(obj) {
   this.annoMimeType = obj.annoMimeType ? obj.annoMimeType : "";
   this.isTag = obj.isTag ? obj.isTag : false;
   this.tagArray = obj.tagArray ? obj.tagArray : null;
-  this.isFavicon = obj.isFavicon ? obj.isFavicon : false;
-  this.faviconURI = obj.faviconURI ? obj.faviconURI : "";
-  this.faviconLen = obj.faviconLen ? obj.faviconLen : 0;
-  this.faviconMimeType = obj.faviconMimeType ? obj.faviconMimeType : "";
-  this.faviconExpiration = obj.faviconExpiration ?
-                           obj.faviconExpiration : futureday;
   this.isLivemark = obj.isLivemark ? obj.isLivemark : false;
   this.parentFolder = obj.parentFolder ? obj.parentFolder
                                        : PlacesUtils.placesRootId;

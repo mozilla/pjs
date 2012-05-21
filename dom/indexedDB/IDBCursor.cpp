@@ -1,41 +1,8 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Indexed Database.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "IDBCursor.h"
 
@@ -157,7 +124,7 @@ already_AddRefed<IDBCursor>
 IDBCursor::Create(IDBRequest* aRequest,
                   IDBTransaction* aTransaction,
                   IDBObjectStore* aObjectStore,
-                  PRUint16 aDirection,
+                  Direction aDirection,
                   const Key& aRangeKey,
                   const nsACString& aContinueQuery,
                   const nsACString& aContinueToQuery,
@@ -185,7 +152,7 @@ already_AddRefed<IDBCursor>
 IDBCursor::Create(IDBRequest* aRequest,
                   IDBTransaction* aTransaction,
                   IDBIndex* aIndex,
-                  PRUint16 aDirection,
+                  Direction aDirection,
                   const Key& aRangeKey,
                   const nsACString& aContinueQuery,
                   const nsACString& aContinueToQuery,
@@ -215,7 +182,7 @@ already_AddRefed<IDBCursor>
 IDBCursor::Create(IDBRequest* aRequest,
                   IDBTransaction* aTransaction,
                   IDBIndex* aIndex,
-                  PRUint16 aDirection,
+                  Direction aDirection,
                   const Key& aRangeKey,
                   const nsACString& aContinueQuery,
                   const nsACString& aContinueToQuery,
@@ -243,11 +210,34 @@ IDBCursor::Create(IDBRequest* aRequest,
 }
 
 // static
+nsresult
+IDBCursor::ParseDirection(const nsAString& aDirection, Direction* aResult)
+{
+  if (aDirection.EqualsLiteral("next")) {
+    *aResult = NEXT;
+  }
+  else if (aDirection.EqualsLiteral("nextunique")) {
+    *aResult = NEXT_UNIQUE;
+  }
+  else if (aDirection.EqualsLiteral("prev")) {
+    *aResult = PREV;
+  }
+  else if (aDirection.EqualsLiteral("prevunique")) {
+    *aResult = PREV_UNIQUE;
+  }
+  else {
+    return NS_ERROR_TYPE_ERR;
+  }
+  
+  return NS_OK;
+}
+
+// static
 already_AddRefed<IDBCursor>
 IDBCursor::CreateCommon(IDBRequest* aRequest,
                         IDBTransaction* aTransaction,
                         IDBObjectStore* aObjectStore,
-                        PRUint16 aDirection,
+                        Direction aDirection,
                         const Key& aRangeKey,
                         const nsACString& aContinueQuery,
                         const nsACString& aContinueToQuery)
@@ -262,9 +252,15 @@ IDBCursor::CreateCommon(IDBRequest* aRequest,
   nsRefPtr<IDBCursor> cursor = new IDBCursor();
 
   IDBDatabase* database = aTransaction->Database();
-  cursor->mScriptContext = database->GetScriptContext();
-  cursor->mOwner = database->GetOwner();
   cursor->mScriptOwner = database->GetScriptOwner();
+
+  if (cursor->mScriptOwner) {
+    if (NS_FAILED(NS_HOLD_JS_OBJECTS(cursor, IDBCursor))) {
+      return nsnull;
+    }
+
+    cursor->mRooted = true;
+  }
 
   cursor->mRequest = aRequest;
   cursor->mTransaction = aTransaction;
@@ -280,7 +276,7 @@ IDBCursor::CreateCommon(IDBRequest* aRequest,
 IDBCursor::IDBCursor()
 : mScriptOwner(nsnull),
   mType(OBJECTSTORE),
-  mDirection(nsIIDBCursor::NEXT),
+  mDirection(IDBCursor::NEXT),
   mCachedKey(JSVAL_VOID),
   mCachedPrimaryKey(JSVAL_VOID),
   mCachedValue(JSVAL_VOID),
@@ -323,11 +319,11 @@ IDBCursor::ContinueInternal(const Key& aKey,
 
 #ifdef DEBUG
   {
-    PRUint16 readyState;
-    if (NS_FAILED(mRequest->GetReadyState(&readyState))) {
+    nsAutoString readyState;
+    if (NS_FAILED(mRequest->GetReadyState(readyState))) {
       NS_ERROR("This should never fail!");
     }
-    NS_ASSERTION(readyState == nsIIDBRequest::DONE, "Should be DONE!");
+    NS_ASSERTION(readyState.EqualsLiteral("done"), "Should be DONE!");
   }
 #endif
 
@@ -368,8 +364,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(IDBCursor)
                                                        nsIDOMEventTarget)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mObjectStore)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mIndex)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOwner)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mScriptContext)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(IDBCursor)
@@ -413,8 +407,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(IDBCursor)
     tmp->mHaveValue = false;
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mRequest)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOwner)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mScriptContext)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(IDBCursor)
@@ -434,11 +426,24 @@ DOMCI_DATA(IDBCursor, IDBCursor)
 DOMCI_DATA(IDBCursorWithValue, IDBCursor)
 
 NS_IMETHODIMP
-IDBCursor::GetDirection(PRUint16* aDirection)
+IDBCursor::GetDirection(nsAString& aDirection)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
-  *aDirection = mDirection;
+  switch (mDirection) {
+    case NEXT:
+      aDirection.AssignLiteral("next");
+      break;
+    case NEXT_UNIQUE:
+      aDirection.AssignLiteral("nextunique");
+      break;
+    case PREV:
+      aDirection.AssignLiteral("prev");
+      break;
+    case PREV_UNIQUE:
+      aDirection.AssignLiteral("prevunique");
+  }
+
   return NS_OK;
 }
 
@@ -560,15 +565,15 @@ IDBCursor::Continue(const jsval &aKey,
 
   if (!key.IsUnset()) {
     switch (mDirection) {
-      case nsIIDBCursor::NEXT:
-      case nsIIDBCursor::NEXT_NO_DUPLICATE:
+      case IDBCursor::NEXT:
+      case IDBCursor::NEXT_UNIQUE:
         if (key <= mKey) {
           return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
         }
         break;
 
-      case nsIIDBCursor::PREV:
-      case nsIIDBCursor::PREV_NO_DUPLICATE:
+      case IDBCursor::PREV:
+      case IDBCursor::PREV_UNIQUE:
         if (key >= mKey) {
           return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
         }
@@ -682,7 +687,7 @@ IDBCursor::Advance(PRInt32 aCount)
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   if (aCount < 1) {
-    return NS_ERROR_DOM_TYPE_ERR;
+    return NS_ERROR_TYPE_ERR;
   }
 
   Key key;
@@ -851,8 +856,8 @@ ContinueIndexHelper::BindArgumentsToStatement(mozIStorageStatement* aStatement)
 
   // Bind object key if duplicates are allowed and we're not continuing to a
   // specific key.
-  if ((mCursor->mDirection == nsIIDBCursor::NEXT ||
-       mCursor->mDirection == nsIIDBCursor::PREV) &&
+  if ((mCursor->mDirection == IDBCursor::NEXT ||
+       mCursor->mDirection == IDBCursor::PREV) &&
        mCursor->mContinueToKey.IsUnset()) {
     NS_ASSERTION(!mCursor->mObjectKey.IsUnset(), "Bad key!");
 

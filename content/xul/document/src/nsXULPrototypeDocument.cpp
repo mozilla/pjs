@@ -1,43 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Chris Waterson <waterson@netscape.com>
- *   L. David Baron <dbaron@dbaron.org>
- *   Ben Goodger <ben@netscape.com>
- *   Mark Hammond <mhammond@skippinet.com.au>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
 #include "nsXULPrototypeDocument.h"
@@ -66,6 +30,9 @@
 #include "nsCCUncollectableMarker.h"
 #include "nsDOMJSUtils.h" // for GetScriptContextFromJSContext
 #include "xpcpublic.h"
+#include "mozilla/dom/BindingUtils.h"
+
+using mozilla::dom::DestroyProtoOrIfaceCache;
 
 static NS_DEFINE_CID(kDOMScriptObjectFactoryCID,
                      NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
@@ -85,10 +52,9 @@ public:
     virtual void SetScriptsEnabled(bool aEnabled, bool aFireTimeouts);
 
     virtual JSObject* GetGlobalJSObject();
-    virtual nsresult EnsureScriptEnvironment(PRUint32 aLangID);
+    virtual nsresult EnsureScriptEnvironment();
 
-    virtual nsIScriptContext *GetScriptContext(PRUint32 lang);
-    virtual nsresult SetScriptContext(PRUint32 language, nsIScriptContext *ctx);
+    virtual nsIScriptContext *GetScriptContext();
 
     // nsIScriptObjectPrincipal methods
     virtual nsIPrincipal* GetPrincipal();
@@ -117,7 +83,7 @@ PRUint32 nsXULPrototypeDocument::gRefCnt;
 
 
 void
-nsXULPDGlobalObject_finalize(JSContext *cx, JSObject *obj)
+nsXULPDGlobalObject_finalize(JSFreeOp *fop, JSObject *obj)
 {
     nsISupports *nativeThis = (nsISupports*)JS_GetPrivate(obj);
 
@@ -129,11 +95,13 @@ nsXULPDGlobalObject_finalize(JSContext *cx, JSObject *obj)
 
     // The addref was part of JSObject construction
     NS_RELEASE(nativeThis);
+
+    DestroyProtoOrIfaceCache(obj);
 }
 
 
 JSBool
-nsXULPDGlobalObject_resolve(JSContext *cx, JSObject *obj, jsid id)
+nsXULPDGlobalObject_resolve(JSContext *cx, JSHandleObject obj, JSHandleId id)
 {
     JSBool did_resolve = JS_FALSE;
 
@@ -199,8 +167,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXULPrototypeDocument)
     if (nsCCUncollectableMarker::InGeneration(cb, tmp->mCCGeneration)) {
         return NS_SUCCESS_INTERRUPTED_TRAVERSE;
     }
-    NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NATIVE_MEMBER(mRoot,
-                                                    nsXULPrototypeElement)
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mRoot)
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mGlobalObject");
     cb.NoteXPCOMChild(static_cast<nsIScriptGlobalObject*>(tmp->mGlobalObject));
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NATIVE_MEMBER(mNodeInfoManager,
@@ -683,53 +650,22 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(nsXULPDGlobalObject)
 //
 
 nsresult
-nsXULPDGlobalObject::SetScriptContext(PRUint32 lang_id, nsIScriptContext *aScriptContext)
+nsXULPDGlobalObject::EnsureScriptEnvironment()
 {
-  NS_ABORT_IF_FALSE(lang_id == nsIProgrammingLanguage::JAVASCRIPT,
-                    "We don't support this language ID");
-  // almost a clone of nsGlobalWindow
-  if (!aScriptContext) {
-    NS_WARNING("Possibly early removal of script object, see bug #41608");
-  } else {
-    // should probably assert the context is clean???
-    aScriptContext->WillInitializeContext();
-    nsresult rv = aScriptContext->InitContext();
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  NS_ASSERTION(!aScriptContext || !mContext, "Bad call to SetContext()!");
-
-  JSObject* global = NULL;
-
-  if (aScriptContext) {
-    aScriptContext->SetGCOnDestruction(false);
-    aScriptContext->DidInitializeContext();
-    global = aScriptContext->GetNativeGlobal();
-    NS_ASSERTION(global, "GetNativeGlobal returned NULL!");
-  }
-  mContext = aScriptContext;
-  mJSObject = global;
-  return NS_OK;
-}
-
-nsresult
-nsXULPDGlobalObject::EnsureScriptEnvironment(PRUint32 lang_id)
-{
-  NS_ABORT_IF_FALSE(lang_id == nsIProgrammingLanguage::JAVASCRIPT,
-                    "We don't support this language ID");
   if (mContext) {
     return NS_OK;
   }
   NS_ASSERTION(!mJSObject, "Have global without context?");
 
   nsCOMPtr<nsIScriptRuntime> languageRuntime;
-  nsresult rv = NS_GetScriptRuntimeByID(nsIProgrammingLanguage::JAVASCRIPT,
-                                        getter_AddRefs(languageRuntime));
+  nsresult rv = NS_GetJSRuntime(getter_AddRefs(languageRuntime));
   NS_ENSURE_SUCCESS(rv, NS_OK);
 
   nsCOMPtr<nsIScriptContext> ctxNew = languageRuntime->CreateContext();
+  MOZ_ASSERT(ctxNew);
+
   // We have to setup a special global object.  We do this then
-  // attach it as the global for this context.  Then, ::SetScriptContext
+  // attach it as the global for this context.  Then, we
   // will re-fetch the global and set it up in our language globals array.
   {
     JSContext *cx = ctxNew->GetNativeContext();
@@ -751,31 +687,40 @@ nsXULPDGlobalObject::EnsureScriptEnvironment(PRUint32 lang_id)
     NS_ADDREF(this);
   }
 
+  // should probably assert the context is clean???
+  ctxNew->WillInitializeContext();
+  rv = ctxNew->InitContext();
   NS_ENSURE_SUCCESS(rv, NS_OK);
-  rv = SetScriptContext(lang_id, ctxNew);
-  NS_ENSURE_SUCCESS(rv, NS_OK);
+
+  ctxNew->SetGCOnDestruction(false);
+  ctxNew->DidInitializeContext();
+
+  JSObject* global = ctxNew->GetNativeGlobal();
+  NS_ASSERTION(global, "GetNativeGlobal returned NULL!");
+
+  mContext = ctxNew;
+  mJSObject = global;
+
   return NS_OK;
 }
 
 nsIScriptContext*
-nsXULPDGlobalObject::GetScriptContext(PRUint32 lang_id)
+nsXULPDGlobalObject::GetScriptContext()
 {
-  NS_ABORT_IF_FALSE(lang_id == nsIProgrammingLanguage::JAVASCRIPT,
-                    "We don't support this language ID");
   // This global object creates a context on demand - do that now.
-  nsresult rv = EnsureScriptEnvironment(nsIProgrammingLanguage::JAVASCRIPT);
+  nsresult rv = EnsureScriptEnvironment();
   if (NS_FAILED(rv)) {
     NS_ERROR("Failed to setup script language");
     return NULL;
   }
-  // Note that EnsureScriptEnvironment has validated lang_id
+
   return mContext;
 }
 
 JSObject*
 nsXULPDGlobalObject::GetGlobalJSObject()
 {
-  return mJSObject;
+  return xpc_UnmarkGrayObject(mJSObject);
 }
 
 
@@ -788,11 +733,7 @@ nsXULPDGlobalObject::ClearGlobalObjectOwner()
   if (this != nsXULPrototypeDocument::gSystemGlobal)
     mCachedPrincipal = mGlobalObjectOwner->DocumentPrincipal();
 
-  if (mContext) {
-    mContext->FinalizeContext();
-    mContext = NULL;
-  }
-
+  mContext = NULL;
   mGlobalObjectOwner = NULL;
 }
 

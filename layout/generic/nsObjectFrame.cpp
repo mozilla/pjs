@@ -1,48 +1,8 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 // vim:set ts=2 sts=2 sw=2 et cin:
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Jacek Piskozub <piskozub@iopan.gda.pl>
- *   Leon Sha <leon.sha@sun.com>
- *   Roland Mainz <roland.mainz@informatik.med.uni-giessen.de>
- *   Robert O'Callahan <roc+moz@cs.cmu.edu>
- *   Christian Biesinger <cbiesinger@web.de>
- *   Josh Aas <josh@mozilla.com>
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering objects for replaced elements implemented by a plugin */
 
@@ -98,7 +58,6 @@
 #include "nsIImageLoadingContent.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsPIDOMWindow.h"
-#include "nsIDOMElement.h"
 #include "nsContentUtils.h"
 #include "nsDisplayList.h"
 #include "nsAttrName.h"
@@ -352,6 +311,9 @@ nsObjectFrame::DestroyFrom(nsIFrame* aDestructRoot)
     mBackgroundSink->Destroy();
   }
 
+  if (mInstanceOwner) {
+    mInstanceOwner->SetFrame(nsnull);
+  }
   SetInstanceOwner(nsnull);
 
   nsObjectFrameSuper::DestroyFrom(aDestructRoot);
@@ -915,7 +877,7 @@ public:
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder);
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap);
   virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                    nsRegion* aVisibleRegion,
                                    const nsRect& aAllowVisibleRegionExpansion);
@@ -930,7 +892,8 @@ public:
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager)
+                                   LayerManager* aManager,
+                                   const ContainerParameters& aParameters)
   {
     return LAYER_ACTIVE;
   }
@@ -944,8 +907,9 @@ GetDisplayItemBounds(nsDisplayListBuilder* aBuilder, nsDisplayItem* aItem, nsIFr
 }
 
 nsRect
-nsDisplayPluginReadback::GetBounds(nsDisplayListBuilder* aBuilder)
+nsDisplayPluginReadback::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
+  *aSnap = false;
   return GetDisplayItemBounds(aBuilder, this, mFrame);
 }
 
@@ -959,7 +923,8 @@ nsDisplayPluginReadback::ComputeVisibility(nsDisplayListBuilder* aBuilder,
     return false;
 
   nsRect expand;
-  expand.IntersectRect(aAllowVisibleRegionExpansion, GetBounds(aBuilder));
+  bool snap;
+  expand.IntersectRect(aAllowVisibleRegionExpansion, GetBounds(aBuilder, &snap));
   // *Add* our bounds to the visible region so that stuff underneath us is
   // likely to be made visible, so we can use it for a background! This is
   // a bit crazy since we normally only subtract from the visible region.
@@ -968,8 +933,9 @@ nsDisplayPluginReadback::ComputeVisibility(nsDisplayListBuilder* aBuilder,
 }
 
 nsRect
-nsDisplayPlugin::GetBounds(nsDisplayListBuilder* aBuilder)
+nsDisplayPlugin::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
+  *aSnap = false;
   return GetDisplayItemBounds(aBuilder, this, mFrame);
 }
 
@@ -978,7 +944,8 @@ nsDisplayPlugin::Paint(nsDisplayListBuilder* aBuilder,
                        nsRenderingContext* aCtx)
 {
   nsObjectFrame* f = static_cast<nsObjectFrame*>(mFrame);
-  f->PaintPlugin(aBuilder, *aCtx, mVisibleRect, GetBounds(aBuilder));
+  bool snap;
+  f->PaintPlugin(aBuilder, *aCtx, mVisibleRect, GetBounds(aBuilder, &snap));
 }
 
 bool
@@ -986,18 +953,17 @@ nsDisplayPlugin::ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                    nsRegion* aVisibleRegion,
                                    const nsRect& aAllowVisibleRegionExpansion)
 {
-  mVisibleRegion.And(*aVisibleRegion, GetBounds(aBuilder));  
+  bool snap;
+  mVisibleRegion.And(*aVisibleRegion, GetBounds(aBuilder, &snap));
   return nsDisplayItem::ComputeVisibility(aBuilder, aVisibleRegion,
                                           aAllowVisibleRegionExpansion);
 }
 
 nsRegion
 nsDisplayPlugin::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                 bool* aForceTransparentSurface)
+                                 bool* aSnap)
 {
-  if (aForceTransparentSurface) {
-    *aForceTransparentSurface = false;
-  }
+  *aSnap = false;
   nsRegion result;
   nsObjectFrame* f = static_cast<nsObjectFrame*>(mFrame);
   if (!aBuilder->IsForPluginGeometry()) {
@@ -1016,11 +982,13 @@ nsDisplayPlugin::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
       }
     }
   }
-  if (f->IsOpaque() &&
-      (aBuilder->IsForPluginGeometry() ||
-       (f->GetPaintedRect(this) + ToReferenceFrame()).Contains(GetBounds(aBuilder)))) {
-    // We can treat this as opaque
-    result = GetBounds(aBuilder);
+  if (f->IsOpaque()) {
+    nsRect bounds = GetBounds(aBuilder, aSnap);
+    if (aBuilder->IsForPluginGeometry() ||
+        (f->GetPaintedRect(this) + ToReferenceFrame()).Contains(bounds)) {
+      // We can treat this as opaque
+      result = bounds;
+    }
   }
   return result;
 }
@@ -1190,8 +1158,7 @@ nsObjectFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
 
     nsRefPtr<ImageContainer> container = GetImageContainer();
-    nsRefPtr<Image> currentImage = container ? container->GetCurrentImage() : nsnull;
-    if (!currentImage || !isVisible ||
+    if (container && container->HasCurrentImage() || !isVisible ||
         container->GetCurrentSize() != gfxIntSize(window->width, window->height)) {
       mInstanceOwner->NotifyPaintWaiter(aBuilder);
     }
@@ -1548,7 +1515,13 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nsnull;
   }
 
-  gfxIntSize size = container->GetCurrentSize();
+  gfxIntSize size;
+  
+  if (mInstanceOwner->UseAsyncRendering()) {
+    size = container->GetCurrentSize();
+  } else {
+    size = gfxIntSize(window->width, window->height);
+  }
 
   nsRect area = GetContentRectRelativeToSelf() + aItem->ToReferenceFrame();
   gfxRect r = nsLayoutUtils::RectToGfxRect(area, PresContext()->AppUnitsPerDevPixel());
@@ -1571,6 +1544,9 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     ImageLayer* imglayer = static_cast<ImageLayer*>(layer.get());
     UpdateImageLayer(r);
 
+    if (!mInstanceOwner->UseAsyncRendering()) {
+      imglayer->SetScaleToSize(size, ImageLayer::SCALE_STRETCH);
+    }
     imglayer->SetContainer(container);
     gfxPattern::GraphicsFilter filter =
       nsLayoutUtils::GetGraphicsFilterForFrame(this);
@@ -1634,26 +1610,14 @@ nsObjectFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
 {
 #if defined(MOZ_WIDGET_ANDROID)
   if (mInstanceOwner) {
-    NPWindow *window;
-    mInstanceOwner->GetWindow(window);
-
     gfxRect frameGfxRect =
       PresContext()->AppUnitsToGfxUnits(aPluginRect);
     gfxRect dirtyGfxRect =
       PresContext()->AppUnitsToGfxUnits(aDirtyRect);
+
     gfxContext* ctx = aRenderingContext.ThebesContext();
 
-    gfx3DMatrix matrix3d = nsLayoutUtils::GetTransformToAncestor(this, nsnull);
-
-    gfxMatrix matrix2d;
-    if (!matrix3d.Is2D(&matrix2d))
-      return;
-
-    // The matrix includes the frame's position, so we need to transform
-    // from 0,0 to get the correct coordinates.
-    frameGfxRect.MoveTo(0, 0);
-
-    mInstanceOwner->Paint(ctx, matrix2d.Transform(frameGfxRect), dirtyGfxRect);
+    mInstanceOwner->Paint(ctx, frameGfxRect, dirtyGfxRect);
     return;
   }
 #endif
@@ -2165,6 +2129,16 @@ nsIFrame*
 NS_NewObjectFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
   return new (aPresShell) nsObjectFrame(aContext);
+}
+
+bool
+nsObjectFrame::PaintedByGecko()
+{
+#ifdef XP_MACOSX
+  return true;
+#else
+  return !mWidget;
+#endif
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsObjectFrame)

@@ -1,39 +1,6 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is the Mozilla Installer code.
-#
-# The Initial Developer of the Original Code is Mozilla Foundation
-# Portions created by the Initial Developer are Copyright (C) 2006
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#  Robert Strong <robert.bugzilla@gmail.com>
-#  Brian R. Bondy <netzen@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 !macro PostUpdate
   ${CreateShortcutsLog}
@@ -79,7 +46,7 @@
       ${GetLongPath} "$0" $0
     ${EndIf}
     ${If} "$0" == "$INSTDIR"
-      ${SetStartMenuInternet}
+      ${SetStartMenuInternet} ; Does not use SHCTX
     ${EndIf}
 
     ReadRegStr $0 HKLM "Software\mozilla.org\Mozilla" "CurrentVersion"
@@ -121,10 +88,14 @@
     ; We check to see if the maintenance service install was already attempted.
     ; Since the Maintenance service can be installed either x86 or x64,
     ; always use the 64-bit registry for checking if an attempt was made.
-    SetRegView 64
+    ${If} ${RunningX64}
+      SetRegView 64
+    ${EndIf}
     ReadRegDWORD $5 HKLM "Software\Mozilla\MaintenanceService" "Attempted"
     ClearErrors
-    SetRegView lastused
+    ${If} ${RunningX64}
+      SetRegView lastused
+    ${EndIf}
 
     ; If the maintenance service is already installed, do nothing.
     ; The maintenance service will launch:
@@ -152,12 +123,12 @@
 !define PostUpdate "!insertmacro PostUpdate"
 
 !macro SetAsDefaultAppGlobal
-  ${RemoveDeprecatedKeys}
+  ${RemoveDeprecatedKeys} ; Does not use SHCTX
 
   SetShellVarContext all      ; Set SHCTX to all users (e.g. HKLM)
-  ${SetHandlers}
-  ${SetStartMenuInternet}
-  ${FixShellIconHandler}
+  ${SetHandlers} ; Uses SHCTX
+  ${SetStartMenuInternet} ; Does not use SHCTX
+  ${FixShellIconHandler} ; Does not use SHCTX
   ${ShowShortcuts}
   ${StrFilter} "${FileMainEXE}" "+" "" "" $R9
   WriteRegStr HKLM "Software\Clients\StartMenuInternet" "" "$R9"
@@ -302,7 +273,7 @@
   ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
 
   StrCpy $0 "SOFTWARE\Classes"
-  StrCpy $2 "$\"$8$\" -requestPending -osint -url $\"%1$\""
+  StrCpy $2 "$\"$8$\" -osint -url $\"%1$\""
 
   ; Associate the file handlers with FirefoxHTML
   ReadRegStr $6 SHCTX "$0\.htm" ""
@@ -336,25 +307,20 @@
     WriteRegStr SHCTX "$0\.webm"  "" "FirefoxHTML"
   ${EndIf}
 
-  StrCpy $3 "$\"%1$\",,0,0,,,,"
-
   ; An empty string is used for the 5th param because FirefoxHTML is not a
   ; protocol handler
-  ${AddDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" "${AppRegName} HTML Document" "" \
-                         "${DDEApplication}" "$3" "WWW_OpenURL"
+  ${AddDisabledDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" \
+                                 "${AppRegName} HTML Document" ""
 
-  ${AddDDEHandlerValues} "FirefoxURL" "$2" "$8,1" "${AppRegName} URL" "true" \
-                         "${DDEApplication}" "$3" "WWW_OpenURL"
+  ${AddDisabledDDEHandlerValues} "FirefoxURL" "$2" "$8,1" "${AppRegName} URL" \
+                                 "true"
 
   ; An empty string is used for the 4th & 5th params because the following
   ; protocol handlers already have a display name and the additional keys
   ; required for a protocol handler.
-  ${AddDDEHandlerValues} "ftp" "$2" "$8,1" "" "" \
-                         "${DDEApplication}" "$3" "WWW_OpenURL"
-  ${AddDDEHandlerValues} "http" "$2" "$8,1" "" "" \
-                         "${DDEApplication}" "$3" "WWW_OpenURL"
-  ${AddDDEHandlerValues} "https" "$2" "$8,1" "" "" \
-                         "${DDEApplication}" "$3" "WWW_OpenURL"
+  ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" ""
+  ${AddDisabledDDEHandlerValues} "http" "$2" "$8,1" "" ""
+  ${AddDisabledDDEHandlerValues} "https" "$2" "$8,1" "" ""
 !macroend
 !define SetHandlers "!insertmacro SetHandlers"
 
@@ -563,8 +529,7 @@
 !macro UpdateProtocolHandlers
   ; Store the command to open the app with an url in a register for easy access.
   ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
-  StrCpy $2 "$\"$8$\" -requestPending -osint -url $\"%1$\""
-  StrCpy $3 "$\"%1$\",,0,0,,,,"
+  StrCpy $2 "$\"$8$\" -osint -url $\"%1$\""
 
   ; Only set the file and protocol handlers if the existing one under HKCR is
   ; for this install location.
@@ -573,32 +538,32 @@
   ${If} "$R9" == "true"
     ; An empty string is used for the 5th param because FirefoxHTML is not a
     ; protocol handler.
-    ${AddDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" "${AppRegName} HTML Document" "" \
-                           "${DDEApplication}" "$3" "WWW_OpenURL"
+    ${AddDisabledDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" \
+                                   "${AppRegName} HTML Document" ""
   ${EndIf}
 
   ${IsHandlerForInstallDir} "FirefoxURL" $R9
   ${If} "$R9" == "true"
-    ${AddDDEHandlerValues} "FirefoxURL" "$2" "$8,1" "${AppRegName} URL" "true" \
-                           "${DDEApplication}" "$3" "WWW_OpenURL"
+    ${AddDisabledDDEHandlerValues} "FirefoxURL" "$2" "$8,1" \
+                                   "${AppRegName} URL" "true"
   ${EndIf}
 
+  ; An empty string is used for the 4th & 5th params because the following
+  ; protocol handlers already have a display name and the additional keys
+  ; required for a protocol handler.
   ${IsHandlerForInstallDir} "ftp" $R9
   ${If} "$R9" == "true"
-    ${AddDDEHandlerValues} "ftp" "$2" "$8,1" "" "" \
-                           "${DDEApplication}" "$3" "WWW_OpenURL"
+    ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" ""
   ${EndIf}
 
   ${IsHandlerForInstallDir} "http" $R9
   ${If} "$R9" == "true"
-    ${AddDDEHandlerValues} "http" "$2" "$8,1" "" "" \
-                           "${DDEApplication}" "$3" "WWW_OpenURL"
+    ${AddDisabledDDEHandlerValues} "http" "$2" "$8,1" "" ""
   ${EndIf}
 
   ${IsHandlerForInstallDir} "https" $R9
   ${If} "$R9" == "true"
-    ${AddDDEHandlerValues} "https" "$2" "$8,1" "" "" \
-                           "${DDEApplication}" "$3" "WWW_OpenURL"
+    ${AddDisabledDDEHandlerValues} "https" "$2" "$8,1" "" ""
   ${EndIf}
 !macroend
 !define UpdateProtocolHandlers "!insertmacro UpdateProtocolHandlers"
@@ -618,12 +583,15 @@
     ; with at most one certificate.  A fallback certificate can only be used
     ; if the binary is replaced with a different certificate.
     ; We always use the 64bit registry for certs.
-    ; This call is ignored on 32-bit systems.
-    SetRegView 64
+    ${If} ${RunningX64}
+      SetRegView 64
+    ${EndIf}
     DeleteRegKey HKLM "$R0"
     WriteRegStr HKLM "$R0\0" "name" "${CERTIFICATE_NAME}"
     WriteRegStr HKLM "$R0\0" "issuer" "${CERTIFICATE_ISSUER}"
-    SetRegView lastused
+    ${If} ${RunningX64}
+      SetRegView lastused
+    ${EndIf}
     ClearErrors
   ${EndIf} 
   ; Restore the previously used value back
@@ -1157,11 +1125,13 @@ Function SetAsDefaultAppUser
   ; b) is not a member of the administrators group and chooses to elevate
   ${ElevateUAC}
 
-  ${SetStartMenuInternet}
+  ${SetStartMenuInternet} ; Does not use SHCTX
 
   SetShellVarContext all  ; Set SHCTX to all users (e.g. HKLM)
-  ${FixShellIconHandler}
-  ${RemoveDeprecatedKeys}
+
+  ${FixClassKeys} ; Does not use SHCTX
+  ${FixShellIconHandler} ; Does not use SHCTX
+  ${RemoveDeprecatedKeys} ; Does not use SHCTX
 
   ClearErrors
   ${GetParameters} $0

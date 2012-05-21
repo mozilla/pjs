@@ -1,9 +1,15 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 DOM_SRCDIRS = \
   dom/base \
   dom/battery \
   dom/power \
   dom/network/src \
+  dom/settings \
   dom/sms/src \
+  dom/contacts \
   dom/src/events \
   dom/src/storage \
   dom/src/offline \
@@ -25,7 +31,7 @@ DOM_SRCDIRS = \
 
 ifdef MOZ_B2G_RIL
 DOM_SRCDIRS += \
-  dom/system/b2g \
+  dom/system/gonk \
   dom/telephony \
   dom/wifi \
   $(NULL)

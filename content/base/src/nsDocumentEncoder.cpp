@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   Mats Palmgren <matpal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * Object that can be used to serialize selections, ranges, or nodes
@@ -83,6 +49,10 @@
 #include "nsIFrame.h"
 #include "nsStringBuffer.h"
 #include "mozilla/dom/Element.h"
+#include "nsIEditorDocShell.h"
+#include "nsIEditor.h"
+#include "nsIHTMLEditor.h"
+#include "nsIDocShell.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -126,6 +96,11 @@ protected:
                                       nsAString& aString);
   nsresult SerializeRangeContextEnd(const nsTArray<nsINode*>& aAncestorArray,
                                     nsAString& aString);
+  virtual PRInt32
+  GetImmediateContextCount(const nsTArray<nsINode*>& aAncestorArray)
+  {
+    return -1;
+  }
 
   nsresult FlushText(nsAString& aString, bool aForce);
 
@@ -181,6 +156,9 @@ protected:
   nsAutoTArray<nsIContent*, 8> mEndNodes;
   nsAutoTArray<PRInt32, 8>     mEndOffsets;
   bool              mHaltRangeHint;  
+  // Used when context has already been serialized for
+  // table cell selections (where parent is <tr>)
+  bool              mDisableContextSerialize;
   bool              mIsCopying;  // Set to true only while copying
   bool              mNodeIsContainer;
   nsStringBuffer*   mCachedBuffer;
@@ -228,6 +206,7 @@ void nsDocumentEncoder::Initialize(bool aClearCachedSerializer)
   mStartRootIndex = 0;
   mEndRootIndex = 0;
   mHaltRangeHint = false;
+  mDisableContextSerialize = false;
   mNodeIsContainer = false;
   if (aClearCachedSerializer) {
     mSerializer = nsnull;
@@ -349,6 +328,42 @@ nsDocumentEncoder::IncludeInContext(nsINode *aNode)
   return false;
 }
 
+static
+bool
+IsInvisibleBreak(nsINode *aNode) {
+  // xxxehsan: we should probably figure out a way to determine
+  // if a BR node is visible without using the editor.
+  Element* elt = aNode->AsElement();
+  if (!elt->IsHTML(nsGkAtoms::br) ||
+      !aNode->IsEditable()) {
+    return false;
+  }
+
+  // Grab the editor associated with the document
+  nsIDocument *doc = aNode->GetCurrentDoc();
+  if (doc) {
+    nsPIDOMWindow *window = doc->GetWindow();
+    if (window) {
+      nsIDocShell *docShell = window->GetDocShell();
+      if (docShell) {
+        nsCOMPtr<nsIEditorDocShell> editorDocShell = do_QueryInterface(docShell);
+        if (editorDocShell) {
+          nsCOMPtr<nsIEditor> editor;
+          editorDocShell->GetEditor(getter_AddRefs(editor));
+          nsCOMPtr<nsIHTMLEditor> htmlEditor = do_QueryInterface(editor);
+          if (htmlEditor) {
+            bool isVisible = false;
+            nsCOMPtr<nsIDOMNode> domNode = do_QueryInterface(aNode);
+            htmlEditor->BreakIsVisible(domNode, &isVisible);
+            return !isVisible;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 nsresult
 nsDocumentEncoder::SerializeNodeStart(nsINode* aNode,
                                       PRInt32 aStartOffset,
@@ -381,6 +396,11 @@ nsDocumentEncoder::SerializeNodeStart(nsINode* aNode,
     node = aNode;
   
   if (node->IsElement()) {
+    if ((mFlags & (nsIDocumentEncoder::OutputPreformatted |
+                   nsIDocumentEncoder::OutputDropInvisibleBreak)) &&
+        IsInvisibleBreak(node)) {
+      return NS_OK;
+    }
     Element* originalElement =
       aOriginalNode && aOriginalNode->IsElement() ?
         aOriginalNode->AsElement() : nsnull;
@@ -742,32 +762,6 @@ static bool IsTextNode(nsINode *aNode)
   return aNode && aNode->IsNodeOfType(nsINode::eTEXT);
 }
 
-static nsresult GetLengthOfDOMNode(nsIDOMNode *aNode, PRUint32 &aCount) 
-{
-  aCount = 0;
-  if (!aNode) { return NS_ERROR_NULL_POINTER; }
-  nsresult result=NS_OK;
-  nsCOMPtr<nsIDOMCharacterData>nodeAsChar;
-  nodeAsChar = do_QueryInterface(aNode);
-  if (nodeAsChar) {
-    nodeAsChar->GetLength(&aCount);
-  }
-  else
-  {
-    bool hasChildNodes;
-    aNode->HasChildNodes(&hasChildNodes);
-    if (true==hasChildNodes)
-    {
-      nsCOMPtr<nsIDOMNodeList>nodeList;
-      result = aNode->GetChildNodes(getter_AddRefs(nodeList));
-      if (NS_SUCCEEDED(result) && nodeList) {
-        nodeList->GetLength(&aCount);
-      }
-    }
-  }
-  return result;
-}
-
 nsresult
 nsDocumentEncoder::SerializeRangeNodes(nsRange* aRange,
                                        nsINode* aNode,
@@ -894,8 +888,14 @@ nsresult
 nsDocumentEncoder::SerializeRangeContextStart(const nsTArray<nsINode*>& aAncestorArray,
                                               nsAString& aString)
 {
-  PRInt32 i = aAncestorArray.Length();
+  if (mDisableContextSerialize) {
+    return NS_OK;
+  }
+  PRInt32 i = aAncestorArray.Length(), j;
   nsresult rv = NS_OK;
+
+  // currently only for table-related elements; see Bug 137450
+  j = GetImmediateContextCount(aAncestorArray);
 
   while (i > 0) {
     nsINode *node = aAncestorArray.ElementAt(--i);
@@ -903,7 +903,8 @@ nsDocumentEncoder::SerializeRangeContextStart(const nsTArray<nsINode*>& aAncesto
     if (!node)
       break;
 
-    if (IncludeInContext(node)) {
+    // Either a general inclusion or as immediate context
+    if (IncludeInContext(node) || i < j) {
       rv = SerializeNodeStart(node, 0, -1, aString);
 
       if (NS_FAILED(rv))
@@ -918,9 +919,15 @@ nsresult
 nsDocumentEncoder::SerializeRangeContextEnd(const nsTArray<nsINode*>& aAncestorArray,
                                             nsAString& aString)
 {
-  PRInt32 i = 0;
+  if (mDisableContextSerialize) {
+    return NS_OK;
+  }
+  PRInt32 i = 0, j;
   PRInt32 count = aAncestorArray.Length();
   nsresult rv = NS_OK;
+
+  // currently only for table-related elements
+  j = GetImmediateContextCount(aAncestorArray);
 
   while (i < count) {
     nsINode *node = aAncestorArray.ElementAt(i++);
@@ -928,7 +935,8 @@ nsDocumentEncoder::SerializeRangeContextEnd(const nsTArray<nsINode*>& aAncestorA
     if (!node)
       break;
 
-    if (IncludeInContext(node)) {
+    // Either a general inclusion or as immediate context
+    if (IncludeInContext(node) || i - 1 < j) {
       rv = SerializeNodeEnd(node, aString);
 
       if (NS_FAILED(rv))
@@ -1064,21 +1072,43 @@ nsDocumentEncoder::EncodeToString(nsAString& aOutputString)
       // Bug 236546: newlines not added when copying table cells into clipboard
       // Each selected cell shows up as a range containing a row with a single cell
       // get the row, compare it to previous row and emit </tr><tr> as needed
+      // Bug 137450: Problem copying/pasting a table from a web page to Excel.
+      // Each separate block of <tr></tr> produced above will be wrapped by the
+      // immediate context. This assumes that you can't select cells that are
+      // multiple selections from two tables simultaneously.
       range->GetStartContainer(getter_AddRefs(node));
       NS_ENSURE_TRUE(node, NS_ERROR_FAILURE);
       if (node != prevNode) {
+        nsCOMPtr<nsINode> p;
         if (prevNode) {
-          nsCOMPtr<nsINode> p = do_QueryInterface(prevNode);
+          p = do_QueryInterface(prevNode);
           rv = SerializeNodeEnd(p, output);
           NS_ENSURE_SUCCESS(rv, rv);
-          prevNode = nsnull;
         }
         nsCOMPtr<nsIContent> content = do_QueryInterface(node);
-        if (content && content->Tag() == nsGkAtoms::tr) {
-          nsCOMPtr<nsINode> n = do_QueryInterface(node);
+        if (content && content->IsHTML(nsGkAtoms::tr)) {
+          nsINode* n = content;
+          if (!prevNode) {
+            // Went from a non-<tr> to a <tr>
+            mCommonAncestors.Clear();
+            nsContentUtils::GetAncestors(n->GetNodeParent(), mCommonAncestors);
+            rv = SerializeRangeContextStart(mCommonAncestors, output);
+            NS_ENSURE_SUCCESS(rv, rv);
+            // Don't let SerializeRangeToString serialize the context again
+            mDisableContextSerialize = true;
+          }
+
           rv = SerializeNodeStart(n, 0, -1, output);
           NS_ENSURE_SUCCESS(rv, rv);
           prevNode = node;
+        } else if (prevNode) {
+          // Went from a <tr> to a non-<tr>
+          mCommonAncestors.Clear();
+          nsContentUtils::GetAncestors(p->GetNodeParent(), mCommonAncestors);
+          mDisableContextSerialize = false;
+          rv = SerializeRangeContextEnd(mCommonAncestors, output);
+          NS_ENSURE_SUCCESS(rv, rv);
+          prevNode = nsnull;
         }
       }
 
@@ -1086,11 +1116,20 @@ nsDocumentEncoder::EncodeToString(nsAString& aOutputString)
       rv = SerializeRangeToString(r, output);
       NS_ENSURE_SUCCESS(rv, rv);
     }
+
     if (prevNode) {
       nsCOMPtr<nsINode> p = do_QueryInterface(prevNode);
       rv = SerializeNodeEnd(p, output);
       NS_ENSURE_SUCCESS(rv, rv);
+      mCommonAncestors.Clear();
+      nsContentUtils::GetAncestors(p->GetNodeParent(), mCommonAncestors);
+      mDisableContextSerialize = false; 
+      rv = SerializeRangeContextEnd(mCommonAncestors, output);
+      NS_ENSURE_SUCCESS(rv, rv);
     }
+
+    // Just to be safe
+    mDisableContextSerialize = false; 
 
     mSelection = nsnull;
   } else if (mRange) {
@@ -1243,6 +1282,8 @@ protected:
   bool IsLastNode(nsIDOMNode *aNode);
   bool IsEmptyTextContent(nsIDOMNode* aNode);
   virtual bool IncludeInContext(nsINode *aNode);
+  virtual PRInt32
+  GetImmediateContextCount(const nsTArray<nsINode*>& aAncestorArray);
 
   bool mIsTextWidget;
 };
@@ -1271,7 +1312,15 @@ nsHTMLCopyEncoder::Init(nsIDOMDocument* aDocument,
   mDocument = do_QueryInterface(aDocument);
   NS_ENSURE_TRUE(mDocument, NS_ERROR_FAILURE);
 
-  mMimeType.AssignLiteral("text/html");
+  // Hack, hack! Traditionally, the caller passes text/unicode, which is
+  // treated as "guess text/html or text/plain" in this context. (It has a
+  // different meaning in other contexts. Sigh.) From now on, "text/plain"
+  // means forcing text/plain instead of guessing.
+  if (aMimeType.EqualsLiteral("text/plain")) {
+    mMimeType.AssignLiteral("text/plain");
+  } else {
+    mMimeType.AssignLiteral("text/html");
+  }
 
   // Make all links absolute when copying
   // (see related bugs #57296, #41924, #58646, #32768)
@@ -1699,13 +1748,12 @@ nsHTMLCopyEncoder::GetPromotedPoint(Endpoint aWhere, nsIDOMNode *aNode, PRInt32 
     if (IsTextNode(n))
     {
       // if not at end of text node, we are done
-      PRUint32 len;
-      GetLengthOfDOMNode(aNode, len);
+      PRUint32 len = n->Length();
       if (offset < (PRInt32)len)
       {
         // unless everything after us in just whitespace.  NOTE: we need a more
         // general solution that truly detects all cases of non-significant
-        // whitesace with no false alarms.
+        // whitespace with no false alarms.
         nsCOMPtr<nsIDOMCharacterData> nodeAsText = do_QueryInterface(aNode);
         nsAutoString text;
         nodeAsText->SubstringData(offset, len-offset, text);
@@ -1891,17 +1939,19 @@ nsHTMLCopyEncoder::IsLastNode(nsIDOMNode *aNode)
 {
   nsCOMPtr<nsIDOMNode> parent;
   PRInt32 offset,j;
-  PRUint32 numChildren;
   nsresult rv = GetNodeLocation(aNode, address_of(parent), &offset);
   if (NS_FAILED(rv)) 
   {
     NS_NOTREACHED("failure in IsLastNode");
     return false;
   }
-  GetLengthOfDOMNode(parent, numChildren); 
-  if (offset+1 == (PRInt32)numChildren) // easy case, we are last dom child
+  nsCOMPtr<nsINode> parentNode = do_QueryInterface(parent);
+  if (!parentNode) {
     return true;
-  if (!parent)
+  }
+
+  PRUint32 numChildren = parentNode->Length();
+  if (offset+1 == (PRInt32)numChildren) // easy case, we are last dom child
     return true;
   // need to check if any nodes after us are really visible.
   // Mike wrote something for me along these lines in nsSelectionController,
@@ -1947,3 +1997,26 @@ NS_NewHTMLCopyTextEncoder(nsIDocumentEncoder** aResult)
  NS_ADDREF(*aResult);
  return NS_OK;
 }
+
+PRInt32
+nsHTMLCopyEncoder::GetImmediateContextCount(const nsTArray<nsINode*>& aAncestorArray)
+{
+  PRInt32 i = aAncestorArray.Length(), j = 0;
+  while (j < i) {
+    nsINode *node = aAncestorArray.ElementAt(j);
+    if (!node) {
+      break;
+    }
+    nsCOMPtr<nsIContent> content(do_QueryInterface(node));
+    if (!content || !content->IsHTML() || content->Tag() != nsGkAtoms::tr    &&
+                                          content->Tag() != nsGkAtoms::thead &&
+                                          content->Tag() != nsGkAtoms::tbody &&
+                                          content->Tag() != nsGkAtoms::tfoot &&
+                                          content->Tag() != nsGkAtoms::table) {
+      break;
+    }
+    ++j;
+  }
+  return j;
+}
+

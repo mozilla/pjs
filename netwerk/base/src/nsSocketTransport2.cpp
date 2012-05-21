@@ -1,42 +1,7 @@
 /* vim:set ts=4 sw=4 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@netscape.com>
- *   Malcolm Smith <malsmith@cs.rmit.edu.au>
- *   Andreas Otte <andreas.otte@debitel.net>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifdef MOZ_LOGGING
 #define FORCE_PR_LOG
@@ -47,6 +12,7 @@
 #include "nsIOService.h"
 #include "nsStreamUtils.h"
 #include "nsNetSegmentUtils.h"
+#include "nsNetAddr.h"
 #include "nsTransportUtils.h"
 #include "nsProxyInfo.h"
 #include "nsNetCID.h"
@@ -342,7 +308,7 @@ nsSocketInputStream::Read(char *buf, PRUint32 count, PRUint32 *countRead)
 
     *countRead = 0;
 
-    PRFileDesc *fd;
+    PRFileDesc* fd = nsnull;
     {
         MutexAutoLock lock(mTransport->mLock);
 
@@ -363,7 +329,7 @@ nsSocketInputStream::Read(char *buf, PRUint32 count, PRUint32 *countRead)
 
     SOCKET_LOG(("  PR_Read returned [n=%d]\n", n));
 
-    nsresult rv;
+    nsresult rv = NS_OK;
     {
         MutexAutoLock lock(mTransport->mLock);
 
@@ -562,11 +528,10 @@ nsSocketOutputStream::Write(const char *buf, PRUint32 count, PRUint32 *countWrit
 
     *countWritten = 0;
 
-    // A write of 0 bytes can be used to force the initial SSL handshake.
-    if (count == 0 && mByteCount)
-        return NS_OK;
+    // A write of 0 bytes can be used to force the initial SSL handshake, so do
+    // not reject that.
 
-    PRFileDesc *fd;
+    PRFileDesc* fd = nsnull;
     {
         MutexAutoLock lock(mTransport->mLock);
 
@@ -587,13 +552,13 @@ nsSocketOutputStream::Write(const char *buf, PRUint32 count, PRUint32 *countWrit
 
     SOCKET_LOG(("  PR_Write returned [n=%d]\n", n));
 
-    nsresult rv;
+    nsresult rv = NS_OK;
     {
         MutexAutoLock lock(mTransport->mLock);
 
 #ifdef ENABLE_SOCKET_TRACING
-    if (n > 0)
-        mTransport->TraceOutBuf(buf, n);
+        if (n > 0)
+            mTransport->TraceOutBuf(buf, n);
 #endif
 
         mTransport->ReleaseFD_Locked(fd);
@@ -1874,7 +1839,7 @@ nsSocketTransport::IsAlive(bool *result)
 {
     *result = false;
 
-    PRFileDesc *fd;
+    PRFileDesc* fd = nsnull;
     {
         MutexAutoLock lock(mLock);
         if (NS_FAILED(mCondition))
@@ -1956,6 +1921,38 @@ nsSocketTransport::GetSelfAddr(PRNetAddr *addr)
     }
 
     return rv;
+}
+
+/* nsINetAddr getScriptablePeerAddr (); */
+NS_IMETHODIMP
+nsSocketTransport::GetScriptablePeerAddr(nsINetAddr * *addr NS_OUTPARAM)
+{
+    PRNetAddr rawAddr;
+
+    nsresult rv;
+    rv = GetPeerAddr(&rawAddr);
+    if (NS_FAILED(rv))
+        return rv;
+
+    NS_ADDREF(*addr = new nsNetAddr(&rawAddr));
+
+    return NS_OK;
+}
+
+/* nsINetAddr getScriptableSelfAddr (); */
+NS_IMETHODIMP
+nsSocketTransport::GetScriptableSelfAddr(nsINetAddr * *addr NS_OUTPARAM)
+{
+    PRNetAddr rawAddr;
+
+    nsresult rv;
+    rv = GetSelfAddr(&rawAddr);
+    if (NS_FAILED(rv))
+        return rv;
+
+    NS_ADDREF(*addr = new nsNetAddr(&rawAddr));
+
+    return NS_OK;
 }
 
 NS_IMETHODIMP

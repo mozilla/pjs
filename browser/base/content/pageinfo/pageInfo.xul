@@ -1,46 +1,7 @@
 <?xml version="1.0"?>
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is Mozilla Communicator client code, released
-# March 31, 1998.
-#
-# The Initial Developer of the Original Code is
-# Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1998-1999
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Simeon Morrison <smorrison@gte.com>
-#   Chris McAfee <mcafee@netscape.com>
-#   Daniel Brooks <db48x@yahoo.com>
-#   Gervase Markham <gerv@gerv.net>
-#   Florian QUEZE <f.qu@queze.net>
-#   Ehsan Akhgari <ehsan.akhgari@gmail.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 <?xml-stylesheet href="chrome://browser/content/pageinfo/pageInfo.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/pageInfo.css" type="text/css"?>
@@ -89,14 +50,18 @@
     <command id="cmd_popupDef"      oncommand="onCheckboxClick('popup');"/>
     <command id="cmd_cookieDef"     oncommand="onCheckboxClick('cookie');"/>
     <command id="cmd_installDef"    oncommand="onCheckboxClick('install');"/>
+    <command id="cmd_fullscreenDef" oncommand="onCheckboxClick('fullscreen');"/>
     <command id="cmd_geoDef"        oncommand="onCheckboxClick('geo');"/>
     <command id="cmd_indexedDBDef"  oncommand="onCheckboxClick('indexedDB');"/>
+    <command id="cmd_pluginsDef"    oncommand="onCheckboxClick('plugins');"/>
     <command id="cmd_imageToggle"   oncommand="onRadioClick('image');"/>
     <command id="cmd_popupToggle"   oncommand="onRadioClick('popup');"/>
     <command id="cmd_cookieToggle"  oncommand="onRadioClick('cookie');"/>
     <command id="cmd_installToggle" oncommand="onRadioClick('install');"/>
+    <command id="cmd_fullscreenToggle" oncommand="onRadioClick('fullscreen');"/>
     <command id="cmd_geoToggle"     oncommand="onRadioClick('geo');"/>
     <command id="cmd_indexedDBToggle" oncommand="onRadioClick('indexedDB');"/>
+    <command id="cmd_pluginsToggle" oncommand="onRadioClick('plugins');"/>
   </commandset>
 
   <keyset>
@@ -399,6 +364,31 @@
             <radiogroup id="indexedDBRadioGroup" orient="horizontal">
               <radio id="indexedDB#1" command="cmd_indexedDBToggle" label="&permAllow;"/>
               <radio id="indexedDB#2" command="cmd_indexedDBToggle" label="&permBlock;"/>
+            </radiogroup>
+          </hbox>
+        </vbox>
+        <vbox class="permission" id="permPluginsRow">
+          <label class="permissionLabel" id="permPluginsLabel"
+                 value="&permPlugins;" control="pluginsRadioGroup"/>
+          <hbox role="group" aria-labelledby="permPluginsLabel">
+            <checkbox id="pluginsDef" command="cmd_pluginsDef" label="&permAskAlways;"/>
+            <spacer flex="1"/>
+            <radiogroup id="pluginsRadioGroup" orient="horizontal">
+              <radio id="plugins#1" command="cmd_pluginsToggle" label="&permAllow;"/>
+              <radio id="plugins#2" command="cmd_pluginsToggle" label="&permBlock;"/>
+            </radiogroup>
+          </hbox>
+        </vbox>
+        <vbox class="permission">
+          <label class="permissionLabel" id="permFullscreenLabel"
+                 value="&permFullscreen;" control="fullscreenRadioGroup"/>
+          <hbox role="group" aria-labelledby="permFullscreenLabel">
+            <checkbox id="fullscreenDef" command="cmd_fullscreenDef" label="&permUseDefault;"/>
+            <spacer flex="1"/>
+            <radiogroup id="fullscreenRadioGroup" orient="horizontal">
+              <radio id="fullscreen#0" command="cmd_fullscreenToggle" label="&permAskAlways;"/>
+              <radio id="fullscreen#1" command="cmd_fullscreenToggle" label="&permAllow;"/>
+              <radio id="fullscreen#2" command="cmd_fullscreenToggle" label="&permBlock;"/>
             </radiogroup>
           </hbox>
         </vbox>

@@ -1,45 +1,14 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * John B. Keiser
- * Portions created by the Initial Developer are Copyright (C) 2001
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsITextControlElement_h___
 #define nsITextControlElement_h___
 
 #include "nsISupports.h"
+#include "nsCOMPtr.h"
 class nsIContent;
 class nsAString;
 class nsIEditor;
@@ -49,8 +18,8 @@ class nsTextControlFrame;
 
 // IID for the nsITextControl interface
 #define NS_ITEXTCONTROLELEMENT_IID    \
-{ 0x2e758eee, 0xd023, 0x4fd1,    \
-  { 0x97, 0x93, 0xae, 0xeb, 0xbb, 0xf3, 0xa8, 0x3f } }
+{ 0xe0a05008, 0xef02, 0x4fa2,    \
+  { 0x93, 0xf2, 0x78, 0xe1, 0xec, 0xf7, 0x5b, 0x79 } }
 
 /**
  * This interface is used for the text control frame to get the editor and
@@ -127,14 +96,6 @@ public:
   NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const = 0;
 
   /**
-   * Set the current value of the text editor.
-   *
-   * @param aValue the new value for the text control.
-   * @param aUserInput whether this value is coming from user input.
-   */
-  NS_IMETHOD_(void) SetTextEditorValue(const nsAString& aValue, bool aUserInput) = 0;
-
-  /**
    * Get the editor object associated with the text editor.
    * The return value is null if the control does not support an editor
    * (for example, if it is a checkbox.)
@@ -190,11 +151,6 @@ public:
   NS_IMETHOD_(void) InitializeKeyboardEventListeners() = 0;
 
   /**
-   * Notify the text control that the placeholder text needs to be updated.
-   */
-  NS_IMETHOD_(void) UpdatePlaceholderText(bool aNotify) = 0;
-
-  /**
    * Show/hide the placeholder for the control.
    */
   NS_IMETHOD_(void) SetPlaceholderClass(bool aVisible, bool aNotify) = 0;
@@ -226,6 +182,9 @@ public:
    * elements be initialized eagerly.
    */
   NS_IMETHOD_(bool) HasCachedSelection() = 0;
+
+  static already_AddRefed<nsITextControlElement>
+  GetTextControlElementFromEditingHost(nsIContent* aHost);
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsITextControlElement,

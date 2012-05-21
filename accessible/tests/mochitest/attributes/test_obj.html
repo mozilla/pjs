@@ -96,6 +96,22 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=558036
       testAttrs("th2", { "abbr": "SS#" }, true);
       testAttrs("th2", { "axis": "social" }, true);
 
+      // application accessible
+      if (WIN) {
+        var gfxInfo = Components.classes["@mozilla.org/gfx/info;1"].
+          getService(Components.interfaces.nsIGfxInfo);
+        var attrs = {
+          "D2D": (gfxInfo.D2DEnabled ? "true" : "false")
+        }
+        testAttrs(getApplicationAccessible(), attrs, false);
+      }
+
+      // no object attributes
+      testAbsentAttrs(getAccessible("listitem").firstChild, { "tag": "" });
+
+      // experimental aria
+      testAttrs("experimental", {"blah" : "true"}, true);
+
       SimpleTest.finish();
     }
 
@@ -128,6 +144,11 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=558036
      href="https://bugzilla.mozilla.org/show_bug.cgi?id=663136"
      title="Add test coverage for tablist as implicit live region">
     Mozilla Bug 663136
+  </a>
+  <a target="_blank"
+     href="https://bugzilla.mozilla.org/show_bug.cgi?id=563862"
+     title="Expand support for nsIAccessibleEvent::OBJECT_ATTRIBUTE_CHANGE">
+    Mozilla Bug 563862
   </a>
   <p id="display"></p>
   <div id="content" style="display: none"></div>
@@ -184,5 +205,12 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=558036
       <th id="th2" abbr="SS#" axis="social">Social Security Number</th>
     </tr>
   </table>
+
+  <ul>
+    <li id="listitem">item
+  </ul>
+
+  <!-- experimental aria -->
+  <div id="experimental" aria-blah="true">Fake beer</div>
 </body>
 </html>

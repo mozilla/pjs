@@ -1,39 +1,7 @@
 /* vim:set ts=2 sw=2 sts=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla code.
- *
- * The Initial Developer of the Original Code is the Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Chris Double <chris.double@double.co.nz>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if !defined(MediaResource_h_)
 #define MediaResource_h_
@@ -191,6 +159,12 @@ public:
   virtual void Resume() = 0;
   // Get the current principal for the channel
   virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal() = 0;
+  // If this returns false, then we shouldn't try to clone this MediaResource
+  // because its underlying resources are not suitable for reuse (e.g.
+  // because the underlying connection has been lost, or this resource
+  // just can't be safely cloned). If this returns true, CloneData could
+  // still fail. If this returns false, CloneData should not be called.
+  virtual bool CanClone() { return false; }
   // Create a new stream of the same type that refers to the same URI
   // with a new channel. Any cached data associated with the original
   // stream should be accessible in the new stream too.
@@ -369,6 +343,8 @@ public:
   // if this stream didn't read any data, since another stream might have
   // received data for the same resource.
   void CacheClientNotifyDataEnded(nsresult aStatus);
+  // Notify that the principal for the cached resource changed.
+  void CacheClientNotifyPrincipalChanged();
 
   // These are called on the main thread by nsMediaCache. These shouldn't block,
   // but they may grab locks --- the media cache is not holding its lock
@@ -391,6 +367,7 @@ public:
   virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal();
   // Return true if the stream has been closed.
   bool IsClosed() const { return mCacheStream.IsClosed(); }
+  virtual bool     CanClone();
   virtual MediaResource* CloneData(nsMediaDecoder* aDecoder);
   virtual nsresult ReadFromCache(char* aBuffer, PRInt64 aOffset, PRUint32 aCount);
   virtual void     EnsureCacheUpToDate();

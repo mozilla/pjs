@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2007
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Alexander Surkov <surkov.alexander@gmail.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsAccUtils_h_
 #define nsAccUtils_h_
@@ -44,7 +11,6 @@
 #include "nsIAccessibleText.h"
 #include "nsIAccessibleTable.h"
 
-#include "nsARIAMap.h"
 #include "nsAccessibilityService.h"
 #include "nsCoreUtils.h"
 
@@ -60,6 +26,7 @@ class nsAccessible;
 class nsHyperTextAccessible;
 class nsHTMLTableAccessible;
 class nsDocAccessible;
+struct nsRoleMapEntry;
 #ifdef MOZ_XUL
 class nsXULTreeAccessible;
 #endif
@@ -108,22 +75,6 @@ public:
   static PRInt32 GetARIAOrDefaultLevel(nsAccessible *aAccessible);
 
   /**
-   * Compute position in group (posinset) and group size (setsize) for
-   * nsIDOMXULSelectControlItemElement node.
-   */
-  static void GetPositionAndSizeForXULSelectControlItem(nsIContent *aContent,
-                                                        PRInt32 *aPosInSet,
-                                                        PRInt32 *aSetSize);
-
-  /**
-   * Compute group position and group size (posinset and setsize) for
-   * nsIDOMXULContainerItemElement node.
-   */
-  static void GetPositionAndSizeForXULContainerItem(nsIContent *aContent,
-                                                    PRInt32 *aPosInSet,
-                                                    PRInt32 *aSetSize);
-
-  /**
    * Compute group level for nsIDOMXULContainerItemElement node.
    */
   static PRInt32 GetLevelForXULContainerItem(nsIContent *aContent);
@@ -154,22 +105,12 @@ public:
   static nsIAtom* GetARIAToken(mozilla::dom::Element* aElement, nsIAtom* aAttr);
 
   /**
-   * Return document accessible for the given presshell.
-   */
-  static nsDocAccessible* GetDocAccessibleFor(const nsIPresShell* aPresShell)
-  {
-    return aPresShell ?
-      GetAccService()->GetDocAccessible(aPresShell->GetDocument()) : nsnull;
-  }
-
-  /**
    * Return document accessible for the given DOM node.
    */
   static nsDocAccessible *GetDocAccessibleFor(nsINode *aNode)
   {
     nsIPresShell *presShell = nsCoreUtils::GetPresShellFor(aNode);
-    return presShell ?
-      GetAccService()->GetDocAccessible(presShell->GetDocument()) : nsnull;
+    return GetAccService()->GetDocAccessible(presShell);
   }
 
   /**
@@ -180,8 +121,7 @@ public:
     nsCOMPtr<nsIDocShell> docShell(do_QueryInterface(aContainer));
     nsCOMPtr<nsIPresShell> presShell;
     docShell->GetPresShell(getter_AddRefs(presShell));
-    return presShell ?
-      GetAccService()->GetDocAccessible(presShell->GetDocument()) : nsnull;
+    return GetAccService()->GetDocAccessible(presShell);
   }
 
   /**
@@ -203,11 +143,6 @@ public:
    */
   static nsAccessible* GetSelectableContainer(nsAccessible* aAccessible,
                                               PRUint64 aState);
-
-  /**
-   * Return multi selectable container for the given item.
-   */
-  static nsAccessible *GetMultiSelectableContainer(nsINode *aNode);
 
   /**
    * Return true if the DOM node of given accessible has aria-selected="true"
@@ -271,16 +206,6 @@ public:
   static nsIntPoint GetScreenCoordsForParent(nsAccessNode *aAccessNode);
 
   /**
-   * Get the role map entry for a given DOM node. This will use the first
-   * ARIA role if the role attribute provides a space delimited list of roles.
-   *
-   * @param aNode  [in] the DOM node to get the role map entry for
-   * @return        a pointer to the role map entry for the ARIA role, or nsnull
-   *                if none
-   */
-  static nsRoleMapEntry *GetRoleMapEntry(nsINode *aNode);
-
-  /**
    * Return the role of the given accessible.
    */
   static PRUint32 Role(nsIAccessible *aAcc)
@@ -312,7 +237,7 @@ public:
    */
   static bool GetLiveAttrValue(PRUint32 aRule, nsAString& aValue);
 
-#ifdef DEBUG_A11Y
+#ifdef DEBUG
   /**
    * Detect whether the given accessible object implements nsIAccessibleText,
    * when it is text or has text child node.

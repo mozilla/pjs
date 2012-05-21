@@ -1,50 +1,18 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2003
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Original Author: Aaron Leventhal (aaronl@netscape.com)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "Accessible-inl.h"
 #include "AccIterator.h"
 #include "nsAccCache.h"
 #include "nsAccessibilityService.h"
 #include "nsAccessiblePivot.h"
 #include "nsAccTreeWalker.h"
 #include "nsAccUtils.h"
-#include "nsRootAccessible.h"
 #include "nsTextEquivUtils.h"
 #include "Role.h"
+#include "RootAccessible.h"
 #include "States.h"
 
 #include "nsIMutableArray.h"
@@ -175,7 +143,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsDocAccessible, nsAccessible)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsDocAccessible)
-  NS_INTERFACE_MAP_STATIC_AMBIGUOUS(nsDocAccessible)
   NS_INTERFACE_MAP_ENTRY(nsIAccessibleDocument)
   NS_INTERFACE_MAP_ENTRY(nsIDocumentObserver)
   NS_INTERFACE_MAP_ENTRY(nsIMutationObserver)
@@ -213,26 +180,26 @@ NS_IMPL_RELEASE_INHERITED(nsDocAccessible, nsHyperTextAccessible)
 ////////////////////////////////////////////////////////////////////////////////
 // nsIAccessible
 
-NS_IMETHODIMP
-nsDocAccessible::GetName(nsAString& aName)
+ENameValueFlag
+nsDocAccessible::Name(nsString& aName)
 {
-  nsresult rv = NS_OK;
   aName.Truncate();
+
   if (mParent) {
-    rv = mParent->GetName(aName); // Allow owning iframe to override the name
+    mParent->Name(aName); // Allow owning iframe to override the name
   }
   if (aName.IsEmpty()) {
     // Allow name via aria-labelledby or title attribute
-    rv = nsAccessible::GetName(aName);
+    nsAccessible::Name(aName);
   }
   if (aName.IsEmpty()) {
-    rv = GetTitle(aName);   // Try title element
+    GetTitle(aName);   // Try title element
   }
   if (aName.IsEmpty()) {   // Last resort: use URL
-    rv = GetURL(aName);
+    GetURL(aName);
   }
-
-  return rv;
+ 
+  return eNameOK;
 }
 
 // nsAccessible public method
@@ -285,7 +252,7 @@ nsDocAccessible::SetRoleMapEntry(nsRoleMapEntry* aRoleMapEntry)
   // Allow use of ARIA role from outer to override
   nsIContent *ownerContent = parentDoc->FindContentForSubDocument(mDocument);
   if (ownerContent) {
-    nsRoleMapEntry *roleMapEntry = nsAccUtils::GetRoleMapEntry(ownerContent);
+    nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(ownerContent);
     if (roleMapEntry)
       mRoleMapEntry = roleMapEntry; // Override
   }
@@ -333,8 +300,7 @@ nsDocAccessible::NativeState()
     state |= states::INVISIBLE | states::OFFSCREEN;
   }
 
-  nsCOMPtr<nsIEditor> editor;
-  GetAssociatedEditor(getter_AddRefs(editor));
+  nsCOMPtr<nsIEditor> editor = GetEditor();
   state |= editor ? states::EDITABLE : states::READONLY;
 
   return state;
@@ -342,7 +308,7 @@ nsDocAccessible::NativeState()
 
 // nsAccessible public method
 void
-nsDocAccessible::ApplyARIAState(PRUint64* aState)
+nsDocAccessible::ApplyARIAState(PRUint64* aState) const
 {
   // Combine with states from outer doc
   // 
@@ -553,37 +519,32 @@ nsDocAccessible::GetVirtualCursor(nsIAccessiblePivot** aVirtualCursor)
   return NS_OK;
 }
 
-// nsIAccessibleHyperText method
-NS_IMETHODIMP nsDocAccessible::GetAssociatedEditor(nsIEditor **aEditor)
+// nsHyperTextAccessible method
+already_AddRefed<nsIEditor>
+nsDocAccessible::GetEditor() const
 {
-  NS_ENSURE_ARG_POINTER(aEditor);
-  *aEditor = nsnull;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
   // Check if document is editable (designMode="on" case). Otherwise check if
   // the html:body (for HTML document case) or document element is editable.
   if (!mDocument->HasFlag(NODE_IS_EDITABLE) &&
       !mContent->HasFlag(NODE_IS_EDITABLE))
-    return NS_OK;
+    return nsnull;
 
   nsCOMPtr<nsISupports> container = mDocument->GetContainer();
   nsCOMPtr<nsIEditingSession> editingSession(do_GetInterface(container));
   if (!editingSession)
-    return NS_OK; // No editing session interface
+    return nsnull; // No editing session interface
 
   nsCOMPtr<nsIEditor> editor;
   editingSession->GetEditorForWindow(mDocument->GetWindow(), getter_AddRefs(editor));
-  if (!editor) {
-    return NS_OK;
-  }
-  bool isEditable;
+  if (!editor)
+    return nsnull;
+
+  bool isEditable = false;
   editor->GetIsDocumentEditable(&isEditable);
-  if (isEditable) {
-    NS_ADDREF(*aEditor = editor);
-  }
-  return NS_OK;
+  if (isEditable)
+    return editor.forget();
+
+  return nsnull;
 }
 
 // nsDocAccessible public method
@@ -699,12 +660,6 @@ nsDocAccessible::GetFrame() const
   return root;
 }
 
-bool
-nsDocAccessible::IsDefunct() const
-{
-  return nsHyperTextAccessibleWrap::IsDefunct() || !mDocument;
-}
-
 // nsDocAccessible protected member
 void nsDocAccessible::GetBoundsRect(nsRect& aBounds, nsIFrame** aRelativeFrame)
 {
@@ -776,7 +731,7 @@ nsresult nsDocAccessible::AddEventListeners()
   nsCOMPtr<nsIDocShellTreeItem> rootTreeItem;
   docShellTreeItem->GetRootTreeItem(getter_AddRefs(rootTreeItem));
   if (rootTreeItem) {
-    nsRootAccessible* rootAccessible = RootAccessible();
+    a11y::RootAccessible* rootAccessible = RootAccessible();
     NS_ENSURE_TRUE(rootAccessible, NS_ERROR_FAILURE);
     nsRefPtr<nsCaretAccessible> caretAccessible = rootAccessible->GetCaretAccessible();
     if (caretAccessible) {
@@ -823,7 +778,7 @@ nsresult nsDocAccessible::RemoveEventListeners()
     NS_RELEASE_THIS(); // Kung fu death grip
   }
 
-  nsRootAccessible* rootAccessible = RootAccessible();
+  a11y::RootAccessible* rootAccessible = RootAccessible();
   if (rootAccessible) {
     nsRefPtr<nsCaretAccessible> caretAccessible = rootAccessible->GetCaretAccessible();
     if (caretAccessible)
@@ -929,7 +884,8 @@ nsDocAccessible::OnPivotChanged(nsIAccessiblePivot* aPivot,
                                 nsIAccessible* aOldAccessible,
                                 PRInt32 aOldStart, PRInt32 aOldEnd)
 {
-  nsRefPtr<AccEvent> event = new AccEvent(nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED, this);
+  nsRefPtr<AccEvent> event = new AccVCChangeEvent(this, aOldAccessible,
+                                                  aOldStart, aOldEnd);
   nsEventShell::FireEvent(event);
 
   return NS_OK;
@@ -1094,6 +1050,9 @@ nsDocAccessible::AttributeChangedImpl(nsIContent* aContent, PRInt32 aNameSpaceID
   if ((aContent->IsXUL() && aAttribute == nsGkAtoms::selected) ||
       aAttribute == nsGkAtoms::aria_selected) {
     nsAccessible* item = GetAccessible(aContent);
+    if (!item)
+      return;
+
     nsAccessible* widget =
       nsAccUtils::GetSelectableContainer(item, item->State());
     if (widget) {
@@ -1148,16 +1107,6 @@ nsDocAccessible::ARIAAttributeChanged(nsIContent* aContent, nsIAtom* aAttribute)
     return;
   }
 
-  // For aria drag and drop changes we fire a generic attribute change event;
-  // at least until native API comes up with a more meaningful event.
-  if (aAttribute == nsGkAtoms::aria_grabbed ||
-      aAttribute == nsGkAtoms::aria_dropeffect ||
-      aAttribute == nsGkAtoms::aria_hidden ||
-      aAttribute == nsGkAtoms::aria_sort) {
-    FireDelayedAccessibleEvent(nsIAccessibleEvent::EVENT_OBJECT_ATTRIBUTE_CHANGED,
-                               aContent);
-  }
-
   // We treat aria-expanded as a global ARIA state for historical reasons
   if (aAttribute == nsGkAtoms::aria_expanded) {
     nsRefPtr<AccEvent> event =
@@ -1165,6 +1114,13 @@ nsDocAccessible::ARIAAttributeChanged(nsIContent* aContent, nsIAtom* aAttribute)
     FireDelayedAccessibleEvent(event);
     return;
   }
+
+  // For aria attributes like drag and drop changes we fire a generic attribute
+  // change event; at least until native API comes up with a more meaningful event.
+  PRUint8 attrFlags = nsAccUtils::GetAttributeCharacteristics(aAttribute);
+  if (!(attrFlags & ATTR_BYPASSOBJ))
+    FireDelayedAccessibleEvent(nsIAccessibleEvent::EVENT_OBJECT_ATTRIBUTE_CHANGED,
+                               aContent);
 
   if (!aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::role)) {
     // We don't care about these other ARIA attribute changes unless there is
@@ -1380,17 +1336,11 @@ nsDocAccessible::BindToDocument(nsAccessible* aAccessible,
     return false;
 
   // Put into DOM node cache.
-  if (aAccessible->IsPrimaryForNode() &&
-      !mNodeToAccessibleMap.Put(aAccessible->GetNode(), aAccessible))
-    return false;
+  if (aAccessible->IsPrimaryForNode())
+    mNodeToAccessibleMap.Put(aAccessible->GetNode(), aAccessible);
 
   // Put into unique ID cache.
-  if (!mAccessibleCache.Put(aAccessible->UniqueID(), aAccessible)) {
-    if (aAccessible->IsPrimaryForNode())
-      mNodeToAccessibleMap.Remove(aAccessible->GetNode());
-
-    return false;
-  }
+  mAccessibleCache.Put(aAccessible->UniqueID(), aAccessible);
 
   // Initialize the accessible.
   if (!aAccessible->Init()) {
@@ -1472,14 +1422,8 @@ nsDocAccessible::RecreateAccessible(nsIContent* aContent)
   // coalescence with normal hide and show events. Note, in this case they
   // should be coalesced with normal show/hide events.
 
-  // Check if the node is in accessible document.
-  nsAccessible* container = GetContainerAccessible(aContent);
-  if (container) {
-    // Remove and reinsert.
-    UpdateTree(container, aContent, false);
-    container->UpdateChildren();
-    UpdateTree(container, aContent, true);
-  }
+  ContentRemoved(aContent->GetParent(), aContent);
+  ContentInserted(aContent->GetParent(), aContent, aContent->GetNextSibling());
 }
 
 void
@@ -1628,7 +1572,7 @@ nsDocAccessible::AddDependentIDsFor(nsAccessible* aRelProvider,
         continue;
     }
 
-    IDRefsIterator iter(aRelProvider->GetContent(), relAttr);
+    IDRefsIterator iter(this, aRelProvider->GetContent(), relAttr);
     while (true) {
       const nsDependentSubstring id = iter.NextID();
       if (id.IsEmpty())
@@ -1638,10 +1582,7 @@ nsDocAccessible::AddDependentIDsFor(nsAccessible* aRelProvider,
       if (!providers) {
         providers = new AttrRelProviderArray();
         if (providers) {
-          if (!mDependentIDsHash.Put(id, providers)) {
-            delete providers;
-            providers = nsnull;
-          }
+          mDependentIDsHash.Put(id, providers);
         }
       }
 
@@ -1679,7 +1620,7 @@ nsDocAccessible::RemoveDependentIDsFor(nsAccessible* aRelProvider,
     if (aRelAttr && aRelAttr != *kRelationAttrs[idx])
       continue;
 
-    IDRefsIterator iter(aRelProvider->GetContent(), relAttr);
+    IDRefsIterator iter(this, aRelProvider->GetContent(), relAttr);
     while (true) {
       const nsDependentSubstring id = iter.NextID();
       if (id.IsEmpty())
@@ -1715,15 +1656,14 @@ nsDocAccessible::UpdateAccessibleOnAttrChange(dom::Element* aElement,
     // It is common for js libraries to set the role on the body element after
     // the document has loaded. In this case we just update the role map entry.
     if (mContent == aElement) {
-      SetRoleMapEntry(nsAccUtils::GetRoleMapEntry(aElement));
+      SetRoleMapEntry(aria::GetRoleMap(aElement));
       return true;
     }
 
     // Recreate the accessible when role is changed because we might require a
     // different accessible class for the new role or the accessible may expose
     // a different sets of interfaces (COM restriction).
-    HandleNotification<nsDocAccessible, nsIContent>
-      (this, &nsDocAccessible::RecreateAccessible, aElement);
+    RecreateAccessible(aElement);
 
     return true;
   }
@@ -1734,11 +1674,9 @@ nsDocAccessible::UpdateAccessibleOnAttrChange(dom::Element* aElement,
     // kill use to recreate the accessible even if the attribute was used in
     // the wrong namespace or an element that doesn't support it.
 
-    // Recreate accessible asynchronously to allow the content to handle
-    // the attribute change.
-    mNotificationController->ScheduleNotification<nsDocAccessible, nsIContent>
-      (this, &nsDocAccessible::RecreateAccessible, aElement);
-
+    // Make sure the accessible is recreated asynchronously to allow the content
+    // to handle the attribute change.
+    RecreateAccessible(aElement);
     return true;
   }
 
@@ -1747,8 +1685,7 @@ nsDocAccessible::UpdateAccessibleOnAttrChange(dom::Element* aElement,
     // This affects whether the accessible supports SelectAccessible.
     // COM says we cannot change what interfaces are supported on-the-fly,
     // so invalidate this object. A new one will be created on demand.
-    HandleNotification<nsDocAccessible, nsIContent>
-      (this, &nsDocAccessible::RecreateAccessible, aElement);
+    RecreateAccessible(aElement);
 
     return true;
   }
@@ -1791,11 +1728,6 @@ nsDocAccessible::ProcessPendingEvent(AccEvent* aEvent)
     PRInt32 caretOffset;
     if (hyperText &&
         NS_SUCCEEDED(hyperText->GetCaretOffset(&caretOffset))) {
-#ifdef DEBUG_A11Y
-      PRUnichar chAtOffset;
-      hyperText->GetCharacterAtOffset(caretOffset, &chAtOffset);
-      printf("\nCaret moved to %d with char %c", caretOffset, chAtOffset);
-#endif
       nsRefPtr<AccEvent> caretMoveEvent =
         new AccCaretMoveEvent(hyperText, caretOffset);
       nsEventShell::FireEvent(caretMoveEvent);

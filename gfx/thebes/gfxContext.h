@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Oracle Corporation code.
- *
- * The Initial Developer of the Original Code is Oracle Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2005
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Stuart Parmenter <pavlov@pavlov.net>
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_CONTEXT_H
 #define GFX_CONTEXT_H
@@ -54,6 +21,7 @@
 #include "mozilla/gfx/2D.h"
 
 typedef struct _cairo cairo_t;
+struct GlyphBufferAzure;
 template <typename T> class FallibleTArray;
 
 /**
@@ -717,6 +685,7 @@ public:
 
 private:
   friend class GeneralPattern;
+  friend struct GlyphBufferAzure;
 
   typedef mozilla::gfx::Matrix Matrix;
   typedef mozilla::gfx::DrawTarget DrawTarget;
@@ -737,6 +706,7 @@ private:
       , clipWasReset(false)
       , fillRule(mozilla::gfx::FILL_WINDING)
       , aaMode(mozilla::gfx::AA_SUBPIXEL)
+      , patternTransformChanged(false)
     {}
 
     mozilla::gfx::CompositionOp op;
@@ -759,6 +729,8 @@ private:
     mozilla::RefPtr<DrawTarget> drawTarget;
     mozilla::RefPtr<DrawTarget> parentTarget;
     mozilla::gfx::AntialiasMode aaMode;
+    bool patternTransformChanged;
+    Matrix patternTransform;
   };
 
   // This ensures mPath contains a valid path (in user space!)
@@ -768,6 +740,7 @@ private:
   void FillAzure(mozilla::gfx::Float aOpacity);
   void PushClipsToDT(mozilla::gfx::DrawTarget *aDT);
   CompositionOp GetOp();
+  void TransformWillChange();
 
   bool mPathIsRect;
   bool mTransformChanged;
@@ -924,23 +897,33 @@ public:
     gfxContextAutoDisableSubpixelAntialiasing(gfxContext *aContext, bool aDisable)
     {
         if (aDisable) {
-            mSurface = aContext->CurrentSurface();
-            if (!mSurface) {
-              return;
+            if (aContext->IsCairo()) {
+                mSurface = aContext->CurrentSurface();
+                if (!mSurface) {
+                  return;
+                }
+                mSubpixelAntialiasingEnabled = mSurface->GetSubpixelAntialiasingEnabled();
+                mSurface->SetSubpixelAntialiasingEnabled(false);
+            } else {
+                mDT = aContext->GetDrawTarget();
+
+                mSubpixelAntialiasingEnabled = mDT->GetPermitSubpixelAA();
+                mDT->SetPermitSubpixelAA(false);
             }
-            mSubpixelAntialiasingEnabled = mSurface->GetSubpixelAntialiasingEnabled();
-            mSurface->SetSubpixelAntialiasingEnabled(false);
         }
     }
     ~gfxContextAutoDisableSubpixelAntialiasing()
     {
         if (mSurface) {
             mSurface->SetSubpixelAntialiasingEnabled(mSubpixelAntialiasingEnabled);
+        } else if (mDT) {
+            mDT->SetPermitSubpixelAA(mSubpixelAntialiasingEnabled);
         }
     }
 
 private:
     nsRefPtr<gfxASurface> mSurface;
+    mozilla::RefPtr<mozilla::gfx::DrawTarget> mDT;
     bool mSubpixelAntialiasingEnabled;
 };
 

@@ -1,41 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Tim Copperfield <timecop@network.email.ne.jp>
- *   Roland Mainz <roland.mainz@informatik.med.uni-giessen.de>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "prlog.h"
 #include "prmem.h"
@@ -48,7 +14,6 @@
 #include "nsPluginHost.h"
 #include "nsPluginSafety.h"
 #include "nsPluginLogging.h"
-#include "nsIPrivateBrowsingService.h"
 #include "nsContentUtils.h"
 
 #include "nsIDocument.h"
@@ -61,6 +26,8 @@
 #include "nsNetCID.h"
 #include "nsIContent.h"
 
+#include "mozilla/Preferences.h"
+
 #ifdef MOZ_WIDGET_ANDROID
 #include "ANPBase.h"
 #include <android/log.h>
@@ -68,25 +35,41 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/CondVar.h"
 #include "AndroidBridge.h"
+
+class PluginEventRunnable : public nsRunnable
+{
+public:
+  PluginEventRunnable(nsNPAPIPluginInstance* instance, ANPEvent* event)
+    : mInstance(instance), mEvent(*event), mCanceled(false) {}
+
+  virtual nsresult Run() {
+    if (mCanceled)
+      return NS_OK;
+
+    mInstance->HandleEvent(&mEvent, nsnull);
+    mInstance->PopPostedEvent(this);
+    return NS_OK;
+  }
+
+  void Cancel() { mCanceled = true; }
+private:
+  nsNPAPIPluginInstance* mInstance;
+  ANPEvent mEvent;
+  bool mCanceled;
+};
+
 #endif
 
 using namespace mozilla;
 using namespace mozilla::plugins::parent;
 
 static NS_DEFINE_IID(kIOutputStreamIID, NS_IOUTPUTSTREAM_IID);
-static NS_DEFINE_IID(kIPluginStreamListenerIID, NS_IPLUGINSTREAMLISTENER_IID);
 
 NS_IMPL_THREADSAFE_ISUPPORTS0(nsNPAPIPluginInstance)
 
-nsNPAPIPluginInstance::nsNPAPIPluginInstance(nsNPAPIPlugin* plugin)
+nsNPAPIPluginInstance::nsNPAPIPluginInstance()
   :
-#ifdef XP_MACOSX
-#ifdef NP_NO_QUICKDRAW
-    mDrawingModel(NPDrawingModelCoreGraphics),
-#else
-    mDrawingModel(NPDrawingModelQuickDraw),
-#endif
-#endif
+    mDrawingModel(kDefaultDrawingModel),
 #ifdef MOZ_WIDGET_ANDROID
     mSurface(nsnull),
     mANPDrawingModel(0),
@@ -98,7 +81,7 @@ nsNPAPIPluginInstance::nsNPAPIPluginInstance(nsNPAPIPlugin* plugin)
     mCached(false),
     mUsesDOMForCursor(false),
     mInPluginInitCall(false),
-    mPlugin(plugin),
+    mPlugin(nsnull),
     mMIMEType(nsnull),
     mOwner(nsnull),
     mCurrentPluginEvent(nsnull),
@@ -108,20 +91,11 @@ nsNPAPIPluginInstance::nsNPAPIPluginInstance(nsNPAPIPlugin* plugin)
     mUsePluginLayersPref(false)
 #endif
 {
-  NS_ASSERTION(mPlugin != NULL, "Plugin is required when creating an instance.");
-
-  // Initialize the NPP structure.
-
   mNPP.pdata = NULL;
   mNPP.ndata = this;
 
-  nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
-  if (prefs) {
-    bool useLayersPref;
-    nsresult rv = prefs->GetBoolPref("plugins.use_layers", &useLayersPref);
-    if (NS_SUCCEEDED(rv))
-      mUsePluginLayersPref = useLayersPref;
-  }
+  mUsePluginLayersPref =
+    Preferences::GetBool("plugins.use_layers", mUsePluginLayersPref);
 
   PLUGIN_LOG(PLUGIN_LOG_BASIC, ("nsNPAPIPluginInstance ctor: this=%p\n",this));
 }
@@ -149,30 +123,24 @@ nsNPAPIPluginInstance::StopTime()
   return mStopTime;
 }
 
-nsresult nsNPAPIPluginInstance::Initialize(nsIPluginInstanceOwner* aOwner, const char* aMIMEType)
+nsresult nsNPAPIPluginInstance::Initialize(nsNPAPIPlugin *aPlugin, nsIPluginInstanceOwner* aOwner, const char* aMIMEType)
 {
   PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsNPAPIPluginInstance::Initialize this=%p\n",this));
 
+  NS_ENSURE_ARG_POINTER(aPlugin);
+  NS_ENSURE_ARG_POINTER(aOwner);
+
+  mPlugin = aPlugin;
   mOwner = aOwner;
 
   if (aMIMEType) {
     mMIMEType = (char*)PR_Malloc(PL_strlen(aMIMEType) + 1);
-
-    if (mMIMEType)
+    if (mMIMEType) {
       PL_strcpy(mMIMEType, aMIMEType);
+    }
   }
-
-  return InitializePlugin();
-}
-
-nsresult nsNPAPIPluginInstance::Start()
-{
-  PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsNPAPIPluginInstance::Start this=%p\n",this));
-
-  if (RUNNING == mRunning)
-    return NS_OK;
-
-  return InitializePlugin();
+  
+  return Start();
 }
 
 nsresult nsNPAPIPluginInstance::Stop()
@@ -234,6 +202,14 @@ nsresult nsNPAPIPluginInstance::Stop()
                    ("NPP Destroy called: this=%p, npp=%p, return=%d\n", this, &mNPP, error));
   }
   mRunning = DESTROYED;
+
+#if MOZ_WIDGET_ANDROID
+  for (PRUint32 i = 0; i < mPostedEvents.Length(); i++) {
+    mPostedEvents[i]->Cancel();
+  }
+
+  mPostedEvents.Clear();
+#endif
 
   nsJSNPRuntime::OnPluginDestroy(&mNPP);
 
@@ -322,8 +298,12 @@ nsNPAPIPluginInstance::FileCachedStreamListeners()
 }
 
 nsresult
-nsNPAPIPluginInstance::InitializePlugin()
-{ 
+nsNPAPIPluginInstance::Start()
+{
+  if (mRunning == RUNNING) {
+    return NS_OK;
+  }
+
   PluginDestructionGuard guard(this);
 
   PRUint16 count = 0;
@@ -498,13 +478,6 @@ nsresult nsNPAPIPluginInstance::SetWindow(NPWindow* window)
 }
 
 nsresult
-nsNPAPIPluginInstance::NewStreamToPlugin(nsIPluginStreamListener** listener)
-{
-  // This method can be removed at the next opportunity.
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-nsresult
 nsNPAPIPluginInstance::NewStreamFromPlugin(const char* type, const char* target,
                                            nsIOutputStream* *result)
 {
@@ -517,14 +490,15 @@ nsNPAPIPluginInstance::NewStreamFromPlugin(const char* type, const char* target,
 
 nsresult
 nsNPAPIPluginInstance::NewStreamListener(const char* aURL, void* notifyData,
-                                         nsIPluginStreamListener** listener)
+                                         nsNPAPIPluginStreamListener** listener)
 {
-  nsNPAPIPluginStreamListener* stream = new nsNPAPIPluginStreamListener(this, notifyData, aURL);
-  NS_ENSURE_TRUE(stream, NS_ERROR_OUT_OF_MEMORY);
+  nsRefPtr<nsNPAPIPluginStreamListener> sl = new nsNPAPIPluginStreamListener(this, notifyData, aURL);
 
-  mStreamListeners.AppendElement(stream);
+  mStreamListeners.AppendElement(sl);
 
-  return stream->QueryInterface(kIPluginStreamListenerIID, (void**)listener);
+  sl.forget(listener);
+
+  return NS_OK;
 }
 
 nsresult nsNPAPIPluginInstance::Print(NPPrint* platformPrint)
@@ -654,18 +628,6 @@ nsresult nsNPAPIPluginInstance::GetNPP(NPP* aNPP)
   return NS_OK;
 }
 
-void
-nsNPAPIPluginInstance::SetURI(nsIURI* uri)
-{
-  mURI = uri;
-}
-
-nsIURI*
-nsNPAPIPluginInstance::GetURI()
-{
-  return mURI.get();
-}
-
 NPError nsNPAPIPluginInstance::SetWindowless(bool aWindowless)
 {
   mWindowless = aWindowless;
@@ -704,12 +666,17 @@ nsNPAPIPluginInstance::UsesDOMForCursor()
   return mUsesDOMForCursor;
 }
 
-#if defined(XP_MACOSX)
 void nsNPAPIPluginInstance::SetDrawingModel(NPDrawingModel aModel)
 {
   mDrawingModel = aModel;
 }
 
+void nsNPAPIPluginInstance::RedrawPlugin()
+{
+  mOwner->RedrawPlugin();
+}
+
+#if defined(XP_MACOSX)
 void nsNPAPIPluginInstance::SetEventModel(NPEventModel aModel)
 {
   // the event model needs to be set for the object frame immediately
@@ -822,6 +789,19 @@ void nsNPAPIPluginInstance::RequestJavaSurface()
   ((SurfaceGetter*)mSurfaceGetter.get())->RequestSurface();
 }
 
+void nsNPAPIPluginInstance::PostEvent(void* event)
+{
+  PluginEventRunnable *r = new PluginEventRunnable(this, (ANPEvent*)event);
+  mPostedEvents.AppendElement(nsRefPtr<PluginEventRunnable>(r));
+
+  NS_DispatchToMainThread(r);
+}
+
+void nsNPAPIPluginInstance::PopPostedEvent(PluginEventRunnable* r)
+{
+  mPostedEvents.RemoveElement(r);
+}
+
 #endif
 
 nsresult nsNPAPIPluginInstance::GetDrawingModel(PRInt32* aModel)
@@ -861,63 +841,6 @@ nsNPAPIPluginInstance::GetJSObject(JSContext *cx, JSObject** outObject)
   *outObject = nsNPObjWrapper::GetNewOrUsed(&mNPP, cx, npobj);
 
   _releaseobject(npobj);
-
-  return NS_OK;
-}
-
-nsresult
-nsNPAPIPluginInstance::DefineJavaProperties()
-{
-  NPObject *plugin_obj = nsnull;
-
-  // The dummy Java plugin's scriptable object is what we want to
-  // expose as window.Packages. And Window.Packages.java will be
-  // exposed as window.java.
-
-  // Get the scriptable plugin object.
-  nsresult rv = GetValueFromPlugin(NPPVpluginScriptableNPObject, &plugin_obj);
-
-  if (NS_FAILED(rv) || !plugin_obj) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Get the NPObject wrapper for window.
-  NPObject *window_obj = _getwindowobject(&mNPP);
-
-  if (!window_obj) {
-    _releaseobject(plugin_obj);
-
-    return NS_ERROR_FAILURE;
-  }
-
-  NPIdentifier java_id = _getstringidentifier("java");
-  NPIdentifier packages_id = _getstringidentifier("Packages");
-
-  NPObject *java_obj = nsnull;
-  NPVariant v;
-  OBJECT_TO_NPVARIANT(plugin_obj, v);
-
-  // Define the properties.
-
-  bool ok = _setproperty(&mNPP, window_obj, packages_id, &v);
-  if (ok) {
-    ok = _getproperty(&mNPP, plugin_obj, java_id, &v);
-
-    if (ok && NPVARIANT_IS_OBJECT(v)) {
-      // Set java_obj so that we properly release it at the end of
-      // this function.
-      java_obj = NPVARIANT_TO_OBJECT(v);
-
-      ok = _setproperty(&mNPP, window_obj, java_id, &v);
-    }
-  }
-
-  _releaseobject(window_obj);
-  _releaseobject(plugin_obj);
-  _releaseobject(java_obj);
-
-  if (!ok)
-    return NS_ERROR_FAILURE;
 
   return NS_OK;
 }
@@ -1172,7 +1095,7 @@ nsNPAPIPluginInstance::GetPluginAPIVersion(PRUint16* version)
 }
 
 nsresult
-nsNPAPIPluginInstance::PrivateModeStateChanged()
+nsNPAPIPluginInstance::PrivateModeStateChanged(bool enabled)
 {
   if (RUNNING != mRunning)
     return NS_OK;
@@ -1184,23 +1107,15 @@ nsNPAPIPluginInstance::PrivateModeStateChanged()
 
   NPPluginFuncs* pluginFunctions = mPlugin->PluginFuncs();
 
-  if (pluginFunctions->setvalue) {
-    PluginDestructionGuard guard(this);
-    
-    nsCOMPtr<nsIPrivateBrowsingService> pbs = do_GetService(NS_PRIVATE_BROWSING_SERVICE_CONTRACTID);
-    if (pbs) {
-      bool pme = false;
-      nsresult rv = pbs->GetPrivateBrowsingEnabled(&pme);
-      if (NS_FAILED(rv))
-        return rv;
+  if (!pluginFunctions->setvalue)
+    return NS_ERROR_FAILURE;
 
-      NPError error;
-      NPBool value = static_cast<NPBool>(pme);
-      NS_TRY_SAFE_CALL_RETURN(error, (*pluginFunctions->setvalue)(&mNPP, NPNVprivateModeBool, &value), this);
-      return (error == NPERR_NO_ERROR) ? NS_OK : NS_ERROR_FAILURE;
-    }
-  }
-  return NS_ERROR_FAILURE;
+  PluginDestructionGuard guard(this);
+    
+  NPError error;
+  NPBool value = static_cast<NPBool>(enabled);
+  NS_TRY_SAFE_CALL_RETURN(error, (*pluginFunctions->setvalue)(&mNPP, NPNVprivateModeBool, &value), this);
+  return (error == NPERR_NO_ERROR) ? NS_OK : NS_ERROR_FAILURE;
 }
 
 class DelayUnscheduleEvent : public nsRunnable {
@@ -1480,6 +1395,32 @@ nsNPAPIPluginInstance::URLRedirectResponse(void* notifyData, NPBool allow)
       currentListener->URLRedirectResponse(allow);
     }
   }
+}
+
+NPError
+nsNPAPIPluginInstance::InitAsyncSurface(NPSize *size, NPImageFormat format,
+                                        void *initData, NPAsyncSurface *surface)
+{
+  if (mOwner)
+    return mOwner->InitAsyncSurface(size, format, initData, surface);
+
+  return NPERR_GENERIC_ERROR;
+}
+
+NPError
+nsNPAPIPluginInstance::FinalizeAsyncSurface(NPAsyncSurface *surface)
+{
+  if (mOwner)
+    return mOwner->FinalizeAsyncSurface(surface);
+
+  return NPERR_GENERIC_ERROR;
+}
+
+void
+nsNPAPIPluginInstance::SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed)
+{
+  if (mOwner)
+    mOwner->SetCurrentAsyncSurface(surface, changed);
 }
 
 class CarbonEventModelFailureEvent : public nsRunnable {

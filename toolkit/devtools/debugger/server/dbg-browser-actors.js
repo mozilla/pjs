@@ -1,41 +1,8 @@
 /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is JS Debugger Server code.
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Dave Camp <dcamp@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 /**
@@ -92,6 +59,10 @@ BrowserRootActor.prototype = {
     while (e.hasMoreElements()) {
       let win = e.getNext();
       this.unwatchWindow(win);
+      // Signal our imminent shutdown.
+      let evt = win.document.createEvent("Event");
+      evt.initEvent("Debugger:Shutdown", true, false);
+      win.document.documentElement.dispatchEvent(evt);
     }
   },
 
@@ -192,10 +163,13 @@ BrowserRootActor.prototype = {
   onWindowTitleChange: function BRA_onWindowTitleChange(aWindow, aTitle) { },
   onOpenWindow: function BRA_onOpenWindow(aWindow) { },
   onCloseWindow: function BRA_onCloseWindow(aWindow) {
+    // An nsIWindowMediatorListener's onCloseWindow method gets passed all
+    // sorts of windows; we only care about the tab containers. Those have
+    // 'getBrowser' methods.
     if (aWindow.getBrowser) {
       this.unwatchWindow(aWindow);
     }
-  },
+  }
 }
 
 /**
@@ -306,8 +280,19 @@ BrowserTabActor.prototype = {
     this.conn.addActorPool(this._contextPool);
 
     this.threadActor = new ThreadActor(this);
-    this.threadActor.addDebuggee(this.browser.contentWindow.wrappedJSObject);
+    this._addDebuggees(this.browser.contentWindow.wrappedJSObject);
     this._contextPool.addActor(this.threadActor);
+  },
+
+  /**
+   * Add the provided window and all windows in its frame tree as debuggees.
+   */
+  _addDebuggees: function BTA__addDebuggees(aWindow) {
+    this.threadActor.addDebuggee(aWindow);
+    let frames = aWindow.frames;
+    for (let i = 0; i < frames.length; i++) {
+      this._addDebuggees(frames[i]);
+    }
   },
 
   /**
@@ -368,6 +353,10 @@ BrowserTabActor.prototype = {
    * Prepare to enter a nested event loop by disabling debuggee events.
    */
   preNest: function BTA_preNest() {
+    if (!this.browser) {
+      // The tab is already closed.
+      return;
+    }
     let windowUtils = this.browser.contentWindow
                           .QueryInterface(Ci.nsIInterfaceRequestor)
                           .getInterface(Ci.nsIDOMWindowUtils);
@@ -379,6 +368,10 @@ BrowserTabActor.prototype = {
    * Prepare to exit a nested event loop by enabling debuggee events.
    */
   postNest: function BTA_postNest(aNestData) {
+    if (!this.browser) {
+      // The tab is already closed.
+      return;
+    }
     let windowUtils = this.browser.contentWindow
                           .QueryInterface(Ci.nsIInterfaceRequestor)
                           .getInterface(Ci.nsIDOMWindowUtils);
@@ -397,8 +390,7 @@ BrowserTabActor.prototype = {
                          url: this.browser.contentDocument.URL });
       }
     }
-  },
-
+  }
 };
 
 /**

@@ -1,42 +1,7 @@
 # -*- Mode: Java; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
-#
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
-#
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
-#
-# The Original Code is Mozilla.org Code.
-#
-# The Initial Developer of the Original Code is
-# Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 2001
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Ehsan Akhgari <ehsan.akhgari@gmail.com>
-#   Rob Campbell <rcampbell@mozilla.com>
-#   Steffen Wilberg <steffen.wilberg@web.de>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
        <menubar id="main-menubar"
                 onpopupshowing="if (event.target.parentNode.parentNode == this &amp;&amp;
@@ -291,16 +256,16 @@
                 </menu>
                 <menu id="pageStyleMenu" label="&pageStyleMenu.label;"
                       accesskey="&pageStyleMenu.accesskey;" observes="isImage">
-                  <menupopup onpopupshowing="stylesheetFillPopup(this);"
-                             oncommand="stylesheetSwitchAll(window.content, event.target.getAttribute('data')); setStyleDisabled(false);">
+                  <menupopup onpopupshowing="gPageStyleMenu.fillPopup(this);">
                     <menuitem id="menu_pageStyleNoStyle"
                               label="&pageStyleNoStyle.label;"
                               accesskey="&pageStyleNoStyle.accesskey;"
-                              oncommand="setStyleDisabled(true); event.stopPropagation();"
+                              oncommand="gPageStyleMenu.disableStyle();"
                               type="radio"/>
                     <menuitem id="menu_pageStylePersistentOnly"
                               label="&pageStylePersistentOnly.label;"
                               accesskey="&pageStylePersistentOnly.accesskey;"
+                              oncommand="gPageStyleMenu.switchStyleSheet('');"
                               type="radio"
                               checked="true"/>
                     <menuseparator/>
@@ -308,12 +273,30 @@
                 </menu>
 #include browser-charsetmenu.inc
                 <menuseparator/>
+#ifdef XP_MACOSX
+                <menuitem id="enterFullScreenItem"
+                          accesskey="&enterFullScreenCmd.accesskey;"
+                          label="&enterFullScreenCmd.label;"
+                          key="key_fullScreen">
+                  <observes element="View:FullScreen" attribute="oncommand"/>
+                  <observes element="View:FullScreen" attribute="disabled"/>
+                </menuitem>
+                <menuitem id="exitFullScreenItem"
+                          accesskey="&exitFullScreenCmd.accesskey;"
+                          label="&exitFullScreenCmd.label;"
+                          key="key_fullScreen"
+                          hidden="true">
+                  <observes element="View:FullScreen" attribute="oncommand"/>
+                  <observes element="View:FullScreen" attribute="disabled"/>
+                </menuitem>
+#else
                 <menuitem id="fullScreenItem"
                           accesskey="&fullScreenCmd.accesskey;"
                           label="&fullScreenCmd.label;"
                           key="key_fullScreen"
                           type="checkbox"
                           observes="View:FullScreen"/>
+#endif
                 <menuitem id="menu_showAllTabs"
                           hidden="true"
                           accesskey="&showAllTabsCmd.accesskey;"
@@ -531,8 +514,15 @@
               <menu id="webDeveloperMenu"
                     label="&webDeveloperMenu.label;"
                     accesskey="&webDeveloperMenu.accesskey;">
-                <menupopup id="menuWebDeveloperPopup"
-                           onpopupshowing="onWebDeveloperMenuShowing();">
+                <menupopup id="menuWebDeveloperPopup">
+                  <menuitem id="menu_devToolbar"
+                            type="checkbox"
+                            autocheck="false"
+                            hidden="true"
+                            label="&devToolbarMenu.label;"
+                            accesskey="&devToolbarMenu.accesskey;"
+                            key="key_devToolbar"
+                            command="Tools:DevToolbar"/>
                   <menuitem id="webConsole"
                             type="checkbox"
                             label="&webConsoleCmd.label;"
@@ -548,9 +538,18 @@
                             command="Tools:Inspect"/>
                   <menuitem id="menu_debugger"
                             hidden="true"
-                            label="&debuggerMenu.label;"
+                            type="checkbox"
+                            label="&debuggerMenu.label2;"
                             key="key_debugger"
                             command="Tools:Debugger"/>
+                  <menuitem id="menu_remoteDebugger"
+                            hidden="true"
+                            label="&remoteDebuggerMenu.label;"
+                            command="Tools:RemoteDebugger"/>
+                  <menuitem id="menu_chromeDebugger"
+                            hidden="true"
+                            label="&chromeDebuggerMenu.label;"
+                            command="Tools:ChromeDebugger"/>
                   <menuitem id="menu_scratchpad"
                             hidden="true"
                             label="&scratchpad.label;"

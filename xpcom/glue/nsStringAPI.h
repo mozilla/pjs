@@ -1,42 +1,7 @@
 /* vim:set ts=2 sw=2 et cindent: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.
- *
- * The Initial Developer of the Original Code is IBM Corporation.
- * Portions created by IBM Corporation are Copyright (C) 2003
- * IBM Corporation.  All Rights Reserved.
- *
- * Contributor(s):
- *   Darin Fisher <darin@meer.net>
- *   Benjamin Smedberg <benjamin@smedbergs.us>
- *   Ben Turner <mozilla@songbirdnest.com>
- *   Prasad Sunkari <prasad@medhas.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * This header provides wrapper classes around the frozen string API
@@ -1100,10 +1065,10 @@ private:
 
 #if defined(HAVE_CPP_CHAR16_T) || defined(HAVE_CPP_2BYTE_WCHAR_T)
 #if defined(HAVE_CPP_CHAR16_T)
-  PR_STATIC_ASSERT(sizeof(char16_t) == 2);
+  MOZ_STATIC_ASSERT(sizeof(char16_t) == 2, "size of char16_t must be 2");
   #define NS_LL(s)                                u##s
 #else
-  PR_STATIC_ASSERT(sizeof(wchar_t) == 2);
+  MOZ_STATIC_ASSERT(sizeof(wchar_t) == 2, "size of wchar_t must be 2");
   #define NS_LL(s)                                L##s
 #endif
   #define NS_MULTILINE_LITERAL_STRING(s)          nsDependentString(reinterpret_cast<const nsAString::char_type*>(s), PRUint32((sizeof(s)/2)-1))
@@ -1119,7 +1084,7 @@ private:
 #endif
 
 /* Check that PRUnichar is unsigned */
-PR_STATIC_ASSERT(PRUnichar(-1) > PRUnichar(0));
+MOZ_STATIC_ASSERT(PRUnichar(-1) > PRUnichar(0), "PRUnichar is by definition an unsigned type");
 
 /*
  * Macro arguments used in concatenation or stringification won't be expanded.
@@ -1322,7 +1287,7 @@ Substring( const nsAString& str, PRUint32 startPos, PRUint32 length )
 inline const nsDependentSubstring
 Substring( const PRUnichar* start, const PRUnichar* end )
 {
-  NS_ABORT_IF_FALSE(PRUint32(end - start) == end - start, "string too long");
+  NS_ABORT_IF_FALSE(PRUint32(end - start) == uintptr_t(end - start), "string too long");
   return nsDependentSubstring(start, PRUint32(end - start));
 }
 
@@ -1361,7 +1326,7 @@ inline
 const nsDependentCSubstring
 Substring( const char* start, const char* end )
 {
-  NS_ABORT_IF_FALSE(PRUint32(end - start) == end - start, "string too long");
+  NS_ABORT_IF_FALSE(PRUint32(end - start) == uintptr_t(end - start), "string too long");
   return nsDependentCSubstring(start, PRUint32(end - start));
 }
 

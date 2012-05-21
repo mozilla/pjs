@@ -1,52 +1,40 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Mobile Browser.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2008
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Matt Brubeck <mbrubeck@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #filter substitution
 
 pref("toolkit.defaultChromeURI", "chrome://browser/content/shell.xul");
 pref("browser.chromeURL", "chrome://browser/content/");
 #ifdef MOZ_OFFICIAL_BRANDING
-pref("browser.homescreenURL", "file:///system/home/homescreen.html");
+pref("browser.homescreenURL", "http://homescreen.gaiamobile.org/");
 #else
-pref("browser.homescreenURL", "file:///data/local/homescreen.html,file:///system/home/homescreen.html");
+pref("browser.homescreenURL", "http://homescreen.gaiamobile.org/");
 #endif
 
+// All the privileged domains
+// XXX TODO : we should read them from a file somewhere
+pref("b2g.privileged.domains", "http://browser.gaiamobile.org,
+	                            http://calculator.gaiamobile.org,
+	                            http://contacts.gaiamobile.org,
+	                            http://camera.gaiamobile.org,
+	                            http://clock.gaiamobile.org,
+	                            http://crystalskull.gaiamobile.org,
+	                            http://cubevid.gaiamobile.org,
+	                            http://dialer.gaiamobile.org,
+	                            http://gallery.gaiamobile.org,
+	                            http://homescreen.gaiamobile.org,
+	                            http://maps.gaiamobile.org,
+	                            http://market.gaiamobile.org,
+	                            http://music.gaiamobile.org,
+	                            http://penguinpop.gaiamobile.org,
+	                            http://settings.gaiamobile.org,
+	                            http://sms.gaiamobile.org,
+	                            http://towerjelly.gaiamobile.org,
+	                            http://video.gaiamobile.org");
+
 // URL for the dialer application.
-pref("dom.telephony.app.phone.url", "http://localhost:7777/data/local/apps/dialer/dialer.html");
+pref("dom.telephony.app.phone.url", "http://dialer.gaiamobile.org,http://homescreen.gaiamobile.org");
 
 // Device pixel to CSS px ratio, in percent. Set to -1 to calculate based on display density.
 pref("browser.viewport.scaleRatio", -1);
@@ -55,8 +43,11 @@ pref("browser.viewport.scaleRatio", -1);
 pref("browser.ignoreNativeFrameTextSelection", true);
 
 /* cache prefs */
-pref("browser.cache.disk.enable", false);
-pref("browser.cache.disk.capacity", 0); // kilobytes
+#ifdef MOZ_WIDGET_GONK
+pref("browser.cache.disk.enable", true);
+pref("browser.cache.disk.capacity", 55000); // kilobytes
+pref("browser.cache.disk.parent_directory", "/cache");
+#endif
 pref("browser.cache.disk.smart_size.enabled", false);
 pref("browser.cache.disk.smart_size.first_run", false);
 
@@ -68,7 +59,8 @@ pref("image.cache.size", 1048576); // bytes
 
 /* offline cache prefs */
 pref("browser.offline-apps.notify", false);
-pref("browser.cache.offline.enable", false);
+pref("browser.cache.offline.enable", true);
+pref("offline-apps.allow_by_default", true);
 
 /* protocol warning prefs */
 pref("network.protocol-handler.warn-external.tel", false);
@@ -146,7 +138,7 @@ pref("dom.disable_open_during_load", true);
 pref("privacy.popups.showBrowserMessage", true);
 
 pref("keyword.enabled", true);
-pref("keyword.URL", "http://www.google.com/m?ie=UTF-8&oe=UTF-8&sourceid=navclient&gfns=1&q=");
+pref("keyword.URL", "https://www.google.com/m?ie=UTF-8&oe=UTF-8&sourceid=navclient&gfns=1&q=");
 
 pref("accessibility.typeaheadfind", false);
 pref("accessibility.typeaheadfind.timeout", 5000);
@@ -282,6 +274,7 @@ pref("ui.dragThresholdY", 25);
 
 // Layers Acceleration
 pref("layers.acceleration.disabled", false);
+pref("layers.offmainthreadcomposition.enabled", false);
 
 // Web Notifications
 pref("notification.feature.enabled", true);
@@ -354,6 +347,9 @@ pref("urlclassifier.gethashtables", "goog-phish-shavar,goog-malware-shavar");
 // the database.
 pref("urlclassifier.confirm-age", 2700);
 
+// Maximum size of the sqlite3 cache during an update, in bytes
+pref("urlclassifier.updatecachemax", 4194304);
+
 // URL for checking the reason for a malware warning.
 pref("browser.safebrowsing.malware.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 #endif
@@ -387,11 +383,6 @@ pref("security.fileuri.strict_origin_policy", false);
 // compositing isn't default disabled in widget/android.
 pref("layers.acceleration.force-enabled", true);
 
-// screen.enabled and screen.brightness properties.
-pref("dom.screenEnabledProperty.enabled", true);
-pref("dom.screenBrightnessProperty.enabled", true);
-pref("dom.mozScreenWhitelist", "http://localhost:7777");
-
 // handle links targeting new windows
 // 1=current window/tab, 2=new window, 3=new tab in most recent window
 pref("browser.link.open_newwindow", 3);
@@ -401,13 +392,26 @@ pref("browser.link.open_newwindow", 3);
 // 2: don't divert window.open with features
 pref("browser.link.open_newwindow.restriction", 0);
 
-// Enable browser frame
+// Enable browser frames (including OOP), but make in-process browser frames
+// the default.
 pref("dom.mozBrowserFramesEnabled", true);
-pref("dom.mozBrowserFramesWhitelist", "http://localhost:7777");
+pref("dom.mozBrowserFramesWhitelist", "http://homescreen.gaiamobile.org,http://browser.gaiamobile.org");
+pref("dom.ipc.tabs.disabled", false);
+pref("dom.ipc.browser_frames.oop_by_default", false);
 
 // Temporary permission hack for WebSMS
 pref("dom.sms.enabled", true);
-pref("dom.sms.whitelist", "file://,http://localhost:7777");
+pref("dom.sms.whitelist", "file://,http://homescreen.gaiamobile.org,http://sms.gaiamobile.org");
+
+// Temporary permission hack for WebMobileConnection
+pref("dom.mobileconnection.whitelist", "http://system.gaiamobile.org,http://homescreen.gaiamobile.org,http://dialer.gaiamobile.org");
+
+// Temporary permission hack for WebContacts
+pref("dom.mozContacts.enabled", true);
+pref("dom.mozContacts.whitelist", "http://dialer.gaiamobile.org,http://sms.gaiamobile.org");
+
+// WebSettings
+pref("dom.mozSettings.enabled", true);
 
 // Ignore X-Frame-Options headers.
 pref("b2g.ignoreXFrameOptions", true);
@@ -435,7 +439,47 @@ pref("b2g.keys.search.enabled", false);
 
 // Screen timeout in minutes
 pref("power.screen.timeout", 60);
+pref("dom.power.whitelist", "http://homescreen.gaiamobile.org,http://settings.gaiamobile.org");
 
 pref("full-screen-api.enabled", true);
 
 pref("media.volume.steps", 10);
+
+//Enable/disable marionette server, set listening port
+pref("marionette.defaultPrefs.enabled", true);
+pref("marionette.defaultPrefs.port", 2828);
+
+#ifdef MOZ_UPDATER
+pref("app.update.enabled", true);
+pref("app.update.auto", true);
+pref("app.update.silent", true);
+pref("app.update.mode", 0);
+pref("app.update.incompatible.mode", 0);
+pref("app.update.service.enabled", true);
+
+// The URL hosting the update manifest.
+pref("app.update.url", "http://update.boot2gecko.org/m2.5/updates.xml");
+// Interval at which update manifest is fetched.  In units of seconds.
+pref("app.update.interval", 3600); // 1 hour
+// First interval to elapse before checking for update.  In units of
+// milliseconds.  Capped at 10 seconds.
+pref("app.update.timerFirstInterval", 30000);
+pref("app.update.timerMinimumDelay", 30); // seconds
+// Don't throttle background updates.
+pref("app.update.download.backgroundInterval", 0);
+
+// Enable update logging for now, to diagnose growing pains in the
+// field.
+pref("app.update.log", true);
+#endif
+
+// Extensions preferences
+pref("extensions.update.enabled", false);
+pref("extensions.getAddons.cache.enabled", false);
+
+// Context Menu
+pref("ui.click_hold_context_menus", true);
+pref("ui.click_hold_context_menus.delay", 1000);
+
+// Enable device storage
+pref("device.storage.enabled", true);

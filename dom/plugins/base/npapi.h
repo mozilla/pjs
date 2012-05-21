@@ -1,39 +1,7 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef npapi_h_
 #define npapi_h_
@@ -228,6 +196,33 @@ typedef enum {
   NPFocusPrevious = 1
 } NPFocusDirection;
 
+/* These formats describe the format in the memory byte-order. This means if
+ * a 32-bit value of a pixel is viewed on a little-endian system the layout will
+ * be 0xAARRGGBB. The Alpha channel will be stored in the most significant
+ * bits. */
+typedef enum {
+  /* 32-bit per pixel 8-bit per channel - premultiplied alpha */
+  NPImageFormatBGRA32     = 0x1,
+  /* 32-bit per pixel 8-bit per channel - 1 unused channel */
+  NPImageFormatBGRX32     = 0x2 
+} NPImageFormat;
+
+typedef struct _NPAsyncSurface
+{
+  uint32_t version;
+  NPSize size;
+  NPImageFormat format;
+  union {
+    struct {
+      uint32_t stride;
+      void *data;
+    } bitmap;
+#if defined(XP_WIN)
+    HANDLE sharedHandle;
+#endif
+  };
+} NPAsyncSurface;
+
 /* Return values for NPP_HandleEvent */
 #define kNPEventNotHandled 0
 #define kNPEventHandled 1
@@ -273,17 +268,29 @@ typedef struct
 
 #endif /* XP_UNIX */
 
-#if defined(XP_MACOSX)
 typedef enum {
+#if defined(XP_MACOSX)
 #ifndef NP_NO_QUICKDRAW
   NPDrawingModelQuickDraw = 0,
 #endif
   NPDrawingModelCoreGraphics = 1,
   NPDrawingModelOpenGL = 2,
   NPDrawingModelCoreAnimation = 3,
-  NPDrawingModelInvalidatingCoreAnimation = 4
+  NPDrawingModelInvalidatingCoreAnimation = 4,
+#endif
+#if defined(XP_WIN)
+  NPDrawingModelSyncWin = 5,
+#endif
+#if defined(MOZ_X11)
+  NPDrawingModelSyncX = 6,
+#endif
+  NPDrawingModelAsyncBitmapSurface = 7
+#if defined(XP_WIN)
+  , NPDrawingModelAsyncWindowsDXGISurface = 8
+#endif
 } NPDrawingModel;
 
+#ifdef XP_MACOSX
 typedef enum {
 #ifndef NP_NO_CARBON
   NPEventModelCarbon = 0,
@@ -368,18 +375,18 @@ typedef enum {
 
   NPPVsupportsAdvancedKeyHandling = 21,
 
-  NPPVpluginUsesDOMForCursorBool = 22
+  NPPVpluginUsesDOMForCursorBool = 22,
 
-#if defined(XP_MACOSX)
   /* Used for negotiating drawing models */
-  , NPPVpluginDrawingModel = 1000
+  NPPVpluginDrawingModel = 1000
+#if defined(XP_MACOSX)
   /* Used for negotiating event models */
   , NPPVpluginEventModel = 1001
   /* In the NPDrawingModelCoreAnimation drawing model, the browser asks the plug-in for a Core Animation layer. */
   , NPPVpluginCoreAnimationLayer = 1003
 #endif
 
-#if (MOZ_PLATFORM_MAEMO == 5) || (MOZ_PLATFORM_MAEMO == 6)
+#if defined(MOZ_PLATFORM_MAEMO) && ((MOZ_PLATFORM_MAEMO == 5) || (MOZ_PLATFORM_MAEMO == 6))
   , NPPVpluginWindowlessLocalBool = 2002
 #endif
 } NPPVariable;
@@ -413,11 +420,11 @@ typedef enum {
 
   NPNVsupportsAdvancedKeyHandling = 21,
 
-  NPNVdocumentOrigin = 22
+  NPNVdocumentOrigin = 22,
 
+  NPNVpluginDrawingModel = 1000 /* Get the current drawing model (NPDrawingModel) */
 #if defined(XP_MACOSX)
-  /* Used for negotiating drawing models */
-  , NPNVpluginDrawingModel = 1000
+  , NPNVcontentsScaleFactor = 1001
 #ifndef NP_NO_QUICKDRAW
   , NPNVsupportsQuickDrawBool = 2000
 #endif
@@ -425,6 +432,12 @@ typedef enum {
   , NPNVsupportsOpenGLBool = 2002
   , NPNVsupportsCoreAnimationBool = 2003
   , NPNVsupportsInvalidatingCoreAnimationBool = 2004
+#endif
+  , NPNVsupportsAsyncBitmapSurfaceBool = 2007
+#if defined(XP_WIN)
+  , NPNVsupportsAsyncWindowsDXGISurfaceBool = 2008
+#endif
+#if defined(XP_MACOSX)
 #ifndef NP_NO_CARBON
   , NPNVsupportsCarbonBool = 3000 /* TRUE if the browser supports the Carbon event model */
 #endif
@@ -434,7 +447,7 @@ typedef enum {
   , NPNVsupportsCompositingCoreAnimationPluginsBool = 74656 /* TRUE if the browser supports
                                                                CA model compositing */
 #endif
-#if (MOZ_PLATFORM_MAEMO == 5) || (MOZ_PLATFORM_MAEMO == 6)
+#if defined(MOZ_PLATFORM_MAEMO) && ((MOZ_PLATFORM_MAEMO == 5) || (MOZ_PLATFORM_MAEMO == 6))
   , NPNVSupportsWindowlessLocal = 2002
 #endif
 } NPNVariable;
@@ -820,6 +833,7 @@ void    NP_LOADDS NPP_LostFocus(NPP instance);
 void    NP_LOADDS NPP_URLRedirectNotify(NPP instance, const char* url, int32_t status, void* notifyData);
 NPError NP_LOADDS NPP_ClearSiteData(const char* site, uint64_t flags, uint64_t maxAge);
 char**  NP_LOADDS NPP_GetSitesWithData(void);
+void    NP_LOADDS NPP_DidComposite(NPP instance);
 
 /* NPN_* functions are provided by the navigator and called by the plugin. */
 void        NP_LOADDS NPN_Version(int* plugin_major, int* plugin_minor,
@@ -882,6 +896,11 @@ NPBool      NP_LOADDS NPN_ConvertPoint(NPP instance, double sourceX, double sour
 NPBool      NP_LOADDS NPN_HandleEvent(NPP instance, void *event, NPBool handled);
 NPBool      NP_LOADDS NPN_UnfocusInstance(NPP instance, NPFocusDirection direction);
 void        NP_LOADDS NPN_URLRedirectResponse(NPP instance, void* notifyData, NPBool allow);
+NPError     NP_LOADDS NPN_InitAsyncSurface(NPP instance, NPSize *size,
+                                           NPImageFormat format, void *initData,
+                                           NPAsyncSurface *surface);
+NPError     NP_LOADDS NPN_FinalizeAsyncSurface(NPP instance, NPAsyncSurface *surface);
+void        NP_LOADDS NPN_SetCurrentAsyncSurface(NPP instance, NPAsyncSurface *surface, NPRect *changed);
 
 #ifdef __cplusplus
 }  /* end extern "C" */

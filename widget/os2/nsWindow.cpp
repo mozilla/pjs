@@ -1,47 +1,9 @@
 /* vim: set sw=2 sts=2 et cin: */
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Mozilla OS/2 libraries.
- *
- * The Initial Developer of the Original Code is
- * John Fairhurst, <john_fairhurst@iname.com>.
- * Portions created by the Initial Developer are Copyright (C) 1999
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Pierre Phaneuf <pp@ludusdesign.com>
- *   IBM Corp.
- *   Rich Walsh <dragtext@e-vertise.com>
- *   Dan Rosen <dr@netscape.com>
- *   Dainis Jonitis <Dainis_Jonitis@swh-t.lv>
- *   Peter Weilbacher <mozilla@Weilbacher.org>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK *****/
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 //=============================================================================
 /*
@@ -2145,14 +2107,10 @@ bool nsWindow::OnMouseChord(MPARAM mp1, MPARAM mp2)
 
   event.keyCode     = NS_VK_INSERT;
   if (isCopy) {
-    event.isShift   = false;
-    event.isControl = true;
+    event.modifiers = widget::MODIFIER_CONTROL;
   } else {
-    event.isShift   = true;
-    event.isControl = false;
+    event.modifiers = widget::MODIFIER_SHIFT;
   }
-  event.isAlt       = false;
-  event.isMeta      = false;
   event.eventStructType = NS_KEY_EVENT;
   event.charCode    = 0;
 
@@ -2160,13 +2118,13 @@ bool nsWindow::OnMouseChord(MPARAM mp1, MPARAM mp2)
   if (SHORT1FROMMP(mp1) & (KC_VIRTUALKEY | KC_KEYUP | KC_LONEKEY)) {
     USHORT usVKey = SHORT2FROMMP(mp2);
     if (usVKey == VK_SHIFT) {
-      event.isShift = true;
+      event.modifiers |= widget::MODIFIER_SHIFT;
     }
     if (usVKey == VK_CTRL) {
-      event.isControl = true;
+      event.modifiers |= widget::MODIFIER_CONTROL;
     }
     if (usVKey == VK_ALTGRAF || usVKey == VK_ALT) {
-      event.isAlt = true;
+      event.modifiers |= widget::MODIFIER_ALT;
     }
   }
 
@@ -2462,10 +2420,8 @@ bool nsWindow::DispatchKeyEvent(MPARAM mp1, MPARAM mp2)
                    this);
   InitEvent(event, &point);
   event.keyCode   = WMChar2KeyCode(mp1, mp2);
-  event.isShift   = (fsFlags & KC_SHIFT) ? true : false;
-  event.isControl = (fsFlags & KC_CTRL) ? true : false;
-  event.isAlt     = (fsFlags & KC_ALT) ? true : false;
-  event.isMeta    = false;
+  event.InitBasicModifiers(fsFlags & KC_CTRL, fsFlags & KC_ALT,
+                           fsFlags & KC_SHIFT, false);
   event.charCode  = 0;
 
   // Check for a scroll mouse event vs. a keyboard event.  The way we know
@@ -2522,15 +2478,15 @@ bool nsWindow::DispatchKeyEvent(MPARAM mp1, MPARAM mp2)
 
     pressEvent.charCode = outbuf[0];
 
-    if (pressEvent.isControl && !(fsFlags & (KC_VIRTUALKEY | KC_DEADKEY))) {
-      if (!pressEvent.isShift && (pressEvent.charCode >= 'A' && pressEvent.charCode <= 'Z')) {
+    if (pressEvent.IsControl() && !(fsFlags & (KC_VIRTUALKEY | KC_DEADKEY))) {
+      if (!pressEvent.IsShift() && (pressEvent.charCode >= 'A' && pressEvent.charCode <= 'Z')) {
         pressEvent.charCode = tolower(pressEvent.charCode);
       }
-      if (pressEvent.isShift && (pressEvent.charCode >= 'a' && pressEvent.charCode <= 'z')) {
+      if (pressEvent.IsShift() && (pressEvent.charCode >= 'a' && pressEvent.charCode <= 'z')) {
         pressEvent.charCode = toupper(pressEvent.charCode);
       }
       pressEvent.keyCode = 0;
-    } else if (!pressEvent.isControl && !pressEvent.isAlt && pressEvent.charCode != 0) {
+    } else if (!pressEvent.IsControl() && !pressEvent.IsAlt() && pressEvent.charCode != 0) {
       if (!(fsFlags & KC_VIRTUALKEY) || // not virtual key
           ((fsFlags & KC_CHAR) && !pressEvent.keyCode)) {
         pressEvent.keyCode = 0;
@@ -2799,10 +2755,9 @@ bool nsWindow::DispatchDragDropEvent(PRUint32 aMsg)
   nsDragEvent event(true, aMsg, this);
   InitEvent(event);
 
-  event.isShift   = isKeyDown(VK_SHIFT);
-  event.isControl = isKeyDown(VK_CTRL);
-  event.isAlt     = isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF);
-  event.isMeta    = false;
+  event.InitBasicModifiers(isKeyDown(VK_CTRL),
+                           isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF),
+                           isKeyDown(VK_SHIFT), false);
 
   return DispatchWindowEvent(&event);
 }
@@ -2875,9 +2830,9 @@ bool nsWindow::DispatchMouseEvent(PRUint32 aEventType, MPARAM mp1, MPARAM mp2,
     }
 
     InitEvent(event, nsnull);
-    event.isShift   = isKeyDown(VK_SHIFT);
-    event.isControl = isKeyDown(VK_CTRL);
-    event.isAlt     = isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF);
+    event.InitBasicModifiers(isKeyDown(VK_CTRL),
+                             isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF),
+                             isKeyDown(VK_SHIFT), false);
   } else {
     POINTL ptl;
     if (aEventType == NS_CONTEXTMENU && aIsContextMenuKey) {
@@ -2892,11 +2847,9 @@ bool nsWindow::DispatchMouseEvent(PRUint32 aEventType, MPARAM mp1, MPARAM mp2,
     InitEvent(event, &pt);
 
     USHORT usFlags  = SHORT2FROMMP(mp2);
-    event.isShift   = (usFlags & KC_SHIFT) ? true : false;
-    event.isControl = (usFlags & KC_CTRL) ? true : false;
-    event.isAlt     = (usFlags & KC_ALT) ? true : false;
+    event.InitBasicModifiers(usFlags & KC_CTRL, usFlags & KC_ALT,
+                             usFlags & KC_SHIFT, false);
   }
-  event.isMeta = false;
 
   // Dblclicks are used to set the click count, then changed to mousedowns
   if (aEventType == NS_MOUSE_DOUBLECLICK &&
@@ -3010,10 +2963,9 @@ bool nsWindow::DispatchScrollEvent(ULONG msg, MPARAM mp1, MPARAM mp2)
   nsMouseScrollEvent scrollEvent(true, NS_MOUSE_SCROLL, this);
   InitEvent(scrollEvent);
 
-  scrollEvent.isShift     = isKeyDown(VK_SHIFT);
-  scrollEvent.isControl   = isKeyDown(VK_CTRL);
-  scrollEvent.isAlt       = isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF);
-  scrollEvent.isMeta      = false;
+  scrollEvent.InitBasicModifiers(isKeyDown(VK_CTRL),
+                                 isKeyDown(VK_ALT) || isKeyDown(VK_ALTGRAF),
+                                 isKeyDown(VK_SHIFT), false);
   scrollEvent.scrollFlags = (msg == WM_HSCROLL) ?
                             nsMouseScrollEvent::kIsHorizontal :
                             nsMouseScrollEvent::kIsVertical;

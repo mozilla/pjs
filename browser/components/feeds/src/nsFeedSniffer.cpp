@@ -1,40 +1,7 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is the Feed Content Sniffer.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Goodger <beng@google.com>
- *   Robert Sayre <sayrer@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsFeedSniffer.h"
 
@@ -69,7 +36,7 @@
 #define NS_RDF "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 #define NS_RSS "http://purl.org/rss/1.0/"
 
-#define MAX_BYTES 512
+#define MAX_BYTES 512u
 
 NS_IMPL_ISUPPORTS3(nsFeedSniffer,
                    nsIContentSniffer,
@@ -313,19 +280,22 @@ nsFeedSniffer::GetMIMETypeFromContent(nsIRequest* request,
   nsresult rv = ConvertEncodedData(request, data, length);
   if (NS_FAILED(rv))
     return rv;
-  
-  const char* testData = 
-    mDecodedData.IsEmpty() ? (const char*)data : mDecodedData.get();
-
-  // The strategy here is based on that described in:
-  // http://blogs.msdn.com/rssteam/articles/PublishersGuide.aspx
-  // for interoperarbility purposes.
 
   // We cap the number of bytes to scan at MAX_BYTES to prevent picking up 
   // false positives by accidentally reading document content, e.g. a "how to
   // make a feed" page.
-  if (length > MAX_BYTES)
-    length = MAX_BYTES;
+  const char* testData;
+  if (mDecodedData.IsEmpty()) {
+    testData = (const char*)data;
+    length = NS_MIN(length, MAX_BYTES);
+  } else {
+    testData = mDecodedData.get();
+    length = NS_MIN(mDecodedData.Length(), MAX_BYTES);
+  }
+
+  // The strategy here is based on that described in:
+  // http://blogs.msdn.com/rssteam/articles/PublishersGuide.aspx
+  // for interoperarbility purposes.
 
   // Thus begins the actual sniffing.
   nsDependentCSubstring dataString((const char*)testData, length);

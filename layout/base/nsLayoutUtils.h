@@ -1,42 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Boris Zbarsky <bzbarsky@mit.edu>.
- * Portions created by the Initial Developer are Copyright (C) 2002
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Boris Zbarsky <bzbarsky@mit.edu> (original author)
- *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
- *   Mats Palmgren <matspal@gmail.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsLayoutUtils_h__
 #define nsLayoutUtils_h__
@@ -55,6 +20,7 @@ class nsClientRectList;
 class nsFontFaceList;
 
 #include "prtypes.h"
+#include "nsChangeHint.h"
 #include "nsStyleContext.h"
 #include "nsAutoPtr.h"
 #include "nsStyleSet.h"
@@ -1330,11 +1296,11 @@ public:
 
   /**
    * Get a device context that can be used to get up-to-date device
-   * dimensions for the given docshell.  For some reason, this is more
+   * dimensions for the given window. For some reason, this is more
    * complicated than it ought to be in multi-monitor situations.
    */
   static nsDeviceContext*
-  GetDeviceContextForScreenInfo(nsIDocShell* aDocShell);
+  GetDeviceContextForScreenInfo(nsPIDOMWindow* aWindow);
 
   /**
    * Some frames with 'position: fixed' (nsStylePosition::mDisplay ==
@@ -1497,6 +1463,18 @@ public:
   static bool Are3DTransformsEnabled();
 
   /**
+   * Checks if we should forcibly use nearest pixel filtering for the
+   * background.
+   */
+  static bool UseBackgroundNearestFiltering();
+
+  /**
+   * Checks whether we want to use the GPU to scale images when
+   * possible.
+   */
+  static bool GPUImageScalingEnabled();
+
+  /**
    * Unions the overflow areas of all non-popup children of aFrame with
    * aOverflowAreas.
    */
@@ -1554,6 +1532,30 @@ public:
                                       nscoord aMinFontSize);
 
   static bool FontSizeInflationEnabled(nsPresContext *aPresContext);
+
+  /**
+   * See comment above "font.size.inflation.emPerLine" in
+   * modules/libpref/src/init/all.js .
+   */
+  static PRUint32 FontSizeInflationEmPerLine() {
+    return sFontSizeInflationEmPerLine;
+  }
+
+  /**
+   * See comment above "font.size.inflation.minTwips" in
+   * modules/libpref/src/init/all.js .
+   */
+  static PRUint32 FontSizeInflationMinTwips() {
+    return sFontSizeInflationMinTwips;
+  }
+
+  /**
+   * See comment above "font.size.inflation.lineThreshold" in
+   * modules/libpref/src/init/all.js .
+   */
+  static PRUint32 FontSizeInflationLineThreshold() {
+    return sFontSizeInflationLineThreshold;
+  }
 
   static void Initialize();
   static void Shutdown();
@@ -1616,6 +1618,15 @@ public:
                                      imgIRequest* aRequest,
                                      bool* aRequestRegistered);
 
+  /**
+   * Shim to nsCSSFrameConstructor::PostRestyleEvent. Exists so that we
+   * can avoid including nsCSSFrameConstructor.h and all its dependencies
+   * in content files.
+   */
+  static void PostRestyleEvent(mozilla::dom::Element* aElement,
+                               nsRestyleHint aRestyleHint,
+                               nsChangeHint aMinChangeHint);
+
 #ifdef DEBUG
   /**
    * Assert that there are no duplicate continuations of the same frame
@@ -1633,6 +1644,11 @@ public:
   static void
   AssertTreeOnlyEmptyNextInFlows(nsIFrame *aSubtreeRoot);
 #endif
+
+private:
+  static PRUint32 sFontSizeInflationEmPerLine;
+  static PRUint32 sFontSizeInflationMinTwips;
+  static PRUint32 sFontSizeInflationLineThreshold;
 };
 
 namespace mozilla {

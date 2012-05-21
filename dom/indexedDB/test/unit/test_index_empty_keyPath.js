@@ -43,7 +43,7 @@ function testSteps()
   objectStore.createIndex("set", "", { unique: true });
   yield; // success
 
-  let trans = db.transaction("data", IDBTransaction.READ_WRITE);
+  let trans = db.transaction("data", "readwrite");
   objectStore = trans.objectStore("data");
   index = objectStore.index("set");
 
@@ -70,7 +70,7 @@ function testSteps()
   is(event.target.result, "foopy", "Got correct result");
 
   let request = objectStore.add("foopy", 5);
-  request.onerror = new ExpectError(IDBDatabaseException.CONSTRAINT_ERR);
+  request.onerror = new ExpectError("ConstraintError");
   request.onsuccess = unexpectedSuccessHandler;
 
   trans.oncomplete = grabEventAndContinueHandler;

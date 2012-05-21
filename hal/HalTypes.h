@@ -36,8 +36,40 @@ enum FlashMode {
     eHalLightFlash_Timed = 1,     // timed flashing.  Use flashOnMS and flashOffMS for timing
     eHalLightFlash_Hardware = 2   // hardware assisted flashing
 };
+
+class SwitchEvent;
+
+enum SwitchDevice {
+  SWITCH_DEVICE_UNKNOWN = -1,
+  SWITCH_HEADPHONES,
+  NUM_SWITCH_DEVICE
+};
+
+enum SwitchState {
+  SWITCH_STATE_UNKNOWN = -1,
+  SWITCH_STATE_ON,
+  SWITCH_STATE_OFF,
+  NUM_SWITCH_STATE
+};
+
+typedef Observer<SwitchEvent> SwitchObserver;
 } // namespace hal
 } // namespace mozilla
+
+namespace mozilla {
+namespace hal {
+
+/**
+ * Used by ModifyWakeLock
+ */
+enum WakeLockControl {
+  WAKE_LOCK_REMOVE_ONE = -1,
+  WAKE_LOCK_NO_CHANGE  = 0,
+  WAKE_LOCK_ADD_ONE    = 1,
+};
+
+}
+}
 
 namespace IPC {
 
@@ -70,6 +102,37 @@ struct ParamTraits<mozilla::hal::FlashMode>
                           mozilla::hal::eHalLightFlash_None,
                           mozilla::hal::eHalLightFlash_Hardware>
 {};
+
+/**
+ * WakeLockControl serializer.
+ */
+template <>
+struct ParamTraits<mozilla::hal::WakeLockControl>
+  : public EnumSerializer<mozilla::hal::WakeLockControl,
+                          mozilla::hal::WAKE_LOCK_REMOVE_ONE,
+                          mozilla::hal::WAKE_LOCK_ADD_ONE>
+{};
+
+/**
+ * Serializer for SwitchState
+ */
+template <>
+struct ParamTraits<mozilla::hal::SwitchState>:
+  public EnumSerializer<mozilla::hal::SwitchState,
+                        mozilla::hal::SWITCH_STATE_UNKNOWN,
+                        mozilla::hal::NUM_SWITCH_STATE> {
+};
+
+/**
+ * Serializer for SwitchDevice
+ */
+template <>
+struct ParamTraits<mozilla::hal::SwitchDevice>:
+  public EnumSerializer<mozilla::hal::SwitchDevice,
+                        mozilla::hal::SWITCH_DEVICE_UNKNOWN,
+                        mozilla::hal::NUM_SWITCH_DEVICE> {
+};
+
 
 } // namespace IPC
 

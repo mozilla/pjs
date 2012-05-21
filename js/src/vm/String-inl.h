@@ -1,52 +1,22 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=79 ft=cpp:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey JavaScript engine.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Luke Wagner <luke@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef String_inl_h__
 #define String_inl_h__
 
+#include "jscntxt.h"
+#include "jsprobes.h"
+
+#include "gc/Marking.h"
 #include "String.h"
 
-#include "jscntxt.h"
-#include "jsgcmark.h"
-
 #include "jsgcinlines.h"
+#include "jsobjinlines.h"
+#include "gc/Barrier-inl.h"
 
 inline void
 JSString::writeBarrierPre(JSString *str)
@@ -56,8 +26,11 @@ JSString::writeBarrierPre(JSString *str)
         return;
 
     JSCompartment *comp = str->compartment();
-    if (comp->needsBarrier())
-        MarkStringUnbarriered(comp->barrierTracer(), str, "write barrier");
+    if (comp->needsBarrier()) {
+        JSString *tmp = str;
+        MarkStringUnbarriered(comp->barrierTracer(), &tmp, "write barrier");
+        JS_ASSERT(tmp == str);
+    }
 #endif
 }
 
@@ -81,8 +54,11 @@ JSString::readBarrier(JSString *str)
 {
 #ifdef JSGC_INCREMENTAL
     JSCompartment *comp = str->compartment();
-    if (comp->needsBarrier())
-        MarkStringUnbarriered(comp->barrierTracer(), str, "read barrier");
+    if (comp->needsBarrier()) {
+        JSString *tmp = str;
+        MarkStringUnbarriered(comp->barrierTracer(), &tmp, "read barrier");
+        JS_ASSERT(tmp == str);
+    }
 #endif
 }
 
@@ -108,7 +84,7 @@ JSRope::init(JSString *left, JSString *right, size_t length)
 }
 
 JS_ALWAYS_INLINE JSRope *
-JSRope::new_(JSContext *cx, JSString *left, JSString *right, size_t length)
+JSRope::new_(JSContext *cx, js::HandleString left, js::HandleString right, size_t length)
 {
     if (!validateLength(cx, length))
         return NULL;
@@ -119,9 +95,17 @@ JSRope::new_(JSContext *cx, JSString *left, JSString *right, size_t length)
     return str;
 }
 
+inline void
+JSRope::markChildren(JSTracer *trc)
+{
+    js::gc::MarkStringUnbarriered(trc, &d.u1.left, "left child");
+    js::gc::MarkStringUnbarriered(trc, &d.s.u2.right, "right child");
+}
+
 JS_ALWAYS_INLINE void
 JSDependentString::init(JSLinearString *base, const jschar *chars, size_t length)
 {
+    JS_ASSERT(!js::IsPoisonedPtr(base));
     d.lengthAndFlags = buildLengthAndFlags(length, DEPENDENT_BIT);
     d.u1.chars = chars;
     d.s.u2.base = base;
@@ -139,11 +123,26 @@ JSDependentString::new_(JSContext *cx, JSLinearString *base, const jschar *chars
     JS_ASSERT(chars >= base->chars() && chars < base->chars() + base->length());
     JS_ASSERT(length <= base->length() - (chars - base->chars()));
 
+    JS::Root<JSLinearString*> baseRoot(cx, &base);
+
+    /*
+     * The characters may be an internal pointer to a GC thing, so prevent them
+     * from being overwritten. For now this prevents strings used as dependent
+     * bases of other strings from being moved by the GC.
+     */
+    JS::SkipRoot charsRoot(cx, &chars);
+
     JSDependentString *str = (JSDependentString *)js_NewGCString(cx);
     if (!str)
         return NULL;
     str->init(base, chars, length);
     return str;
+}
+
+inline void
+JSDependentString::markChildren(JSTracer *trc)
+{
+    js::gc::MarkStringUnbarriered(trc, &d.s.u2.base, "base");
 }
 
 inline js::PropertyName *
@@ -293,7 +292,7 @@ js::StaticStrings::hasInt(int32_t i)
 }
 
 inline JSAtom *
-js::StaticStrings::getInt(jsint i)
+js::StaticStrings::getInt(int32_t i)
 {
     JS_ASSERT(hasInt(i));
     return getUint(uint32_t(i));
@@ -352,11 +351,11 @@ js::StaticStrings::lookup(const jschar *chars, size_t length)
         if ('1' <= chars[0] && chars[0] <= '9' &&
             '0' <= chars[1] && chars[1] <= '9' &&
             '0' <= chars[2] && chars[2] <= '9') {
-            jsint i = (chars[0] - '0') * 100 +
+            int i = (chars[0] - '0') * 100 +
                       (chars[1] - '0') * 10 +
                       (chars[2] - '0');
 
-            if (jsuint(i) < INT_STATIC_LIMIT)
+            if (unsigned(i) < INT_STATIC_LIMIT)
                 return getInt(i);
         }
         return NULL;
@@ -366,19 +365,19 @@ js::StaticStrings::lookup(const jschar *chars, size_t length)
 }
 
 JS_ALWAYS_INLINE void
-JSString::finalize(JSContext *cx, bool background)
+JSString::finalize(js::FreeOp *fop)
 {
     /* Shorts are in a different arena. */
     JS_ASSERT(!isShort());
 
     if (isFlat())
-        asFlat().finalize(cx->runtime);
+        asFlat().finalize(fop);
     else
         JS_ASSERT(isDependent() || isRope());
 }
 
 inline void
-JSFlatString::finalize(JSRuntime *rt)
+JSFlatString::finalize(js::FreeOp *fop)
 {
     JS_ASSERT(!isShort());
 
@@ -387,36 +386,57 @@ JSFlatString::finalize(JSRuntime *rt)
      * beginning of inlineStorage. E.g., this is not the case for short strings.
      */
     if (chars() != d.inlineStorage)
-        rt->free_(const_cast<jschar *>(chars()));
+        fop->free_(const_cast<jschar *>(chars()));
 }
 
 inline void
-JSShortString::finalize(JSContext *cx, bool background)
+JSShortString::finalize(js::FreeOp *fop)
 {
     JS_ASSERT(JSString::isShort());
 }
 
 inline void
-JSAtom::finalize(JSRuntime *rt)
+JSAtom::finalize(js::FreeOp *fop)
 {
     JS_ASSERT(JSString::isAtom());
     if (getAllocKind() == js::gc::FINALIZE_STRING)
-        JSFlatString::finalize(rt);
+        JSFlatString::finalize(fop);
     else
         JS_ASSERT(getAllocKind() == js::gc::FINALIZE_SHORT_STRING);
 }
 
 inline void
-JSExternalString::finalize(JSContext *cx, bool background)
-{
-    finalize();
-}
-
-inline void
-JSExternalString::finalize()
+JSExternalString::finalize(js::FreeOp *fop)
 {
     const JSStringFinalizer *fin = externalFinalizer();
     fin->finalize(fin, const_cast<jschar *>(chars()));
 }
+
+namespace js {
+
+static JS_ALWAYS_INLINE JSFixedString *
+NewShortString(JSContext *cx, const jschar *chars, size_t length)
+{
+    SkipRoot skip(cx, &chars);
+
+    /*
+     * Don't bother trying to find a static atom; measurement shows that not
+     * many get here (for one, Atomize is catching them).
+     */
+    JS_ASSERT(JSShortString::lengthFits(length));
+    JSInlineString *str = JSInlineString::lengthFits(length)
+                          ? JSInlineString::new_(cx)
+                          : JSShortString::new_(cx);
+    if (!str)
+        return NULL;
+
+    jschar *storage = str->init(length);
+    PodCopy(storage, chars, length);
+    storage[length] = 0;
+    Probes::createString(cx, str, length);
+    return str;
+}
+
+} /* namespace js */
 
 #endif

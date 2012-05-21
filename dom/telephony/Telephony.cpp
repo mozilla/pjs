@@ -1,65 +1,41 @@
 /* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
 /* vim: set ts=2 et sw=2 tw=40: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Telephony.
- *
- * The Initial Developer of the Original Code is
- *   The Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2011
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Ben Turner <bent.mozilla@gmail.com> (Original Author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Telephony.h"
 
 #include "nsIDocument.h"
 #include "nsIURI.h"
+#include "nsIURL.h"
 #include "nsPIDOMWindow.h"
 
 #include "jsapi.h"
 #include "mozilla/Preferences.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsContentUtils.h"
 #include "nsDOMClassInfo.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsNetUtil.h"
 #include "nsServiceManagerUtils.h"
 #include "SystemWorkerManager.h"
+#include "nsRadioInterfaceLayer.h"
 
 #include "CallEvent.h"
 #include "TelephonyCall.h"
 
 USING_TELEPHONY_NAMESPACE
+using namespace mozilla::dom::gonk;
 using mozilla::Preferences;
 
 #define DOM_TELEPHONY_APP_PHONE_URL_PREF "dom.telephony.app.phone.url"
 
 namespace {
+
+typedef nsAutoTArray<Telephony*, 2> TelephonyList;
+
+TelephonyList* gTelephonyList;
 
 template <class T>
 inline nsresult
@@ -110,20 +86,41 @@ nsTArrayToJSArray(JSContext* aCx, JSObject* aGlobal,
 
 } // anonymous namespace
 
+Telephony::Telephony()
+: mActiveCall(nsnull), mCallsArray(nsnull), mRooted(false)
+{
+  if (!gTelephonyList) {
+    gTelephonyList = new TelephonyList();
+  }
+
+  gTelephonyList->AppendElement(this);
+}
+
 Telephony::~Telephony()
 {
   if (mRIL && mRILTelephonyCallback) {
-    mRIL->UnregisterCallback(mRILTelephonyCallback);
+    mRIL->UnregisterTelephonyCallback(mRILTelephonyCallback);
   }
 
   if (mRooted) {
     NS_DROP_JS_OBJECTS(this, Telephony);
   }
+
+  NS_ASSERTION(gTelephonyList, "This should never be null!");
+  NS_ASSERTION(gTelephonyList->Contains(this), "Should be in the list!");
+
+  if (gTelephonyList->Length() == 1) {
+    delete gTelephonyList;
+    gTelephonyList = nsnull;
+  }
+  else {
+    gTelephonyList->RemoveElement(this);
+  }
 }
 
 // static
 already_AddRefed<Telephony>
-Telephony::Create(nsPIDOMWindow* aOwner, nsIRadioInterfaceLayer* aRIL)
+Telephony::Create(nsPIDOMWindow* aOwner, nsIRILContentHelper* aRIL)
 {
   NS_ASSERTION(aOwner, "Null owner!");
   NS_ASSERTION(aRIL, "Null RIL!");
@@ -136,28 +133,51 @@ Telephony::Create(nsPIDOMWindow* aOwner, nsIRadioInterfaceLayer* aRIL)
 
   nsRefPtr<Telephony> telephony = new Telephony();
 
-  telephony->mOwner = aOwner;
-  telephony->mScriptContext.swap(scriptContext);
+  telephony->BindToOwner(aOwner);
+
   telephony->mRIL = aRIL;
   telephony->mRILTelephonyCallback = new RILTelephonyCallback(telephony);
 
   nsresult rv = aRIL->EnumerateCalls(telephony->mRILTelephonyCallback);
   NS_ENSURE_SUCCESS(rv, nsnull);
 
-  rv = aRIL->RegisterCallback(telephony->mRILTelephonyCallback);
+  rv = aRIL->RegisterTelephonyCallback(telephony->mRILTelephonyCallback);
   NS_ENSURE_SUCCESS(rv, nsnull);
 
   return telephony.forget();
 }
 
-void
-Telephony::SwitchActiveCall(TelephonyCall* aCall)
+already_AddRefed<TelephonyCall>
+Telephony::CreateNewDialingCall(const nsAString& aNumber)
 {
-  if (mActiveCall) {
-    // Put the call on hold?
-    NS_NOTYETIMPLEMENTED("Implement me!");
-  }
-  mActiveCall = aCall;
+  nsRefPtr<TelephonyCall> call =
+    TelephonyCall::Create(this, aNumber,
+                          nsIRadioInterfaceLayer::CALL_STATE_DIALING);
+  NS_ASSERTION(call, "This should never fail!");
+
+  NS_ASSERTION(mCalls.Contains(call), "Should have auto-added new call!");
+
+  return call.forget();
+}
+
+void
+Telephony::NoteDialedCallFromOtherInstance(const nsAString& aNumber)
+{
+  // We don't need to hang on to this call object, it is held alive by mCalls.
+  nsRefPtr<TelephonyCall> call = CreateNewDialingCall(aNumber);
+}
+
+nsresult
+Telephony::NotifyCallsChanged(TelephonyCall* aCall)
+{
+  nsRefPtr<CallEvent> event = CallEvent::Create(aCall);
+  NS_ASSERTION(event, "This should never fail!");
+
+  nsresult rv =
+    event->Dispatch(ToIDOMEventTarget(), NS_LITERAL_STRING("callschanged"));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(Telephony)
@@ -166,6 +186,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(Telephony,
                                                   nsDOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
   NS_CYCLE_COLLECTION_TRAVERSE_EVENT_HANDLER(incoming)
+  NS_CYCLE_COLLECTION_TRAVERSE_EVENT_HANDLER(callschanged)
   for (PRUint32 index = 0; index < tmp->mCalls.Length(); index++) {
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mCalls[i]");
     cb.NoteXPCOMChild(tmp->mCalls[index]->ToISupports());
@@ -180,6 +201,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(Telephony,
                                                 nsDOMEventTargetHelper)
   NS_CYCLE_COLLECTION_UNLINK_EVENT_HANDLER(incoming)
+  NS_CYCLE_COLLECTION_UNLINK_EVENT_HANDLER(callschanged)
   tmp->mCalls.Clear();
   tmp->mActiveCall = nsnull;
   tmp->mCallsArray = nsnull;
@@ -216,11 +238,16 @@ Telephony::Dial(const nsAString& aNumber, nsIDOMTelephonyCall** aResult)
   nsresult rv = mRIL->Dial(aNumber);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<TelephonyCall> call =
-    TelephonyCall::Create(this, aNumber, nsIRadioInterfaceLayer::CALL_STATE_DIALING);
-  NS_ASSERTION(call, "This should never fail!");
+  nsRefPtr<TelephonyCall> call = CreateNewDialingCall(aNumber);
 
-  NS_ASSERTION(mCalls.Contains(call), "Should have auto-added new call!");
+  // Notify other telephony objects that we just dialed.
+  for (PRUint32 index = 0; index < gTelephonyList->Length(); index++) {
+    Telephony*& telephony = gTelephonyList->ElementAt(index);
+    if (telephony != this) {
+      nsRefPtr<Telephony> kungFuDeathGrip = telephony;
+      telephony->NoteDialedCallFromOtherInstance(aNumber);
+    }
+  }
 
   call.forget(aResult);
   return NS_OK;
@@ -270,39 +297,17 @@ Telephony::GetActive(jsval* aActive)
     return NS_OK;
   }
 
-  nsresult rv =
-    nsContentUtils::WrapNative(mScriptContext->GetNativeContext(),
-                               mScriptContext->GetNativeGlobal(),
-                               mActiveCall->ToISupports(), aActive);
+  nsresult rv;
+  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-Telephony::SetActive(const jsval& aActive)
-{
-  if (aActive.isObject()) {
-    nsIXPConnect* xpc = nsContentUtils::XPConnect();
-    NS_ASSERTION(xpc, "This should never be null!");
-
-    nsISupports* native =
-      xpc->GetNativeOfWrapper(mScriptContext->GetNativeContext(),
-                              &aActive.toObject());
-
-    nsCOMPtr<nsIDOMTelephonyCall> call = do_QueryInterface(native);
-    if (call) {
-      // See if this call has the same telephony object. Otherwise we can't use
-      // it.
-      TelephonyCall* concreteCall = static_cast<TelephonyCall*>(call.get());
-      if (this == concreteCall->mTelephony) {
-        SwitchActiveCall(concreteCall);
-        return NS_OK;
-      }
-    }
+  if (sc) {
+    rv =
+      nsContentUtils::WrapNative(sc->GetNativeContext(),
+                                 sc->GetNativeGlobal(),
+                                 mActiveCall->ToISupports(), aActive);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
-
-  return NS_ERROR_INVALID_ARG;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -310,17 +315,24 @@ Telephony::GetCalls(jsval* aCalls)
 {
   JSObject* calls = mCallsArray;
   if (!calls) {
-    nsresult rv =
-      nsTArrayToJSArray(mScriptContext->GetNativeContext(),
-                        mScriptContext->GetNativeGlobal(), mCalls, &calls);
+    nsresult rv;
+    nsIScriptContext* sc = GetContextForEventHandlers(&rv);
     NS_ENSURE_SUCCESS(rv, rv);
+    if (sc) {
+      rv =
+        nsTArrayToJSArray(sc->GetNativeContext(),
+                          sc->GetNativeGlobal(), mCalls, &calls);
+      NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!mRooted) {
-      NS_HOLD_JS_OBJECTS(this, Telephony);
-      mRooted = true;
+      if (!mRooted) {
+        NS_HOLD_JS_OBJECTS(this, Telephony);
+        mRooted = true;
+      }
+
+      mCallsArray = calls;
+    } else {
+      NS_ENSURE_SUCCESS(rv, rv);
     }
-
-    mCallsArray = calls;
   }
 
   aCalls->setObject(*calls);
@@ -354,19 +366,12 @@ Telephony::StopTone()
   return NS_OK;
 }
 
-NS_IMETHODIMP
-Telephony::SendTones(const nsAString& aTones, PRUint32 aToneDuration,
-                     PRUint32 aIntervalDuration)
-{
-  NS_NOTYETIMPLEMENTED("Implement me!");
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
 NS_IMPL_EVENT_HANDLER(Telephony, incoming)
+NS_IMPL_EVENT_HANDLER(Telephony, callschanged)
 
 NS_IMETHODIMP
 Telephony::CallStateChanged(PRUint32 aCallIndex, PRUint16 aCallState,
-                            const nsAString& aNumber)
+                            const nsAString& aNumber, bool aIsActive)
 {
   NS_ASSERTION(aCallIndex != kOutgoingPlaceholderCallIndex,
                "This should never happen!");
@@ -378,7 +383,8 @@ Telephony::CallStateChanged(PRUint32 aCallIndex, PRUint16 aCallState,
     nsRefPtr<TelephonyCall>& tempCall = mCalls[index];
     if (tempCall->CallIndex() == kOutgoingPlaceholderCallIndex) {
       NS_ASSERTION(!outgoingCall, "More than one outgoing call not supported!");
-      NS_ASSERTION(tempCall->CallState() == nsIRadioInterfaceLayer::CALL_STATE_DIALING,
+      NS_ASSERTION(tempCall->CallState() ==
+                   nsIRadioInterfaceLayer::CALL_STATE_DIALING,
                    "Something really wrong here!");
       // Stash this for later, we may need it if aCallIndex doesn't match one of
       // our other calls.
@@ -406,8 +412,8 @@ Telephony::CallStateChanged(PRUint32 aCallIndex, PRUint16 aCallState,
     modifiedCall->ChangeState(aCallState);
 
     // See if this should replace our current active call.
-    if (aCallState == nsIRadioInterfaceLayer::CALL_STATE_CONNECTED) {
-      SwitchActiveCall(modifiedCall);
+    if (aIsActive) {
+      mActiveCall = modifiedCall;
     }
 
     return NS_OK;
@@ -461,6 +467,31 @@ Telephony::EnumerateCallState(PRUint32 aCallIndex, PRUint16 aCallState,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+Telephony::NotifyError(PRInt32 aCallIndex,
+                        const nsAString& aError)
+{
+  PRInt32 index = -1;
+  PRInt32 length = mCalls.Length();
+
+  // The connection is not established yet, remove the latest call object
+  if (aCallIndex == -1) {
+    if (length > 0) {
+      index = length - 1;
+    }
+  } else {
+    if (aCallIndex < 0 || aCallIndex >= length) {
+      return NS_ERROR_INVALID_ARG;
+    }
+    index = aCallIndex;
+  }
+  if (index != -1) {
+    mCalls[index]->NotifyError(aError);
+  }
+
+  return NS_OK;
+}
+
 nsresult
 NS_NewTelephony(nsPIDOMWindow* aWindow, nsIDOMTelephony** aTelephony)
 {
@@ -486,32 +517,55 @@ NS_NewTelephony(nsPIDOMWindow* aWindow, nsIDOMTelephony** aTelephony)
   // Do security checks. We assume that chrome is always allowed and we also
   // allow a single page specified by preferences.
   if (!nsContentUtils::IsSystemPrincipal(document->NodePrincipal())) {
-    nsCOMPtr<nsIURI> documentURI;
+    nsCOMPtr<nsIURI> originalURI;
     nsresult rv =
-      document->NodePrincipal()->GetURI(getter_AddRefs(documentURI));
+      document->NodePrincipal()->GetURI(getter_AddRefs(originalURI));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCString documentURL;
-    rv = documentURI->GetSpec(documentURL);
+    nsCOMPtr<nsIURI> documentURI;
+    rv = originalURI->Clone(getter_AddRefs(documentURI));
     NS_ENSURE_SUCCESS(rv, rv);
+
+    // Strip the query string (if there is one) before comparing.
+    nsCOMPtr<nsIURL> documentURL = do_QueryInterface(documentURI);
+    if (documentURL) {
+      rv = documentURL->SetQuery(EmptyCString());
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+
+    bool allowed = false;
 
     // The pref may not exist but in that case we deny access just as we do if
     // the url doesn't match.
-    nsCString phoneAppURL;
-    if (NS_FAILED(Preferences::GetCString(DOM_TELEPHONY_APP_PHONE_URL_PREF,
-                                          &phoneAppURL)) ||
-        !phoneAppURL.Equals(documentURL,
-                            nsCaseInsensitiveCStringComparator())) {
+    nsCString whitelist;
+    if (NS_SUCCEEDED(Preferences::GetCString(DOM_TELEPHONY_APP_PHONE_URL_PREF,
+                                             &whitelist))) {
+      nsCOMPtr<nsIIOService> ios = do_GetIOService();
+      NS_ENSURE_TRUE(ios, NS_ERROR_FAILURE);
+
+      nsCCharSeparatedTokenizer tokenizer(whitelist, ',');
+      while (tokenizer.hasMoreTokens()) {
+        nsCOMPtr<nsIURI> uri;
+        if (NS_SUCCEEDED(NS_NewURI(getter_AddRefs(uri), tokenizer.nextToken(),
+                                   nsnull, nsnull, ios))) {
+          rv = documentURI->EqualsExceptRef(uri, &allowed);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          if (allowed) {
+            break;
+          }
+        }
+      }
+    }
+
+    if (!allowed) {
       *aTelephony = nsnull;
       return NS_OK;
     }
   }
 
-  // Security checks passed, make a telephony object.
-  nsIInterfaceRequestor* ireq = SystemWorkerManager::GetInterfaceRequestor();
-  NS_ENSURE_TRUE(ireq, NS_ERROR_UNEXPECTED);
-
-  nsCOMPtr<nsIRadioInterfaceLayer> ril = do_GetInterface(ireq);
+  nsCOMPtr<nsIRILContentHelper> ril =
+    do_GetService(NS_RILCONTENTHELPER_CONTRACTID);
   NS_ENSURE_TRUE(ril, NS_ERROR_UNEXPECTED);
 
   nsRefPtr<Telephony> telephony = Telephony::Create(innerWindow, ril);
