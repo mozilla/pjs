@@ -28,6 +28,7 @@ js:
 ${BUILD}/%.o: ${SRC}/%.cpp ${HEADERS} ${BUILD}/MC
 	g++ -DDEBUG -O0 -g -w -m64 -fno-rtti			\
 		$$(${BUILD}/install/bin/js-config --cflags)	\
+		-I ${BUILD}/js								\
 		-I ${MC}/js/src								\
 		-o $@ -c $<
 

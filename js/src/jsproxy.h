@@ -23,8 +23,8 @@ class JS_FRIEND_API(BaseProxyHandler) {
     /* ES5 Harmony fundamental proxy traps. */
     virtual bool getPropertyDescriptor(JSContext *cx, JSObject *proxy, jsid id, bool set,
                                        PropertyDescriptor *desc) = 0;
-    virtual bool getOwnPropertyDescriptor(JSContext *cx, JSObject *proxy, jsid id, bool set,
-                                          PropertyDescriptor *desc) = 0;
+    virtual bool getOwnPropertyDescriptor(JSContext *cx, JSObject *proxy, jsid id,
+                                          bool set, PropertyDescriptor *desc) = 0;
     virtual bool defineProperty(JSContext *cx, JSObject *proxy, jsid id,
                                 PropertyDescriptor *desc) = 0;
     virtual bool getOwnPropertyNames(JSContext *cx, JSObject *proxy, AutoIdVector &props) = 0;

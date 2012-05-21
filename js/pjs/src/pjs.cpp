@@ -264,11 +264,11 @@ class Closure {
 private:
     JSContext *_cx;
     auto_arr<jsval> _toProxy; // [0] == fn, [1..argc] == args
-    uintN _argc;
-    uintN _rooted;
+    unsigned _argc;
+    unsigned _rooted;
 
     Closure(JSContext *cx, auto_arr<jsval>& toProxy,
-            uintN argc)
+            unsigned argc)
         : _cx(cx)
         , _toProxy(toProxy)
         , _argc(argc)
@@ -338,7 +338,7 @@ private:
 #   endif
 
     JSBool addRoot(JSContext *cx);
-    JSBool delRoot(JSContext *cx);
+    void delRoot(JSContext *cx);
 
     explicit ChildTaskHandle(JSContext *cx, TaskContext *parent,
                              JSObject *object, auto_ptr<Closure> &closure)
@@ -358,7 +358,7 @@ private:
 
     static JSClass jsClass;
     static JSFunctionSpec jsMethods[2];
-    static JSBool jsGet(JSContext *cx, uintN argc, jsval *vp);
+    static JSBool jsGet(JSContext *cx, unsigned argc, jsval *vp);
 
 public:
     virtual ~ChildTaskHandle() {
@@ -393,7 +393,7 @@ private:
     TaskHandle *_taskHandle;
     JSObject *_global;
     JSObject *_object;
-    jsrefcount _outstandingChildren;
+    PRInt32 _outstandingChildren;
     ChildTaskHandleVec _toFork;
     Runner *_runner;
 
@@ -613,9 +613,9 @@ void reportError(JSContext *cx, const char *message, JSErrorReport *report)
             message);
 }
 
-JSBool print(JSContext *cx, uintN argc, jsval *vp) {
+JSBool print(JSContext *cx, unsigned argc, jsval *vp) {
     jsval *argv;
-    uintN i;
+    unsigned i;
     JSString *str;
     char *bytes;
 
@@ -635,9 +635,9 @@ JSBool print(JSContext *cx, uintN argc, jsval *vp) {
     return JS_TRUE;
 }
 
-JSBool dumpObjects(JSContext *cx, uintN argc, jsval *vp) {
+JSBool dumpObjects(JSContext *cx, unsigned argc, jsval *vp) {
     jsval *argv;
-    uintN i;
+    unsigned i;
     JSString *str;
     char *bytes;
 
@@ -651,7 +651,7 @@ JSBool dumpObjects(JSContext *cx, uintN argc, jsval *vp) {
     return JS_TRUE;
 }
 
-JSBool assert(JSContext *cx, uintN argc, jsval *vp) {
+JSBool assert(JSContext *cx, unsigned argc, jsval *vp) {
     JSBool chk;
     JSString *str;
     if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "bS", &chk, &str))
@@ -670,7 +670,7 @@ JSBool assert(JSContext *cx, uintN argc, jsval *vp) {
     return JS_TRUE;
 }
 
-JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
+JSBool fork(JSContext *cx, unsigned argc, jsval *vp) {
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
     jsval *argv = JS_ARGV(cx, vp);
@@ -693,7 +693,7 @@ JSBool fork(JSContext *cx, uintN argc, jsval *vp) {
     return JS_TRUE;
 }
 
-JSBool oncompletion(JSContext *cx, uintN argc, jsval *vp) {
+JSBool oncompletion(JSContext *cx, unsigned argc, jsval *vp) {
     TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
     JSObject *func;
     if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "o", &func))
@@ -721,12 +721,12 @@ static JSFunctionSpec pjsGlobalFunctions[] = {
 JSClass Global::jsClass = {
     "Global", JSCLASS_GLOBAL_FLAGS,
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, JS_FinalizeStub,
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, NULL,
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
 JS_PUBLIC_API(JSBool)
-JS_ResolveStub(JSContext *cx, JSObject *obj, jsid id)
+JS_ResolveStub(JSContext *cx, JSHandleObject obj, JSHandleId id)
 {
 }
 
@@ -822,7 +822,7 @@ bool Closure::addRoots() {
 }
 
 void Closure::delRoots() {
-    for (uintN i = 0; i < _rooted; i++)
+    for (unsigned i = 0; i < _rooted; i++)
         JS_RemoveValueRoot(_cx, &_toProxy[i]);
 }
 
@@ -977,9 +977,9 @@ JSBool ChildTaskHandle::addRoot(JSContext *cx) {
     return JS_AddNamedObjectRoot(cx, &_object, "ChildTaskHandle::addRoot()");
 }
 
-JSBool ChildTaskHandle::delRoot(JSContext *cx) {
+void ChildTaskHandle::delRoot(JSContext *cx) {
     PJS_ASSERT_CX(cx, _checkCx);
-    return JS_RemoveObjectRoot(cx, &_object);
+    JS_RemoveObjectRoot(cx, &_object);
 }
 
 JSBool ChildTaskHandle::initClass(JSContext *cx, JSObject *global) {
@@ -996,7 +996,7 @@ JSBool ChildTaskHandle::initClass(JSContext *cx, JSObject *global) {
 JSClass ChildTaskHandle::jsClass = {
     "TaskHandle", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, JS_FinalizeStub,
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, NULL,
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
@@ -1005,7 +1005,7 @@ JSFunctionSpec ChildTaskHandle::jsMethods[2] = {
     JS_FS_END
 };
 
-JSBool ChildTaskHandle::jsGet(JSContext *cx, uintN argc, jsval *vp) {
+JSBool ChildTaskHandle::jsGet(JSContext *cx, unsigned argc, jsval *vp) {
     TaskContext *taskContext = static_cast<TaskContext*>(
         JS_GetContextPrivate(cx));
     JSObject *self = JS_THIS_OBJECT(cx, vp);
@@ -1085,7 +1085,7 @@ void TaskContext::addTaskToFork(ChildTaskHandle *th) {
 }
 
 void TaskContext::onChildCompleted() {
-    jsrefcount v = JS_ATOMIC_DECREMENT(&_outstandingChildren);
+    PRInt32 v = JS_ATOMIC_DECREMENT(&_outstandingChildren);
     if (v == 0) {
         _runner->reawaken(this);
     }
@@ -1160,7 +1160,7 @@ void TaskContext::resume(Runner *runner) {
 JSClass TaskContext::jsClass = {
     "TaskContext", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(MaxSlot),
     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, JS_FinalizeStub,
+    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, NULL,
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
@@ -1183,7 +1183,7 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
                     pjs_zeal);
             exit(1);
         }
-        JS_SetGCZeal(cx, v1, v2, false);
+        JS_SetGCZeal(cx, v1, v2);
     }
     return new Runner(aThreadPool, anIndex, rt, cx);
 }

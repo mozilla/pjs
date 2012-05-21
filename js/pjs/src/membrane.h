@@ -66,7 +66,7 @@ public:
     ~AutoReadOnly();
 };
 
-class Membrane : ProxyHandler
+class Membrane : BaseProxyHandler
 {
 private:
     // Maps from objects in the parent space to wrapper object in
@@ -83,7 +83,7 @@ private:
     Membrane(JSContext *parentCx, JSObject *parentGlobal,
              JSContext *childCx, JSObject *childGlobal,
              JSNative *safeNatives)
-        : ProxyHandler(MEMBRANE)
+        : BaseProxyHandler(MEMBRANE)
         , _parentCx(parentCx)
         , _parentGlobal(parentGlobal)
         , _childCx(childCx)
@@ -120,7 +120,7 @@ public:
     bool wrap(StrictPropertyOp *propp);
     bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
-    bool wrap(JSAtom **objp);
+    bool wrap(HeapPtrAtom *objp);
 
     static bool IsCrossThreadWrapper(const JSObject *wrapper);
 
@@ -129,7 +129,8 @@ public:
     /* ES5 Harmony fundamental wrapper traps. */
     virtual bool getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id, bool set,
                                        PropertyDescriptor *desc) MOZ_OVERRIDE;
-    virtual bool getOwnPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id, bool set,
+    virtual bool getOwnPropertyDescriptor(JSContext *cx, JSObject* wrapper, 
+                                          jsid id, bool set,
                                           PropertyDescriptor *desc) MOZ_OVERRIDE;
     virtual bool defineProperty(JSContext *cx, JSObject *wrapper, jsid id,
                                 PropertyDescriptor *desc) MOZ_OVERRIDE;
@@ -140,8 +141,8 @@ public:
 
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
 
-    virtual bool get(JSContext *cx, JSObject *wrapper, JSObject *receiver,
-                     jsid id, Value *vp) MOZ_OVERRIDE;
+    virtual bool get(JSContext *cx, JSObject *wrapper, JSHandleObject receiver,
+                     HandleId id, Value *vp) MOZ_OVERRIDE;
 };
 
 }

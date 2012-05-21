@@ -45,6 +45,7 @@
 #include "jsobj.h"
 #include "jscompartment.h"
 #include "jsinterp.h"
+#include "jsatominlines.h"
 #include "util.h"
 
 using namespace JS;
@@ -178,7 +179,7 @@ bool Membrane::wrap(JSObject **objp)
     return true;
 }
 
-bool Membrane::wrap(JSAtom **objp)
+bool Membrane::wrap(HeapPtrAtom *objp)
 {
     if (!*objp)
         return true;
@@ -186,7 +187,7 @@ bool Membrane::wrap(JSAtom **objp)
     if (!wrap(tvr.addr()))
         return false;
     JSString *str = tvr.value().toString();
-    **objp = str->asAtom();
+    *objp = &str->asAtom();
     return true;
 }
 
@@ -455,7 +456,7 @@ bool
 Membrane::wrap(AutoIdVector &props)
 {
     jsid *vector = props.begin();
-    jsint length = props.length();
+    int length = props.length();
     for (size_t n = 0; n < size_t(length); ++n) {
         if (!wrapId(&vector[n]))
             return false;
@@ -526,26 +527,29 @@ Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
 }
 
 bool
-Membrane::get(JSContext *cx, JSObject *wrapper, JSObject *receiver,
-              jsid id, Value *vp)
+Membrane::get(JSContext *cx, JSObject *wrapper, JSHandleObject receiver,
+              HandleId id, Value *vp)
 {
     JSObject *wrappee = wrappedObject(wrapper);
     if (wrappee->isArray()) {
         vp->setUndefined(); // default result if we refuse to perform this action
         return wrappee->getGeneric(cx, receiver, id, vp);
     } else {
-        return ProxyHandler::get(cx, wrapper, receiver, id, vp);
+        return BaseProxyHandler::get(cx, wrapper, receiver, id, vp);
     }
 }
 
 bool
-Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
-                                   bool set, PropertyDescriptor *desc)
+Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject* wrapper, 
+                                   jsid id, bool set, PropertyDescriptor *desc)
 {
+    RootedVarObject rwrapper(cx, wrappedObject(wrapper));
+    RootedVarId rid(cx, id);
+
     desc->obj = NULL;
     PIERCE(cx, wrapper,
            unwrapId(&id),
-           GetOwnPropertyDescriptor(cx, wrappedObject(wrapper), id, desc),
+           GetOwnPropertyDescriptor(cx, rwrapper, rid, desc),
            wrap(desc));
 }
 
