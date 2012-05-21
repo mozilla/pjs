@@ -725,10 +725,12 @@ JSClass Global::jsClass = {
     JSCLASS_NO_OPTIONAL_MEMBERS
 };
 
+/*
 JS_PUBLIC_API(JSBool)
 JS_ResolveStub(JSContext *cx, JSHandleObject obj, JSHandleId id)
 {
 }
+*/
 
 // ______________________________________________________________________
 // ArrRooter impl
