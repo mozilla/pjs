@@ -147,8 +147,8 @@ public:
 
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
 
-    virtual bool get(JSContext *cx, JSObject *wrapper, JSHandleObject receiver,
-                     HandleId id, Value *vp) MOZ_OVERRIDE;    
+    virtual bool get(JSContext *cx, JSObject *wrapper, JSObject *receiver,
+                     jsid id, Value *vp) MOZ_OVERRIDE;
 };
 
 }

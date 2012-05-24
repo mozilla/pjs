@@ -287,7 +287,7 @@ bool Membrane::wrap(Value *vp) {
 #       ifdef DEBUG_DUMPS
         {
             char *c_str = JS_EncodeString(cx, wrapped);
-            DEBUG("Wrapping string %p to %p (%s) for %p->%p",
+            DEBUG("Wrapping string %p to %p (%s) for %p->%p\n",
                   str, wrapped, c_str,
                   _parentCx, _childCx);
             JS_free(cx, c_str);
@@ -311,7 +311,7 @@ bool Membrane::wrap(Value *vp) {
         JSObject *env;
         if (!fn->isInterpreted()) {
             if (!isSafeNative(fn->native())) {
-                JS_ReportError(cx, 
+                JS_ReportError(cx,
                                "Cannot access native functions "
                                "from child tasks");
                 return false;
@@ -529,13 +529,15 @@ Membrane::getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id,
 }
 
 bool
-Membrane::get(JSContext *cx, JSObject *wrapper, JSHandleObject receiver,
-              HandleId id, Value *vp)
+Membrane::get(JSContext *cx, JSObject *wrapper, JSObject* receiver,
+              jsid id, Value *vp)
 {
     JSObject *wrappee = wrappedObject(wrapper);
     if (wrappee->isArray()) {
         vp->setUndefined(); // default result if we refuse to perform this action
-        return wrappee->getGeneric(cx, receiver, id, vp);
+        RootedVarObject rreceiver(cx, receiver);
+        RootedVarId rid(cx, id);
+        return wrappee->getGeneric(cx, rreceiver, rid, vp);
     } else {
         return BaseProxyHandler::get(cx, wrapper, receiver, id, vp);
     }
