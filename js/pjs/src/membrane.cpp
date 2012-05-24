@@ -152,7 +152,7 @@ Membrane *Membrane::create(JSContext *parentCx, JSObject *parentGlobal,
 }
 
 Membrane::~Membrane() {
-    delete _rooter;
+//     delete _rooter;
 }
 
 bool
@@ -367,6 +367,8 @@ bool Membrane::wrap(Value *vp) {
     JSObject *wrapper = NewProxyObject(
         cx, this, ObjectValue(*obj), proto, _childGlobal,
         obj->isCallable() ? obj : NULL, NULL);
+    // increment the refcount of the proxy handler.
+    _refCount++;
     vp->setObject(*wrapper);
     DEBUG("Wrapping obj %p to %p for %p->%p\n",
           obj, wrapper,
@@ -603,4 +605,20 @@ Membrane::trace(JSTracer *trc, JSObject *wrapper)
     
 }
 
+void
+Membrane::releaseProxies(){
+    if(_rooter != NULL) {
+	delete _rooter;
+        _rooter = NULL;
+    }
+    if (_refCount == 0)
+        delete this;
+}
+
+void
+Membrane::finalize(JSFreeOp *fop, JSObject *proxy) {
+    _refCount--;
+    if (_refCount == 0)
+        delete this;
+}
 }

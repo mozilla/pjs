@@ -557,7 +557,8 @@ private:
 
     explicit ThreadPool(PRLock *aLock, PRCondVar *aCondVar,
                         int threadCount, PRThread **threads, Runner **runners)
-        : _terminating(0)
+        : _started(0)
+        , _terminating(0)
         , _threadCount(threadCount)
         , _threads(threads)
         , _runners(runners)
@@ -821,6 +822,7 @@ bool Closure::addRoots() {
         if (!JS_AddNamedValueRoot(_cx, &_toProxy[_rooted], "Closure::toProxyArgv[]"))
             return false;
     }
+    return true;
 }
 
 void Closure::delRoots() {
@@ -1155,6 +1157,12 @@ void TaskContext::resume(Runner *runner) {
     // we have finished, notify parent.
     _taskHandle->onCompleted(runner, rval);
     delRoot(cx);
+    // release the membrane to prevent it from getting deleted with the TaskContext
+    Membrane *m = _membrane.release();
+    // release the membrane proxies, so that they would get Garbage Collected.
+    // the membrane itself is deleted when all proxies are finalized.
+    if(m)
+        m->releaseProxies();
     delete this;
     return;
 }
@@ -1331,7 +1339,7 @@ ThreadPool *ThreadPool::create() {
     PRLock *lock = check_null(PR_NewLock());
     PRCondVar *condVar = check_null(PR_NewCondVar(lock));
 
-    const int threadCount = 4; // for now
+    const int threadCount = 1; // for now
 
     PRThread **threads = check_null(new PRThread*[threadCount]);
     memset(threads, 0, sizeof(PRThread*) * threadCount);

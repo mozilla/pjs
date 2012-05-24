@@ -79,6 +79,7 @@ private:
     JSCompartment *_childCompartment;
     ProxyRooter *_rooter;
     JSNative *_safeNatives;
+    int _refCount;
 
     Membrane(JSContext *parentCx, JSObject *parentGlobal,
              JSContext *childCx, JSObject *childGlobal,
@@ -91,6 +92,7 @@ private:
         , _childCompartment(_childGlobal->compartment())
         , _rooter(NULL)
         , _safeNatives(safeNatives)
+        , _refCount(0)
     {
     }
 
@@ -107,6 +109,7 @@ public:
                             JSContext* childCx, JSObject *childGlobal,
                             JSNative *safeNatives);
     ~Membrane();
+    void releaseProxies();
 
     // when invoked with a parent object, modifies vp to be a proxy in
     // child compartment that will permit read access to the parent
@@ -120,9 +123,12 @@ public:
     bool wrap(StrictPropertyOp *propp);
     bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
-    bool wrap(HeapPtrAtom *objp);
+    bool wrap(HeapPtrAtom *objp);    
 
     static bool IsCrossThreadWrapper(const JSObject *wrapper);
+    
+    // decrements the refCount of the membrane.
+    virtual void finalize(JSFreeOp* fop, JSObject* proxy);
 
     // ______________________________________________________________________
 
@@ -142,7 +148,7 @@ public:
     virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
 
     virtual bool get(JSContext *cx, JSObject *wrapper, JSHandleObject receiver,
-                     HandleId id, Value *vp) MOZ_OVERRIDE;
+                     HandleId id, Value *vp) MOZ_OVERRIDE;    
 };
 
 }
