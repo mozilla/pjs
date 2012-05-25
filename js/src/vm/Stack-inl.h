@@ -580,8 +580,8 @@ ContextStack::currentScript(jsbytecode **ppc) const
 #endif
 
     JSScript *script = fp->script();
-    if (script->compartment() != cx_->compartment)
-        return NULL;
+//    if (script->compartment() != cx_->compartment)
+//        return NULL;
 
     if (ppc)
         *ppc = fp->pcQuadratic(*this);
@@ -617,8 +617,8 @@ ContextStack::currentScriptWithDiagnostics(jsbytecode **ppc) const
 #endif
 
     JSScript *script = fp->script();
-    if (script->compartment() != cx_->compartment)
-        *(int *) 0x30 = 0;
+//    if (script->compartment() != cx_->compartment)
+//        *(int *) 0x30 = 0;
 
     if (ppc)
         *ppc = fp->pcQuadratic(*this);
