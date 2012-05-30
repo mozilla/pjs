@@ -470,7 +470,8 @@ public:
 
 #define PJS_TASK_TAKEN   0
 #define PJS_TASK_STOLEN  1
-#define PJS_TASK_CAT_MAX 2
+#define PJS_TASK_ENQUEUED  2
+#define PJS_TASK_CAT_MAX 3
 
 enum task_stat_cat { task_taken, task_stolen, task_stat_max };
 
@@ -509,6 +510,7 @@ private:
     {
         _stats[PJS_TASK_TAKEN] = 0;
         _stats[PJS_TASK_STOLEN] = 0;
+        _stats[PJS_TASK_ENQUEUED] = 0;
     }
 
 public:
@@ -882,6 +884,7 @@ void ChildTaskHandle::onCompleted(Runner *runner, jsval result) {
     _parent->onChildCompleted();
 }
 
+
 JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
                                 auto_ptr<Membrane> &rmembrane, jsval *rval) {
 
@@ -912,7 +915,7 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
             return false;
         for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
             jsid pid = *v, cid = *v;
-            
+
             if (!m->wrapId(&cid))
                 return false;
 
@@ -935,7 +938,7 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
     }
 
     rmembrane = m;
-    return _closure->execute(rmembrane.get(), cx, global, rval);
+    return _closure->execute(rmembrane.get(), cx, _parent->global(), rval);
 }
 
 ChildTaskHandle *ChildTaskHandle::create(JSContext *cx,
@@ -1210,15 +1213,18 @@ bool Runner::haveWorkStolen(TaskHandle **create) {
 }
 
 bool Runner::stealWork(TaskHandle **create) {
+
     int n = _threadPool->runnerCount();
 
     for (int i = _index + 1; i < n; i++)
-        if (_threadPool->runner(i)->haveWorkStolen(create))
+        if (_threadPool->runner(i)->haveWorkStolen(create)) {
             return true;
+        }
 
     for (int i = 0; i < _index; i++)
-        if (_threadPool->runner(i)->haveWorkStolen(create))
+        if (_threadPool->runner(i)->haveWorkStolen(create)) {
             return true;
+        }
 
     return false;
 }
@@ -1278,15 +1284,17 @@ void Runner::reawaken(TaskContext *ctx) {
 void Runner::enqueueRootTask(RootTaskHandle *p) {
     AutoLock hold(_runnerLock);
     _toCreate.push_front(p);
-
+    _stats[PJS_TASK_ENQUEUED] += 1;
     // no need to signal new work for the root task.
 }
 
 void Runner::enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end) {
     {
         AutoLock hold(_runnerLock);
-        for (ChildTaskHandle **p = begin; p < end; p++)
+        for (ChildTaskHandle **p = begin; p < end; p++) {
             _toCreate.push_front(*p);
+            _stats[PJS_TASK_ENQUEUED] += 1;
+        }
     }
 
     _threadPool->signalNewWork();
@@ -1449,17 +1457,19 @@ void ThreadPool::await() {
 
     if (getenv("PJS_STATS") != NULL) {
         int totals[PJS_TASK_CAT_MAX] = { 0, 0 };
-        fprintf(stderr, "Runner | Taken | Stolen\n");
+        fprintf(stderr, "Runner | Enqueued | Taken | Stolen\n");
         for (int i = 0; i < _threadCount; i++) {
-            fprintf(stderr, "%6d | %5d | %6d\n",
-                    i, _runners[i]->stats(PJS_TASK_TAKEN),
+            fprintf(stderr, "%6d | %8d | %5d | %6d\n",
+                    i, _runners[i]->stats(PJS_TASK_ENQUEUED),
+                    _runners[i]->stats(PJS_TASK_TAKEN),
                     _runners[i]->stats(PJS_TASK_STOLEN));
             for (int j = 0; j < PJS_TASK_CAT_MAX; j++)
                 totals[j] += _runners[i]->stats(j);
         }
-        fprintf(stderr, "%6s | %5d | %6d\n", "total", totals[PJS_TASK_TAKEN],
-                totals[PJS_TASK_STOLEN]);
-        fprintf(stderr, "%6s | %5.0f | %6.0f\n", "avg",
+        fprintf(stderr, "%6s | %8d | %5d | %6d\n", "total", totals[PJS_TASK_ENQUEUED],
+        	totals[PJS_TASK_TAKEN], totals[PJS_TASK_STOLEN]);
+        fprintf(stderr, "%6s | %8.0f | %5.0f | %6.0f\n", "avg",
+        	totals[PJS_TASK_ENQUEUED] / (double) _threadCount,
                 totals[PJS_TASK_TAKEN] / (double) _threadCount,
                 totals[PJS_TASK_STOLEN] / (double) _threadCount);
     }
