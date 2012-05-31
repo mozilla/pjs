@@ -109,7 +109,12 @@ var VirtualCursorController = {
     if (last) {
       virtualCursor.moveLast(this.SimpleTraversalRule);
     } else {
-      virtualCursor.moveNext(this.SimpleTraversalRule);
+      try {
+        virtualCursor.moveNext(this.SimpleTraversalRule);
+      } catch (x) {
+        virtualCursor.position =
+          gAccRetrieval.getAccessibleFor(document.activeElement);
+      }
     }
   },
 
@@ -118,7 +123,12 @@ var VirtualCursorController = {
     if (first) {
       virtualCursor.moveFirst(this.SimpleTraversalRule);
     } else {
-      virtualCursor.movePrevious(this.SimpleTraversalRule);
+      try {
+        virtualCursor.movePrevious(this.SimpleTraversalRule);
+      } catch (x) {
+        virtualCursor.position =
+          gAccRetrieval.getAccessibleFor(document.activeElement);
+      }
     }
   },
 
@@ -126,8 +136,28 @@ var VirtualCursorController = {
     let virtualCursor = this.getVirtualCursor(document);
     let acc = virtualCursor.position;
 
-    if (acc.numActions > 0)
+    if (acc.actionCount > 0) {
       acc.doAction(0);
+    } else {
+      // XXX Some mobile widget sets do not expose actions properly
+      // (via ARIA roles, etc.), so we need to generate a click.
+      // Could possibly be made simpler in the future. Maybe core
+      // engine could expose nsCoreUtiles::DispatchMouseEvent()?
+      let docAcc = gAccRetrieval.getAccessibleFor(this.chromeWin.document);
+      let docX = {}, docY = {}, docW = {}, docH = {};
+      docAcc.getBounds(docX, docY, docW, docH);
+
+      let objX = {}, objY = {}, objW = {}, objH = {};
+      acc.getBounds(objX, objY, objW, objH);
+
+      let x = Math.round((objX.value - docX.value) + objW.value/2);
+      let y = Math.round((objY.value - docY.value) + objH.value/2);
+
+      let cwu = this.chromeWin.QueryInterface(Ci.nsIInterfaceRequestor).
+        getInterface(Ci.nsIDOMWindowUtils);
+      cwu.sendMouseEventToWindow('mousedown', x, y, 0, 1, 0, false);
+      cwu.sendMouseEventToWindow('mouseup', x, y, 0, 1, 0, false);
+    }
   },
 
   getVirtualCursor: function getVirtualCursor(document) {

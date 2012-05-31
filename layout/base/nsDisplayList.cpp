@@ -116,8 +116,7 @@ static bool IsFixedItem(nsDisplayItem *aItem, nsDisplayListBuilder* aBuilder)
   nsIFrame* activeScrolledRoot =
     nsLayoutUtils::GetActiveScrolledRootFor(aItem, aBuilder);
   return activeScrolledRoot &&
-         !nsLayoutUtils::ScrolledByViewportScrolling(activeScrolledRoot,
-                                                     aBuilder);
+    !nsLayoutUtils::IsScrolledByRootContentDocumentDisplayportScrolling(activeScrolledRoot, aBuilder);
 }
 
 static bool ForceVisiblityForFixedItem(nsDisplayListBuilder* aBuilder,
@@ -200,21 +199,25 @@ static void RecordFrameMetrics(nsIFrame* aForFrame,
     scrollableFrame = aScrollFrame->GetScrollTargetFrame();
 
   if (scrollableFrame) {
-    nsSize contentSize =
-      scrollableFrame->GetScrollRange().Size() +
-      scrollableFrame->GetScrollPortRect().Size();
-    metrics.mCSSContentSize = gfx::Size(nsPresContext::AppUnitsToFloatCSSPixels(contentSize.width),
-                                        nsPresContext::AppUnitsToFloatCSSPixels(contentSize.height));
-    metrics.mContentSize = contentSize.ScaleToNearestPixels(
+    nsRect contentBounds = scrollableFrame->GetScrollRange();
+    contentBounds.width += scrollableFrame->GetScrollPortRect().width;
+    contentBounds.height += scrollableFrame->GetScrollPortRect().height;
+    metrics.mCSSContentRect = gfx::Rect(nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.x),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.y),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.width),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.height));
+    metrics.mContentRect = contentBounds.ScaleToNearestPixels(
       aContainerParameters.mXScale, aContainerParameters.mYScale, auPerDevPixel);
     metrics.mViewportScrollOffset = scrollableFrame->GetScrollPosition().ScaleToNearestPixels(
       aContainerParameters.mXScale, aContainerParameters.mYScale, auPerDevPixel);
   }
   else {
-    nsSize contentSize = aForFrame->GetSize();
-    metrics.mCSSContentSize = gfx::Size(nsPresContext::AppUnitsToFloatCSSPixels(contentSize.width),
-                                        nsPresContext::AppUnitsToFloatCSSPixels(contentSize.height));
-    metrics.mContentSize = contentSize.ScaleToNearestPixels(
+    nsRect contentBounds = aForFrame->GetRect();
+    metrics.mCSSContentRect = gfx::Rect(nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.x),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.y),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.width),
+                                        nsPresContext::AppUnitsToFloatCSSPixels(contentBounds.height));
+    metrics.mContentRect = contentBounds.ScaleToNearestPixels(
       aContainerParameters.mXScale, aContainerParameters.mYScale, auPerDevPixel);
   }
 
@@ -1129,8 +1132,14 @@ nsDisplayBackground::TryOptimizeToImageLayer(nsDisplayListBuilder* aBuilder)
                                            *bg,
                                            layer);
 
+  nsImageRenderer* imageRenderer = &state.mImageRenderer;
   // We only care about images here, not gradients.
-  if (!state.mImageRenderer.IsRasterImage())
+  if (imageRenderer->IsRasterImage())
+    return false;
+
+  nsRefPtr<ImageContainer> imageContainer = imageRenderer->GetContainer();
+  // Image is not ready to be made into a layer yet
+  if (!imageContainer)
     return false;
 
   // We currently can't handle tiled or partial backgrounds.
@@ -1145,7 +1154,7 @@ nsDisplayBackground::TryOptimizeToImageLayer(nsDisplayListBuilder* aBuilder)
 
   PRInt32 appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
   mDestRect = nsLayoutUtils::RectToGfxRect(state.mDestArea, appUnitsPerDevPixel);
-  mImageContainer = state.mImageRenderer.GetContainer();
+  mImageContainer = imageContainer;
 
   // Ok, we can turn this into a layer if needed.
   return true;

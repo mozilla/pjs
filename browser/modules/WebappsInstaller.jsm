@@ -108,6 +108,11 @@ function NativeApp(aData) {
   this.manifest = app.manifest;
 
   this.profileFolder = Services.dirsvc.get("ProfD", Ci.nsIFile);
+
+  this.webappJson = {
+    "registryDir": this.profileFolder.path,
+    "app": app
+  };
 }
 
 #ifdef XP_WIN
@@ -288,14 +293,9 @@ WinNativeApp.prototype = {
    */
   _createConfigFiles: function() {
     // ${InstallDir}/webapp.json
-    let json = {
-      "registryDir": this.profileFolder.path,
-      "app": this.app
-    };
-
     let configJson = this.installDir.clone();
     configJson.append("webapp.json");
-    writeToFile(configJson, JSON.stringify(json), function() {});
+    writeToFile(configJson, JSON.stringify(this.webappJson), function() {});
 
     // ${InstallDir}/webapp.ini
     let webappINI = this.installDir.clone().QueryInterface(Ci.nsILocalFile);
@@ -309,7 +309,7 @@ WinNativeApp.prototype = {
     writer.setString("Webapp", "Profile", this.installDir.leafName);
     writer.setString("Webapp", "Executable", this.appNameAsFilename);
     writer.setString("WebappRT", "InstallDir", this.processFolder.path);
-    writer.writeFile();
+    writer.writeFile(null, Ci.nsIINIParserWriter.WRITE_UTF16);
 
     // ${UninstallDir}/shortcuts_log.ini
     let shortcutLogsINI = this.uninstallDir.clone().QueryInterface(Ci.nsILocalFile);
@@ -319,7 +319,7 @@ WinNativeApp.prototype = {
     writer.setString("STARTMENU", "Shortcut0", this.appNameAsFilename + ".lnk");
     writer.setString("DESKTOP", "Shortcut0", this.appNameAsFilename + ".lnk");
     writer.setString("TASKBAR", "Migrated", "true");
-    writer.writeFile();
+    writer.writeFile(null, Ci.nsIINIParserWriter.WRITE_UTF16);
 
     writer = null;
     factory = null;
@@ -538,18 +538,9 @@ MacNativeApp.prototype = {
 
   _createConfigFiles: function() {
     // ${ProfileDir}/webapp.json
-    let json = {
-      "registryDir": this.profileFolder.path,
-      "app": {
-        "origin": this.launchURI.prePath,
-        "installOrigin": "apps.mozillalabs.com",
-        "manifest": this.manifest
-       }
-    };
-
     let configJson = this.appProfileDir.clone();
     configJson.append("webapp.json");
-    writeToFile(configJson, JSON.stringify(json), function() {});
+    writeToFile(configJson, JSON.stringify(this.webappJson), function() {});
 
     // ${InstallDir}/Contents/MacOS/webapp.ini
     let applicationINI = this.macOSDir.clone().QueryInterface(Ci.nsILocalFile);
@@ -584,8 +575,6 @@ MacNativeApp.prototype = {
     <string>' + escapeXML(this.appName) + '</string>\n\
     <key>CFBundlePackageType</key>\n\
     <string>APPL</string>\n\
-    <key>CFBundleSignature</key>\n\
-    <string>MOZB</string>\n\
     <key>CFBundleVersion</key>\n\
     <string>0</string>\n\
     <key>FirefoxBinary</key>\n\

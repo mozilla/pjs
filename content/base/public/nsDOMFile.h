@@ -132,12 +132,23 @@ public:
 
   // Create as a blob
   nsDOMFileFile(nsIFile *aFile, const nsAString& aContentType,
-                nsISupports *aCacheToken = nsnull)
+                nsISupports *aCacheToken)
     : nsDOMFileBase(aContentType, UINT64_MAX),
       mFile(aFile), mWholeFile(true), mStoredFile(false),
       mCacheToken(aCacheToken)
   {
     NS_ASSERTION(mFile, "must have file");
+  }
+
+  // Create as a file with custom name
+  nsDOMFileFile(nsIFile *aFile, const nsAString& aName)
+    : nsDOMFileBase(EmptyString(), EmptyString(), UINT64_MAX),
+      mFile(aFile), mWholeFile(true), mStoredFile(false)
+  {
+    NS_ASSERTION(mFile, "must have file");
+    // Lazily get the content type and size
+    mContentType.SetIsVoid(true);
+    mName.Assign(aName);
   }
 
   // Create as a stored file
@@ -183,6 +194,7 @@ public:
   // Overrides
   NS_IMETHOD GetSize(PRUint64* aSize);
   NS_IMETHOD GetType(nsAString& aType);
+  NS_IMETHOD GetLastModifiedDate(JSContext* cx, JS::Value *aLastModifiedDate);
   NS_IMETHOD GetMozFullPathInternal(nsAString& aFullPath);
   NS_IMETHOD GetInternalStream(nsIInputStream**);
 

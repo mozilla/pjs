@@ -406,8 +406,9 @@ ClearAllTextRunReferences(nsTextFrame* aFrame, gfxTextRun* aTextRun,
   bool found = aStartContinuation == aFrame;
   while (aFrame) {
     NS_ASSERTION(aFrame->GetType() == nsGkAtoms::textFrame, "Bad frame");
-    if (!aFrame->RemoveTextRun(aTextRun))
+    if (!aFrame->RemoveTextRun(aTextRun)) {
       break;
+    }
     aFrame = static_cast<nsTextFrame*>(aFrame->GetNextContinuation());
   }
   NS_POSTCONDITION(!found || aStartContinuation, "how did we find null?");
@@ -1849,33 +1850,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
   if (mWhichTextRun == nsTextFrame::eNotInflated) {
     fontInflation = 1.0f;
   } else {
-    nsPresContext* presContext = firstFrame->PresContext();
-    nsLayoutUtils::WidthDetermination widthDeter = nsLayoutUtils::eNotInReflow;
-
-    if (presContext->PresShell()->IsReflowLocked()) {
-      widthDeter = nsLayoutUtils::eInReflow;
-    }
-
-#ifdef DEBUG
-    if (widthDeter == nsLayoutUtils::eInReflow) {
-      // Make sure that the font inflation container is correct.
-      nsIFrame* inflationContainer = nsnull;
-      for (nsIFrame* f = firstFrame; f; f = f->GetParent()) {
-        if (nsLayoutUtils::IsContainerForFontSizeInflation(f)) {
-          inflationContainer = f;
-          break;
-        }
-      }
-
-      // FIXME: When we support variable width containers (e.g. for regions or
-      //        differing-width columns, we should revisit this assertion.
-      NS_ASSERTION(inflationContainer->GetFirstInFlow() ==
-                   presContext->mCurrentInflationContainer->GetFirstInFlow(),
-                   "Current inflation container for text frame is wrong");
-    }
-#endif // #ifdef DEBUG
-
-    fontInflation = nsLayoutUtils::FontSizeInflationFor(firstFrame, widthDeter);
+    fontInflation = nsLayoutUtils::FontSizeInflationFor(firstFrame);
   }
 
   gfxFontGroup* fontGroup = GetFontGroupForFrame(firstFrame, fontInflation);
@@ -3766,7 +3741,7 @@ nsTextPaintStyle::GetResolvedForeColor(nscolor aColor,
 //-----------------------------------------------------------------------------
 
 #ifdef ACCESSIBILITY
-already_AddRefed<nsAccessible>
+already_AddRefed<Accessible>
 nsTextFrame::CreateAccessible()
 {
   if (IsEmpty()) {
@@ -3779,7 +3754,7 @@ nsTextFrame::CreateAccessible()
 
   nsAccessibilityService* accService = nsIPresShell::AccService();
   if (accService) {
-    return accService->CreateHTMLTextAccessible(mContent,
+    return accService->CreateTextLeafAccessible(mContent,
                                                 PresContext()->PresShell());
   }
   return nsnull;
@@ -4237,13 +4212,16 @@ void
 nsTextFrame::ClearTextRun(nsTextFrame* aStartContinuation,
                           TextRunType aWhichTextRun)
 {
-  // save textrun because ClearAllTextRunReferences may clear ours
   gfxTextRun* textRun = GetTextRun(aWhichTextRun);
-
-  if (!textRun)
+  if (!textRun) {
     return;
+  }
 
+  DebugOnly<bool> checkmTextrun = textRun == mTextRun;
   UnhookTextRunFromFrames(textRun, aStartContinuation);
+  MOZ_ASSERT(checkmTextrun ? !mTextRun
+                           : !Properties().Get(UninflatedTextRunProperty()));
+
   // see comments in BuildTextRunForFrames...
 //  if (textRun->GetFlags() & gfxFontGroup::TEXT_IS_PERSISTENT) {
 //    NS_ERROR("Shouldn't reach here for now...");
@@ -4632,8 +4610,7 @@ nsTextFrame::UnionAdditionalOverflow(nsPresContext* aPresContext,
     GetTextDecorations(aPresContext, textDecs);
     if (textDecs.HasDecorationLines()) {
       nscoord inflationMinFontSize =
-        nsLayoutUtils::InflationMinFontSizeFor(aBlockReflowState.frame,
-                                               nsLayoutUtils::eInReflow);
+        nsLayoutUtils::InflationMinFontSizeFor(aBlockReflowState.frame);
 
       const nscoord width = GetSize().width;
       const gfxFloat appUnitsPerDevUnit = aPresContext->AppUnitsPerDevPixel(),
@@ -5629,7 +5606,7 @@ nsTextFrame::DrawTextRunAndDecorations(
                       aDirtyRect.Width() / app, aDirtyRect.Height() / app);
 
     nscoord inflationMinFontSize =
-      nsLayoutUtils::InflationMinFontSizeFor(this, nsLayoutUtils::eNotInReflow);
+      nsLayoutUtils::InflationMinFontSizeFor(this);
 
     // Underlines
     for (PRUint32 i = aDecorations.mUnderlines.Length(); i-- > 0; ) {
@@ -6716,8 +6693,7 @@ nsTextFrame::AddInlineMinWidthForFlow(nsRenderingContext *aRenderingContext,
 nsTextFrame::AddInlineMinWidth(nsRenderingContext *aRenderingContext,
                                nsIFrame::InlineMinWidthData *aData)
 {
-  float inflation =
-    nsLayoutUtils::FontSizeInflationFor(this, nsLayoutUtils::eInReflow);
+  float inflation = nsLayoutUtils::FontSizeInflationFor(this);
   TextRunType trtype = (inflation == 1.0f) ? eNotInflated : eInflated;
 
   nsTextFrame* f;
@@ -6847,8 +6823,7 @@ nsTextFrame::AddInlinePrefWidthForFlow(nsRenderingContext *aRenderingContext,
 nsTextFrame::AddInlinePrefWidth(nsRenderingContext *aRenderingContext,
                                 nsIFrame::InlinePrefWidthData *aData)
 {
-  float inflation =
-    nsLayoutUtils::FontSizeInflationFor(this, nsLayoutUtils::eInReflow);
+  float inflation = nsLayoutUtils::FontSizeInflationFor(this);
   TextRunType trtype = (inflation == 1.0f) ? eNotInflated : eInflated;
 
   nsTextFrame* f;
@@ -6948,7 +6923,7 @@ HasSoftHyphenBefore(const nsTextFragment* aFrag, gfxTextRun* aTextRun,
 }
 
 static void
-RemoveInFlows(nsIFrame* aFrame, nsIFrame* aFirstToNotRemove)
+RemoveInFlows(nsTextFrame* aFrame, nsTextFrame* aFirstToNotRemove)
 {
   NS_PRECONDITION(aFrame != aFirstToNotRemove, "This will go very badly");
   // We have to be careful here, because some RemoveFrame implementations
@@ -6973,6 +6948,21 @@ RemoveInFlows(nsIFrame* aFrame, nsIFrame* aFirstToNotRemove)
   
   nsIFrame* prevContinuation = aFrame->GetPrevContinuation();
   nsIFrame* lastRemoved = aFirstToNotRemove->GetPrevContinuation();
+  nsIFrame* parent = aFrame->GetParent();
+  nsBlockFrame* parentBlock = nsLayoutUtils::GetAsBlock(parent);
+  if (!parentBlock) {
+    // Clear the text run on the first frame we'll remove to make sure none of
+    // the frames we keep shares its text run.  We need to do this now, before
+    // we unlink the frames to remove from the flow, because DestroyFrom calls
+    // ClearTextRuns() and that will start at the first frame with the text
+    // run and walk the continuations.  We only need to care about the first
+    // and last frames we remove since text runs are contiguous.
+    aFrame->ClearTextRuns();
+    if (aFrame != lastRemoved) {
+      // Clear the text run on the last frame we'll remove for the same reason.
+      static_cast<nsTextFrame*>(lastRemoved)->ClearTextRuns();
+    }
+  }
 
   prevContinuation->SetNextInFlow(aFirstToNotRemove);
   aFirstToNotRemove->SetPrevInFlow(prevContinuation);
@@ -6980,16 +6970,14 @@ RemoveInFlows(nsIFrame* aFrame, nsIFrame* aFirstToNotRemove)
   aFrame->SetPrevInFlow(nsnull);
   lastRemoved->SetNextInFlow(nsnull);
 
-  nsIFrame *parent = aFrame->GetParent();
-  nsBlockFrame *parentBlock = nsLayoutUtils::GetAsBlock(parent);
   if (parentBlock) {
     // Manually call DoRemoveFrame so we can tell it that we're
     // removing empty frames; this will keep it from blowing away
     // text runs.
     parentBlock->DoRemoveFrame(aFrame, nsBlockFrame::FRAMES_ARE_EMPTY);
   } else {
-    // Just remove it normally; use the nextBidi list to avoid
-    // posting new reflows.
+    // Just remove it normally; use kNoReflowPrincipalList to avoid posting
+    // new reflows.
     parent->RemoveFrame(nsIFrame::kNoReflowPrincipalList, aFrame);
   }
 }
@@ -7060,7 +7048,7 @@ nsTextFrame::SetLength(PRInt32 aLength, nsLineLayout* aLineLayout,
 
   // Note that in the process we may end up removing some frames from
   // the flow if they end up empty.
-  nsIFrame *framesToRemove = nsnull;
+  nsTextFrame* framesToRemove = nsnull;
   while (f && f->mContentOffset < end) {
     f->mContentOffset = end;
     if (f->GetTextRun(nsTextFrame::eInflated) != mTextRun) {
@@ -7373,8 +7361,7 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
     } 
   }
 
-  float fontSizeInflation = nsLayoutUtils::FontSizeInflationFor(this,
-                              nsLayoutUtils::eInReflow);
+  float fontSizeInflation = nsLayoutUtils::FontSizeInflationFor(this);
 
   if (fontSizeInflation != GetFontSizeInflation()) {
     // FIXME: Ideally, if we already have a text run, we'd move it to be

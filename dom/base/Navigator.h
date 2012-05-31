@@ -9,6 +9,7 @@
 
 #include "nsIDOMNavigator.h"
 #include "nsIDOMNavigatorGeolocation.h"
+#include "nsIDOMNavigatorDeviceStorage.h"
 #include "nsIDOMNavigatorDesktopNotification.h"
 #include "nsIDOMClientInformation.h"
 #include "nsIDOMNavigatorBattery.h"
@@ -33,7 +34,6 @@ class nsIDOMTelephony;
 #include "nsIDOMNavigatorBluetooth.h"
 #endif
 
-class nsIDOMAdapter;
 //*****************************************************************************
 // Navigator: Script "navigator" object
 //*****************************************************************************
@@ -60,6 +60,7 @@ class PowerManager;
 
 class Navigator : public nsIDOMNavigator
                 , public nsIDOMClientInformation
+                , public nsIDOMNavigatorDeviceStorage
                 , public nsIDOMNavigatorGeolocation
                 , public nsIDOMNavigatorDesktopNotification
                 , public nsIDOMMozNavigatorBattery
@@ -79,6 +80,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMNAVIGATOR
   NS_DECL_NSIDOMCLIENTINFORMATION
+  NS_DECL_NSIDOMNAVIGATORDEVICESTORAGE
   NS_DECL_NSIDOMNAVIGATORGEOLOCATION
   NS_DECL_NSIDOMNAVIGATORDESKTOPNOTIFICATION
   NS_DECL_NSIDOMMOZNAVIGATORBATTERY
@@ -125,7 +127,7 @@ private:
   nsRefPtr<network::Connection> mConnection;
   nsRefPtr<network::MobileConnection> mMobileConnection;
 #ifdef MOZ_B2G_BT
-  nsCOMPtr<nsIDOMBluetoothAdapter> mBluetooth;
+  nsCOMPtr<nsIDOMBluetoothManager> mBluetooth;
 #endif
   nsWeakPtr mWindow;
 };

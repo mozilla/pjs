@@ -12,6 +12,8 @@
 // Need this for XMLHttpRequestResponseType.
 #include "mozilla/dom/XMLHttpRequestBinding.h"
 
+#include "mozilla/dom/TypedArray.h"
+
 BEGIN_WORKERS_NAMESPACE
 
 class Proxy;
@@ -62,13 +64,13 @@ protected:
 
 public:
   virtual void
-  _Trace(JSTracer* aTrc) MOZ_OVERRIDE;
+  _trace(JSTracer* aTrc) MOZ_OVERRIDE;
 
   virtual void
-  _Finalize(JSFreeOp* aFop) MOZ_OVERRIDE;
+  _finalize(JSFreeOp* aFop) MOZ_OVERRIDE;
 
   static XMLHttpRequest*
-  _Constructor(JSContext* aCx, JSObject* aGlobal, ErrorResult& aRv);
+  Constructor(JSContext* aCx, JSObject* aGlobal, ErrorResult& aRv);
 
   void
   Unpin();
@@ -101,7 +103,8 @@ public:
 
   void
   Open(const nsAString& aMethod, const nsAString& aUrl, bool aAsync,
-       const nsAString& aUser, const nsAString& aPassword, ErrorResult& aRv);
+       const Optional<nsAString>& aUser, const Optional<nsAString>& aPassword,
+       ErrorResult& aRv);
 
   void
   SetRequestHeader(const nsAString& aHeader, const nsAString& aValue,
@@ -154,6 +157,11 @@ public:
 
   void
   Send(JSObject* aBody, ErrorResult& aRv);
+
+  void
+  Send(ArrayBuffer& aBody, ErrorResult& aRv) {
+    return Send(aBody.mObj, aRv);
+  }
 
   void
   SendAsBinary(const nsAString& aBody, ErrorResult& aRv);

@@ -36,11 +36,20 @@ of the License or (at your option) any later version.
 #include "inc/Main.h"
 
 #if defined(__GNUC__)
+#if defined(__clang__)
+#define     HOT
+#if defined(__x86_64)
+#define     REGPARM(n)      __attribute__((regparm(n)))
+#else
+#define     REGPARM(n)
+#endif
+#else
 #define     HOT             __attribute__((hot))
 #if defined(__x86_64)
 #define     REGPARM(n)      __attribute__((hot, regparm(n)))
 #else
 #define     REGPARM(n)
+#endif
 #endif
 #else
 #define     HOT
@@ -179,7 +188,6 @@ inline void Machine::check_final_stack(const int32 * const sp)
     if      (sp <  base)    _status = stack_underflow;       // This should be impossible now.
     else if (sp >= limit)   _status = stack_overflow;        // So should this.
     else if (sp != base)    _status = stack_not_empty;
-    else                    _status = finished;
 }
 
 } // namespace vm

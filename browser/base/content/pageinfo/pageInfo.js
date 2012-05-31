@@ -653,8 +653,7 @@ function grabAll(elem)
     };
 
     addImgFunc(gStrings.mediaBGImg, computedStyle.getPropertyCSSValue("background-image"));
-    addImgFunc(gStrings.mediaBorderImg, computedStyle.getPropertyCSSValue("-moz-border-image-source"));
-    // TODO: support unprefixed "border-image" once bug 713643 is fixed.
+    addImgFunc(gStrings.mediaBorderImg, computedStyle.getPropertyCSSValue("border-image-source"));
     addImgFunc(gStrings.mediaListImg, computedStyle.getPropertyCSSValue("list-style-image"));
     addImgFunc(gStrings.mediaCursor, computedStyle.getPropertyCSSValue("cursor"));
   }
@@ -780,8 +779,16 @@ function saveMedia()
     var item = getSelectedImage(tree);
     var url = gImageView.data[tree.currentIndex][COL_IMAGE_ADDRESS];
 
-    if (url)
-      saveURL(url, null, "SaveImageTitle", false, false, makeURI(item.baseURI));
+    if (url) {
+      var titleKey = "SaveImageTitle";
+
+      if (item instanceof HTMLVideoElement)
+        titleKey = "SaveVideoTitle";
+      else if (item instanceof HTMLAudioElement)
+        titleKey = "SaveAudioTitle";
+
+      saveURL(url, null, titleKey, false, false, makeURI(item.baseURI));
+    }
   }
   else {
     var odir  = selectSaveFolder();

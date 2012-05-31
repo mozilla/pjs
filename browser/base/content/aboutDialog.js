@@ -116,7 +116,7 @@ function appUpdater()
     return;
   }
 
-  if (this.isPending) {
+  if (this.isPending || this.isApplied) {
     this.setupUpdateButton("update.restart." +
                            (this.isMajor ? "upgradeButton" : "updateButton"));
     return;
@@ -151,6 +151,16 @@ appUpdater.prototype =
             this.um.activeUpdate.state == "pending-service");
   },
 
+  // true when there is an update already installed in the background.
+  get isApplied() {
+    if (this.update)
+      return this.update.state == "applied" ||
+             this.update.state == "applied-service";
+    return this.um.activeUpdate &&
+           (this.um.activeUpdate.state == "applied" ||
+            this.um.activeUpdate.state == "applied-service");
+  },
+
   // true when there is an update download in progress.
   get isDownloading() {
     if (this.update)
@@ -179,6 +189,12 @@ appUpdater.prototype =
     }
     catch (e) { }
     return true; // Firefox default is true
+  },
+
+  // true when updating in background is enabled.
+  get backgroundUpdateEnabled() {
+    return this.updateEnabled &&
+           Services.prefs.getBoolPref("app.update.stage.enabled");
   },
 
   // true when updating is automatic.
@@ -220,7 +236,7 @@ appUpdater.prototype =
    * Handles oncommand for the update button.
    */
   buttonOnCommand: function() {
-    if (this.isPending) {
+    if (this.isPending || this.isApplied) {
       // Notify all windows that an application quit has been requested.
       let cancelQuit = Components.classes["@mozilla.org/supports-PRBool;1"].
                        createInstance(Components.interfaces.nsISupportsPRBool);
@@ -505,9 +521,33 @@ appUpdater.prototype =
       break;
     case Components.results.NS_OK:
       this.removeDownloadListener();
-      this.selectPanel("updateButtonBox");
-      this.setupUpdateButton("update.restart." +
-                             (this.isMajor ? "upgradeButton" : "updateButton"));
+      if (this.backgroundUpdateEnabled) {
+        this.selectPanel("applying");
+        let update = this.um.activeUpdate;
+        let self = this;
+        Services.obs.addObserver(function (aSubject, aTopic, aData) {
+          // Update the UI when the background updater is finished
+          let status = update.state;
+          if (status == "applied" || status == "applied-service" ||
+              status == "pending" || status == "pending-service") {
+            // If the update is successfully applied, or if the updater has
+            // fallen back to non-staged updates, show the Restart to Update
+            // button.
+            self.selectPanel("updateButtonBox");
+            self.setupUpdateButton("update.restart." +
+                                   (self.isMajor ? "upgradeButton" : "updateButton"));
+          } else if (status == "failed") {
+            // Background update has failed, let's show the UI responsible for
+            // prompting the user to update manually.
+            self.selectPanel("downloadFailed");
+          }
+          Services.obs.removeObserver(arguments.callee, "update-staged");
+        }, "update-staged", false);
+      } else {
+        this.selectPanel("updateButtonBox");
+        this.setupUpdateButton("update.restart." +
+                               (this.isMajor ? "upgradeButton" : "updateButton"));
+      }
       break;
     default:
       this.removeDownloadListener();

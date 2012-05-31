@@ -24,6 +24,7 @@
 @APPNAME@/Contents/Info.plist
 @APPNAME@/Contents/PkgInfo
 @APPNAME@/Contents/Resources/
+@APPNAME@/Contents/_CodeSignature/CodeResources
 #endif
 
 [@AB_CD@]
@@ -168,6 +169,7 @@
 @BINPATH@/components/dom_contacts.xpt
 @BINPATH@/components/dom_core.xpt
 @BINPATH@/components/dom_css.xpt
+@BINPATH@/components/dom_devicestorage.xpt
 @BINPATH@/components/dom_events.xpt
 @BINPATH@/components/dom_geolocation.xpt
 @BINPATH@/components/dom_network.xpt
@@ -480,9 +482,10 @@
 ; [Browser Chrome Files]
 @BINPATH@/chrome/browser@JAREXT@
 @BINPATH@/chrome/browser.manifest
+@BINPATH@/chrome/pdfjs.manifest
+@BINPATH@/chrome/pdfjs/*
 @BINPATH@/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}/install.rdf
 @BINPATH@/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}/icon.png
-@BINPATH@/extensions/uriloader@pdf.js.xpi
 #ifdef SHIP_FEEDBACK
 @BINPATH@/distribution/extensions/testpilot@labs.mozilla.com.xpi
 #endif
@@ -506,13 +509,14 @@
 ; All the pref files must be part of base to prevent migration bugs
 @BINPATH@/@PREF_DIR@/firefox.js
 @BINPATH@/@PREF_DIR@/firefox-branding.js
-@BINPATH@/@PREF_DIR@/channel-prefs.js
 #ifdef MOZ_SERVICES_SYNC
 @BINPATH@/@PREF_DIR@/services-sync.js
 #endif
 @BINPATH@/greprefs.js
 @BINPATH@/defaults/autoconfig/platform.js
 @BINPATH@/defaults/autoconfig/prefcalls.js
+; Warning: changing the path to channel-prefs.js can cause bugs (Bug 756325)
+@BINPATH@/defaults/pref/channel-prefs.js
 @BINPATH@/defaults/profile/prefs.js
 
 ; [Layout Engine Resources]

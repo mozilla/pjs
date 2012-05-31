@@ -148,10 +148,16 @@ class HeapReverser : public JSTracer {
 
   private:
     /*
-     * Conservative scanning can, on a whim, decide that a root is no longer a
-     * root, and cause bits of our graph to disappear. The 'roots' vector holds
-     * all the roots we find alive, and 'rooter' keeps them alive until we're
-     * destroyed.
+     * Once we've produced a reversed map of the heap, we need to keep the
+     * engine from freeing the objects we've found in it, until we're done using
+     * the map. Even if we're only using the map to construct a result object,
+     * and not rearranging the heap ourselves, any allocation could cause a
+     * garbage collection, which could free objects held internally by the
+     * engine (for example, JaegerMonkey object templates, used by jit scripts).
+     *
+     * So, each time reverseHeap reaches any object, we add it to 'roots', which
+     * is cited by 'rooter', so the object will stay alive long enough for us to
+     * include it in the results, if needed.
      *
      * Note that AutoArrayRooters must be constructed and destroyed in a
      * stack-like order, so the same rule applies to this HeapReverser. The
@@ -218,7 +224,8 @@ class HeapReverser : public JSTracer {
     /* Static member function wrapping 'traverseEdge'. */
     static void traverseEdgeWithThis(JSTracer *tracer, void **thingp, JSGCTraceKind kind) {
         HeapReverser *reverser = static_cast<HeapReverser *>(tracer);
-        reverser->traversalStatus = reverser->traverseEdge(*thingp, kind);
+        if (!reverser->traverseEdge(*thingp, kind))
+            reverser->traversalStatus = false;
     }
 
     /* Return a jsval representing a node, if possible; otherwise, return JSVAL_VOID. */
@@ -231,10 +238,11 @@ class HeapReverser : public JSTracer {
 };
 
 bool
-HeapReverser::traverseEdge(void *cell, JSGCTraceKind kind) {
-    /* If this is a root, make our own root for it as well. */
-    if (!parent) {
-        if (!roots.append(nodeToValue(cell, kind)))
+HeapReverser::traverseEdge(void *cell, JSGCTraceKind kind)
+{
+    jsval v = nodeToValue(cell, kind);
+    if (v.isObject()) {
+        if (!roots.append(v))
             return false;
         rooter.changeArray(roots.begin(), roots.length());
     }
@@ -267,7 +275,10 @@ HeapReverser::traverseEdge(void *cell, JSGCTraceKind kind) {
 }
 
 bool
-HeapReverser::reverseHeap() {
+HeapReverser::reverseHeap()
+{
+    traversalStatus = true;
+
     /* Prime the work stack with the roots of collection. */
     JS_TraceRuntime(this);
     if (!traversalStatus)
@@ -332,7 +343,7 @@ class ReferenceFinder {
     const HeapReverser &reverser;
 
     /* The results object we're currently building. */
-    RootedVarObject result;
+    RootedObject result;
 
     /* A list of edges we've traversed to get to a certain point. */
     class Path {
@@ -470,9 +481,11 @@ ReferenceFinder::Path::computeName(JSContext *cx)
 }
 
 bool
-ReferenceFinder::addReferrer(jsval referrer, Path *path)
+ReferenceFinder::addReferrer(jsval referrer_, Path *path)
 {
-    if (!context->compartment->wrap(context, &referrer))
+    Rooted<jsval> referrer(context, referrer_);
+
+    if (!context->compartment->wrap(context, referrer.address()))
         return NULL;
 
     char *pathName = path->computeName(context);
@@ -480,15 +493,13 @@ ReferenceFinder::addReferrer(jsval referrer, Path *path)
         return false;
     AutoReleasePtr releasePathName(context, pathName);
 
-    Root<jsval> referrerRoot(context, &referrer);
-
     /* Find the property of the results object named |pathName|. */
     JS::Value v;
     if (!JS_GetProperty(context, result, pathName, &v))
         return false;
     if (v.isUndefined()) {
         /* Create an array to accumulate referents under this path. */
-        JSObject *array = JS_NewArrayObject(context, 1, &referrer);
+        JSObject *array = JS_NewArrayObject(context, 1, referrer.address());
         if (!array)
             return false;
         v.setObject(*array);
@@ -496,13 +507,13 @@ ReferenceFinder::addReferrer(jsval referrer, Path *path)
     }
 
     /* The property's value had better be an array. */
-    RootedVarObject array(context, &v.toObject());
+    RootedObject array(context, &v.toObject());
     JS_ASSERT(JS_IsArrayObject(context, array));
 
     /* Append our referrer to this array. */
     uint32_t length;
     return JS_GetArrayLength(context, array, &length) &&
-           JS_SetElement(context, array, length, &referrer);
+           JS_SetElement(context, array, length, referrer.address());
 }
 
 JSObject *
@@ -541,7 +552,7 @@ FindReferences(JSContext *cx, unsigned argc, jsval *vp)
 
     /* Given the reversed map, find the referents of target. */
     ReferenceFinder finder(cx, reverser);
-    JSObject *references = finder.findReferences(RootedVarObject(cx, &target.toObject()));
+    JSObject *references = finder.findReferences(RootedObject(cx, &target.toObject()));
     if (!references)
         return false;
 

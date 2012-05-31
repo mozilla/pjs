@@ -18,11 +18,14 @@ import android.widget.TextSwitcher;
 import android.app.Instrumentation;
 import com.jayway.android.robotium.solo.Solo;
 import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.TimeUnit;
 
 public class FennecNativeElement implements Element {
     private final Activity mActivity;
     private Integer mId;
     private Solo mSolo;
+    // max time to wait for thread synchronization
+    private static final int MAX_WAIT_MS = 60000;
 
     public FennecNativeElement(Integer id, Activity activity, Solo solo) {
         mId = id;
@@ -34,34 +37,50 @@ public class FennecNativeElement implements Element {
         return mId;
     }
 
-    public void click() {
+    private boolean mClickSuccess;
+
+    public boolean click() {
         final SynchronousQueue syncQueue = new SynchronousQueue();
+        mClickSuccess = false;
         mActivity.runOnUiThread(
             new Runnable() {
                 public void run() {
                     View view = (View)mActivity.findViewById(mId);
-                    if(view != null) {
-                        if (!view.performClick()) {
+                    if (view != null) {
+                        if (view.performClick()) {
+                            mClickSuccess = true;
+                        } else {
                             FennecNativeDriver.log(FennecNativeDriver.LogLevel.WARN,
                                 "Robocop called click on an element with no listener");
                         }
                     } else {
-                        throw new RoboCopException("click: unable to find view "+mId); 
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR,
+                            "click: unable to find view "+mId);
                     }
-                    syncQueue.offer(new Object());
+                    try {
+                        syncQueue.put(new Object());
+                    } catch (InterruptedException e) {
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
+                    }
                 }
             });
         try {
-            syncQueue.take();
+            // Wait for the UiThread code to finish running
+            if (syncQueue.poll(MAX_WAIT_MS, TimeUnit.MILLISECONDS) == null) {
+                FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, 
+                    "click: time-out waiting for UI thread");
+            }
         } catch (InterruptedException e) {
             FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
         }
+        return mClickSuccess;
     }
 
     private Object mText;
 
     public String getText() {
         final SynchronousQueue syncQueue = new SynchronousQueue();
+        mText = null;
         mActivity.runOnUiThread(
             new Runnable() {
                 public void run() {
@@ -83,22 +102,33 @@ public class FennecNativeElement implements Element {
                     } else if (v instanceof TextView) {
                         mText = ((TextView)v).getText(); 
                     } else if (v == null) {
-                        throw new RoboCopException("getText: unable to find view "+mId); 
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR,
+                            "getText: unable to find view "+mId);
                     } else {
-                        throw new RoboCopException("getText: unhandled type for view "+mId); 
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR,
+                            "getText: unhandled type for view "+mId);
                     }
-                    syncQueue.offer(new Object());
+                    try {
+                        syncQueue.put(new Object());
+                    } catch (InterruptedException e) {
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
+                    }
                 } // end of run() method definition
             } // end of anonymous Runnable object instantiation
         );
         try {     
             // Wait for the UiThread code to finish running
-            syncQueue.take();
+            if (syncQueue.poll(MAX_WAIT_MS, TimeUnit.MILLISECONDS) == null) {
+                FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, 
+                    "getText: time-out waiting for UI thread");
+            }
         } catch (InterruptedException e) {
             FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
         }
         if (mText == null) {
-            throw new RoboCopException("getText: Text is null for view "+mId);
+            FennecNativeDriver.log(FennecNativeDriver.LogLevel.WARN,
+                "getText: Text is null for view "+mId);
+            return null;
         }
         return mText.toString();
     }
@@ -115,11 +145,19 @@ public class FennecNativeElement implements Element {
                     if (view != null) {
                         mDisplayed = true;
                     }
-                    syncQueue.offer(new Object());
+                    try {
+                        syncQueue.put(new Object());
+                    } catch (InterruptedException e) {
+                        FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
+                    }
                 }
             });
         try {
-            syncQueue.take();
+            // Wait for the UiThread code to finish running
+            if (syncQueue.poll(MAX_WAIT_MS, TimeUnit.MILLISECONDS) == null) {
+                FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, 
+                    "isDisplayed: time-out waiting for UI thread");
+            }
         } catch (InterruptedException e) {
             FennecNativeDriver.log(FennecNativeDriver.LogLevel.ERROR, e);
         }

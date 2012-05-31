@@ -20,9 +20,16 @@ endif
 SHARED_LIBRARY_LIBS = \
     $(MOZ_OTS_LIBS) \
     $(QCMS_LIBS) \
-    $(MOZ_CAIRO_LIBS) \
     $(MOZ_HARFBUZZ_LIBS) \
     $(NULL)
+
+ifdef MOZ_TREE_CAIRO
+SHARED_LIBRARY_LIBS += $(MOZ_CAIRO_LIBS)
+endif
+
+ifdef MOZ_TREE_PIXMAN
+SHARED_LIBRARY_LIBS += $(MOZ_PIXMAN_LIBS)
+endif
 
 ifdef MOZ_GRAPHITE
 SHARED_LIBRARY_LIBS += $(MOZ_GRAPHITE_LIBS)
@@ -101,9 +108,14 @@ SHARED_LIBRARY_LIBS 	+= \
 SHARED_LIBRARY_LIBS 	+= \
 	$(DEPTH)/gfx/2d/$(LIB_PREFIX)gfx2d.$(LIB_SUFFIX) \
 	$(NULL)
+  
+ifdef MOZ_ENABLE_SKIA
+SHARED_LIBRARY_LIBS += $(MOZ_SKIA_LIBS)
+endif
 
 ifeq (WINNT,$(OS_TARGET))
 EXTRA_DSO_LDOPTS = $(MOZALLOC_LIB) $(NSPR_LIBS)
+OS_LIBS += $(call EXPAND_LIBNAME,usp10)
 
 # OTS uses uncompress2() from libz, so we need to link with this
 ifdef MOZ_NATIVE_ZLIB

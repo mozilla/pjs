@@ -12,21 +12,8 @@ const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/NetworkHelper.jsm");
 
 var EXPORTED_SYMBOLS = ["HUDService", "ConsoleUtils"];
-
-XPCOMUtils.defineLazyServiceGetter(this, "scriptError",
-                                   "@mozilla.org/scripterror;1",
-                                   "nsIScriptError");
-
-XPCOMUtils.defineLazyServiceGetter(this, "activityDistributor",
-                                   "@mozilla.org/network/http-activity-distributor;1",
-                                   "nsIHttpActivityDistributor");
-
-XPCOMUtils.defineLazyServiceGetter(this, "mimeService",
-                                   "@mozilla.org/mime;1",
-                                   "nsIMIMEService");
 
 XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                    "@mozilla.org/widget/clipboardhelper;1",
@@ -38,56 +25,20 @@ XPCOMUtils.defineLazyGetter(this, "gcli", function () {
   return obj.gcli;
 });
 
-XPCOMUtils.defineLazyGetter(this, "CssRuleView", function() {
-  let tmp = {};
-  Cu.import("resource:///modules/devtools/CssRuleView.jsm", tmp);
-  return tmp.CssRuleView;
-});
-
-XPCOMUtils.defineLazyGetter(this, "NetUtil", function () {
-  var obj = {};
-  Cu.import("resource://gre/modules/NetUtil.jsm", obj);
-  return obj.NetUtil;
-});
-
 XPCOMUtils.defineLazyGetter(this, "template", function () {
   var obj = {};
   Cu.import("resource:///modules/devtools/Templater.jsm", obj);
   return obj.template;
 });
 
-XPCOMUtils.defineLazyGetter(this, "PropertyPanel", function () {
-  var obj = {};
-  try {
-    Cu.import("resource:///modules/PropertyPanel.jsm", obj);
-  } catch (err) {
-    Cu.reportError(err);
-  }
-  return obj.PropertyPanel;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "PropertyPanel",
+                                  "resource:///modules/PropertyPanel.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "PropertyPanelAsync", function () {
-  let obj = {};
-  Cu.import("resource:///modules/PropertyPanelAsync.jsm", obj);
-  return obj.PropertyPanel;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
+                                  "resource:///modules/PropertyPanel.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "PropertyTreeViewAsync", function () {
-  let obj = {};
-  Cu.import("resource:///modules/PropertyPanelAsync.jsm", obj);
-  return obj.PropertyTreeView;
-});
-
-XPCOMUtils.defineLazyGetter(this, "AutocompletePopup", function () {
-  var obj = {};
-  try {
-    Cu.import("resource:///modules/AutocompletePopup.jsm", obj);
-  }
-  catch (err) {
-    Cu.reportError(err);
-  }
-  return obj.AutocompletePopup;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
+                                  "resource:///modules/AutocompletePopup.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "ScratchpadManager", function () {
   var obj = {};
@@ -100,17 +51,11 @@ XPCOMUtils.defineLazyGetter(this, "ScratchpadManager", function () {
   return obj.ScratchpadManager;
 });
 
-XPCOMUtils.defineLazyGetter(this, "namesAndValuesOf", function () {
-  var obj = {};
-  Cu.import("resource:///modules/PropertyPanel.jsm", obj);
-  return obj.namesAndValuesOf;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "NetworkPanel",
+                                  "resource:///modules/NetworkPanel.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
-  let obj = {};
-  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
-  return obj.WebConsoleUtils;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+                                  "resource:///modules/WebConsoleUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "l10n", function() {
   return WebConsoleUtils.l10n;
@@ -170,6 +115,7 @@ const LEVELS = {
   info: SEVERITY_INFO,
   log: SEVERITY_LOG,
   trace: SEVERITY_LOG,
+  debug: SEVERITY_LOG,
   dir: SEVERITY_LOG,
   group: SEVERITY_LOG,
   groupCollapsed: SEVERITY_LOG,
@@ -180,14 +126,8 @@ const LEVELS = {
 
 // The lowest HTTP response code (inclusive) that is considered an error.
 const MIN_HTTP_ERROR_CODE = 400;
-// The highest HTTP response code (exclusive) that is considered an error.
-const MAX_HTTP_ERROR_CODE = 600;
-
-// HTTP status codes.
-const HTTP_MOVED_PERMANENTLY = 301;
-const HTTP_FOUND = 302;
-const HTTP_SEE_OTHER = 303;
-const HTTP_TEMPORARY_REDIRECT = 307;
+// The highest HTTP response code (inclusive) that is considered an error.
+const MAX_HTTP_ERROR_CODE = 599;
 
 // The HTML namespace.
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -236,12 +176,6 @@ const ANIMATE_IN = 1;
 const HISTORY_BACK = -1;
 const HISTORY_FORWARD = 1;
 
-// The maximum number of bytes a Network ResponseListener can hold.
-const RESPONSE_BODY_LIMIT = 1024*1024; // 1 MB
-
-// The maximum uint32 value.
-const PR_UINT32_MAX = 4294967295;
-
 // Minimum console height, in pixels.
 const MINIMUM_CONSOLE_HEIGHT = 150;
 
@@ -251,9 +185,6 @@ const MINIMUM_PAGE_HEIGHT = 50;
 
 // The default console height, as a ratio from the content window inner height.
 const DEFAULT_CONSOLE_HEIGHT = 0.33;
-
-// Constant used when checking the typeof objects.
-const TYPEOF_FUNCTION = "function";
 
 // This script is inserted into the content process.
 const CONTENT_SCRIPT_URL = "chrome://browser/content/devtools/HUDService-content.js";
@@ -270,278 +201,6 @@ const GROUP_INDENT = 12;
 
 // The pref prefix for webconsole filters
 const PREFS_PREFIX = "devtools.webconsole.filter.";
-
-/**
- * Implements the nsIStreamListener and nsIRequestObserver interface. Used
- * within the HS_httpObserverFactory function to get the response body of
- * requests.
- *
- * The code is mostly based on code listings from:
- *
- *   http://www.softwareishard.com/blog/firebug/
- *      nsitraceablechannel-intercept-http-traffic/
- *
- * @param object aHttpActivity
- *        HttpActivity object associated with this request (see
- *        HS_httpObserverFactory). As the response is done, the response header,
- *        body and status is stored on aHttpActivity.
- */
-function ResponseListener(aHttpActivity) {
-  this.receivedData = "";
-  this.httpActivity = aHttpActivity;
-}
-
-ResponseListener.prototype =
-{
-  /**
-   * The response will be written into the outputStream of this nsIPipe.
-   * Both ends of the pipe must be blocking.
-   */
-  sink: null,
-
-  /**
-   * The HttpActivity object associated with this response.
-   */
-  httpActivity: null,
-
-  /**
-   * Stores the received data as a string.
-   */
-  receivedData: null,
-
-  /**
-   * The nsIRequest we are started for.
-   */
-  request: null,
-
-  /**
-   * Sets the httpActivity object's response header if it isn't set already.
-   *
-   * @param nsIRequest aRequest
-   */
-  setResponseHeader: function RL_setResponseHeader(aRequest)
-  {
-    let httpActivity = this.httpActivity;
-    // Check if the header isn't set yet.
-    if (!httpActivity.response.header) {
-      if (aRequest instanceof Ci.nsIHttpChannel) {
-      httpActivity.response.header = {};
-        try {
-        aRequest.visitResponseHeaders({
-          visitHeader: function(aName, aValue) {
-            httpActivity.response.header[aName] = aValue;
-          }
-        });
-      }
-        // Accessing the response header can throw an NS_ERROR_NOT_AVAILABLE
-        // exception. Catch it and stop it to make it not show up in the.
-        // This can happen if the response is not finished yet and the user
-        // reloades the page.
-        catch (ex) {
-          delete httpActivity.response.header;
-        }
-      }
-    }
-  },
-
-  /**
-   * Set the async listener for the given nsIAsyncInputStream. This allows us to
-   * wait asynchronously for any data coming from the stream.
-   *
-   * @param nsIAsyncInputStream aStream
-   *        The input stream from where we are waiting for data to come in.
-   *
-   * @param nsIInputStreamCallback aListener
-   *        The input stream callback you want. This is an object that must have
-   *        the onInputStreamReady() method. If the argument is null, then the
-   *        current callback is removed.
-   *
-   * @returns void
-   */
-  setAsyncListener: function RL_setAsyncListener(aStream, aListener)
-  {
-    // Asynchronously wait for the stream to be readable or closed.
-    aStream.asyncWait(aListener, 0, 0, Services.tm.mainThread);
-  },
-
-  /**
-   * Stores the received data, if request/response body logging is enabled. It
-   * also does limit the number of stored bytes, based on the
-   * RESPONSE_BODY_LIMIT constant.
-   *
-   * Learn more about nsIStreamListener at:
-   * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIStreamListener
-   *
-   * @param nsIRequest aRequest
-   * @param nsISupports aContext
-   * @param nsIInputStream aInputStream
-   * @param unsigned long aOffset
-   * @param unsigned long aCount
-   */
-  onDataAvailable: function RL_onDataAvailable(aRequest, aContext, aInputStream,
-                                               aOffset, aCount)
-  {
-    this.setResponseHeader(aRequest);
-
-    let data = NetUtil.readInputStreamToString(aInputStream, aCount);
-
-    if (!this.httpActivity.response.bodyDiscarded &&
-        this.receivedData.length < RESPONSE_BODY_LIMIT) {
-      this.receivedData += NetworkHelper.
-                           convertToUnicode(data, aRequest.contentCharset);
-    }
-  },
-
-  /**
-   * See documentation at
-   * https://developer.mozilla.org/En/NsIRequestObserver
-   *
-   * @param nsIRequest aRequest
-   * @param nsISupports aContext
-   */
-  onStartRequest: function RL_onStartRequest(aRequest, aContext)
-  {
-    this.request = aRequest;
-
-    // Always discard the response body if logging is not enabled in the Web
-    // Console.
-    this.httpActivity.response.bodyDiscarded =
-      !HUDService.saveRequestAndResponseBodies;
-
-    // Check response status and discard the body for redirects.
-    if (!this.httpActivity.response.bodyDiscarded &&
-        this.httpActivity.channel instanceof Ci.nsIHttpChannel) {
-      switch (this.httpActivity.channel.responseStatus) {
-        case HTTP_MOVED_PERMANENTLY:
-        case HTTP_FOUND:
-        case HTTP_SEE_OTHER:
-        case HTTP_TEMPORARY_REDIRECT:
-          this.httpActivity.response.bodyDiscarded = true;
-          break;
-      }
-    }
-
-    // Asynchronously wait for the data coming from the request.
-    this.setAsyncListener(this.sink.inputStream, this);
-  },
-
-  /**
-   * Handle the onStopRequest by storing the response header is stored on the
-   * httpActivity object. The sink output stream is also closed.
-   *
-   * For more documentation about nsIRequestObserver go to:
-   * https://developer.mozilla.org/En/NsIRequestObserver
-   *
-   * @param nsIRequest aRequest
-   *        The request we are observing.
-   * @param nsISupports aContext
-   * @param nsresult aStatusCode
-   */
-  onStopRequest: function RL_onStopRequest(aRequest, aContext, aStatusCode)
-  {
-    // Retrieve the response headers, as they are, from the server.
-    let response = null;
-    for each (let item in HUDService.openResponseHeaders) {
-      if (item.channel === this.httpActivity.channel) {
-        response = item;
-        break;
-      }
-    }
-
-    if (response) {
-      this.httpActivity.response.header = response.headers;
-      delete HUDService.openResponseHeaders[response.id];
-    }
-    else {
-      this.setResponseHeader(aRequest);
-    }
-
-    this.sink.outputStream.close();
-  },
-
-  /**
-   * Clean up the response listener once the response input stream is closed.
-   * This is called from onStopRequest() or from onInputStreamReady() when the
-   * stream is closed.
-   *
-   * @returns void
-   */
-  onStreamClose: function RL_onStreamClose()
-  {
-    if (!this.httpActivity) {
-      return;
-    }
-
-    // Remove our listener from the request input stream.
-    this.setAsyncListener(this.sink.inputStream, null);
-
-    if (!this.httpActivity.response.bodyDiscarded &&
-        HUDService.saveRequestAndResponseBodies) {
-      this.httpActivity.response.body = this.receivedData;
-    }
-
-    if (HUDService.lastFinishedRequestCallback) {
-      HUDService.lastFinishedRequestCallback(this.httpActivity);
-    }
-
-    // Call update on all panels.
-    this.httpActivity.panels.forEach(function(weakRef) {
-      let panel = weakRef.get();
-      if (panel) {
-        panel.update();
-      }
-    });
-    this.httpActivity.response.isDone = true;
-    this.httpActivity = null;
-    this.receivedData = "";
-    this.request = null;
-    this.sink = null;
-    this.inputStream = null;
-  },
-
-  /**
-   * The nsIInputStreamCallback for when the request input stream is ready -
-   * either it has more data or it is closed.
-   *
-   * @param nsIAsyncInputStream aStream
-   *        The sink input stream from which data is coming.
-   *
-   * @returns void
-   */
-  onInputStreamReady: function RL_onInputStreamReady(aStream)
-  {
-    if (!(aStream instanceof Ci.nsIAsyncInputStream) || !this.httpActivity) {
-      return;
-    }
-
-    let available = -1;
-    try {
-      // This may throw if the stream is closed normally or due to an error.
-      available = aStream.available();
-    }
-    catch (ex) { }
-
-    if (available != -1) {
-      if (available != 0) {
-        // Note that passing 0 as the offset here is wrong, but the
-        // onDataAvailable() method does not use the offset, so it does not
-        // matter.
-        this.onDataAvailable(this.request, null, aStream, 0, available);
-      }
-      this.setAsyncListener(aStream, this);
-    }
-    else {
-      this.onStreamClose();
-    }
-  },
-
-  QueryInterface: XPCOMUtils.generateQI([
-    Ci.nsIStreamListener,
-    Ci.nsIInputStreamCallback,
-    Ci.nsIRequestObserver,
-    Ci.nsISupports,
-  ])
-}
 
 ///////////////////////////////////////////////////////////////////////////
 //// Helper for creating the network panel.
@@ -568,637 +227,6 @@ function createElement(aDocument, aTag, aAttributes)
     }
   }
   return node;
-}
-
-/**
- * Creates a new DOMNode and appends it to aParent.
- *
- * @param nsIDOMNode aParent
- *        A parent node to append the created element.
- * @param string aTag
- *        Name of the tag for the DOMNode.
- * @param object aAttributes
- *        Attributes set on the created DOMNode.
- *
- * @returns nsIDOMNode
- */
-function createAndAppendElement(aParent, aTag, aAttributes)
-{
-  let node = createElement(aParent.ownerDocument, aTag, aAttributes);
-  aParent.appendChild(node);
-  return node;
-}
-
-///////////////////////////////////////////////////////////////////////////
-//// NetworkPanel
-
-/**
- * Creates a new NetworkPanel.
- *
- * @param nsIDOMNode aParent
- *        Parent node to append the created panel to.
- * @param object aHttpActivity
- *        HttpActivity to display in the panel.
- */
-function NetworkPanel(aParent, aHttpActivity)
-{
-  let doc = aParent.ownerDocument;
-  this.httpActivity = aHttpActivity;
-
-  // Create the underlaying panel
-  this.panel = createElement(doc, "panel", {
-    label: l10n.getStr("NetworkPanel.label"),
-    titlebar: "normal",
-    noautofocus: "true",
-    noautohide: "true",
-    close: "true"
-  });
-
-  // Create the iframe that displays the NetworkPanel XHTML.
-  this.iframe = createAndAppendElement(this.panel, "iframe", {
-    src: "chrome://browser/content/NetworkPanel.xhtml",
-    type: "content",
-    flex: "1"
-  });
-
-  let self = this;
-
-  // Destroy the panel when it's closed.
-  this.panel.addEventListener("popuphidden", function onPopupHide() {
-    self.panel.removeEventListener("popuphidden", onPopupHide, false);
-    self.panel.parentNode.removeChild(self.panel);
-    self.panel = null;
-    self.iframe = null;
-    self.document = null;
-    self.httpActivity = null;
-
-    if (self.linkNode) {
-      self.linkNode._panelOpen = false;
-      self.linkNode = null;
-    }
-  }, false);
-
-  // Set the document object and update the content once the panel is loaded.
-  this.panel.addEventListener("load", function onLoad() {
-    self.panel.removeEventListener("load", onLoad, true);
-    self.document = self.iframe.contentWindow.document;
-    self.update();
-  }, true);
-
-  // Create the footer.
-  let footer = createElement(doc, "hbox", { align: "end" });
-  createAndAppendElement(footer, "spacer", { flex: 1 });
-
-  createAndAppendElement(footer, "resizer", { dir: "bottomend" });
-  this.panel.appendChild(footer);
-
-  aParent.appendChild(this.panel);
-}
-
-NetworkPanel.prototype =
-{
-  /**
-   * Callback is called once the NetworkPanel is processed completly. Used by
-   * unit tests.
-   */
-  isDoneCallback: null,
-
-  /**
-   * The current state of the output.
-   */
-  _state: 0,
-
-  /**
-   * State variables.
-   */
-  _INIT: 0,
-  _DISPLAYED_REQUEST_HEADER: 1,
-  _DISPLAYED_REQUEST_BODY: 2,
-  _DISPLAYED_RESPONSE_HEADER: 3,
-  _TRANSITION_CLOSED: 4,
-
-  _fromDataRegExp: /Content-Type\:\s*application\/x-www-form-urlencoded/,
-
-  /**
-   * Small helper function that is nearly equal to  HUDService.getFormatStr
-   * except that it prefixes aName with "NetworkPanel.".
-   *
-   * @param string aName
-   *        The name of an i10n string to format. This string is prefixed with
-   *        "NetworkPanel." before calling the HUDService.getFormatStr function.
-   * @param array aArray
-   *        Values used as placeholder for the i10n string.
-   * @returns string
-   *          The i10n formated string.
-   */
-  _format: function NP_format(aName, aArray)
-  {
-    return l10n.getFormatStr("NetworkPanel." + aName, aArray);
-  },
-
-  /**
-   * Returns the content type of the response body. This is based on the
-   * response.header["Content-Type"] info. If this value is not available, then
-   * the content type is tried to be estimated by the url file ending.
-   *
-   * @returns string or null
-   *          Content type or null if no content type could be figured out.
-   */
-  get _contentType()
-  {
-    let response = this.httpActivity.response;
-    let contentTypeValue = null;
-
-    if (response.header && response.header["Content-Type"]) {
-      let types = response.header["Content-Type"].split(/,|;/);
-      for (let i = 0; i < types.length; i++) {
-        let type = NetworkHelper.mimeCategoryMap[types[i]];
-        if (type) {
-          return types[i];
-        }
-      }
-    }
-
-    // Try to get the content type from the request file extension.
-    let uri = NetUtil.newURI(this.httpActivity.url);
-    let mimeType = null;
-    if ((uri instanceof Ci.nsIURL) && uri.fileExtension) {
-      try {
-        mimeType = mimeService.getTypeFromExtension(uri.fileExtension);
-      } catch(e) {
-        // Added to prevent failures on OS X 64. No Flash?
-        Cu.reportError(e);
-        // Return empty string to pass unittests.
-        return "";
-      }
-    }
-    return mimeType;
-  },
-
-  /**
-   *
-   * @returns boolean
-   *          True if the response is an image, false otherwise.
-   */
-  get _responseIsImage()
-  {
-    return NetworkHelper.mimeCategoryMap[this._contentType] == "image";
-  },
-
-  /**
-   *
-   * @returns boolean
-   *          True if the response body contains text, false otherwise.
-   */
-  get _isResponseBodyTextData()
-  {
-    let contentType = this._contentType;
-
-    if (!contentType)
-      return false;
-
-    if (contentType.indexOf("text/") == 0) {
-      return true;
-    }
-
-    switch (NetworkHelper.mimeCategoryMap[contentType]) {
-      case "txt":
-      case "js":
-      case "json":
-      case "css":
-      case "html":
-      case "svg":
-      case "xml":
-        return true;
-
-      default:
-        return false;
-    }
-  },
-
-  /**
-   *
-   * @returns boolean
-   *          Returns true if the server responded that the request is already
-   *          in the browser's cache, false otherwise.
-   */
-  get _isResponseCached()
-  {
-    return this.httpActivity.response.status.indexOf("304") != -1;
-  },
-
-  /**
-   *
-   * @returns boolean
-   *          Returns true if the posted body contains form data.
-   */
-  get _isRequestBodyFormData()
-  {
-    let requestBody = this.httpActivity.request.body;
-    return this._fromDataRegExp.test(requestBody);
-  },
-
-  /**
-   * Appends the node with id=aId by the text aValue.
-   *
-   * @param string aId
-   * @param string aValue
-   * @returns void
-   */
-  _appendTextNode: function NP_appendTextNode(aId, aValue)
-  {
-    let textNode = this.document.createTextNode(aValue);
-    this.document.getElementById(aId).appendChild(textNode);
-  },
-
-  /**
-   * Generates some HTML to display the key-value pair of the aList data. The
-   * generated HTML is added to node with id=aParentId.
-   *
-   * @param string aParentId
-   *        Id of the parent node to append the list to.
-   * @oaram object aList
-   *        Object that holds the key-value information to display in aParentId.
-   * @param boolean aIgnoreCookie
-   *        If true, the key-value named "Cookie" is not added to the list.
-   * @returns void
-   */
-  _appendList: function NP_appendList(aParentId, aList, aIgnoreCookie)
-  {
-    let parent = this.document.getElementById(aParentId);
-    let doc = this.document;
-
-    let sortedList = {};
-    Object.keys(aList).sort().forEach(function(aKey) {
-      sortedList[aKey] = aList[aKey];
-    });
-
-    for (let key in sortedList) {
-      if (aIgnoreCookie && key == "Cookie") {
-        continue;
-      }
-
-      /**
-       * The following code creates the HTML:
-       * <tr>
-       * <th scope="row" class="property-name">${line}:</th>
-       * <td class="property-value">${aList[line]}</td>
-       * </tr>
-       * and adds it to parent.
-       */
-      let row = doc.createElement("tr");
-      let textNode = doc.createTextNode(key + ":");
-      let th = doc.createElement("th");
-      th.setAttribute("scope", "row");
-      th.setAttribute("class", "property-name");
-      th.appendChild(textNode);
-      row.appendChild(th);
-
-      textNode = doc.createTextNode(sortedList[key]);
-      let td = doc.createElement("td");
-      td.setAttribute("class", "property-value");
-      td.appendChild(textNode);
-      row.appendChild(td);
-
-      parent.appendChild(row);
-    }
-  },
-
-  /**
-   * Displays the node with id=aId.
-   *
-   * @param string aId
-   * @returns void
-   */
-  _displayNode: function NP_displayNode(aId)
-  {
-    this.document.getElementById(aId).style.display = "block";
-  },
-
-  /**
-   * Sets the request URL, request method, the timing information when the
-   * request started and the request header content on the NetworkPanel.
-   * If the request header contains cookie data, a list of sent cookies is
-   * generated and a special sent cookie section is displayed + the cookie list
-   * added to it.
-   *
-   * @returns void
-   */
-  _displayRequestHeader: function NP_displayRequestHeader()
-  {
-    let timing = this.httpActivity.timing;
-    let request = this.httpActivity.request;
-
-    this._appendTextNode("headUrl", this.httpActivity.url);
-    this._appendTextNode("headMethod", this.httpActivity.method);
-
-    this._appendTextNode("requestHeadersInfo",
-      l10n.timestampString(timing.REQUEST_HEADER/1000));
-
-    this._appendList("requestHeadersContent", request.header, true);
-
-    if ("Cookie" in request.header) {
-      this._displayNode("requestCookie");
-
-      let cookies = request.header.Cookie.split(";");
-      let cookieList = {};
-      let cookieListSorted = {};
-      cookies.forEach(function(cookie) {
-        let name, value;
-        [name, value] = cookie.trim().split("=");
-        cookieList[name] = value;
-      });
-      this._appendList("requestCookieContent", cookieList);
-    }
-  },
-
-  /**
-   * Displays the request body section of the NetworkPanel and set the request
-   * body content on the NetworkPanel.
-   *
-   * @returns void
-   */
-  _displayRequestBody: function NP_displayRequestBody() {
-    this._displayNode("requestBody");
-    this._appendTextNode("requestBodyContent", this.httpActivity.request.body);
-  },
-
-  /*
-   * Displays the `sent form data` section. Parses the request header for the
-   * submitted form data displays it inside of the `sent form data` section.
-   *
-   * @returns void
-   */
-  _displayRequestForm: function NP_processRequestForm() {
-    let requestBodyLines = this.httpActivity.request.body.split("\n");
-    let formData = requestBodyLines[requestBodyLines.length - 1].
-                      replace(/\+/g, " ").split("&");
-
-    function unescapeText(aText)
-    {
-      try {
-        return decodeURIComponent(aText);
-      }
-      catch (ex) {
-        return decodeURIComponent(unescape(aText));
-      }
-    }
-
-    let formDataObj = {};
-    for (let i = 0; i < formData.length; i++) {
-      let data = formData[i];
-      let idx = data.indexOf("=");
-      let key = data.substring(0, idx);
-      let value = data.substring(idx + 1);
-      formDataObj[unescapeText(key)] = unescapeText(value);
-    }
-
-    this._appendList("requestFormDataContent", formDataObj);
-    this._displayNode("requestFormData");
-  },
-
-  /**
-   * Displays the response section of the NetworkPanel, sets the response status,
-   * the duration between the start of the request and the receiving of the
-   * response header as well as the response header content on the the NetworkPanel.
-   *
-   * @returns void
-   */
-  _displayResponseHeader: function NP_displayResponseHeader()
-  {
-    let timing = this.httpActivity.timing;
-    let response = this.httpActivity.response;
-
-    this._appendTextNode("headStatus", response.status);
-
-    let deltaDuration =
-      Math.round((timing.RESPONSE_HEADER - timing.REQUEST_HEADER) / 1000);
-    this._appendTextNode("responseHeadersInfo",
-      this._format("durationMS", [deltaDuration]));
-
-    this._displayNode("responseContainer");
-    this._appendList("responseHeadersContent", response.header);
-  },
-
-  /**
-   * Displays the respones image section, sets the source of the image displayed
-   * in the image response section to the request URL and the duration between
-   * the receiving of the response header and the end of the request. Once the
-   * image is loaded, the size of the requested image is set.
-   *
-   * @returns void
-   */
-  _displayResponseImage: function NP_displayResponseImage()
-  {
-    let self = this;
-    let timing = this.httpActivity.timing;
-    let response = this.httpActivity.response;
-    let cached = "";
-
-    if (this._isResponseCached) {
-      cached = "Cached";
-    }
-
-    let imageNode = this.document.getElementById("responseImage" + cached +"Node");
-    imageNode.setAttribute("src", this.httpActivity.url);
-
-    // This function is called to set the imageInfo.
-    function setImageInfo() {
-      let deltaDuration =
-        Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
-      self._appendTextNode("responseImage" + cached + "Info",
-        self._format("imageSizeDeltaDurationMS", [
-          imageNode.width, imageNode.height, deltaDuration
-        ]
-      ));
-    }
-
-    // Check if the image is already loaded.
-    if (imageNode.width != 0) {
-      setImageInfo();
-    }
-    else {
-      // Image is not loaded yet therefore add a load event.
-      imageNode.addEventListener("load", function imageNodeLoad() {
-        imageNode.removeEventListener("load", imageNodeLoad, false);
-        setImageInfo();
-      }, false);
-    }
-
-    this._displayNode("responseImage" + cached);
-  },
-
-  /**
-   * Displays the response body section, sets the the duration between
-   * the receiving of the response header and the end of the request as well as
-   * the content of the response body on the NetworkPanel.
-   *
-   * @param [optional] string aCachedContent
-   *        Cached content for this request. If this argument is set, the
-   *        responseBodyCached section is displayed.
-   * @returns void
-   */
-  _displayResponseBody: function NP_displayResponseBody(aCachedContent)
-  {
-    let timing = this.httpActivity.timing;
-    let response = this.httpActivity.response;
-    let cached =  "";
-    if (aCachedContent) {
-      cached = "Cached";
-    }
-
-    let deltaDuration =
-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
-    this._appendTextNode("responseBody" + cached + "Info",
-      this._format("durationMS", [deltaDuration]));
-
-    this._displayNode("responseBody" + cached);
-    this._appendTextNode("responseBody" + cached + "Content",
-                            aCachedContent || response.body);
-  },
-
-  /**
-   * Displays the `Unknown Content-Type hint` and sets the duration between the
-   * receiving of the response header on the NetworkPanel.
-   *
-   * @returns void
-   */
-  _displayResponseBodyUnknownType: function NP_displayResponseBodyUnknownType()
-  {
-    let timing = this.httpActivity.timing;
-
-    this._displayNode("responseBodyUnknownType");
-    let deltaDuration =
-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
-    this._appendTextNode("responseBodyUnknownTypeInfo",
-      this._format("durationMS", [deltaDuration]));
-
-    this._appendTextNode("responseBodyUnknownTypeContent",
-      this._format("responseBodyUnableToDisplay.content", [this._contentType]));
-  },
-
-  /**
-   * Displays the `no response body` section and sets the the duration between
-   * the receiving of the response header and the end of the request.
-   *
-   * @returns void
-   */
-  _displayNoResponseBody: function NP_displayNoResponseBody()
-  {
-    let timing = this.httpActivity.timing;
-
-    this._displayNode("responseNoBody");
-    let deltaDuration =
-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
-    this._appendTextNode("responseNoBodyInfo",
-      this._format("durationMS", [deltaDuration]));
-  },
-
-  /*
-   * Calls the isDoneCallback function if one is specified.
-   */
-  _callIsDone: function() {
-    if (this.isDoneCallback) {
-      this.isDoneCallback();
-    }
-  },
-
-  /**
-   * Updates the content of the NetworkPanel's iframe.
-   *
-   * @returns void
-   */
-  update: function NP_update()
-  {
-    /**
-     * After the iframe's contentWindow is ready, the document object is set.
-     * If the document object isn't set yet, then the page is loaded and nothing
-     * can be updated.
-     */
-    if (!this.document) {
-      return;
-    }
-
-    let timing = this.httpActivity.timing;
-    let request = this.httpActivity.request;
-    let response = this.httpActivity.response;
-
-    switch (this._state) {
-      case this._INIT:
-        this._displayRequestHeader();
-        this._state = this._DISPLAYED_REQUEST_HEADER;
-        // FALL THROUGH
-
-      case this._DISPLAYED_REQUEST_HEADER:
-        // Process the request body if there is one.
-        if (!request.bodyDiscarded && request.body) {
-          // Check if we send some form data. If so, display the form data special.
-          if (this._isRequestBodyFormData) {
-            this._displayRequestForm();
-          }
-          else {
-            this._displayRequestBody();
-          }
-          this._state = this._DISPLAYED_REQUEST_BODY;
-        }
-        // FALL THROUGH
-
-      case this._DISPLAYED_REQUEST_BODY:
-        // There is always a response header. Therefore we can skip here if
-        // we don't have a response header yet and don't have to try updating
-        // anything else in the NetworkPanel.
-        if (!response.header) {
-          break
-        }
-        this._displayResponseHeader();
-        this._state = this._DISPLAYED_RESPONSE_HEADER;
-        // FALL THROUGH
-
-      case this._DISPLAYED_RESPONSE_HEADER:
-        // Check if the transition is done.
-        if (timing.TRANSACTION_CLOSE && response.isDone) {
-          if (response.bodyDiscarded) {
-            this._callIsDone();
-          }
-          else if (this._responseIsImage) {
-            this._displayResponseImage();
-            this._callIsDone();
-          }
-          else if (!this._isResponseBodyTextData) {
-            this._displayResponseBodyUnknownType();
-            this._callIsDone();
-          }
-          else if (response.body) {
-            this._displayResponseBody();
-            this._callIsDone();
-          }
-          else if (this._isResponseCached) {
-            let self = this;
-            NetworkHelper.loadFromCache(this.httpActivity.url,
-                                        this.httpActivity.charset,
-                                        function(aContent) {
-              // If some content could be loaded from the cache, then display
-              // the body.
-              if (aContent) {
-                self._displayResponseBody(aContent);
-                self._callIsDone();
-              }
-              // Otherwise, show the "There is no response body" hint.
-              else {
-                self._displayNoResponseBody();
-                self._callIsDone();
-              }
-            });
-          }
-          else {
-            this._displayNoResponseBody();
-            this._callIsDone();
-          }
-          this._state = this._TRANSITION_CLOSED;
-        }
-        break;
-    }
-  }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1290,11 +318,6 @@ function HUD_SERVICE()
   // Remembers the last console height, in pixels.
   this.lastConsoleHeight = Services.prefs.getIntPref("devtools.hud.height");
 
-  // Network response bodies are piped through a buffer of the given size (in
-  // bytes).
-  this.responsePipeSegmentSize =
-    Services.prefs.getIntPref("network.buffer.cache.size");
-
   /**
    * Collection of HUDIds that map to the tabs/windows/contexts
    * that a HeadsUpDisplay can be activated for.
@@ -1315,16 +338,6 @@ function HUD_SERVICE()
    * Keeps a reference for each HeadsUpDisplay that is created
    */
   this.hudReferences = {};
-
-  /**
-   * Requests that haven't finished yet.
-   */
-  this.openRequests = {};
-
-  /**
-   * Response headers for requests that haven't finished yet.
-   */
-  this.openResponseHeaders = {};
 };
 
 HUD_SERVICE.prototype =
@@ -1343,12 +356,6 @@ HUD_SERVICE.prototype =
    * integers
    */
   sequencer: null,
-
-  /**
-   * Whether to save the bodies of network requests and responses. Disabled by
-   * default to save memory.
-   */
-  saveRequestAndResponseBodies: false,
 
   /**
    * Tell the HUDService that a HeadsUpDisplay can be activated
@@ -1468,10 +475,6 @@ HUD_SERVICE.prototype =
       if (!aAnimated) {
         this.storeHeight(hudId);
       }
-
-      let hud = this.hudReferences[hudId];
-      browser.webProgress.removeProgressListener(hud.progressListener);
-      delete hud.progressListener;
 
       this.unregisterDisplay(hudId);
 
@@ -1742,12 +745,11 @@ HUD_SERVICE.prototype =
     // Remove children from the output. If the output is not cleared, there can
     // be leaks as some nodes has node.onclick = function; set and GC can't
     // remove the nodes then.
-    if (hud.jsterm) {
-      hud.jsterm.clearOutput();
-    }
     if (hud.gcliterm) {
       hud.gcliterm.clearOutput();
     }
+
+    let document = hud.chromeDocument;
 
     hud.destroy();
 
@@ -1758,6 +760,7 @@ HUD_SERVICE.prototype =
     // Remove the HUDBox and the consolePanel if the Web Console is inside a
     // floating panel.
     if (hud.consolePanel && hud.consolePanel.parentNode) {
+      hud.consolePanel.hidePopup();
       hud.consolePanel.parentNode.removeChild(hud.consolePanel);
       hud.consolePanel.removeAttribute("hudId");
       hud.consolePanel = null;
@@ -1767,10 +770,6 @@ HUD_SERVICE.prototype =
 
     if (hud.splitter.parentNode) {
       hud.splitter.parentNode.removeChild(hud.splitter);
-    }
-
-    if (hud.jsterm) {
-      hud.jsterm.autocompletePopup.destroy();
     }
 
     delete this.hudReferences[aHUDId];
@@ -1783,14 +782,14 @@ HUD_SERVICE.prototype =
 
     this.unregisterActiveContext(aHUDId);
 
-    let popupset = hud.chromeDocument.getElementById("mainPopupSet");
+    let popupset = document.getElementById("mainPopupSet");
     let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
     for (let i = 0; i < panels.length; i++) {
       panels[i].hidePopup();
     }
 
     if (Object.keys(this.hudReferences).length == 0) {
-      let autocompletePopup = hud.chromeDocument.
+      let autocompletePopup = document.
                               getElementById("webConsole_autocompletePopup");
       if (autocompletePopup) {
         autocompletePopup.parentNode.removeChild(autocompletePopup);
@@ -1812,10 +811,7 @@ HUD_SERVICE.prototype =
       return;
     }
 
-    // begin observing HTTP traffic
-    this.startHTTPObservation();
-
-    HUDWindowObserver.init();
+    WebConsoleObserver.init();
   },
 
   /**
@@ -1826,20 +822,10 @@ HUD_SERVICE.prototype =
    */
   suspend: function HS_suspend()
   {
-    activityDistributor.removeObserver(this.httpObserver);
-    delete this.httpObserver;
-
-    Services.obs.removeObserver(this.httpResponseExaminer,
-                                "http-on-examine-response");
-
-    this.openRequests = {};
-    this.openResponseHeaders = {};
-
     delete this.defaultFilterPrefs;
-
     delete this.lastFinishedRequestCallback;
 
-    HUDWindowObserver.uninit();
+    WebConsoleObserver.uninit();
   },
 
   /**
@@ -1970,8 +956,11 @@ HUD_SERVICE.prototype =
   applicationHooks: null,
 
   /**
-   * Assign a function to this property to listen for finished httpRequests.
-   * Used by unit tests.
+   * Assign a function to this property to listen for every request that
+   * completes. Used by unit tests. The callback takes one argument: the HTTP
+   * activity object as received from the remote Web Console.
+   *
+   * @type function
    */
   lastFinishedRequestCallback: null,
 
@@ -1979,11 +968,12 @@ HUD_SERVICE.prototype =
    * Opens a NetworkPanel.
    *
    * @param nsIDOMNode aNode
-   *        DOMNode to display the panel next to.
+   *        The message node you want the panel to be anchored to.
    * @param object aHttpActivity
-   *        httpActivity object. The data of this object is displayed in the
-   *        NetworkPanel.
-   * @returns NetworkPanel
+   *        The HTTP activity object that holds network request and response
+   *        information. This object is given to the NetworkPanel constructor.
+   * @return object
+   *         The new NetworkPanel instance.
    */
   openNetworkPanel: function HS_openNetworkPanel(aNode, aHttpActivity)
   {
@@ -1991,442 +981,23 @@ HUD_SERVICE.prototype =
     let parent = doc.getElementById("mainPopupSet");
     let netPanel = new NetworkPanel(parent, aHttpActivity);
     netPanel.linkNode = aNode;
+    aNode._netPanel = netPanel;
 
     let panel = netPanel.panel;
     panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
     panel.sizeTo(450, 500);
     panel.setAttribute("hudId", aHttpActivity.hudId);
-    aHttpActivity.panels.push(Cu.getWeakReference(netPanel));
+
+    panel.addEventListener("popuphiding", function HS_netPanel_onHide() {
+      panel.removeEventListener("popuphiding", HS_netPanel_onHide);
+
+      aNode._panelOpen = false;
+      aNode._netPanel = null;
+    });
+
+    aNode._panelOpen = true;
+
     return netPanel;
-  },
-
-  /**
-   * Begin observing HTTP traffic that we care about,
-   * namely traffic that originates inside any context that a Heads Up Display
-   * is active for.
-   */
-  startHTTPObservation: function HS_httpObserverFactory()
-  {
-    // creates an observer for http traffic
-    var self = this;
-    var httpObserver = {
-      observeActivity :
-      function HS_SHO_observeActivity(aChannel,
-                                      aActivityType,
-                                      aActivitySubtype,
-                                      aTimestamp,
-                                      aExtraSizeData,
-                                      aExtraStringData)
-      {
-        if (aActivityType ==
-              activityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION ||
-            aActivityType ==
-              activityDistributor.ACTIVITY_TYPE_SOCKET_TRANSPORT) {
-
-          aChannel = aChannel.QueryInterface(Ci.nsIHttpChannel);
-
-          let transCodes = this.httpTransactionCodes;
-          let hudId;
-
-          if (aActivitySubtype ==
-              activityDistributor.ACTIVITY_SUBTYPE_REQUEST_HEADER ) {
-            // Try to get the source window of the request.
-            let win = NetworkHelper.getWindowForRequest(aChannel);
-            if (!win) {
-              return;
-            }
-
-            // Try to get the hudId that is associated to the window.
-            hudId = self.getHudIdByWindow(win.top);
-            if (!hudId) {
-              return;
-            }
-
-            // The httpActivity object will hold all information concerning
-            // this request and later response.
-
-            let httpActivity = {
-              id: self.sequenceId(),
-              hudId: hudId,
-              url: aChannel.URI.spec,
-              method: aChannel.requestMethod,
-              channel: aChannel,
-              charset: win.document.characterSet,
-
-              panels: [],
-              request: {
-                header: { }
-              },
-              response: {
-                header: null
-              },
-              timing: {
-                "REQUEST_HEADER": aTimestamp
-              }
-            };
-
-            // Add a new output entry.
-            let loggedNode = self.logNetActivity(httpActivity);
-
-            // In some cases loggedNode can be undefined (e.g. if an image was
-            // requested). Don't continue in such a case.
-            if (!loggedNode) {
-              return;
-            }
-
-            aChannel.QueryInterface(Ci.nsITraceableChannel);
-
-            // The response will be written into the outputStream of this pipe.
-            // This allows us to buffer the data we are receiving and read it
-            // asynchronously.
-            // Both ends of the pipe must be blocking.
-            let sink = Cc["@mozilla.org/pipe;1"].createInstance(Ci.nsIPipe);
-
-            // The streams need to be blocking because this is required by the
-            // stream tee.
-            sink.init(false, false, HUDService.responsePipeSegmentSize,
-                      PR_UINT32_MAX, null);
-
-            // Add listener for the response body.
-            let newListener = new ResponseListener(httpActivity);
-
-            // Remember the input stream, so it isn't released by GC.
-            newListener.inputStream = sink.inputStream;
-            newListener.sink = sink;
-
-            let tee = Cc["@mozilla.org/network/stream-listener-tee;1"].
-                      createInstance(Ci.nsIStreamListenerTee);
-
-            let originalListener = aChannel.setNewListener(tee);
-
-            tee.init(originalListener, sink.outputStream, newListener);
-
-            // Copy the request header data.
-            aChannel.visitRequestHeaders({
-              visitHeader: function(aName, aValue) {
-                httpActivity.request.header[aName] = aValue;
-              }
-            });
-
-            // Store the loggedNode and the httpActivity object for later reuse.
-            let linkNode = loggedNode.querySelector(".webconsole-msg-link");
-
-            httpActivity.messageObject = {
-              messageNode: loggedNode,
-              linkNode:    linkNode
-            };
-            self.openRequests[httpActivity.id] = httpActivity;
-
-            // Make the network span clickable.
-            linkNode.setAttribute("aria-haspopup", "true");
-            linkNode.addEventListener("mousedown", function(aEvent) {
-              this._startX = aEvent.clientX;
-              this._startY = aEvent.clientY;
-            }, false);
-
-            linkNode.addEventListener("click", function(aEvent) {
-              if (aEvent.detail != 1 || aEvent.button != 0 ||
-                  (this._startX != aEvent.clientX &&
-                   this._startY != aEvent.clientY)) {
-                return;
-              }
-
-              if (!this._panelOpen) {
-                self.openNetworkPanel(this, httpActivity);
-                this._panelOpen = true;
-              }
-            }, false);
-          }
-          else {
-            // Iterate over all currently ongoing requests. If aChannel can't
-            // be found within them, then exit this function.
-            let httpActivity = null;
-            for each (let item in self.openRequests) {
-              if (item.channel !== aChannel) {
-                continue;
-              }
-              httpActivity = item;
-              break;
-            }
-
-            if (!httpActivity) {
-              return;
-            }
-
-            hudId = httpActivity.hudId;
-            let msgObject = httpActivity.messageObject;
-
-            let updatePanel = false;
-            let data;
-            // Store the time information for this activity subtype.
-            httpActivity.timing[transCodes[aActivitySubtype]] = aTimestamp;
-
-            switch (aActivitySubtype) {
-              case activityDistributor.ACTIVITY_SUBTYPE_REQUEST_BODY_SENT: {
-                if (!self.saveRequestAndResponseBodies) {
-                  httpActivity.request.bodyDiscarded = true;
-                  break;
-                }
-
-                let gBrowser = msgObject.messageNode.ownerDocument.
-                               defaultView.gBrowser;
-                let HUD = HUDService.hudReferences[hudId];
-                let browser = gBrowser.
-                              getBrowserForDocument(HUD.contentDocument);
-
-                let sentBody = NetworkHelper.
-                               readPostTextFromRequest(aChannel, browser);
-                if (!sentBody) {
-                  // If the request URL is the same as the current page url, then
-                  // we can try to get the posted text from the page directly.
-                  // This check is necessary as otherwise the
-                  //   NetworkHelper.readPostTextFromPage
-                  // function is called for image requests as well but these
-                  // are not web pages and as such don't store the posted text
-                  // in the cache of the webpage.
-                  if (httpActivity.url == browser.contentWindow.location.href) {
-                    sentBody = NetworkHelper.readPostTextFromPage(browser);
-                  }
-                  if (!sentBody) {
-                    sentBody = "";
-                  }
-                }
-                httpActivity.request.body = sentBody;
-                break;
-              }
-
-              case activityDistributor.ACTIVITY_SUBTYPE_RESPONSE_HEADER: {
-                // aExtraStringData contains the response header. The first line
-                // contains the response status (e.g. HTTP/1.1 200 OK).
-                //
-                // Note: The response header is not saved here. Calling the
-                //       aChannel.visitResponseHeaders at this point sometimes
-                //       causes an NS_ERROR_NOT_AVAILABLE exception. Therefore,
-                //       the response header and response body is stored on the
-                //       httpActivity object within the RL_onStopRequest function.
-                httpActivity.response.status =
-                  aExtraStringData.split(/\r\n|\n|\r/)[0];
-
-                // Add the response status.
-                let linkNode = msgObject.linkNode;
-                let statusNode = linkNode.
-                  querySelector(".webconsole-msg-status");
-                let statusText = "[" + httpActivity.response.status + "]";
-                statusNode.setAttribute("value", statusText);
-
-                let clipboardTextPieces =
-                  [ httpActivity.method, httpActivity.url, statusText ];
-                msgObject.messageNode.clipboardText =
-                  clipboardTextPieces.join(" ");
-
-                let status = parseInt(httpActivity.response.status.
-                  replace(/^HTTP\/\d\.\d (\d+).+$/, "$1"));
-
-                if (status >= MIN_HTTP_ERROR_CODE &&
-                    status < MAX_HTTP_ERROR_CODE) {
-                  ConsoleUtils.setMessageType(msgObject.messageNode,
-                                              CATEGORY_NETWORK,
-                                              SEVERITY_ERROR);
-                }
-
-                break;
-              }
-
-              case activityDistributor.ACTIVITY_SUBTYPE_TRANSACTION_CLOSE: {
-                let timing = httpActivity.timing;
-                let requestDuration =
-                  Math.round((timing.RESPONSE_COMPLETE -
-                                timing.REQUEST_HEADER) / 1000);
-
-                // Add the request duration.
-                let linkNode = msgObject.linkNode;
-                let statusNode = linkNode.
-                  querySelector(".webconsole-msg-status");
-
-                let statusText = httpActivity.response.status;
-                let timeText = l10n.getFormatStr("NetworkPanel.durationMS",
-                                                 [ requestDuration ]);
-                let fullStatusText = "[" + statusText + " " + timeText + "]";
-                statusNode.setAttribute("value", fullStatusText);
-
-                let clipboardTextPieces =
-                  [ httpActivity.method, httpActivity.url, fullStatusText ];
-                msgObject.messageNode.clipboardText =
-                  clipboardTextPieces.join(" ");
-
-                delete httpActivity.messageObject;
-                delete self.openRequests[httpActivity.id];
-                updatePanel = true;
-                break;
-              }
-            }
-
-            if (updatePanel) {
-              httpActivity.panels.forEach(function(weakRef) {
-                let panel = weakRef.get();
-                if (panel) {
-                  panel.update();
-                }
-              });
-            }
-          }
-        }
-      },
-
-      httpTransactionCodes: {
-        0x5001: "REQUEST_HEADER",
-        0x5002: "REQUEST_BODY_SENT",
-        0x5003: "RESPONSE_START",
-        0x5004: "RESPONSE_HEADER",
-        0x5005: "RESPONSE_COMPLETE",
-        0x5006: "TRANSACTION_CLOSE",
-
-        0x804b0003: "STATUS_RESOLVING",
-        0x804b000b: "STATUS_RESOLVED",
-        0x804b0007: "STATUS_CONNECTING_TO",
-        0x804b0004: "STATUS_CONNECTED_TO",
-        0x804b0005: "STATUS_SENDING_TO",
-        0x804b000a: "STATUS_WAITING_FOR",
-        0x804b0006: "STATUS_RECEIVING_FROM"
-      }
-    };
-
-    this.httpObserver = httpObserver;
-
-    activityDistributor.addObserver(httpObserver);
-
-    // This is used to find the correct HTTP response headers.
-    Services.obs.addObserver(this.httpResponseExaminer,
-                             "http-on-examine-response", false);
-  },
-
-  /**
-   * Observe notifications for the http-on-examine-response topic, coming from
-   * the nsIObserver service.
-   *
-   * @param string aTopic
-   * @param nsIHttpChannel aSubject
-   * @returns void
-   */
-  httpResponseExaminer: function HS_httpResponseExaminer(aSubject, aTopic)
-  {
-    if (aTopic != "http-on-examine-response" ||
-        !(aSubject instanceof Ci.nsIHttpChannel)) {
-      return;
-    }
-
-    let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
-    let win = NetworkHelper.getWindowForRequest(channel);
-    if (!win) {
-      return;
-    }
-    let hudId = HUDService.getHudIdByWindow(win);
-    if (!hudId) {
-      return;
-    }
-
-    let response = {
-      id: HUDService.sequenceId(),
-      hudId: hudId,
-      channel: channel,
-      headers: {},
-    };
-
-    try {
-      channel.visitResponseHeaders({
-        visitHeader: function(aName, aValue) {
-          response.headers[aName] = aValue;
-        }
-      });
-    }
-    catch (ex) {
-      delete response.headers;
-    }
-
-    if (response.headers) {
-      HUDService.openResponseHeaders[response.id] = response;
-    }
-  },
-
-  /**
-   * Logs network activity.
-   *
-   * @param object aActivityObject
-   *        The activity to log.
-   * @returns void
-   */
-  logNetActivity: function HS_logNetActivity(aActivityObject)
-  {
-    let hudId = aActivityObject.hudId;
-    let outputNode = this.hudReferences[hudId].outputNode;
-
-    let chromeDocument = outputNode.ownerDocument;
-    let msgNode = chromeDocument.createElementNS(XUL_NS, "hbox");
-
-    let methodNode = chromeDocument.createElementNS(XUL_NS, "label");
-    methodNode.setAttribute("value", aActivityObject.method);
-    methodNode.classList.add("webconsole-msg-body-piece");
-    msgNode.appendChild(methodNode);
-
-    let linkNode = chromeDocument.createElementNS(XUL_NS, "hbox");
-    linkNode.setAttribute("flex", "1");
-    linkNode.classList.add("webconsole-msg-body-piece");
-    linkNode.classList.add("webconsole-msg-link");
-    msgNode.appendChild(linkNode);
-
-    let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
-    urlNode.setAttribute("crop", "center");
-    urlNode.setAttribute("flex", "1");
-    urlNode.setAttribute("title", aActivityObject.url);
-    urlNode.setAttribute("value", aActivityObject.url);
-    urlNode.classList.add("hud-clickable");
-    urlNode.classList.add("webconsole-msg-body-piece");
-    urlNode.classList.add("webconsole-msg-url");
-    linkNode.appendChild(urlNode);
-
-    let statusNode = chromeDocument.createElementNS(XUL_NS, "label");
-    statusNode.setAttribute("value", "");
-    statusNode.classList.add("hud-clickable");
-    statusNode.classList.add("webconsole-msg-body-piece");
-    statusNode.classList.add("webconsole-msg-status");
-    linkNode.appendChild(statusNode);
-
-    let clipboardText = aActivityObject.method + " " + aActivityObject.url;
-
-    let messageNode = ConsoleUtils.createMessageNode(chromeDocument,
-                                                     CATEGORY_NETWORK,
-                                                     SEVERITY_LOG,
-                                                     msgNode,
-                                                     hudId,
-                                                     null,
-                                                     null,
-                                                     clipboardText);
-
-    ConsoleUtils.outputMessageNode(messageNode, aActivityObject.hudId);
-    return messageNode;
-  },
-
-  /**
-   * Initialize the JSTerm object to create a JS Workspace by attaching the UI
-   * into the given parent node, using the mixin.
-   *
-   * @param nsIDOMWindow aContext the context used for evaluating user input
-   * @param nsIDOMNode aParentNode where to attach the JSTerm
-   * @param object aConsole
-   *        Console object used within the JSTerm instance to report errors
-   *        and log data (by calling console.error(), console.log(), etc).
-   */
-  initializeJSTerm: function HS_initializeJSTerm(aContext, aParentNode, aConsole)
-  {
-    // create Initial JS Workspace:
-    var context = Cu.getWeakReference(aContext);
-
-    // Attach the UI into the target parent node using the mixin.
-    var firefoxMixin = new JSTermFirefoxMixin(context, aParentNode);
-    var jsTerm = new JSTerm(context, aParentNode, firefoxMixin, aConsole);
-
-    // TODO: injection of additional functionality needs re-thinking/api
-    // see bug 559748
   },
 
   /**
@@ -2445,31 +1016,6 @@ HUD_SERVICE.prototype =
       }
     }
     return sequencer(aInt);
-  },
-
-  // See jsapi.h (JSErrorReport flags):
-  // http://mxr.mozilla.org/mozilla-central/source/js/src/jsapi.h#3429
-  scriptErrorFlags: {
-    0: "error", // JSREPORT_ERROR
-    1: "warn", // JSREPORT_WARNING
-    2: "exception", // JSREPORT_EXCEPTION
-    4: "error", // JSREPORT_STRICT | JSREPORT_ERROR
-    5: "warn", // JSREPORT_STRICT | JSREPORT_WARNING
-    8: "error", // JSREPORT_STRICT_MODE_ERROR
-    13: "warn", // JSREPORT_STRICT_MODE_ERROR | JSREPORT_WARNING | JSREPORT_ERROR
-  },
-
-  /**
-   * replacement strings (L10N)
-   */
-  scriptMsgLogLevel: {
-    0: "typeError", // JSREPORT_ERROR
-    1: "typeWarning", // JSREPORT_WARNING
-    2: "typeException", // JSREPORT_EXCEPTION
-    4: "typeError", // JSREPORT_STRICT | JSREPORT_ERROR
-    5: "typeStrict", // JSREPORT_STRICT | JSREPORT_WARNING
-    8: "typeError", // JSREPORT_STRICT_MODE_ERROR
-    13: "typeWarning", // JSREPORT_STRICT_MODE_ERROR | JSREPORT_WARNING | JSREPORT_ERROR
   },
 
   /**
@@ -2594,11 +1140,6 @@ HUD_SERVICE.prototype =
       HUDService.registerHUDReference(hud);
       let windowId = WebConsoleUtils.getOuterWindowId(aContentWindow.top);
       this.windowIds[windowId] = hudId;
-
-      hud.progressListener = new ConsoleProgressListener(hudId);
-
-      _browser.webProgress.addProgressListener(hud.progressListener,
-        Ci.nsIWebProgress.NOTIFY_STATE_ALL);
     }
     else {
       hud = this.hudReferences[hudId];
@@ -2890,20 +1431,15 @@ function HeadsUpDisplay(aConfig)
 
   // create a panel dynamically and attach to the parentNode
   this.createHUD();
-
   this.HUDBox.lastTimestamp = 0;
+
   // create the JSTerm input element
-  try {
-    this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-    if (this.jsterm) {
-      this.jsterm.inputNode.focus();
-    }
-    if (this.gcliterm) {
-      this.gcliterm.inputNode.focus();
-    }
+  this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
+  if (this.jsterm) {
+    this.jsterm.inputNode.focus();
   }
-  catch (ex) {
-    Cu.reportError(ex);
+  else if (this.gcliterm) {
+    this.gcliterm.inputNode.focus();
   }
 
   // A cache for tracking repeated CSS Nodes.
@@ -2921,7 +1457,10 @@ HeadsUpDisplay.prototype = {
    * @type array
    */
   _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
-                      "WebConsole:CachedMessages", "WebConsole:PageError"],
+    "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
+    "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
+    "JSTerm:InspectObject", "WebConsole:NetworkActivity",
+    "WebConsole:FileActivity"],
 
   consolePanel: null,
 
@@ -2929,6 +1468,34 @@ HeadsUpDisplay.prototype = {
    * The nesting depth of the currently active console group.
    */
   groupDepth: 0,
+
+  _saveRequestAndResponseBodies: false,
+
+  /**
+   * Tells whether to save the bodies of network requests and responses.
+   * Disabled by default to save memory.
+   * @type boolean
+   */
+  get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
+
+  /**
+   * Setter for saving of network request and response bodies.
+   *
+   * @param boolean aValue
+   *        The new value you want to set.
+   */
+  set saveRequestAndResponseBodies(aValue) {
+    this._saveRequestAndResponseBodies = aValue;
+
+    let message = {
+      preferences: {
+        "NetworkMonitor.saveRequestAndResponseBodies":
+          this._saveRequestAndResponseBodies,
+      },
+    };
+
+    this.sendMessageToContent("WebConsole:SetPreferences", message);
+  },
 
   get mainPopupSet()
   {
@@ -3245,10 +1812,8 @@ HeadsUpDisplay.prototype = {
 
     if (appName() == "FIREFOX") {
       if (!usegcli) {
-        let context = Cu.getWeakReference(aWindow);
-        let mixin = new JSTermFirefoxMixin(context, aParentNode,
-                                           aExistingConsole);
-        this.jsterm = new JSTerm(context, aParentNode, mixin, this.console);
+        let mixin = new JSTermFirefoxMixin(aParentNode, aExistingConsole);
+        this.jsterm = new JSTerm(this, mixin);
       }
       else {
         this.gcliterm = new GcliTerm(aWindow, this.hudId, this.chromeDocument,
@@ -3320,15 +1885,10 @@ HeadsUpDisplay.prototype = {
       this.consolePanel.label = this.getPanelTitle();
     }
 
-    if (this.jsterm) {
-      this.jsterm.context = Cu.getWeakReference(this.contentWindow);
-      this.jsterm.console = this.console;
-      this.jsterm.createSandbox();
-    }
-    else if (this.gcliterm) {
+    if (this.gcliterm) {
       this.gcliterm.reattachConsole(this.contentWindow, this.console);
     }
-    else {
+    else if (!this.jsterm) {
       this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
     }
   },
@@ -3607,9 +2167,8 @@ HeadsUpDisplay.prototype = {
     let id = this.hudId + "-output-contextmenu";
     menuPopup.setAttribute("id", id);
     menuPopup.addEventListener("popupshowing", function() {
-      saveBodiesItem.setAttribute("checked",
-        HUDService.saveRequestAndResponseBodies);
-    }, true);
+      saveBodiesItem.setAttribute("checked", this.saveRequestAndResponseBodies);
+    }.bind(this), true);
 
     let saveBodiesItem = this.makeXULNode("menuitem");
     saveBodiesItem.setAttribute("label", l10n.getStr("saveBodies.label"));
@@ -3618,6 +2177,7 @@ HeadsUpDisplay.prototype = {
     saveBodiesItem.setAttribute("type", "checkbox");
     saveBodiesItem.setAttribute("buttonType", "saveBodies");
     saveBodiesItem.setAttribute("oncommand", "HUDConsoleUI.command(this);");
+    saveBodiesItem.setAttribute("hudId", this.hudId);
     menuPopup.appendChild(saveBodiesItem);
 
     menuPopup.appendChild(this.makeXULNode("menuseparator"));
@@ -3932,7 +2492,7 @@ HeadsUpDisplay.prototype = {
           data: { object: node._stacktrace },
         };
 
-        let propPanel = this.jsterm.openPropertyPanelAsync(options);
+        let propPanel = this.jsterm.openPropertyPanel(options);
         propPanel.panel.setAttribute("hudId", this.hudId);
       }.bind(this));
     }
@@ -4010,6 +2570,106 @@ HeadsUpDisplay.prototype = {
     ConsoleUtils.outputMessageNode(node, this.hudId);
   },
 
+  /**
+   * Log network activity.
+   *
+   * @param object aHttpActivity
+   *        The HTTP activity to log.
+   */
+  logNetActivity: function HUD_logNetActivity(aHttpActivity)
+  {
+    let entry = aHttpActivity.log.entries[0];
+    let request = entry.request;
+
+    let msgNode = this.chromeDocument.createElementNS(XUL_NS, "hbox");
+
+    let methodNode = this.chromeDocument.createElementNS(XUL_NS, "label");
+    methodNode.setAttribute("value", request.method);
+    methodNode.classList.add("webconsole-msg-body-piece");
+    msgNode.appendChild(methodNode);
+
+    let linkNode = this.chromeDocument.createElementNS(XUL_NS, "hbox");
+    linkNode.setAttribute("flex", "1");
+    linkNode.classList.add("webconsole-msg-body-piece");
+    linkNode.classList.add("webconsole-msg-link");
+    msgNode.appendChild(linkNode);
+
+    let urlNode = this.chromeDocument.createElementNS(XUL_NS, "label");
+    urlNode.setAttribute("crop", "center");
+    urlNode.setAttribute("flex", "1");
+    urlNode.setAttribute("title", request.url);
+    urlNode.setAttribute("value", request.url);
+    urlNode.classList.add("hud-clickable");
+    urlNode.classList.add("webconsole-msg-body-piece");
+    urlNode.classList.add("webconsole-msg-url");
+    linkNode.appendChild(urlNode);
+
+    let statusNode = this.chromeDocument.createElementNS(XUL_NS, "label");
+    statusNode.setAttribute("value", "");
+    statusNode.classList.add("hud-clickable");
+    statusNode.classList.add("webconsole-msg-body-piece");
+    statusNode.classList.add("webconsole-msg-status");
+    linkNode.appendChild(statusNode);
+
+    let clipboardText = request.method + " " + request.url;
+
+    let messageNode = ConsoleUtils.createMessageNode(this.chromeDocument,
+                                                     CATEGORY_NETWORK,
+                                                     SEVERITY_LOG,
+                                                     msgNode,
+                                                     this.hudId,
+                                                     null,
+                                                     null,
+                                                     clipboardText);
+
+    messageNode.setAttribute("connectionId", entry.connection);
+
+    messageNode._httpActivity = aHttpActivity;
+
+    this.makeOutputMessageLink(messageNode, function HUD_net_message_link() {
+      if (!messageNode._panelOpen) {
+        HUDService.openNetworkPanel(messageNode, messageNode._httpActivity);
+      }
+    }.bind(this));
+
+    ConsoleUtils.outputMessageNode(messageNode, this.hudId);
+  },
+
+  /**
+   * Log file activity.
+   *
+   * @param string aFileURI
+   *        The file URI that was loaded.
+   */
+  logFileActivity: function HUD_logFileActivity(aFileURI)
+  {
+    let chromeDocument = this.chromeDocument;
+
+    let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
+    urlNode.setAttribute("crop", "center");
+    urlNode.setAttribute("flex", "1");
+    urlNode.setAttribute("title", aFileURI);
+    urlNode.setAttribute("value", aFileURI);
+    urlNode.classList.add("hud-clickable");
+    urlNode.classList.add("webconsole-msg-url");
+
+    let outputNode = ConsoleUtils.createMessageNode(chromeDocument,
+                                                    CATEGORY_NETWORK,
+                                                    SEVERITY_LOG,
+                                                    urlNode,
+                                                    this.hudId,
+                                                    null,
+                                                    null,
+                                                    aFileURI);
+
+    this.makeOutputMessageLink(outputNode, function HUD__onFileClick() {
+      let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
+      viewSourceUtils.viewSource(aFileURI, null, chromeDocument);
+    });
+
+    ConsoleUtils.outputMessageNode(outputNode, this.hudId);
+  },
+
   ERRORS: {
     HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
     TAB_ID_REQUIRED: "Tab DOM ID is required",
@@ -4032,9 +2692,13 @@ HeadsUpDisplay.prototype = {
     }, this);
 
     let message = {
-      hudId: this.hudId,
-      features: ["ConsoleAPI", "JSTerm", "PageError"],
+      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor"],
       cachedMessages: ["ConsoleAPI", "PageError"],
+      NetworkMonitor: { monitorFileActivity: true },
+      preferences: {
+        "NetworkMonitor.saveRequestAndResponseBodies":
+          this.saveRequestAndResponseBodies,
+      },
     };
     this.sendMessageToContent("WebConsole:Init", message);
   },
@@ -4055,8 +2719,16 @@ HeadsUpDisplay.prototype = {
     }
 
     switch (aMessage.name) {
+      case "JSTerm:EvalResult":
       case "JSTerm:EvalObject":
+      case "JSTerm:AutocompleteProperties":
         this._receiveMessageWithCallback(aMessage.json);
+        break;
+      case "JSTerm:ClearOutput":
+        this.jsterm.clearOutput();
+        break;
+      case "JSTerm:InspectObject":
+        this.jsterm.handleInspectObject(aMessage.json);
         break;
       case "WebConsole:ConsoleAPI":
         this.logConsoleAPIMessage(aMessage.json);
@@ -4067,6 +2739,12 @@ HeadsUpDisplay.prototype = {
       case "WebConsole:CachedMessages":
         this._displayCachedConsoleMessages(aMessage.json.messages);
         this._onInitComplete();
+        break;
+      case "WebConsole:NetworkActivity":
+        this.handleNetworkActivity(aMessage.json);
+        break;
+      case "WebConsole:FileActivity":
+        this.logFileActivity(aMessage.json.uri);
         break;
     }
   },
@@ -4145,6 +2823,75 @@ HeadsUpDisplay.prototype = {
   },
 
   /**
+   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
+   * Console.
+   *
+   * @param object aMessage
+   *        The HTTP activity object. This object needs to hold two properties:
+   *        - meta - some metadata about the request log:
+   *          - stages - the stages the network request went through.
+   *          - discardRequestBody and discardResponseBody - booleans that tell
+   *          if the network request/response body was discarded or not.
+   *        - log - the request and response information. This is a HAR-like
+   *        object. See HUDService-content.js
+   *        NetworkMonitor.createActivityObject().
+   */
+  handleNetworkActivity: function HUD_handleNetworkActivity(aMessage)
+  {
+    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
+
+    if (stage == "REQUEST_HEADER") {
+      this.logNetActivity(aMessage);
+      return;
+    }
+
+    let entry = aMessage.log.entries[0];
+    let request = entry.request;
+    let response = entry.response;
+
+    let messageNode = this.outputNode.
+      querySelector("richlistitem[connectionId=" + entry.connection + "]");
+    if (!messageNode) {
+      return;
+    }
+    messageNode._httpActivity = aMessage;
+
+    if (stage == "TRANSACTION_CLOSE" || stage == "RESPONSE_HEADER") {
+      let status = [response.httpVersion, response.status, response.statusText];
+      if (stage == "TRANSACTION_CLOSE") {
+        status.push(l10n.getFormatStr("NetworkPanel.durationMS", [entry.time]));
+      }
+      let statusText = "[" + status.join(" ") + "]";
+
+      let linkNode = messageNode.querySelector(".webconsole-msg-link");
+      let statusNode = linkNode.querySelector(".webconsole-msg-status");
+      statusNode.setAttribute("value", statusText);
+
+      messageNode.clipboardText = [request.method, request.url, statusText]
+                                  .join(" ");
+
+      if (stage == "RESPONSE_HEADER" &&
+          response.status >= MIN_HTTP_ERROR_CODE &&
+          response.status <= MAX_HTTP_ERROR_CODE) {
+        ConsoleUtils.setMessageType(messageNode, CATEGORY_NETWORK,
+                                    SEVERITY_ERROR);
+      }
+    }
+
+    if (messageNode._netPanel) {
+      messageNode._netPanel.update();
+    }
+
+    // For unit tests we pass the HTTP activity object to the test callback,
+    // once requests complete.
+    if (HUDService.lastFinishedRequestCallback &&
+        aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
+        aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
+      HUDService.lastFinishedRequestCallback(aMessage);
+    }
+  },
+
+  /**
    * Make a link given an output element.
    *
    * @param nsIDOMNode aNode
@@ -4157,7 +2904,7 @@ HeadsUpDisplay.prototype = {
   {
     let linkNode;
     if (aNode.category === CATEGORY_NETWORK) {
-      linkNode = aNode.querySelector(".webconsole-msg-link");
+      linkNode = aNode.querySelector(".webconsole-msg-link, .webconsole-msg-url");
     }
     else {
       linkNode = aNode.querySelector(".webconsole-msg-body");
@@ -4188,7 +2935,7 @@ HeadsUpDisplay.prototype = {
    */
   destroy: function HUD_destroy()
   {
-    this.sendMessageToContent("WebConsole:Destroy", {hudId: this.hudId});
+    this.sendMessageToContent("WebConsole:Destroy", {});
 
     this._messageListeners.forEach(function(aName) {
       this.messageManager.removeMessageListener(aName, this);
@@ -4204,6 +2951,7 @@ HeadsUpDisplay.prototype = {
     delete this.asyncRequests;
     delete this.messageManager;
     delete this.browser;
+    delete this.chromeDocument;
 
     this.positionMenuitems.above.removeEventListener("command",
       this._positionConsoleAbove, false);
@@ -4245,532 +2993,34 @@ function NodeFactory(aFactoryType, ignored, aDocument)
   }
 }
 
-//////////////////////////////////////////////////////////////////////////
-// JS Completer
-//////////////////////////////////////////////////////////////////////////
-
-const STATE_NORMAL = 0;
-const STATE_QUOTE = 2;
-const STATE_DQUOTE = 3;
-
-const OPEN_BODY = '{[('.split('');
-const CLOSE_BODY = '}])'.split('');
-const OPEN_CLOSE_BODY = {
-  '{': '}',
-  '[': ']',
-  '(': ')'
-};
 
 /**
- * Analyses a given string to find the last statement that is interesting for
- * later completion.
+ * Create a JSTerminal (a JavaScript command line). This is attached to an
+ * existing HeadsUpDisplay (a Web Console instance). This code is responsible
+ * with handling command line input, code evaluation and result output.
  *
- * @param   string aStr
- *          A string to analyse.
- *
- * @returns object
- *          If there was an error in the string detected, then a object like
- *
- *            { err: "ErrorMesssage" }
- *
- *          is returned, otherwise a object like
- *
- *            {
- *              state: STATE_NORMAL|STATE_QUOTE|STATE_DQUOTE,
- *              startPos: index of where the last statement begins
- *            }
- */
-function findCompletionBeginning(aStr)
-{
-  let bodyStack = [];
-
-  let state = STATE_NORMAL;
-  let start = 0;
-  let c;
-  for (let i = 0; i < aStr.length; i++) {
-    c = aStr[i];
-
-    switch (state) {
-      // Normal JS state.
-      case STATE_NORMAL:
-        if (c == '"') {
-          state = STATE_DQUOTE;
-        }
-        else if (c == '\'') {
-          state = STATE_QUOTE;
-        }
-        else if (c == ';') {
-          start = i + 1;
-        }
-        else if (c == ' ') {
-          start = i + 1;
-        }
-        else if (OPEN_BODY.indexOf(c) != -1) {
-          bodyStack.push({
-            token: c,
-            start: start
-          });
-          start = i + 1;
-        }
-        else if (CLOSE_BODY.indexOf(c) != -1) {
-          var last = bodyStack.pop();
-          if (!last || OPEN_CLOSE_BODY[last.token] != c) {
-            return {
-              err: "syntax error"
-            };
-          }
-          if (c == '}') {
-            start = i + 1;
-          }
-          else {
-            start = last.start;
-          }
-        }
-        break;
-
-      // Double quote state > " <
-      case STATE_DQUOTE:
-        if (c == '\\') {
-          i ++;
-        }
-        else if (c == '\n') {
-          return {
-            err: "unterminated string literal"
-          };
-        }
-        else if (c == '"') {
-          state = STATE_NORMAL;
-        }
-        break;
-
-      // Single quoate state > ' <
-      case STATE_QUOTE:
-        if (c == '\\') {
-          i ++;
-        }
-        else if (c == '\n') {
-          return {
-            err: "unterminated string literal"
-          };
-          return;
-        }
-        else if (c == '\'') {
-          state = STATE_NORMAL;
-        }
-        break;
-    }
-  }
-
-  return {
-    state: state,
-    startPos: start
-  };
-}
-
-/**
- * Provides a list of properties, that are possible matches based on the passed
- * scope and inputValue.
- *
- * @param object aScope
- *        Scope to use for the completion.
- *
- * @param string aInputValue
- *        Value that should be completed.
- *
- * @returns null or object
- *          If no completion valued could be computed, null is returned,
- *          otherwise a object with the following form is returned:
- *            {
- *              matches: [ string, string, string ],
- *              matchProp: Last part of the inputValue that was used to find
- *                         the matches-strings.
- *            }
- */
-function JSPropertyProvider(aScope, aInputValue)
-{
-  let obj = WebConsoleUtils.unwrap(aScope);
-
-  // Analyse the aInputValue and find the beginning of the last part that
-  // should be completed.
-  let beginning = findCompletionBeginning(aInputValue);
-
-  // There was an error analysing the string.
-  if (beginning.err) {
-    return null;
-  }
-
-  // If the current state is not STATE_NORMAL, then we are inside of an string
-  // which means that no completion is possible.
-  if (beginning.state != STATE_NORMAL) {
-    return null;
-  }
-
-  let completionPart = aInputValue.substring(beginning.startPos);
-
-  // Don't complete on just an empty string.
-  if (completionPart.trim() == "") {
-    return null;
-  }
-
-  let properties = completionPart.split('.');
-  let matchProp;
-  if (properties.length > 1) {
-    matchProp = properties.pop().trimLeft();
-    for (let i = 0; i < properties.length; i++) {
-      let prop = properties[i].trim();
-
-      // If obj is undefined or null, then there is no chance to run completion
-      // on it. Exit here.
-      if (typeof obj === "undefined" || obj === null) {
-        return null;
-      }
-
-      // Check if prop is a getter function on obj. Functions can change other
-      // stuff so we can't execute them to get the next object. Stop here.
-      if (WebConsoleUtils.isNonNativeGetter(obj, prop)) {
-        return null;
-      }
-      try {
-        obj = obj[prop];
-      }
-      catch (ex) {
-        return null;
-      }
-    }
-  }
-  else {
-    matchProp = properties[0].trimLeft();
-  }
-
-  // If obj is undefined or null, then there is no chance to run
-  // completion on it. Exit here.
-  if (typeof obj === "undefined" || obj === null) {
-    return null;
-  }
-
-  // Skip Iterators and Generators.
-  if (WebConsoleUtils.isIteratorOrGenerator(obj)) {
-    return null;
-  }
-
-  let matches = [];
-  for (let prop in obj) {
-    if (prop.indexOf(matchProp) == 0) {
-      matches.push(prop);
-    }
-  }
-
-  return {
-    matchProp: matchProp,
-    matches: matches.sort(),
-  };
-}
-
-//////////////////////////////////////////////////////////////////////////
-// JSTerm
-//////////////////////////////////////////////////////////////////////////
-
-/**
- * JSTermHelper
- *
- * Defines a set of functions ("helper functions") that are available from the
- * WebConsole but not from the webpage.
- * A list of helper functions used by Firebug can be found here:
- *   http://getfirebug.com/wiki/index.php/Command_Line_API
- */
-function JSTermHelper(aJSTerm)
-{
-  /**
-   * Returns the result of document.getElementById(aId).
-   *
-   * @param string aId
-   *        A string that is passed to window.document.getElementById.
-   * @returns nsIDOMNode or null
-   */
-  aJSTerm.sandbox.$ = function JSTH_$(aId)
-  {
-    try {
-      return aJSTerm._window.document.getElementById(aId);
-    }
-    catch (ex) {
-      aJSTerm.console.error(ex.message);
-    }
-  };
-
-  /**
-   * Returns the result of document.querySelectorAll(aSelector).
-   *
-   * @param string aSelector
-   *        A string that is passed to window.document.querySelectorAll.
-   * @returns array of nsIDOMNode
-   */
-  aJSTerm.sandbox.$$ = function JSTH_$$(aSelector)
-  {
-    try {
-      return aJSTerm._window.document.querySelectorAll(aSelector);
-    }
-    catch (ex) {
-      aJSTerm.console.error(ex.message);
-    }
-  };
-
-  /**
-   * Runs a xPath query and returns all matched nodes.
-   *
-   * @param string aXPath
-   *        xPath search query to execute.
-   * @param [optional] nsIDOMNode aContext
-   *        Context to run the xPath query on. Uses window.document if not set.
-   * @returns array of nsIDOMNode
-   */
-  aJSTerm.sandbox.$x = function JSTH_$x(aXPath, aContext)
-  {
-    let nodes = [];
-    let doc = aJSTerm._window.document;
-    let aContext = aContext || doc;
-
-    try {
-      let results = doc.evaluate(aXPath, aContext, null,
-                                  Ci.nsIDOMXPathResult.ANY_TYPE, null);
-
-      let node;
-      while (node = results.iterateNext()) {
-        nodes.push(node);
-      }
-    }
-    catch (ex) {
-      aJSTerm.console.error(ex.message);
-    }
-
-    return nodes;
-  };
-
-  /**
-   * Returns the currently selected object in the highlighter.
-   *
-   * @returns nsIDOMNode or null
-   */
-  Object.defineProperty(aJSTerm.sandbox, "$0", {
-    get: function() {
-      let mw = HUDService.currentContext();
-      try {
-        return mw.InspectorUI.selection;
-      }
-      catch (ex) {
-        aJSTerm.console.error(ex.message);
-      }
-    },
-    enumerable: true,
-    configurable: false
-  });
-
-  /**
-   * Clears the output of the JSTerm.
-   */
-  aJSTerm.sandbox.clear = function JSTH_clear()
-  {
-    aJSTerm.helperEvaluated = true;
-    aJSTerm.clearOutput(true);
-  };
-
-  /**
-   * Returns the result of Object.keys(aObject).
-   *
-   * @param object aObject
-   *        Object to return the property names from.
-   * @returns array of string
-   */
-  aJSTerm.sandbox.keys = function JSTH_keys(aObject)
-  {
-    try {
-      return Object.keys(WebConsoleUtils.unwrap(aObject));
-    }
-    catch (ex) {
-      aJSTerm.console.error(ex.message);
-    }
-  };
-
-  /**
-   * Returns the values of all properties on aObject.
-   *
-   * @param object aObject
-   *        Object to display the values from.
-   * @returns array of string
-   */
-  aJSTerm.sandbox.values = function JSTH_values(aObject)
-  {
-    let arrValues = [];
-    let obj = WebConsoleUtils.unwrap(aObject);
-
-    try {
-      for (let prop in obj) {
-        arrValues.push(obj[prop]);
-      }
-    }
-    catch (ex) {
-      aJSTerm.console.error(ex.message);
-    }
-    return arrValues;
-  };
-
-  /**
-   * Opens a help window in MDC
-   */
-  aJSTerm.sandbox.help = function JSTH_help()
-  {
-    aJSTerm.helperEvaluated = true;
-    aJSTerm._window.open(
-        "https://developer.mozilla.org/AppLinks/WebConsoleHelp?locale=" +
-        aJSTerm._window.navigator.language, "help", "");
-  };
-
-  /**
-   * Inspects the passed aObject. This is done by opening the PropertyPanel.
-   *
-   * @param object aObject
-   *        Object to inspect.
-   * @returns void
-   */
-  aJSTerm.sandbox.inspect = function JSTH_inspect(aObject)
-  {
-    aJSTerm.helperEvaluated = true;
-    let propPanel = aJSTerm.openPropertyPanel(null,
-                                              WebConsoleUtils.unwrap(aObject));
-    propPanel.panel.setAttribute("hudId", aJSTerm.hudId);
-  };
-
-  aJSTerm.sandbox.inspectrules = function JSTH_inspectrules(aNode)
-  {
-    aJSTerm.helperEvaluated = true;
-    let doc = aJSTerm.inputNode.ownerDocument;
-    let win = doc.defaultView;
-    let panel = createElement(doc, "panel", {
-      label: "CSS Rules",
-      titlebar: "normal",
-      noautofocus: "true",
-      noautohide: "true",
-      close: "true",
-      width: 350,
-      height: (win.screen.height / 2)
-    });
-
-    let iframe = createAndAppendElement(panel, "iframe", {
-      src: "chrome://browser/content/devtools/cssruleview.xul",
-      flex: "1",
-    });
-
-    panel.addEventListener("load", function onLoad() {
-      panel.removeEventListener("load", onLoad, true);
-      let doc = iframe.contentDocument;
-      let view = new CssRuleView(doc);
-      doc.documentElement.appendChild(view.element);
-      view.highlight(aNode);
-    }, true);
-
-    let parent = doc.getElementById("mainPopupSet");
-    parent.appendChild(panel);
-
-    panel.addEventListener("popuphidden", function onHide() {
-      panel.removeEventListener("popuphidden", onHide);
-      parent.removeChild(panel);
-    });
-
-    let footer = createElement(doc, "hbox", { align: "end" });
-    createAndAppendElement(footer, "spacer", { flex: 1});
-    createAndAppendElement(footer, "resizer", { dir: "bottomend" });
-    panel.appendChild(footer);
-
-    let anchor = win.gBrowser.selectedBrowser;
-    panel.openPopup(anchor, "end_before", 0, 0, false, false);
-
-  }
-
-  /**
-   * Prints aObject to the output.
-   *
-   * @param object aObject
-   *        Object to print to the output.
-   * @returns void
-   */
-  aJSTerm.sandbox.pprint = function JSTH_pprint(aObject)
-  {
-    aJSTerm.helperEvaluated = true;
-    if (aObject === null || aObject === undefined || aObject === true || aObject === false) {
-      aJSTerm.console.error(l10n.getStr("helperFuncUnsupportedTypeError"));
-      return;
-    }
-    else if (typeof aObject === TYPEOF_FUNCTION) {
-      aJSTerm.writeOutput(aObject + "\n", CATEGORY_OUTPUT, SEVERITY_LOG);
-      return;
-    }
-
-    let output = [];
-    let pairs = namesAndValuesOf(WebConsoleUtils.unwrap(aObject));
-
-    pairs.forEach(function(pair) {
-      output.push("  " + pair.display);
-    });
-
-    aJSTerm.writeOutput(output.join("\n"), CATEGORY_OUTPUT, SEVERITY_LOG);
-  };
-
-  /**
-   * Print a string to the output, as-is.
-   *
-   * @param string aString
-   *        A string you want to output.
-   * @returns void
-   */
-  aJSTerm.sandbox.print = function JSTH_print(aString)
-  {
-    aJSTerm.helperEvaluated = true;
-    aJSTerm.writeOutput("" + aString, CATEGORY_OUTPUT, SEVERITY_LOG);
-  };
-}
-
-/**
- * JSTerm
- *
- * JavaScript Terminal: creates input nodes for console code interpretation
- * and 'JS Workspaces'
- */
-
-/**
- * Create a JSTerminal or attach a JSTerm input node to an existing output node,
- * given by the parent node.
- *
- * @param object aContext
- *        Usually nsIDOMWindow, but doesn't have to be
- * @param nsIDOMNode aParentNode where to attach the JSTerm
+ * @constructor
+ * @param object aHud
+ *        The HeadsUpDisplay object that owns this JSTerm instance.
  * @param object aMixin
  *        Gecko-app (or Jetpack) specific utility object
- * @param object aConsole
- *        Console object to use within the JSTerm.
  */
-function JSTerm(aContext, aParentNode, aMixin, aConsole)
+function JSTerm(aHud, aMixin)
 {
-  // set the context, attach the UI by appending to aParentNode
+  // attach the UI by appending to aParentNode
 
   this.application = appName();
-  this.context = aContext;
-  this.parentNode = aParentNode;
+  this.hud = aHud;
   this.mixins = aMixin;
-  this.console = aConsole;
-  this.document = aParentNode.ownerDocument
+  this.document = this.hud.chromeDocument;
 
-  this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
+  this.hudId = this.hud.hudId;
 
-  let node = aParentNode;
-  while (!node.hasAttribute("id")) {
-    node = node.parentNode;
-  }
-  this.hudId = node.getAttribute("id");
-
+  this.lastCompletion = {};
   this.history = [];
   this.historyIndex = 0;
   this.historyPlaceHolder = 0;  // this.history.length;
-  this.log = LogFactory("*** JSTerm:");
-  this.autocompletePopup = new AutocompletePopup(aParentNode.ownerDocument);
+  this.autocompletePopup = new AutocompletePopup(this.document);
   this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
   this.autocompletePopup.onClick = this.acceptProposedCompletion.bind(this);
   this.init();
@@ -4778,16 +3028,12 @@ function JSTerm(aContext, aParentNode, aMixin, aConsole)
 
 JSTerm.prototype = {
   lastInputValue: "",
-  propertyProvider: JSPropertyProvider,
-
   COMPLETE_FORWARD: 0,
   COMPLETE_BACKWARD: 1,
   COMPLETE_HINT_ONLY: 2,
 
   init: function JST_init()
   {
-    this.createSandbox();
-
     this.inputNode = this.mixins.inputNode;
     this.outputNode = this.mixins.outputNode;
     this.completeNode = this.mixins.completeNode;
@@ -4818,62 +3064,82 @@ JSTerm.prototype = {
     this.mixins.attachUI();
   },
 
-  createSandbox: function JST_setupSandbox()
-  {
-    // create a JS Sandbox out of this.context
-    this.sandbox = new Cu.Sandbox(this._window,
-      { sandboxPrototype: this._window, wantXrays: false });
-    this.sandbox.console = this.console;
-    JSTermHelper(this);
-  },
 
-  get _window()
+  /**
+   * Asynchronously evaluate a string in the content process sandbox.
+   *
+   * @param string aString
+   *        String to evaluate in the content process JavaScript sandbox.
+   * @param function [aCallback]
+   *        Optional function to be invoked when the evaluation result is
+   *        received.
+   */
+  evalInContentSandbox: function JST_evalInContentSandbox(aString, aCallback)
   {
-    return this.context.get().QueryInterface(Ci.nsIDOMWindow);
+    let message = {
+      str: aString,
+      resultCacheId: "HUDEval-" + HUDService.sequenceId(),
+    };
+
+    this.hud.sendMessageToContent("JSTerm:EvalRequest", message, aCallback);
+
+    return message;
   },
 
   /**
-   * Evaluates a string in the sandbox.
+   * The "JSTerm:EvalResult" message handler. This is the JSTerm execution
+   * result callback which is invoked whenever JavaScript code evaluation
+   * results come from the content process.
    *
-   * @param string aString
-   *        String to evaluate in the sandbox.
-   * @returns something
-   *          The result of the evaluation.
+   * @private
+   * @param object aResponse
+   *        The JSTerm:EvalResult message received from the content process. See
+   *        JSTerm.handleEvalRequest() in HUDService-content.js for further
+   *        details.
+   * @param object aRequest
+   *        The JSTerm:EvalRequest message we sent to the content process.
+   * @see JSTerm.handleEvalRequest() in HUDService-content.js
    */
-  evalInSandbox: function JST_evalInSandbox(aString)
+  _executeResultCallback:
+  function JST__executeResultCallback(aResponse, aRequest)
   {
-    // The help function needs to be easy to guess, so we make the () optional
-    if (aString.trim() === "help" || aString.trim() === "?") {
-      aString = "help()";
+    let errorMessage = aResponse.errorMessage;
+    let resultString = aResponse.resultString;
+
+    // Hide undefined results coming from JSTerm helper functions.
+    if (!errorMessage &&
+        resultString == "undefined" &&
+        aResponse.helperResult &&
+        !aResponse.inspectable &&
+        !aResponse.helperRawOutput) {
+      return;
     }
 
-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
-    let $ = null, $$ = null;
+    let afterNode = aRequest.outputNode;
 
-    // We prefer to execute the page-provided implementations for the $() and
-    // $$() functions.
-    if (typeof window.$ == "function") {
-      $ = this.sandbox.$;
-      delete this.sandbox.$;
+    if (aResponse.errorMessage) {
+      this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
+                       afterNode, aResponse.timestamp);
     }
-    if (typeof window.$$ == "function") {
-      $$ = this.sandbox.$$;
-      delete this.sandbox.$$;
+    else if (aResponse.inspectable) {
+      let node = this.writeOutputJS(aResponse.resultString,
+                                    this._evalOutputClick.bind(this, aResponse),
+                                    afterNode, aResponse.timestamp);
+      node._evalCacheId = aResponse.childrenCacheId;
     }
-
-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8", "Web Console", 1);
-
-    if ($) {
-      this.sandbox.$ = $;
+    else {
+      this.writeOutput(aResponse.resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+                       afterNode, aResponse.timestamp);
     }
-    if ($$) {
-      this.sandbox.$$ = $$;
-    }
-
-    return result;
   },
 
-
+  /**
+   * Execute a string. Execution happens asynchronously in the content process.
+   *
+   * @param string [aExecuteString]
+   *        The string you want to execute. If this is not provided, the current
+   *        user input is used - taken from |this.inputNode.value|.
+   */
   execute: function JST_execute(aExecuteString)
   {
     // attempt to execute the content of the inputNode
@@ -4883,99 +3149,18 @@ JSTerm.prototype = {
       return;
     }
 
-    this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+    let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
 
-    try {
-      this.helperEvaluated = false;
-      let result = this.evalInSandbox(aExecuteString);
-
-      // Hide undefined results coming from helpers.
-      let shouldShow = !(result === undefined && this.helperEvaluated);
-      if (shouldShow) {
-        let inspectable = WebConsoleUtils.isObjectInspectable(result);
-        let resultString = WebConsoleUtils.formatResult(result);
-
-        if (inspectable) {
-          this.writeOutputJS(aExecuteString, result, resultString);
-        }
-        else {
-          this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG);
-        }
-      }
-    }
-    catch (ex) {
-      this.writeOutput("" + ex, CATEGORY_OUTPUT, SEVERITY_ERROR);
-    }
+    let messageToContent =
+      this.evalInContentSandbox(aExecuteString,
+                                this._executeResultCallback.bind(this));
+    messageToContent.outputNode = node;
 
     this.history.push(aExecuteString);
     this.historyIndex++;
     this.historyPlaceHolder = this.history.length;
     this.setInputValue("");
     this.clearCompletion();
-  },
-
-  /**
-   * Opens a new PropertyPanel. The panel has two buttons: "Update" reexecutes
-   * the passed aEvalString and places the result inside of the tree. The other
-   * button closes the panel.
-   *
-   * @param string aEvalString
-   *        String that was used to eval the aOutputObject. Used as title
-   *        and to update the tree content.
-   * @param object aOutputObject
-   *        Object to display/inspect inside of the tree.
-   * @param nsIDOMNode aAnchor
-   *        A node to popup the panel next to (using "after_pointer").
-   * @returns object the created and opened propertyPanel.
-   */
-  openPropertyPanel: function JST_openPropertyPanel(aEvalString, aOutputObject,
-                                                    aAnchor)
-  {
-    let self = this;
-    let propPanel;
-    // The property panel has one button:
-    //    `Update`: reexecutes the string executed on the command line. The
-    //    result will be inspected by this panel.
-    let buttons = [];
-
-    // If there is a evalString passed to this function, then add a `Update`
-    // button to the panel so that the evalString can be reexecuted to update
-    // the content of the panel.
-    if (aEvalString !== null) {
-      buttons.push({
-        label: l10n.getStr("update.button"),
-        accesskey: l10n.getStr("update.accesskey"),
-        oncommand: function () {
-          try {
-            var result = self.evalInSandbox(aEvalString);
-
-            if (result !== undefined) {
-              // TODO: This updates the value of the tree.
-              // However, the states of opened nodes is not saved.
-              // See bug 586246.
-              propPanel.treeView.data = result;
-            }
-          }
-          catch (ex) {
-            self.console.error(ex);
-          }
-        }
-      });
-    }
-
-    let doc = self.document;
-    let parent = doc.getElementById("mainPopupSet");
-    let title = (aEvalString
-        ? l10n.getFormatStr("jsPropertyInspectTitle", [aEvalString])
-        : l10n.getStr("jsPropertyTitle"));
-
-    propPanel = new PropertyPanel(parent, doc, title, aOutputObject, buttons);
-    propPanel.linkNode = aAnchor;
-
-    let panel = propPanel.panel;
-    panel.openPopup(aAnchor, "after_pointer", 0, 0, false, false);
-    panel.sizeTo(350, 450);
-    return propPanel;
   },
 
   /**
@@ -4995,16 +3180,12 @@ JSTerm.prototype = {
    *        not shown.
    *        - data:
    *        An object that represents the object you want to inspect. Please see
-   *        the PropertyPanelAsync documentation - this object is passed to the
-   *        PropertyPanelAsync constructor
-   * @param object aResponse
-   *        The response object to display/inspect inside of the tree.
-   * @param nsIDOMNode aAnchor
-   *        A node to popup the panel next to (using "after_pointer").
+   *        the PropertyPanel documentation - this object is passed to the
+   *        PropertyPanel constructor
    * @return object
-   *         The new instance of PropertyPanelAsync.
+   *         The new instance of PropertyPanel.
    */
-  openPropertyPanelAsync: function JST_openPropertyPanelAsync(aOptions)
+  openPropertyPanel: function JST_openPropertyPanel(aOptions)
   {
     // The property panel has one button:
     //    `Update`: reexecutes the string executed on the command line. The
@@ -5024,7 +3205,7 @@ JSTerm.prototype = {
                 l10n.getFormatStr("jsPropertyInspectTitle", [aOptions.title]) :
                 l10n.getStr("jsPropertyTitle");
 
-    let propPanel = new PropertyPanelAsync(parent, title, aOptions.data, buttons);
+    let propPanel = new PropertyPanel(parent, title, aOptions.data, buttons);
 
     propPanel.panel.openPopup(aOptions.anchor, "after_pointer", 0, 0, false, false);
     propPanel.panel.sizeTo(350, 450);
@@ -5041,52 +3222,32 @@ JSTerm.prototype = {
   },
 
   /**
-   * Writes a JS object to the JSTerm outputNode. If the user clicks on the
-   * written object, openPropertyPanel is called to open up a panel to inspect
-   * the object.
+   * Writes a JS object to the JSTerm outputNode.
    *
-   * @param string aEvalString
-   *        String that was evaluated to get the aOutputObject.
-   * @param object aResultObject
-   *        The evaluation result object.
-   * @param object aOutputString
-   *        The output string to be written to the outputNode.
+   * @param string aOutputMessage
+   *        The message to display.
+   * @param function [aCallback]
+   *        Optional function to invoke when users click the message.
+   * @param nsIDOMNode [aNodeAfter]
+   *        Optional DOM node after which you want to insert the new message.
+   *        This is used when execution results need to be inserted immediately
+   *        after the user input.
+   * @param number [aTimestamp]
+   *        Optional timestamp to show for the output message (millisconds since
+   *        the UNIX epoch). If no timestamp is provided then Date.now() is
+   *        used.
+   * @return nsIDOMNode
+   *         The new message node.
    */
-  writeOutputJS: function JST_writeOutputJS(aEvalString, aOutputObject, aOutputString)
+  writeOutputJS:
+  function JST_writeOutputJS(aOutputMessage, aCallback, aNodeAfter, aTimestamp)
   {
-    let node = ConsoleUtils.createMessageNode(this.document,
-                                              CATEGORY_OUTPUT,
-                                              SEVERITY_LOG,
-                                              aOutputString,
-                                              this.hudId);
-
-    let linkNode = node.querySelector(".webconsole-msg-body");
-
-    linkNode.classList.add("hud-clickable");
-    linkNode.setAttribute("aria-haspopup", "true");
-
-    // Make the object bring up the property panel.
-    node.addEventListener("mousedown", function(aEvent) {
-      this._startX = aEvent.clientX;
-      this._startY = aEvent.clientY;
-    }, false);
-
-    let self = this;
-    node.addEventListener("click", function(aEvent) {
-      if (aEvent.detail != 1 || aEvent.button != 0 ||
-          (this._startX != aEvent.clientX &&
-           this._startY != aEvent.clientY)) {
-        return;
-      }
-
-      if (!this._panelOpen) {
-        let propPanel = self.openPropertyPanel(aEvalString, aOutputObject, this);
-        propPanel.panel.setAttribute("hudId", self.hudId);
-        this._panelOpen = true;
-      }
-    }, false);
-
-    ConsoleUtils.outputMessageNode(node, this.hudId);
+    let node = this.writeOutput(aOutputMessage, CATEGORY_OUTPUT, SEVERITY_LOG,
+                                aNodeAfter, aTimestamp);
+    if (aCallback) {
+      this.hud.makeOutputMessageLink(node, aCallback);
+    }
+    return node;
   },
 
   /**
@@ -5099,15 +3260,28 @@ JSTerm.prototype = {
    *        The category of message: one of the CATEGORY_ constants.
    * @param number aSeverity
    *        The severity of message: one of the SEVERITY_ constants.
-   * @returns void
+   * @param nsIDOMNode [aNodeAfter]
+   *        Optional DOM node after which you want to insert the new message.
+   *        This is used when execution results need to be inserted immediately
+   *        after the user input.
+   * @param number [aTimestamp]
+   *        Optional timestamp to show for the output message (millisconds since
+   *        the UNIX epoch). If no timestamp is provided then Date.now() is
+   *        used.
+   * @return nsIDOMNode
+   *         The new message node.
    */
-  writeOutput: function JST_writeOutput(aOutputMessage, aCategory, aSeverity)
+  writeOutput:
+  function JST_writeOutput(aOutputMessage, aCategory, aSeverity, aNodeAfter,
+                           aTimestamp)
   {
-    let node = ConsoleUtils.createMessageNode(this.document,
-                                              aCategory, aSeverity,
-                                              aOutputMessage, this.hudId);
+    let node = ConsoleUtils.createMessageNode(this.document, aCategory,
+                                              aSeverity, aOutputMessage,
+                                              this.hudId, null, null, null,
+                                              null, aTimestamp);
 
-    ConsoleUtils.outputMessageNode(node, this.hudId);
+    ConsoleUtils.outputMessageNode(node, this.hudId, aNodeAfter);
+    return node;
   },
 
   /**
@@ -5398,7 +3572,7 @@ JSTerm.prototype = {
    * only if the selection/cursor is at the end of the string. If no completion
    * is found, the current inputNode value and cursor/selection stay.
    *
-   * @param int type possible values are
+   * @param int aType possible values are
    *    - this.COMPLETE_FORWARD: If there is more than one possible completion
    *          and the input value stayed the same compared to the last time this
    *          function was called, then the next completion of all possible
@@ -5416,11 +3590,13 @@ JSTerm.prototype = {
    *          used again. If there is only one possible completion, then
    *          the inputNode.value is set to this value and the selection is set
    *          from the current cursor position to the end of the completed text.
-   *
+   * @param function aCallback
+   *        Optional function invoked when the autocomplete properties are
+   *        updated.
    * @returns boolean true if there existed a completion for the current input,
    *          or false otherwise.
    */
-  complete: function JSTF_complete(type)
+  complete: function JSTF_complete(aType, aCallback)
   {
     let inputNode = this.inputNode;
     let inputValue = inputNode.value;
@@ -5437,55 +3613,128 @@ JSTerm.prototype = {
       return false;
     }
 
-    let popup = this.autocompletePopup;
-
-    if (!this.lastCompletion || this.lastCompletion.value != inputValue) {
-      let properties = this.propertyProvider(this.sandbox.window, inputValue);
-      if (!properties || !properties.matches.length) {
-        this.clearCompletion();
-        return false;
-      }
-
-      let items = properties.matches.map(function(aMatch) {
-        return {label: aMatch};
-      });
-      popup.setItems(items);
-      this.lastCompletion = {value: inputValue,
-                             matchProp: properties.matchProp};
-
-      if (items.length > 1 && !popup.isOpen) {
-        popup.openPopup(this.inputNode);
-      }
-      else if (items.length < 2 && popup.isOpen) {
-        popup.hidePopup();
-      }
-
-      if (items.length == 1) {
-          popup.selectedIndex = 0;
-      }
-      this.onAutocompleteSelect();
+    // Update the completion results.
+    if (this.lastCompletion.value != inputValue) {
+      this._updateCompletionResult(aType, aCallback);
+      return false;
     }
 
+    let popup = this.autocompletePopup;
     let accepted = false;
 
-    if (type != this.COMPLETE_HINT_ONLY && popup.itemCount == 1) {
+    if (aType != this.COMPLETE_HINT_ONLY && popup.itemCount == 1) {
       this.acceptProposedCompletion();
       accepted = true;
     }
-    else if (type == this.COMPLETE_BACKWARD) {
-      this.autocompletePopup.selectPreviousItem();
+    else if (aType == this.COMPLETE_BACKWARD) {
+      popup.selectPreviousItem();
     }
-    else if (type == this.COMPLETE_FORWARD) {
-      this.autocompletePopup.selectNextItem();
+    else if (aType == this.COMPLETE_FORWARD) {
+      popup.selectNextItem();
     }
 
+    aCallback && aCallback(this);
     return accepted || popup.itemCount > 0;
+  },
+
+  /**
+   * Update the completion result. This operation is performed asynchronously by
+   * fetching updated results from the content process.
+   *
+   * @private
+   * @param int aType
+   *        Completion type. See this.complete() for details.
+   * @param function [aCallback]
+   *        Optional, function to invoke when completion results are received.
+   */
+  _updateCompletionResult:
+  function JST__updateCompletionResult(aType, aCallback)
+  {
+    if (this.lastCompletion.value == this.inputNode.value) {
+      return;
+    }
+
+    let message = {
+      id: "HUDComplete-" + HUDService.sequenceId(),
+      input: this.inputNode.value,
+    };
+
+    this.lastCompletion = {requestId: message.id, completionType: aType};
+    let callback = this._receiveAutocompleteProperties.bind(this, aCallback);
+    this.hud.sendMessageToContent("JSTerm:Autocomplete", message, callback);
+  },
+
+  /**
+   * Handler for the "JSTerm:AutocompleteProperties" message. This method takes
+   * the completion result received from the content process and updates the UI
+   * accordingly.
+   *
+   * @param function [aCallback=null]
+   *        Optional, function to invoke when the completion result is received.
+   * @param object aMessage
+   *        The JSON message which holds the completion results received from
+   *        the content process.
+   */
+  _receiveAutocompleteProperties:
+  function JST__receiveAutocompleteProperties(aCallback, aMessage)
+  {
+    let inputNode = this.inputNode;
+    let inputValue = inputNode.value;
+    if (aMessage.input != inputValue ||
+        this.lastCompletion.value == inputValue ||
+        aMessage.id != this.lastCompletion.requestId) {
+      return;
+    }
+
+    let matches = aMessage.matches;
+    if (!matches.length) {
+      this.clearCompletion();
+      return;
+    }
+
+    let items = matches.map(function(aMatch) {
+      return { label: aMatch };
+    });
+
+    let popup = this.autocompletePopup;
+    popup.setItems(items);
+
+    let completionType = this.lastCompletion.completionType;
+    this.lastCompletion = {
+      value: inputValue,
+      matchProp: aMessage.matchProp,
+    };
+
+    if (items.length > 1 && !popup.isOpen) {
+      popup.openPopup(inputNode);
+    }
+    else if (items.length < 2 && popup.isOpen) {
+      popup.hidePopup();
+    }
+
+    if (items.length == 1) {
+      popup.selectedIndex = 0;
+    }
+
+    this.onAutocompleteSelect();
+
+    if (completionType != this.COMPLETE_HINT_ONLY && popup.itemCount == 1) {
+      this.acceptProposedCompletion();
+    }
+    else if (completionType == this.COMPLETE_BACKWARD) {
+      popup.selectPreviousItem();
+    }
+    else if (completionType == this.COMPLETE_FORWARD) {
+      popup.selectNextItem();
+    }
+
+    aCallback && aCallback(this);
   },
 
   onAutocompleteSelect: function JSTF_onAutocompleteSelect()
   {
     let currentItem = this.autocompletePopup.selectedItem;
-    if (currentItem && this.lastCompletion) {
+    if (currentItem && this.lastCompletion.value) {
       let suffix = currentItem.label.substring(this.lastCompletion.
                                                matchProp.length);
       this.updateCompleteNode(suffix);
@@ -5502,7 +3751,7 @@ JSTerm.prototype = {
   clearCompletion: function JSTF_clearCompletion()
   {
     this.autocompletePopup.clearItems();
-    this.lastCompletion = null;
+    this.lastCompletion = {};
     this.updateCompleteNode("");
     if (this.autocompletePopup.isOpen) {
       this.autocompletePopup.hidePopup();
@@ -5521,7 +3770,7 @@ JSTerm.prototype = {
     let updated = false;
 
     let currentItem = this.autocompletePopup.selectedItem;
-    if (currentItem && this.lastCompletion) {
+    if (currentItem && this.lastCompletion.value) {
       let suffix = currentItem.label.substring(this.lastCompletion.
                                                matchProp.length);
       this.setInputValue(this.inputNode.value + suffix);
@@ -5555,8 +3804,7 @@ JSTerm.prototype = {
    */
   clearObjectCache: function JST_clearObjectCache(aCacheId)
   {
-    let hud = HUDService.getHudReferenceById(this.hudId);
-    hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
+    this.hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
   },
 
   /**
@@ -5583,8 +3831,147 @@ JSTerm.prototype = {
       resultCacheId: aResultCacheId,
     };
 
-    let hud = HUDService.getHudReferenceById(this.hudId);
-    hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
+    this.hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
+  },
+
+  /**
+   * The "JSTerm:InspectObject" remote message handler. This allows the content
+   * process to open the Property Panel for a given object.
+   *
+   * @param object aRequest
+   *        The request message from the content process. This message includes
+   *        the user input string that was evaluated to inspect an object and
+   *        the result object which is to be inspected.
+   */
+  handleInspectObject: function JST_handleInspectObject(aRequest)
+  {
+    let options = {
+      title: aRequest.input,
+
+      data: {
+        rootCacheId: aRequest.objectCacheId,
+        panelCacheId: aRequest.objectCacheId,
+        remoteObject: aRequest.resultObject,
+        remoteObjectProvider: this.remoteObjectProvider.bind(this),
+      },
+    };
+
+    let propPanel = this.openPropertyPanel(options);
+    propPanel.panel.setAttribute("hudId", this.hudId);
+
+    let onPopupHide = function JST__onPopupHide() {
+      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+
+      this.clearObjectCache(options.data.panelCacheId);
+    }.bind(this);
+
+    propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+  },
+
+  /**
+   * The click event handler for evaluation results in the output.
+   *
+   * @private
+   * @param object aResponse
+   *        The JSTerm:EvalResult message received from the content process.
+   * @param nsIDOMNode aLink
+   *        The message node for which we are handling events.
+   */
+  _evalOutputClick: function JST__evalOutputClick(aResponse, aLinkNode)
+  {
+    if (aLinkNode._panelOpen) {
+      return;
+    }
+
+    let options = {
+      title: aResponse.input,
+      anchor: aLinkNode,
+
+      // Data to inspect.
+      data: {
+        // This is where the resultObject children are cached.
+        rootCacheId: aResponse.childrenCacheId,
+        remoteObject: aResponse.resultObject,
+        // This is where all objects retrieved by the panel will be cached.
+        panelCacheId: "HUDPanel-" + HUDService.sequenceId(),
+        remoteObjectProvider: this.remoteObjectProvider.bind(this),
+      },
+    };
+
+    options.updateButtonCallback = function JST__evalUpdateButton() {
+      this.evalInContentSandbox(aResponse.input,
+        this._evalOutputUpdatePanelCallback.bind(this, options, propPanel,
+                                                 aResponse));
+    }.bind(this);
+
+    let propPanel = this.openPropertyPanel(options);
+    propPanel.panel.setAttribute("hudId", this.hudId);
+
+    let onPopupHide = function JST__evalInspectPopupHide() {
+      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+
+      this.clearObjectCache(options.data.panelCacheId);
+
+      if (!aLinkNode.parentNode && aLinkNode._evalCacheId) {
+        this.clearObjectCache(aLinkNode._evalCacheId);
+      }
+    }.bind(this);
+
+    propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+  },
+
+  /**
+   * The callback used for updating the Property Panel when the user clicks the
+   * Update button.
+   *
+   * @private
+   * @param object aOptions
+   *        The options object used for opening the initial Property Panel.
+   * @param object aPropPanel
+   *        The Property Panel instance.
+   * @param object aOldResponse
+   *        The previous JSTerm:EvalResult message received from the content
+   *        process.
+   * @param object aNewResponse
+   *        The new JSTerm:EvalResult message received after the user clicked
+   *        the Update button.
+   */
+  _evalOutputUpdatePanelCallback:
+  function JST__updatePanelCallback(aOptions, aPropPanel, aOldResponse,
+                                    aNewResponse)
+  {
+    if (aNewResponse.errorMessage) {
+      this.writeOutput(aNewResponse.errorMessage, CATEGORY_OUTPUT,
+                       SEVERITY_ERROR);
+      return;
+    }
+
+    if (!aNewResponse.inspectable) {
+      this.writeOutput(l10n.getStr("JSTerm.updateNotInspectable"), CATEGORY_OUTPUT, SEVERITY_ERROR);
+      return;
+    }
+
+    this.clearObjectCache(aOptions.data.panelCacheId);
+    this.clearObjectCache(aOptions.data.rootCacheId);
+
+    if (aOptions.anchor && aOptions.anchor._evalCacheId) {
+      aOptions.anchor._evalCacheId = aNewResponse.childrenCacheId;
+    }
+
+    // Update the old response object such that when the panel is reopen, the
+    // user sees the new response.
+    aOldResponse.id = aNewResponse.id;
+    aOldResponse.childrenCacheId = aNewResponse.childrenCacheId;
+    aOldResponse.resultObject = aNewResponse.resultObject;
+    aOldResponse.resultString = aNewResponse.resultString;
+
+    aOptions.data.rootCacheId = aNewResponse.childrenCacheId;
+    aOptions.data.remoteObject = aNewResponse.resultObject;
+
+    // TODO: This updates the value of the tree.
+    // However, the states of open nodes is not saved.
+    // See bug 586246.
+    aPropPanel.treeView.data = aOptions.data;
   },
 
   /**
@@ -5592,9 +3979,20 @@ JSTerm.prototype = {
    */
   destroy: function JST_destroy()
   {
+    this.clearCompletion();
+    this.clearOutput();
+
+    this.autocompletePopup.destroy();
+
     this.inputNode.removeEventListener("keypress", this._keyPress, false);
     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
+
+    delete this.history;
+    delete this.hud;
+    delete this.autocompletePopup;
+    delete this.document;
+    delete this.mixins;
   },
 };
 
@@ -5602,26 +4000,19 @@ JSTerm.prototype = {
  * Generates and attaches the JS Terminal part of the Web Console, which
  * essentially consists of the interactive JavaScript input facility.
  *
- * @param nsWeakPtr<nsIDOMWindow> aContext
- *        A weak pointer to the DOM window that contains the Web Console.
  * @param nsIDOMNode aParentNode
  *        The Web Console wrapper node.
  * @param nsIDOMNode aExistingConsole
  *        The Web Console output node.
  * @return void
  */
-function
-JSTermFirefoxMixin(aContext,
-                   aParentNode,
-                   aExistingConsole)
+function JSTermFirefoxMixin(aParentNode, aExistingConsole)
 {
   // aExisting Console is the existing outputNode to use in favor of
   // creating a new outputNode - this is so we can just attach the inputNode to
   // a normal HeadsUpDisplay console output, and re-use code.
-  this.context = aContext;
   this.parentNode = aParentNode;
   this.existingConsoleNode = aExistingConsole;
-  this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
 
   if (aParentNode.ownerDocument) {
     this.xulElementFactory =
@@ -5894,7 +4285,7 @@ ConsoleUtils = {
       node.appendChild(bodyContainer);
       node.classList.add("webconsole-msg-inspector");
       // Create the treeView object.
-      let treeView = node.propertyTreeView = new PropertyTreeViewAsync();
+      let treeView = node.propertyTreeView = new PropertyTreeView();
 
       treeView.data = {
         rootCacheId: body.cacheId,
@@ -6131,8 +4522,11 @@ ConsoleUtils = {
    *        The message node to send to the output.
    * @param string aHUDId
    *        The ID of the HUD in which to insert this node.
+   * @param nsIDOMNode [aNodeAfter]
+   *        Insert the node after the given aNodeAfter (optional).
    */
-  outputMessageNode: function ConsoleUtils_outputMessageNode(aNode, aHUDId) {
+  outputMessageNode:
+  function ConsoleUtils_outputMessageNode(aNode, aHUDId, aNodeAfter) {
     ConsoleUtils.filterMessageNode(aNode, aHUDId);
     let outputNode = HUDService.hudReferences[aHUDId].outputNode;
 
@@ -6151,7 +4545,7 @@ ConsoleUtils = {
     }
 
     if (!isRepeated) {
-      outputNode.appendChild(aNode);
+      outputNode.insertBefore(aNode, aNodeAfter ? aNodeAfter.nextSibling : null);
     }
 
     HUDService.regroupOutput(outputNode);
@@ -6348,66 +4742,27 @@ HeadsUpDisplayUICommands = {
       }
       case "saveBodies": {
         let checked = aButton.getAttribute("checked") === "true";
-        HUDService.saveRequestAndResponseBodies = checked;
+        HUDService.hudReferences[hudId].saveRequestAndResponseBodies = checked;
         break;
       }
     }
   },
-
-};
-
-/**
- * A Console log entry
- *
- * @param JSObject aConfig, object literal with ConsolEntry properties
- * @param integer aId
- * @returns void
- */
-
-function ConsoleEntry(aConfig, id)
-{
-  if (!aConfig.logLevel && aConfig.message) {
-    throw new Error("Missing Arguments when creating a console entry");
-  }
-
-  this.config = aConfig;
-  this.id = id;
-  for (var prop in aConfig) {
-    if (!(typeof aConfig[prop] == "function")){
-      this[prop] = aConfig[prop];
-    }
-  }
-
-  if (aConfig.logLevel == "network") {
-    this.transactions = { };
-    if (aConfig.activity) {
-      this.transactions[aConfig.activity.stage] = aConfig.activity;
-    }
-  }
-
-}
-
-ConsoleEntry.prototype = {
-
-  updateTransaction: function CE_updateTransaction(aActivity) {
-    this.transactions[aActivity.stage] = aActivity;
-  }
 };
 
 //////////////////////////////////////////////////////////////////////////
-// HUDWindowObserver
+// WebConsoleObserver
 //////////////////////////////////////////////////////////////////////////
 
-HUDWindowObserver = {
+let WebConsoleObserver = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
 
-  init: function HWO_init()
+  init: function WCO_init()
   {
     Services.obs.addObserver(this, "content-document-global-created", false);
     Services.obs.addObserver(this, "quit-application-granted", false);
   },
 
-  observe: function HWO_observe(aSubject, aTopic, aData)
+  observe: function WCO_observe(aSubject, aTopic)
   {
     if (aTopic == "content-document-global-created") {
       HUDService.windowInitializer(aSubject);
@@ -6417,12 +4772,11 @@ HUDWindowObserver = {
     }
   },
 
-  uninit: function HWO_uninit()
+  uninit: function WCO_uninit()
   {
     Services.obs.removeObserver(this, "content-document-global-created");
     Services.obs.removeObserver(this, "quit-application-granted");
   },
-
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -6513,88 +4867,6 @@ CommandController.prototype = {
         break;
     }
   }
-};
-
-/**
- * A WebProgressListener that listens for location changes, to update HUDService
- * state information on page navigation.
- *
- * @constructor
- * @param string aHudId
- *        The HeadsUpDisplay ID.
- */
-function ConsoleProgressListener(aHudId)
-{
-  this.hudId = aHudId;
-}
-
-ConsoleProgressListener.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
-                                         Ci.nsISupportsWeakReference]),
-
-  onStateChange: function CPL_onStateChange(aProgress, aRequest, aState,
-                                            aStatus)
-  {
-    if (!(aState & Ci.nsIWebProgressListener.STATE_START)) {
-      return;
-    }
-
-    let uri = null;
-    if (aRequest instanceof Ci.imgIRequest) {
-      let imgIRequest = aRequest.QueryInterface(Ci.imgIRequest);
-      uri = imgIRequest.URI;
-    }
-    else if (aRequest instanceof Ci.nsIChannel) {
-      let nsIChannel = aRequest.QueryInterface(Ci.nsIChannel);
-      uri = nsIChannel.URI;
-    }
-
-    if (!uri || !uri.schemeIs("file") && !uri.schemeIs("ftp")) {
-      return;
-    }
-
-    let outputNode = HUDService.hudReferences[this.hudId].outputNode;
-
-    let chromeDocument = outputNode.ownerDocument;
-    let msgNode = chromeDocument.createElementNS(HTML_NS, "html:span");
-
-    // Create the clickable URL part of the message.
-    let linkNode = chromeDocument.createElementNS(HTML_NS, "html:span");
-    linkNode.appendChild(chromeDocument.createTextNode(uri.spec));
-    linkNode.classList.add("hud-clickable");
-    linkNode.classList.add("webconsole-msg-url");
-
-    linkNode.addEventListener("mousedown", function(aEvent) {
-      this._startX = aEvent.clientX;
-      this._startY = aEvent.clientY;
-    }, false);
-
-    linkNode.addEventListener("click", function(aEvent) {
-      if (aEvent.detail == 1 && aEvent.button == 0 &&
-          this._startX == aEvent.clientX && this._startY == aEvent.clientY) {
-        let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
-        viewSourceUtils.viewSource(uri.spec, null, chromeDocument);
-      }
-    }, false);
-
-    msgNode.appendChild(linkNode);
-
-    let messageNode = ConsoleUtils.createMessageNode(chromeDocument,
-                                                     CATEGORY_NETWORK,
-                                                     SEVERITY_LOG,
-                                                     msgNode,
-                                                     this.hudId,
-                                                     null,
-                                                     null,
-                                                     uri.spec);
-
-    ConsoleUtils.outputMessageNode(messageNode, this.hudId);
-  },
-
-  onLocationChange: function() {},
-  onStatusChange: function() {},
-  onProgressChange: function() {},
-  onSecurityChange: function() {},
 };
 
 ///////////////////////////////////////////////////////////////////////////

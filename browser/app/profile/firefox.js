@@ -59,9 +59,8 @@ pref("extensions.hotfix.id", "firefox-hotfix@mozilla.org");
 pref("extensions.hotfix.cert.checkAttributes", true);
 pref("extensions.hotfix.certs.1.sha1Fingerprint", "F1:DB:F9:6A:7B:B8:04:FA:48:3C:16:95:C7:2F:17:C6:5B:C2:9F:45");
 
-// Disable add-ons installed into the shared user and shared system areas by
-// default. This does not include the application directory. See the SCOPE
-// constants in AddonManager.jsm for values to use here
+// Disable add-ons that are not installed by the user in all scopes by default.
+// See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
 
 // Dictionary download preference
@@ -145,6 +144,10 @@ pref("app.update.mode", 1);
 
 // If set to true, the Update Service will present no UI for any event.
 pref("app.update.silent", false);
+
+// If set to true, the Update Service will apply updates in the background
+// when it finishes downloading them.
+pref("app.update.stage.enabled", true);
 
 // Update service URL:
 pref("app.update.url", "https://aus3.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
@@ -488,10 +491,19 @@ pref("browser.gesture.pinch.threshold", 150);
 pref("browser.gesture.pinch.latched", false);
 pref("browser.gesture.pinch.threshold", 25);
 #endif
+#ifdef XP_WIN
+// Enabled for touch input display zoom.
+pref("browser.gesture.pinch.out", "cmd_fullZoomEnlarge");
+pref("browser.gesture.pinch.in", "cmd_fullZoomReduce");
+pref("browser.gesture.pinch.out.shift", "cmd_fullZoomReset");
+pref("browser.gesture.pinch.in.shift", "cmd_fullZoomReset");
+#else
+// Disabled by default due to issues with track pad input.
 pref("browser.gesture.pinch.out", "");
 pref("browser.gesture.pinch.in", "");
 pref("browser.gesture.pinch.out.shift", "");
 pref("browser.gesture.pinch.in.shift", "");
+#endif
 pref("browser.gesture.twist.latched", false);
 pref("browser.gesture.twist.threshold", 25);
 pref("browser.gesture.twist.right", "");
@@ -583,7 +595,7 @@ pref("plugins.use_layers", true);
 pref("plugins.hide_infobar_for_carbon_failure_plugin", false);
 #endif
 
-pref("plugins.update.url", "https://www.mozilla.com/%LOCALE%/plugincheck/");
+pref("plugins.update.url", "https://www.mozilla.org/%LOCALE%/plugincheck/");
 pref("plugins.update.notifyUser", false);
 
 pref("plugins.click_to_play", false);
@@ -891,6 +903,7 @@ pref("dom.ipc.plugins.enabled.i386", false);
 pref("dom.ipc.plugins.enabled.i386.flash player.plugin", true);
 pref("dom.ipc.plugins.enabled.i386.javaplugin2_npapi.plugin", true);
 pref("dom.ipc.plugins.enabled.i386.javaappletplugin.plugin", true);
+pref("dom.ipc.plugins.enabled.i386.silverlight.plugin", true);
 // x86_64 ipc preferences
 pref("dom.ipc.plugins.enabled.x86_64", true);
 #else
@@ -958,7 +971,6 @@ pref("services.sync.prefs.sync.browser.tabs.closeButtons", true);
 pref("services.sync.prefs.sync.browser.tabs.loadInBackground", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
-pref("services.sync.prefs.sync.browser.tabs.onTop", true);
 pref("services.sync.prefs.sync.browser.urlbar.autocomplete.enabled", true);
 pref("services.sync.prefs.sync.browser.urlbar.default.behavior", true);
 pref("services.sync.prefs.sync.browser.urlbar.maxRichResults", true);
@@ -1010,8 +1022,9 @@ pref("services.sync.prefs.sync.xpinstall.whitelist.required", true);
 // Disable the error console
 pref("devtools.errorconsole.enabled", false);
 
-// Enable the developer toolbar
+// Developer toolbar and GCLI preferences
 pref("devtools.toolbar.enabled", false);
+pref("devtools.gcli.allowSet", false);
 
 // Enable the Inspector
 pref("devtools.inspector.enabled", true);
@@ -1027,7 +1040,7 @@ pref("devtools.layoutview.enabled", false);
 pref("devtools.layoutview.open", false);
 
 // Enable the Debugger
-pref("devtools.debugger.enabled", false);
+pref("devtools.debugger.enabled", true);
 pref("devtools.debugger.remote-enabled", false);
 pref("devtools.debugger.remote-host", "localhost");
 pref("devtools.debugger.remote-port", 6000);
@@ -1140,7 +1153,7 @@ pref("full-screen-api.approval-required", true);
 // Startup Crash Tracking
 // number of startup crashes that can occur before starting into safe mode automatically
 // (this pref has no effect if more than 6 hours have passed since the last crash)
-pref("toolkit.startup.max_resumed_crashes", 2);
+pref("toolkit.startup.max_resumed_crashes", 3);
 
 // The maximum amount of decoded image data we'll willingly keep around (we
 // might keep around more than this, but we'll try to get down to this value).

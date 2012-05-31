@@ -94,7 +94,8 @@ public:
     enum Flags {
         NoFlags          = 0x0,
         UseNearestFilter = 0x1,
-        NeedsYFlip       = 0x2
+        NeedsYFlip       = 0x2,
+        ForceSingleTile  = 0x4
     };
 
     typedef gfxASurface::gfxContentType ContentType;
@@ -1076,7 +1077,7 @@ private:
                 // Assume IEEE 754 precision
                 range[0] = 127;
                 range[1] = 127;
-                *precision = 0;
+                *precision = 23;
                 break;
             case LOCAL_GL_LOW_INT:
             case LOCAL_GL_MEDIUM_INT:

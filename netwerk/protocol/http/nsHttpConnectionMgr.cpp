@@ -677,10 +677,22 @@ nsHttpConnectionMgr::GetSpdyPreferredEnt(nsConnectionEntry *aOriginalEntry)
         return nsnull;
     }
 
-    rv = sslSocketControl->JoinConnection(NS_LITERAL_CSTRING("spdy/2"),
-                                          aOriginalEntry->mConnInfo->GetHost(),
-                                          aOriginalEntry->mConnInfo->Port(),
-                                          &isJoined);
+    if (gHttpHandler->SpdyInfo()->ProtocolEnabled(0))
+        rv = sslSocketControl->JoinConnection(gHttpHandler->SpdyInfo()->VersionString[0],
+                                              aOriginalEntry->mConnInfo->GetHost(),
+                                              aOriginalEntry->mConnInfo->Port(),
+                                              &isJoined);
+    else
+        rv = NS_OK;                               /* simulate failed join */
+
+    // JoinConnection() may have failed due to spdy version level. Try the other
+    // level we support (if any)
+    if (NS_SUCCEEDED(rv) && !isJoined && gHttpHandler->SpdyInfo()->ProtocolEnabled(1)) {
+        rv = sslSocketControl->JoinConnection(gHttpHandler->SpdyInfo()->VersionString[1],
+                                              aOriginalEntry->mConnInfo->GetHost(),
+                                              aOriginalEntry->mConnInfo->Port(),
+                                              &isJoined);
+    }
 
     if (NS_FAILED(rv) || !isJoined) {
         LOG(("nsHttpConnectionMgr::GetSpdyPreferredConnection "
@@ -1044,15 +1056,27 @@ nsHttpConnectionMgr::ReportFailedToProcess(nsIURI *uri)
     if (NS_FAILED(rv) || !isHttp || host.IsEmpty())
         return;
 
-    // report the event for both the anonymous and non-anonymous
-    // versions of this host
+    // report the event for all the permutations of anonymous and
+    // private versions of this host
     nsRefPtr<nsHttpConnectionInfo> ci =
         new nsHttpConnectionInfo(host, port, nsnull, usingSSL);
     ci->SetAnonymous(false);
+    ci->SetPrivate(false);
     PipelineFeedbackInfo(ci, RedCorruptedContent, nsnull, 0);
 
-    ci = new nsHttpConnectionInfo(host, port, nsnull, usingSSL);
+    ci = ci->Clone();
+    ci->SetAnonymous(false);
+    ci->SetPrivate(true);
+    PipelineFeedbackInfo(ci, RedCorruptedContent, nsnull, 0);
+
+    ci = ci->Clone();
     ci->SetAnonymous(true);
+    ci->SetPrivate(false);
+    PipelineFeedbackInfo(ci, RedCorruptedContent, nsnull, 0);
+
+    ci = ci->Clone();
+    ci->SetAnonymous(true);
+    ci->SetPrivate(true);
     PipelineFeedbackInfo(ci, RedCorruptedContent, nsnull, 0);
 }
 
@@ -1099,9 +1123,22 @@ nsHttpConnectionMgr::AtActiveConnectionLimit(nsConnectionEntry *ent, PRUint8 cap
 
     // Add in the in-progress tcp connections, we will assume they are
     // keepalive enabled.
-    totalCount += ent->mHalfOpens.Length();
-    persistCount += ent->mHalfOpens.Length();
+    PRUint32 pendingHalfOpens = 0;
+    for (i = 0; i < ent->mHalfOpens.Length(); ++i) {
+        nsHalfOpenSocket *halfOpen = ent->mHalfOpens[i];
+
+        // Exclude half-open's that has already created a usable connection.
+        // This prevents the limit being stuck on ipv6 connections that 
+        // eventually time out after typical 21 seconds of no ACK+SYN reply.
+        if (halfOpen->HasConnected())
+            continue;
+
+        ++pendingHalfOpens;
+    }
     
+    totalCount += pendingHalfOpens;
+    persistCount += pendingHalfOpens;
+
     LOG(("   total=%d, persist=%d\n", totalCount, persistCount));
 
     PRUint16 maxConns;
@@ -1117,8 +1154,10 @@ nsHttpConnectionMgr::AtActiveConnectionLimit(nsConnectionEntry *ent, PRUint8 cap
     }
 
     // use >= just to be safe
-    return (totalCount >= maxConns) || ( (caps & NS_HTTP_ALLOW_KEEPALIVE) &&
-                                         (persistCount >= maxPersistConns) );
+    bool result = (totalCount >= maxConns) || ( (caps & NS_HTTP_ALLOW_KEEPALIVE) &&
+                                              (persistCount >= maxPersistConns) );
+    LOG(("  result: %s", result ? "true" : "false"));
+    return result;
 }
 
 void
@@ -1179,7 +1218,7 @@ nsHttpConnectionMgr::RestrictConnections(nsConnectionEntry *ent)
         bool confirmedRestrict = false;
         for (PRUint32 index = 0; index < ent->mActiveConns.Length(); ++index) {
             nsHttpConnection *conn = ent->mActiveConns[index];
-            if (!conn->ReportedNPN() || conn->EverUsedSpdy()) {
+            if (!conn->ReportedNPN() || conn->CanDirectlyActivate()) {
                 confirmedRestrict = true;
                 break;
             }
@@ -2192,28 +2231,10 @@ nsHttpConnectionMgr::nsConnectionHandle::OnHeadersAvailable(nsAHttpTransaction *
     return mConn->OnHeadersAvailable(trans, req, resp, reset);
 }
 
-nsresult
-nsHttpConnectionMgr::nsConnectionHandle::ResumeSend()
-{
-    return mConn->ResumeSend();
-}
-
-nsresult
-nsHttpConnectionMgr::nsConnectionHandle::ResumeRecv()
-{
-    return mConn->ResumeRecv();
-}
-
 void
 nsHttpConnectionMgr::nsConnectionHandle::CloseTransaction(nsAHttpTransaction *trans, nsresult reason)
 {
     mConn->CloseTransaction(trans, reason);
-}
-
-void
-nsHttpConnectionMgr::nsConnectionHandle::GetConnectionInfo(nsHttpConnectionInfo **result)
-{
-    mConn->GetConnectionInfo(result);
 }
 
 nsresult
@@ -2250,12 +2271,6 @@ nsHttpConnectionMgr::OnMsgSpeculativeConnect(PRInt32, void *param)
         !AtActiveConnectionLimit(ent, trans->Caps())) {
         CreateTransport(ent, trans, trans->Caps(), true);
     }
-}
-
-void
-nsHttpConnectionMgr::nsConnectionHandle::GetSecurityInfo(nsISupports **result)
-{
-    mConn->GetSecurityInfo(result);
 }
 
 bool
@@ -2299,7 +2314,8 @@ nsHalfOpenSocket::nsHalfOpenSocket(nsConnectionEntry *ent,
     : mEnt(ent),
       mTransaction(trans),
       mCaps(caps),
-      mSpeculative(false)
+      mSpeculative(false),
+      mHasConnected(false)
 {
     NS_ABORT_IF_FALSE(ent && trans, "constructor with null arguments");
     LOG(("Creating nsHalfOpenSocket [this=%p trans=%p ent=%s]\n",
@@ -2470,8 +2486,12 @@ nsHttpConnectionMgr::nsHalfOpenSocket::SetupBackupTimer()
         mSynTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
         if (NS_SUCCEEDED(rv)) {
             mSynTimer->InitWithCallback(this, timeout, nsITimer::TYPE_ONE_SHOT);
-            LOG(("nsHalfOpenSocket::SetupBackupTimer()"));
+            LOG(("nsHalfOpenSocket::SetupBackupTimer() [this=%p]", this));
         }
+    }
+    else if (timeout) {
+        LOG(("nsHalfOpenSocket::SetupBackupTimer() [this=%p],"
+             " transaction already done!", this));
     }
 }
 
@@ -2520,10 +2540,7 @@ nsHttpConnectionMgr::nsHalfOpenSocket::Notify(nsITimer *timer)
     NS_ABORT_IF_FALSE(PR_GetCurrentThread() == gSocketThread, "wrong thread");
     NS_ABORT_IF_FALSE(timer == mSynTimer, "wrong timer");
 
-    if (!gHttpHandler->ConnMgr()->
-        AtActiveConnectionLimit(mEnt, mCaps)) {
-        SetupBackupStreams();
-    }
+    SetupBackupStreams();
 
     mSynTimer = nsnull;
     return NS_OK;
@@ -2591,6 +2608,10 @@ nsHalfOpenSocket::OnOutputStreamReady(nsIAsyncOutputStream *out)
              "conn->init (%p) failed %x\n", conn.get(), rv));
         return rv;
     }
+
+    // This half-open socket has created a connection.  This flag excludes it
+    // from counter of actual connections used for checking limits.
+    mHasConnected = true;
 
     // if this is still in the pending list, remove it and dispatch it
     index = mEnt->mPendingQ.IndexOf(mTransaction);
@@ -2754,12 +2775,6 @@ nsHttpConnectionMgr::nsConnectionHandle::TakeHttpConnection()
     return conn;
 }
 
-bool
-nsHttpConnectionMgr::nsConnectionHandle::IsProxyConnectInProgress()
-{
-    return mConn->IsProxyConnectInProgress();
-}
-
 PRUint32
 nsHttpConnectionMgr::nsConnectionHandle::CancelPipeline(nsresult reason)
 {
@@ -2776,14 +2791,6 @@ nsHttpConnectionMgr::nsConnectionHandle::Classification()
     LOG(("nsConnectionHandle::Classification this=%p "
          "has null mConn using CLASS_SOLO default", this));
     return nsAHttpTransaction::CLASS_SOLO;
-}
-
-void
-nsHttpConnectionMgr::
-nsConnectionHandle::Classify(nsAHttpTransaction::Classifier newclass)
-{
-    if (mConn)
-        mConn->Classify(newclass);
 }
 
 // nsConnectionEntry
@@ -3037,25 +3044,4 @@ nsConnectionEntry::MaxPipelineDepth(nsAHttpTransaction::Classifier aClass)
         return kPipelineRestricted;
 
     return mGreenDepth;
-}
-
-bool
-nsHttpConnectionMgr::nsConnectionHandle::LastTransactionExpectedNoContent()
-{
-    return mConn->LastTransactionExpectedNoContent();
-}
-
-void
-nsHttpConnectionMgr::
-nsConnectionHandle::SetLastTransactionExpectedNoContent(bool val)
-{
-     mConn->SetLastTransactionExpectedNoContent(val);
-}
-
-nsISocketTransport *
-nsHttpConnectionMgr::nsConnectionHandle::Transport()
-{
-    if (!mConn)
-        return nsnull;
-    return mConn->Transport();
 }

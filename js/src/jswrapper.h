@@ -159,7 +159,6 @@ class JS_FRIEND_API(CrossCompartmentWrapper) : public Wrapper
     virtual JSString *fun_toString(JSContext *cx, JSObject *wrapper, unsigned indent) MOZ_OVERRIDE;
     virtual bool defaultValue(JSContext *cx, JSObject *wrapper, JSType hint, Value *vp) MOZ_OVERRIDE;
     virtual bool iteratorNext(JSContext *cx, JSObject *wrapper, Value *vp);
-    virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
 
     static CrossCompartmentWrapper singleton;
 };
@@ -223,16 +222,21 @@ IsWrapper(const JSObject *obj)
 // stopAtOuter is true, then this returns the outer window if it was
 // previously wrapped. Otherwise, this returns the first object for
 // which JSObject::isWrapper returns false.
-JS_FRIEND_API(JSObject *) UnwrapObject(JSObject *obj, bool stopAtOuter = true,
-                                       unsigned *flagsp = NULL);
+JS_FRIEND_API(JSObject *)
+UnwrapObject(JSObject *obj, bool stopAtOuter = true, unsigned *flagsp = NULL);
 
 // Given a JSObject, returns that object stripped of wrappers. At each stage,
 // the security wrapper has the opportunity to veto the unwrap. Since checked
 // code should never be unwrapping outer window wrappers, we always stop at
 // outer windows.
-JS_FRIEND_API(JSObject *) UnwrapObjectChecked(JSContext *cx, JSObject *obj);
+JS_FRIEND_API(JSObject *)
+UnwrapObjectChecked(JSContext *cx, JSObject *obj);
 
-bool IsCrossCompartmentWrapper(const JSObject *obj);
+bool
+IsCrossCompartmentWrapper(const JSObject *obj);
+
+void
+NukeCrossCompartmentWrapper(JSObject *wrapper);
 
 } /* namespace js */
 

@@ -103,7 +103,10 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY fullscreenAllowButton.label "Allow">
 <!ENTITY fullscreenExitButton.label "Deny">
 <!ENTITY fullscreenApproval.value "Allow fullscreen?">
+
 <!ENTITY fullscreenExitHint.value "Press ESC at any time to exit fullscreen.">
+<!ENTITY leaveDOMFullScreen.label "Exit Full Screen">
+<!ENTITY leaveDOMFullScreen.accesskey "u">
 
 <!ENTITY closeWindow.label "Close Window">
 <!ENTITY closeWindow.accesskey "d">
@@ -229,9 +232,9 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY inspectCloseButton.tooltiptext "Close Inspector">
 
 <!ENTITY devToolbarCloseButton.tooltiptext "Close Developer Toolbar">
-<!ENTITY devToolbarMenu.label "Developer Toolbar">
-<!ENTITY devToolbarMenu.accesskey "v">
-<!ENTITY devToolbar.commandkey "v">
+<!ENTITY devToolbarMenu.label              "Developer Toolbar">
+<!ENTITY devToolbarMenu.accesskey          "v">
+<!ENTITY devToolbar.commandkey             "v">
 
 <!ENTITY webConsoleButton.label "Web Console">
 <!ENTITY inspectorButton.label "Inspector">

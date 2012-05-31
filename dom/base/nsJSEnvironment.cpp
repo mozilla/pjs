@@ -954,7 +954,7 @@ nsJSContext::JSOptionChangedCallback(const char *pref, void *data)
       useMethodJITAlways = true;
       useHardening = false;
     }
-  }    
+  }
 
   if (useMethodJIT)
     newDefaultJSOptions |= JSOPTION_METHODJIT;
@@ -998,7 +998,8 @@ nsJSContext::JSOptionChangedCallback(const char *pref, void *data)
   else
     newDefaultJSOptions &= ~JSOPTION_RELIMIT;
 
-  ::JS_SetOptions(context->mContext, newDefaultJSOptions & JSRUNOPTION_MASK);
+  ::JS_SetOptions(context->mContext,
+                  newDefaultJSOptions & (JSRUNOPTION_MASK | JSOPTION_ALLOW_XML));
 
   // Save the new defaults for the next page load (InitContext).
   context->mDefaultJSOptions = newDefaultJSOptions;
@@ -1030,7 +1031,7 @@ nsJSContext::nsJSContext(JSRuntime *aRuntime)
 
   ++sContextCount;
 
-  mDefaultJSOptions = JSOPTION_PRIVATE_IS_NSISUPPORTS;
+  mDefaultJSOptions = JSOPTION_PRIVATE_IS_NSISUPPORTS | JSOPTION_ALLOW_XML;
 
   mContext = ::JS_NewContext(aRuntime, gStackSize);
   if (mContext) {
@@ -2069,6 +2070,7 @@ nsJSContext::GetNativeGlobal()
 nsresult
 nsJSContext::CreateNativeGlobalForInner(
                                 nsIScriptGlobalObject *aNewInner,
+                                nsIURI *aURI,
                                 bool aIsChrome,
                                 nsIPrincipal *aPrincipal,
                                 JSObject** aNativeGlobal, nsISupports **aHolder)
@@ -2092,6 +2094,12 @@ nsJSContext::CreateNativeGlobalForInner(
   }
   jsholder->GetJSObject(aNativeGlobal);
   jsholder.forget(aHolder);
+
+  // Set the location information for the new global, so that tools like
+  // about:memory may use that information
+  MOZ_ASSERT(aNativeGlobal && *aNativeGlobal);
+  xpc::SetLocationForGlobal(*aNativeGlobal, aURI);
+
   return NS_OK;
 }
 
@@ -3045,9 +3053,9 @@ nsJSContext::CycleCollectNow(nsICycleCollectorListener *aListener,
       sFirstCollectionTime = now;
     }
 
-    nsString gcmsg;
+    nsCString gcMsg;
     if (ccResults.mForcedGC) {
-      gcmsg.AssignLiteral(", forced a GC");
+      gcMsg.AssignLiteral(", forced a GC");
     }
 
     NS_NAMED_MULTILINE_LITERAL_STRING(kFmt,
@@ -3061,7 +3069,7 @@ nsJSContext::CycleCollectNow(nsICycleCollectorListener *aListener,
                                         (now - start) / PR_USEC_PER_MSEC, suspected,
                                         ccResults.mVisitedRefCounted, ccResults.mVisitedGCed,
                                         ccResults.mFreedRefCounted, ccResults.mFreedGCed,
-                                        sCCollectedWaitingForGC, gcmsg.get(),
+                                        sCCollectedWaitingForGC, gcMsg.get(),
                                         sForgetSkippableBeforeCC,
                                         sMinForgetSkippableTime / PR_USEC_PER_MSEC,
                                         sMaxForgetSkippableTime / PR_USEC_PER_MSEC,

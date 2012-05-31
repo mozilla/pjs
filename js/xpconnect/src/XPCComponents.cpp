@@ -31,6 +31,7 @@
 
 using namespace mozilla;
 using namespace js;
+using namespace xpc;
 
 using mozilla::dom::DestroyProtoOrIfaceCache;
 
@@ -3073,8 +3074,8 @@ xpc::SandboxProxyHandler::getPropertyDescriptor(JSContext *cx, JSObject *proxy,
                                                 jsid id_, bool set,
                                                 PropertyDescriptor *desc)
 {
-    JS::RootedVarObject obj(cx, wrappedObject(proxy));
-    JS::RootedVarId id(cx, id_);
+    JS::RootedObject obj(cx, wrappedObject(proxy));
+    JS::RootedId id(cx, id_);
 
     JS_ASSERT(js::GetObjectCompartment(obj) == js::GetObjectCompartment(proxy));
     // XXXbz Not sure about the JSRESOLVE_QUALIFIED here, but we have
@@ -3135,7 +3136,7 @@ xpc::SandboxProxyHandler::getOwnPropertyDescriptor(JSContext *cx,
 
 nsresult
 xpc_CreateSandboxObject(JSContext * cx, jsval * vp, nsISupports *prinOrSop, JSObject *proto,
-                        bool wantXrays, const nsACString &sandboxName)
+                        bool wantXrays, bool wantComponents, const nsACString &sandboxName)
 {
     // Create the sandbox global object
     nsresult rv;
@@ -3218,12 +3219,28 @@ xpc_CreateSandboxObject(JSContext * cx, jsval * vp, nsISupports *prinOrSop, JSOb
         // Pass on ownership of sop to |sandbox|.
         JS_SetPrivate(sandbox, sop.forget().get());
 
-        rv = xpc->InitClasses(cx, sandbox);
-        if (NS_SUCCEEDED(rv) &&
-            !JS_DefineFunctions(cx, sandbox, SandboxFunctions)) {
-            rv = NS_ERROR_FAILURE;
+        XPCCallContext ccx(NATIVE_CALLER, cx);
+        if (!ccx.IsValid())
+            return NS_ERROR_XPC_UNEXPECTED;
+        
+        {
+          JSAutoEnterCompartment ac;
+          if (!ac.enter(ccx, sandbox))
+              return NS_ERROR_XPC_UNEXPECTED;
+          XPCWrappedNativeScope* scope =
+              XPCWrappedNativeScope::GetNewOrUsed(ccx, sandbox);
+
+          if (!scope)
+              return NS_ERROR_XPC_UNEXPECTED;
+
+          if (wantComponents && !nsXPCComponents::AttachComponentsObject(ccx, scope, sandbox))
+              return NS_ERROR_XPC_UNEXPECTED;
+
+          if (!XPCNativeWrapper::AttachNewConstructorObject(ccx, sandbox))
+              return NS_ERROR_XPC_UNEXPECTED;
         }
-        if (NS_FAILED(rv))
+
+        if (!JS_DefineFunctions(cx, sandbox, SandboxFunctions))
             return NS_ERROR_XPC_UNEXPECTED;
     }
 
@@ -3234,9 +3251,9 @@ xpc_CreateSandboxObject(JSContext * cx, jsval * vp, nsISupports *prinOrSop, JSOb
         }
     }
 
-    xpc::CompartmentPrivate *compartmentPrivate =
-        static_cast<xpc::CompartmentPrivate*>(JS_GetCompartmentPrivate(compartment));
-    compartmentPrivate->location = sandboxName;
+    // Set the location information for the new global, so that tools like
+    // about:memory may use that information
+    xpc::SetLocationForGlobal(sandbox, sandboxName);
 
     return NS_OK;
 }
@@ -3349,6 +3366,7 @@ nsXPCComponents_utils_Sandbox::CallOrConstruct(nsIXPConnectWrappedNative *wrappe
 
     JSObject *proto = nsnull;
     bool wantXrays = true;
+    bool wantComponents = true;
     nsCString sandboxName;
 
     if (argc > 1) {
@@ -3381,6 +3399,18 @@ nsXPCComponents_utils_Sandbox::CallOrConstruct(nsIXPConnectWrappedNative *wrappe
             }
 
             wantXrays = option.toBoolean();
+        }
+
+        if (!JS_HasProperty(cx, optionsObject, "wantComponents", &found))
+            return NS_ERROR_INVALID_ARG;
+
+        if (found) {
+            if (!JS_GetProperty(cx, optionsObject, "wantComponents", &option) ||
+                !option.isBoolean()) {
+                return ThrowAndFail(NS_ERROR_INVALID_ARG, cx, _retval);
+            }
+
+            wantComponents = option.toBoolean();
         }
 
         if (!JS_HasProperty(cx, optionsObject, "sandboxName", &found))
@@ -3424,7 +3454,7 @@ nsXPCComponents_utils_Sandbox::CallOrConstruct(nsIXPConnectWrappedNative *wrappe
             frame->GetFilename(getter_Copies(sandboxName));
     }
 
-    rv = xpc_CreateSandboxObject(cx, vp, prinOrSop, proto, wantXrays, sandboxName);
+    rv = xpc_CreateSandboxObject(cx, vp, prinOrSop, proto, wantXrays, wantComponents, sandboxName);
 
     if (NS_FAILED(rv)) {
         return ThrowAndFail(rv, cx, _retval);
@@ -3466,7 +3496,8 @@ ContextHolder::ContextHolder(JSContext *aOuterCx, JSObject *aSandbox)
         JS_SetOptions(mJSContext,
                       JS_GetOptions(mJSContext) |
                       JSOPTION_DONT_REPORT_UNCAUGHT |
-                      JSOPTION_PRIVATE_IS_NSISUPPORTS);
+                      JSOPTION_PRIVATE_IS_NSISUPPORTS |
+                      JSOPTION_ALLOW_XML);
         JS_SetGlobalObject(mJSContext, aSandbox);
         JS_SetContextPrivate(mJSContext, this);
         JS_SetOperationCallback(mJSContext, ContextHolderOperationCallback);
@@ -3705,9 +3736,7 @@ xpc_EvalInSandbox(JSContext *cx, JSObject *sandbox, const nsAString& source,
                 v = STRING_TO_JSVAL(str);
             }
 
-            xpc::CompartmentPrivate *sandboxdata =
-                static_cast<xpc::CompartmentPrivate *>
-                           (JS_GetCompartmentPrivate(js::GetObjectCompartment(sandbox)));
+            CompartmentPrivate *sandboxdata = GetCompartmentPrivate(sandbox);
             if (!ac.enter(cx, callingScope) ||
                 !WrapForSandbox(cx, sandboxdata->wantXrays, &v)) {
                 rv = NS_ERROR_FAILURE;
@@ -3892,7 +3921,7 @@ nsXPCComponents_Utils::GetGlobalForObject(const JS::Value& object,
 
   // Outerize if necessary.
   if (JSObjectOp outerize = js::GetObjectClass(obj)->ext.outerObject)
-      *retval = OBJECT_TO_JSVAL(outerize(cx, JS::RootedVarObject(cx, obj)));
+      *retval = OBJECT_TO_JSVAL(outerize(cx, JS::RootedObject(cx, obj)));
 
   return NS_OK;
 }
@@ -4068,7 +4097,7 @@ SetBoolOption(JSContext* cx, uint32_t aOption, bool aValue)
 GENERATE_JSOPTION_GETTER_SETTER(Strict, JSOPTION_STRICT)
 GENERATE_JSOPTION_GETTER_SETTER(Werror, JSOPTION_WERROR)
 GENERATE_JSOPTION_GETTER_SETTER(Atline, JSOPTION_ATLINE)
-GENERATE_JSOPTION_GETTER_SETTER(Xml, JSOPTION_XML)
+GENERATE_JSOPTION_GETTER_SETTER(Xml, JSOPTION_MOAR_XML)
 GENERATE_JSOPTION_GETTER_SETTER(Relimit, JSOPTION_RELIMIT)
 GENERATE_JSOPTION_GETTER_SETTER(Methodjit, JSOPTION_METHODJIT)
 GENERATE_JSOPTION_GETTER_SETTER(Methodjit_always, JSOPTION_METHODJIT_ALWAYS)

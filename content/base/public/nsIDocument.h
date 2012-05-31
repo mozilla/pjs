@@ -92,9 +92,8 @@ class Element;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x8e51e6d9, 0x914d, 0x46ba, \
-  { 0xb3, 0x11, 0x2f, 0x27, 0x3d, 0xe6, 0x0d, 0x19 } }
-
+{ 0x7bac702d, 0xca67, 0x4ce1, \
+ { 0x80, 0x3c, 0x35, 0xde, 0x81, 0x26, 0x04, 0x97 } }
 
 // Flag for AddStyleSheet().
 #define NS_STYLESHEET_FROM_CATALOG                (1 << 0)
@@ -745,6 +744,14 @@ public:
   virtual bool IsFullScreenDoc() = 0;
 
   /**
+   * Sets whether this document is approved for fullscreen mode.
+   * Documents aren't approved for fullscreen until chrome has sent a
+   * "fullscreen-approved" notification with a subject which is a pointer
+   * to the approved document.
+   */
+  virtual void SetApprovedForFullscreen(bool aIsApproved) = 0;
+
+  /**
    * Exits all documents from DOM full-screen mode, and moves the top-level
    * browser window out of full-screen mode. If aRunAsync is true, this runs
    * asynchronously.
@@ -1105,6 +1112,14 @@ public:
    */
   virtual nsresult GetContentListFor(nsIContent* aContent,
                                      nsIDOMNodeList** aResult) = 0;
+
+  /**
+   * See GetAnonymousElementByAttribute on nsIDOMDocumentXBL.
+   */
+  virtual nsIContent*
+    GetAnonymousElementByAttribute(nsIContent* aElement,
+                                   nsIAtom* aAttrName,
+                                   const nsAString& aAttrValue) const = 0;
 
   /**
    * Helper for nsIDOMDocument::elementFromPoint implementation that allows

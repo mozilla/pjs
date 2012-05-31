@@ -320,7 +320,7 @@ private:
         nsCString mCoalescingKey;
 
         // To have the UsingSpdy flag means some host with the same connection
-        // entry has done NPN=spdy/2 at some point. It does not mean every
+        // entry has done NPN=spdy/* at some point. It does not mean every
         // connection is currently using spdy.
         bool mUsingSpdy;
 
@@ -389,6 +389,8 @@ private:
         bool IsSpeculative() { return mSpeculative; }
         void SetSpeculative(bool val) { mSpeculative = val; }
 
+        bool HasConnected() { return mHasConnected; }
+
     private:
         nsConnectionEntry              *mEnt;
         nsRefPtr<nsAHttpTransaction>   mTransaction;
@@ -414,6 +416,8 @@ private:
         nsCOMPtr<nsISocketTransport>   mBackupTransport;
         nsCOMPtr<nsIAsyncOutputStream> mBackupStreamOut;
         nsCOMPtr<nsIAsyncInputStream>  mBackupStreamIn;
+
+        bool                           mHasConnected;
     };
     friend class nsHalfOpenSocket;
 
@@ -585,7 +589,7 @@ private:
     //
     nsClassHashtable<nsCStringHashKey, nsConnectionEntry> mCT;
 
-    // mAlternateProtocolHash is used only for spdy/2 upgrades for now
+    // mAlternateProtocolHash is used only for spdy/* upgrades for now
     // protected by the monitor
     nsTHashtable<nsCStringHashKey> mAlternateProtocolHash;
     static PLDHashOperator TrimAlternateProtocolHash(nsCStringHashKey *entry,

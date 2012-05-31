@@ -535,8 +535,8 @@ Membrane::get(JSContext *cx, JSObject *wrapper, JSObject* receiver,
     JSObject *wrappee = wrappedObject(wrapper);
     if (wrappee->isArray()) {
         vp->setUndefined(); // default result if we refuse to perform this action
-        RootedVarObject rreceiver(cx, receiver);
-        RootedVarId rid(cx, id);
+        RootedObject rreceiver(cx, receiver);
+        RootedId rid(cx, id);
         return wrappee->getGeneric(cx, rreceiver, rid, vp);
     } else {
         return BaseProxyHandler::get(cx, wrapper, receiver, id, vp);
@@ -550,8 +550,8 @@ Membrane::getOwnPropertyDescriptor(JSContext *cx, JSObject* wrapper,
     AutoReadOnly ro(cx);
     if (!unwrapId(&id))
         return false;
-    RootedVarObject rwrapper(cx, wrappedObject(wrapper));
-    RootedVarId rid(cx, id);
+    RootedObject rwrapper(cx, wrappedObject(wrapper));
+    RootedId rid(cx, id);
     desc->obj = NULL;
     if (!GetOwnPropertyDescriptor(cx, rwrapper, rid, desc))
         return false;

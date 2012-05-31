@@ -22,12 +22,12 @@ using namespace js;
 using namespace js::frontend;
 
 bool
-MarkInnerAndOuterFunctions(JSContext *cx, JSScript* script)
+MarkInnerAndOuterFunctions(JSContext *cx, JSScript* script_)
 {
-    Root<JSScript*> root(cx, &script);
+    Rooted<JSScript*> script(cx, script_);
 
     Vector<JSScript *, 16> worklist(cx);
-    if (!worklist.append(script))
+    if (!worklist.append(script.reference()))
         return false;
 
     while (worklist.length()) {
@@ -74,9 +74,18 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
                         JSString *source /* = NULL */,
                         unsigned staticLevel /* = 0 */)
 {
-    TokenKind tt;
-    ParseNode *pn;
-    bool inDirectivePrologue;
+    class ProbesManager
+    {
+        const char* filename;
+        unsigned lineno;
+
+      public:
+        ProbesManager(const char *f, unsigned l) : filename(f), lineno(l) {
+            Probes::compileScriptBegin(filename, lineno);
+        }
+        ~ProbesManager() { Probes::compileScriptEnd(filename, lineno); }
+    };
+    ProbesManager probesManager(filename, lineno);
 
     /*
      * The scripted callerFrame can only be given for compile-and-go scripts
@@ -85,25 +94,20 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
     JS_ASSERT_IF(callerFrame, compileAndGo);
     JS_ASSERT_IF(staticLevel != 0, callerFrame);
 
-    bool foldConstants = true;
-    Parser parser(cx, principals, originPrincipals, callerFrame, foldConstants, compileAndGo);
-    if (!parser.init(chars, length, filename, lineno, version))
+    Parser parser(cx, principals, originPrincipals, chars, length, filename, lineno, version,
+                  callerFrame, /* foldConstants = */ true, compileAndGo);
+    if (!parser.init())
         return NULL;
-
-    TokenStream &tokenStream = parser.tokenStream;
 
     SharedContext sc(cx, /* inFunction = */ false);
 
     TreeContext tc(&parser, &sc);
-    if (!tc.init(cx))
+    if (!tc.init())
         return NULL;
 
-    BytecodeEmitter bce(&parser, &sc, tokenStream.getLineno(), noScriptRval, needScriptGlobal);
+    BytecodeEmitter bce(&parser, &sc, lineno, noScriptRval, needScriptGlobal);
     if (!bce.init())
         return NULL;
-
-    Probes::compileScriptBegin(cx, filename, lineno);
-    MUST_FLOW_THROUGH("out");
 
     // We can specialize a bit for the given scope chain if that scope chain is the global object.
     JSObject *globalObj = scopeChain && scopeChain == &scopeChain->global()
@@ -113,22 +117,15 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
     JS_ASSERT_IF(globalObj, globalObj->isNative());
     JS_ASSERT_IF(globalObj, JSCLASS_HAS_GLOBAL_FLAG_AND_SLOTS(globalObj->getClass()));
 
-    RootedVar<JSScript*> script(cx);
-
     GlobalScope globalScope(cx, globalObj);
     bce.sc->setScopeChain(scopeChain);
     bce.globalScope = &globalScope;
     if (!SetStaticLevel(bce.sc, staticLevel))
-        goto out;
+        return NULL;
 
     /* If this is a direct call to eval, inherit the caller's strictness.  */
-    if (callerFrame &&
-        callerFrame->isScriptFrame() &&
-        callerFrame->script()->strictModeCode)
-    {
+    if (callerFrame && callerFrame->isScriptFrame() && callerFrame->script()->strictModeCode)
         bce.sc->setInStrictMode();
-        tokenStream.setStrictMode();
-    }
 
 #ifdef DEBUG
     bool savedCallerFun;
@@ -143,7 +140,7 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
             JSAtom *atom = js_AtomizeString(cx, source);
             jsatomid _;
             if (!atom || !bce.makeAtomIndex(atom, &_))
-                goto out;
+                return NULL;
         }
 
         if (callerFrame && callerFrame->isFunctionFrame()) {
@@ -154,7 +151,7 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
              */
             ObjectBox *funbox = parser.newObjectBox(callerFrame->fun());
             if (!funbox)
-                goto out;
+                return NULL;
             funbox->emitLink = bce.objectList.lastbox;
             bce.objectList.lastbox = funbox;
             bce.objectList.length++;
@@ -170,42 +167,44 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
      */
     uint32_t bodyid;
     if (!GenerateBlockId(bce.sc, bodyid))
-        goto out;
+        return NULL;
     bce.sc->bodyid = bodyid;
 
+    ParseNode *pn;
 #if JS_HAS_XML_SUPPORT
     pn = NULL;
     bool onlyXML;
     onlyXML = true;
 #endif
 
-    inDirectivePrologue = true;
+    bool inDirectivePrologue = true;
+    TokenStream &tokenStream = parser.tokenStream;
     tokenStream.setOctalCharacterEscape(false);
     for (;;) {
-        tt = tokenStream.peekToken(TSF_OPERAND);
+        TokenKind tt = tokenStream.peekToken(TSF_OPERAND);
         if (tt <= TOK_EOF) {
             if (tt == TOK_EOF)
                 break;
             JS_ASSERT(tt == TOK_ERROR);
-            goto out;
+            return NULL;
         }
 
         pn = parser.statement();
         if (!pn)
-            goto out;
+            return NULL;
 
         if (inDirectivePrologue && !parser.recognizeDirectivePrologue(pn, &inDirectivePrologue))
-            goto out;
+            return NULL;
 
         if (!FoldConstants(cx, pn, bce.parser))
-            goto out;
+            return NULL;
 
         if (!AnalyzeFunctions(bce.parser))
-            goto out;
+            return NULL;
         bce.sc->functionList = NULL;
 
         if (!EmitTree(cx, &bce, pn))
-            goto out;
+            return NULL;
 
 #if JS_HAS_XML_SUPPORT
         if (!pn->isKind(PNK_SEMI) || !pn->pn_kid || !pn->pn_kid->isXMLItem())
@@ -223,30 +222,32 @@ frontend::CompileScript(JSContext *cx, JSObject *scopeChain, StackFrame *callerF
      */
     if (pn && onlyXML && !callerFrame) {
         parser.reportErrorNumber(NULL, JSREPORT_ERROR, JSMSG_XML_WHOLE_PROGRAM);
-        goto out;
+        return NULL;
     }
 #endif
+
+    if (!parser.checkForArgumentsAndRest())
+        return NULL;
 
     /*
      * Nowadays the threaded interpreter needs a stop instruction, so we
      * do have to emit that here.
      */
     if (Emit1(cx, &bce, JSOP_STOP) < 0)
-        goto out;
+        return NULL;
 
     JS_ASSERT(bce.version() == version);
 
+    Rooted<JSScript*> script(cx);
     script = JSScript::NewScriptFromEmitter(cx, &bce);
     if (!script)
-        goto out;
+        return NULL;
 
     JS_ASSERT(script->savedCallerFun == savedCallerFun);
 
     if (!MarkInnerAndOuterFunctions(cx, script))
-        script = NULL;
+        return NULL;
 
-  out:
-    Probes::compileScriptEnd(cx, script, filename, lineno);
     return script;
 }
 
@@ -260,19 +261,18 @@ frontend::CompileFunctionBody(JSContext *cx, JSFunction *fun,
                               Bindings *bindings, const jschar *chars, size_t length,
                               const char *filename, unsigned lineno, JSVersion version)
 {
-    Parser parser(cx, principals, originPrincipals);
-    if (!parser.init(chars, length, filename, lineno, version))
+    Parser parser(cx, principals, originPrincipals, chars, length, filename, lineno, version,
+                  /* cfp = */ NULL, /* foldConstants = */ true, /* compileAndGo = */ false);
+    if (!parser.init())
         return false;
-
-    TokenStream &tokenStream = parser.tokenStream;
 
     SharedContext funsc(cx, /* inFunction = */ true);
 
     TreeContext funtc(&parser, &funsc);
-    if (!funtc.init(cx))
+    if (!funtc.init())
         return NULL;
 
-    BytecodeEmitter funbce(&parser, &funsc, tokenStream.getLineno(),
+    BytecodeEmitter funbce(&parser, &funsc, lineno,
                            /* noScriptRval = */ false, /* needsScriptGlobal = */ false);
     if (!funbce.init())
         return false;
@@ -316,7 +316,7 @@ frontend::CompileFunctionBody(JSContext *cx, JSFunction *fun,
      */
     ParseNode *pn = fn ? parser.functionBody(Parser::StatementListBody) : NULL;
     if (pn) {
-        if (!tokenStream.matchToken(TOK_EOF)) {
+        if (!parser.tokenStream.matchToken(TOK_EOF)) {
             parser.reportErrorNumber(NULL, JSREPORT_ERROR, JSMSG_SYNTAX_ERROR);
             pn = NULL;
         } else if (!FoldConstants(cx, pn, &parser)) {

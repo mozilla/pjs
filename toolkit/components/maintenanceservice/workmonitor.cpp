@@ -24,6 +24,7 @@
 #include "uachelper.h"
 #include "updatehelper.h"
 #include "errors.h"
+#include "prefetch.h"
 
 // Wait 15 minutes for an update operation to run at most.
 // Updates usually take less than a minute so this seems like a 
@@ -80,6 +81,34 @@ IsStatusApplying(LPCWSTR updateDirPath, BOOL &isApplying)
   return TRUE;
 }
 
+
+/**
+ * Gets the installation directory from the arguments passed to updater.exe.
+ *
+ * @param argcTmp    The argc value normally sent to updater.exe
+ * @param argvTmp    The argv value normally sent to updater.exe
+ * @param aResultDir Buffer to hold the installation directory.
+ */
+static BOOL
+GetInstallationDir(int argcTmp, LPWSTR *argvTmp, WCHAR aResultDir[MAX_PATH])
+{
+  if (argcTmp < 2) {
+    return FALSE;
+  }
+  wcscpy(aResultDir, argvTmp[2]);
+  WCHAR* backSlash = wcsrchr(aResultDir, L'\\');
+  // Make sure that the path does not include trailing backslashes
+  if (backSlash && (backSlash[1] == L'\0')) {
+    *backSlash = L'\0';
+  }
+  // PID will be set to -1 if we're supposed to perform a background update.
+  bool backgroundUpdate = (argcTmp == 4 && !wcscmp(argvTmp[3], L"-1"));
+  bool replaceRequest = (argcTmp >= 4 && wcsstr(argvTmp[3], L"/replace"));
+  if (backgroundUpdate || replaceRequest) {
+    return PathRemoveFileSpecW(aResultDir);
+  }
+  return TRUE;
+}
 
 /**
  * Runs an update process as the service using the SYSTEM account.
@@ -256,6 +285,16 @@ ProcessSoftwareUpdateCommand(DWORD argc, LPWSTR *argv)
     return FALSE;
   }
 
+  WCHAR installDir[MAX_PATH] = {L'\0'};
+  if (!GetInstallationDir(argc, argv, installDir)) {
+    LOG(("Could not get the installation directory"));
+    if (!WriteStatusFailure(argv[1],
+                            SERVICE_INSTALLDIR_ERROR)) {
+      LOG(("Could not write update.status for GetInstallationDir failure.\n"));
+    }
+    return FALSE;
+  }
+
   // Make sure the path to the updater to use for the update is local.
   // We do this check to make sure that file locking is available for
   // race condition security checks.
@@ -286,9 +325,9 @@ ProcessSoftwareUpdateCommand(DWORD argc, LPWSTR *argv)
 
   // Verify that the updater.exe that we are executing is the same
   // as the one in the installation directory which we are updating.
-  // The installation dir that we are installing to is argv[2].
-  WCHAR installDirUpdater[MAX_PATH + 1];
-  wcsncpy(installDirUpdater, argv[2], MAX_PATH);
+  // The installation dir that we are installing to is installDir.
+  WCHAR installDirUpdater[MAX_PATH + 1] = {L'\0'};
+  wcsncpy(installDirUpdater, installDir, MAX_PATH);
   if (!PathAppendSafe(installDirUpdater, L"updater.exe")) {
     LOG(("Install directory updater could not be determined.\n"));
     result = FALSE;
@@ -356,7 +395,7 @@ ProcessSoftwareUpdateCommand(DWORD argc, LPWSTR *argv)
   // Check for updater.exe sign problems
   BOOL updaterSignProblem = FALSE;
 #ifndef DISABLE_UPDATER_AUTHENTICODE_CHECK
-  updaterSignProblem = !DoesBinaryMatchAllowedCertificates(argv[2],
+  updaterSignProblem = !DoesBinaryMatchAllowedCertificates(installDir,
                                                            argv[0]);
 #endif
 
@@ -370,7 +409,7 @@ ProcessSoftwareUpdateCommand(DWORD argc, LPWSTR *argv)
 
       // We might not execute code after StartServiceUpdate because
       // the service installer will stop the service if it is running.
-      StartServiceUpdate(argc, argv);
+      StartServiceUpdate(installDir);
     } else {
       result = FALSE;
       LOG(("Error running update process. Updating update.status"
@@ -444,6 +483,8 @@ ExecuteServiceCommand(int argc, LPWSTR *argv)
     // because the service self updates itself and the service
     // installer will stop the service.
     LOG(("Service command %ls complete.\n", argv[2]));
+  } else if (!lstrcmpi(argv[2], L"clear-prefetch")) {
+    result = ClearKnownPrefetch();
   } else {
     LOG(("Service command not recognized: %ls.\n", argv[2]));
     // result is already set to FALSE

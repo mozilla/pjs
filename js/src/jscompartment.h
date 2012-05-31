@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,19 +8,14 @@
 
 #include "mozilla/Attributes.h"
 
-#include "jsclist.h"
 #include "jscntxt.h"
 #include "jsfun.h"
 #include "jsgc.h"
 #include "jsobj.h"
 #include "jsscope.h"
+
 #include "vm/GlobalObject.h"
 #include "vm/RegExpObject.h"
-
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4251) /* Silence warning about JS_FRIEND_API and data members. */
-#endif
 
 namespace js {
 
@@ -168,6 +162,7 @@ struct JSCompartment
 
     size_t                       gcBytes;
     size_t                       gcTriggerBytes;
+    size_t                       gcMaxMallocBytes;
 
     bool                         hold;
     bool                         isSystemCompartment;
@@ -245,8 +240,7 @@ struct JSCompartment
      * gcMaxMallocBytes down to zero. This counter should be used only when it's
      * not possible to know the size of a free.
      */
-    size_t                       gcMallocBytes;
-    size_t                       gcMaxMallocBytes;
+    ptrdiff_t                    gcMallocBytes;
 
     enum { DebugFromC = 1, DebugFromJS = 2 };
 
@@ -274,6 +268,7 @@ struct JSCompartment
     void markTypes(JSTracer *trc);
     void discardJitCode(js::FreeOp *fop);
     void sweep(js::FreeOp *fop, bool releaseTypes);
+    void sweepCrossCompartmentWrappers();
     void purge();
 
     void setGCLastBytes(size_t lastBytes, size_t lastMallocBytes, js::JSGCInvocationKind gckind);
@@ -282,17 +277,15 @@ struct JSCompartment
     void resetGCMallocBytes();
     void setGCMaxMallocBytes(size_t value);
     void updateMallocCounter(size_t nbytes) {
-        size_t oldCount = gcMallocBytes;
-        size_t newCount = oldCount - nbytes;
+        ptrdiff_t oldCount = gcMallocBytes;
+        ptrdiff_t newCount = oldCount - ptrdiff_t(nbytes);
         gcMallocBytes = newCount;
-        // gcMallocBytes will wrap around and be bigger than gcMaxAllocBytes if a signed value
-        // would be < 0
-        if (JS_UNLIKELY(oldCount <= gcMaxMallocBytes && newCount > gcMaxMallocBytes))
+        if (JS_UNLIKELY(newCount <= 0 && oldCount > 0))
             onTooMuchMalloc();
     }
 
     bool isTooMuchMalloc() const {
-        return gcMallocBytes > gcMaxMallocBytes;
+        return gcMallocBytes <= 0;
      }
 
     void onTooMuchMalloc();
@@ -387,10 +380,6 @@ JSContext::setCompartment(JSCompartment *compartment)
     this->compartment = compartment;
     this->inferenceEnabled = compartment ? compartment->types.inferenceEnabled : false;
 }
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
 
 namespace js {
 
@@ -492,7 +481,7 @@ class AutoCompartment
 class ErrorCopier
 {
     AutoCompartment &ac;
-    RootedVarObject scope;
+    RootedObject scope;
 
   public:
     ErrorCopier(AutoCompartment &ac, JSObject *scope) : ac(ac), scope(ac.context, scope) {

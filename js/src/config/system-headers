@@ -21,8 +21,6 @@ all.h
 alloca.h
 alloc.h
 alsa/asoundlib.h
-alsa/pcm.h
-alsa/mixer.h
 android/log.h
 ansi_parms.h
 a.out.h
@@ -596,6 +594,7 @@ proto/exec.h
 psap.h
 Pt.h
 pthread.h
+pthread_np.h
 pwd.h
 Python.h
 QDOffscreen.h

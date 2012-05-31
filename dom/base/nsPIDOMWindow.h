@@ -48,8 +48,8 @@ class nsIArray;
 class nsPIWindowRoot;
 
 #define NS_PIDOMWINDOW_IID \
-{ 0x7a6238d4, 0x7cbc, 0x43b2, \
-  { 0x86, 0x68, 0x92, 0xeb, 0x9e, 0xb0, 0x49, 0xaf } }
+{ 0xfcc2db29, 0x03ba, 0x4eb3, \
+  { 0x96, 0xb8, 0xea, 0x0f, 0x6f, 0x1f, 0x61, 0x55 } }
 
 class nsPIDOMWindow : public nsIDOMWindowInternal
 {
@@ -163,6 +163,10 @@ public:
   nsIDOMDocument* GetExtantDocument() const
   {
     return mDocument;
+  }
+  nsIDocument* GetExtantDoc() const
+  {
+    return mDoc;
   }
 
   // Internal getter/setter for the frame element, this version of the
@@ -347,9 +351,15 @@ public:
   }
 
   /**
-   * Set or unset the docshell in the window.
+   * Set the docshell in the window.  Must not be called with a null docshell
+   * (use DetachFromDocShell for that).
    */
   virtual void SetDocShell(nsIDocShell *aDocShell) = 0;
+
+  /**
+   * Detach an outer window from its docshell.
+   */
+  virtual void DetachFromDocShell() = 0;
 
   /**
    * Set a new document in the window. Calling this method will in
@@ -596,6 +606,7 @@ protected:
   // sure you keep them in sync!
   nsCOMPtr<nsIDOMEventTarget> mChromeEventHandler; // strong
   nsCOMPtr<nsIDOMDocument> mDocument; // strong
+  nsCOMPtr<nsIDocument> mDoc; // strong, for fast access
 
   nsCOMPtr<nsIDOMEventTarget> mParentTarget; // strong
 

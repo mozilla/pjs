@@ -287,8 +287,7 @@ nsHTMLAnchorElement::IsHTMLFocusable(bool aWithMouse,
 
   if (!HasAttr(kNameSpaceID_None, nsGkAtoms::tabindex)) {
     // check whether we're actually a link
-    nsCOMPtr<nsIURI> absURI;
-    if (!IsLink(getter_AddRefs(absURI))) {
+    if (!Link::HasURI()) {
       // Not tabbable or focusable without href (bug 17605), unless
       // forced to be via presence of nonnegative tabindex attribute
       if (aTabIndex) {
@@ -414,6 +413,12 @@ nsHTMLAnchorElement::GetLinkState() const
 already_AddRefed<nsIURI>
 nsHTMLAnchorElement::GetHrefURI() const
 {
+  nsIURI* uri = Link::GetCachedURI();
+  if (uri) {
+    NS_ADDREF(uri);
+    return uri;
+  }
+
   return GetHrefURIForAnchors();
 }
 

@@ -40,6 +40,7 @@
 #include "nsDOMMutationObserver.h"
 
 using namespace mozilla::dom;
+using namespace xpc;
 
 NS_IMPL_THREADSAFE_ISUPPORTS7(nsXPConnect,
                               nsIXPConnect,
@@ -1914,7 +1915,7 @@ nsXPConnect::CreateSandbox(JSContext *cx, nsIPrincipal *principal,
     jsval rval = JSVAL_VOID;
     AUTO_MARK_JSVAL(ccx, &rval);
 
-    nsresult rv = xpc_CreateSandboxObject(cx, &rval, principal, NULL, false,
+    nsresult rv = xpc_CreateSandboxObject(cx, &rval, principal, NULL, false, true,
                                           EmptyCString());
     NS_ASSERTION(NS_FAILED(rv) || !JSVAL_IS_PRIMITIVE(rval),
                  "Bad return value from xpc_CreateSandboxObject()!");
@@ -2609,6 +2610,28 @@ DumpJSHeap(FILE* file)
     js::DumpHeapComplete(xpc->GetRuntime()->GetJSRuntime(), file);
 }
 #endif
+
+void
+SetLocationForGlobal(JSObject *global, const nsACString& location)
+{
+    MOZ_ASSERT(global);
+
+    CompartmentPrivate *priv = GetCompartmentPrivate(global);
+    MOZ_ASSERT(priv, "No compartment private");
+
+    priv->SetLocation(location);
+}
+
+void
+SetLocationForGlobal(JSObject *global, nsIURI *locationURI)
+{
+    MOZ_ASSERT(global);
+
+    CompartmentPrivate *priv = GetCompartmentPrivate(global);
+    MOZ_ASSERT(priv, "No compartment private");
+
+    priv->SetLocation(locationURI);
+}
 
 } // namespace xpc
 

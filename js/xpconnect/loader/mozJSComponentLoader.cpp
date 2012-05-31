@@ -403,7 +403,7 @@ mozJSComponentLoader::ReallyInit()
         return NS_ERROR_OUT_OF_MEMORY;
 
     uint32_t options = JS_GetOptions(mContext);
-    JS_SetOptions(mContext, options | JSOPTION_XML);
+    JS_SetOptions(mContext, options | JSOPTION_ALLOW_XML | JSOPTION_MOAR_XML);
 
     // Always use the latest js version
     JS_SetVersion(mContext, JSVERSION_LATEST);
@@ -568,6 +568,10 @@ mozJSComponentLoader::LoadModule(FileLocation &aFile)
 
     // Cache this module for later
     mModules.Put(spec, entry);
+
+    // Set the location information for the new global, so that tools like
+    // about:memory may use that information
+    xpc::SetLocationForGlobal(entry->global, spec);
 
     // The hash owns the ModuleEntry now, forget about it
     return entry.forget();
@@ -1125,6 +1129,10 @@ mozJSComponentLoader::ImportInto(const nsACString & aLocation,
             // Something failed, but we don't know what it is, guess.
             return NS_ERROR_FILE_NOT_FOUND;
         }
+
+        // Set the location information for the new global, so that tools like
+        // about:memory may use that information
+        xpc::SetLocationForGlobal(newEntry->global, aLocation);
 
         mod = newEntry;
     }

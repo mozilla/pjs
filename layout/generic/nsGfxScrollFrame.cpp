@@ -95,16 +95,6 @@ nsHTMLScrollFrame::DestroyFrom(nsIFrame* aDestructRoot)
 }
 
 NS_IMETHODIMP
-nsHTMLScrollFrame::Init(nsIContent* aContent,
-                        nsIFrame*   aParent,
-                        nsIFrame*   aPrevInFlow)
-{
-  nsresult rv = nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
-  mInner.Init();
-  return rv;
-}
-
-NS_IMETHODIMP
 nsHTMLScrollFrame::SetInitialChildList(ChildListID  aListID,
                                        nsFrameList& aChildList)
 {
@@ -948,7 +938,7 @@ nsHTMLScrollFrame::GetFrameName(nsAString& aResult) const
 #endif
 
 #ifdef ACCESSIBILITY
-already_AddRefed<nsAccessible>
+already_AddRefed<Accessible>
 nsHTMLScrollFrame::CreateAccessible()
 {
   // Create an accessible regardless of focusable state because the state can be
@@ -1037,16 +1027,6 @@ nsXULScrollFrame::DestroyFrom(nsIFrame* aDestructRoot)
 {
   mInner.Destroy();
   nsBoxFrame::DestroyFrom(aDestructRoot);
-}
-
-NS_IMETHODIMP
-nsXULScrollFrame::Init(nsIContent* aContent,
-                       nsIFrame*   aParent,
-                       nsIFrame*   aPrevInFlow)
-{
-  nsresult rv = nsBoxFrame::Init(aContent, aParent, aPrevInFlow);
-  mInner.Init();
-  return rv;
 }
 
 NS_IMETHODIMP
@@ -1427,8 +1407,8 @@ nsPoint
 nsGfxScrollFrameInner::AsyncScroll::PositionAt(TimeStamp aTime) {
   double progressX = mTimingFunctionX.GetSplineValue(ProgressAt(aTime));
   double progressY = mTimingFunctionY.GetSplineValue(ProgressAt(aTime));
-  return nsPoint((1 - progressX) * mStartPos.x + progressX * mDestination.x,
-                 (1 - progressY) * mStartPos.y + progressY * mDestination.y);
+  return nsPoint(NSToCoordRound((1 - progressX) * mStartPos.x + progressX * mDestination.x),
+                 NSToCoordRound((1 - progressY) * mStartPos.y + progressY * mDestination.y));
 }
 
 nsSize
@@ -1545,7 +1525,7 @@ nsGfxScrollFrameInner::AsyncScroll::VelocityComponent(double aTimeProgress,
 
   const TimeDuration oneSecond = TimeDuration::FromSeconds(1);
   double slope = dxy / dt;
-  return (slope * (aDestination - aStart) / (mDuration / oneSecond));
+  return NSToCoordRound(slope * (aDestination - aStart) / (mDuration / oneSecond));
 }
 
 void
@@ -1643,14 +1623,6 @@ nsGfxScrollFrameInner::~nsGfxScrollFrameInner()
   }
 }
 
-void
-nsGfxScrollFrameInner::Init()
-{
-  if (mOuter->GetStateBits() & NS_FRAME_FONT_INFLATION_CONTAINER) {
-    mOuter->AddStateBits(NS_FRAME_FONT_INFLATION_FLOW_ROOT);
-  }
-}
-
 /*
  * Callback function from AsyncScroll, used in nsGfxScrollFrameInner::ScrollTo
  */
@@ -1661,12 +1633,15 @@ nsGfxScrollFrameInner::AsyncScrollCallback(void* anInstance, mozilla::TimeStamp 
   if (!self || !self->mAsyncScroll)
     return;
 
+  nsRect range = self->mAsyncScroll->mRange;
   if (self->mAsyncScroll->mIsSmoothScroll) {
     if (!self->mAsyncScroll->IsFinished(aTime)) {
       nsPoint destination = self->mAsyncScroll->PositionAt(aTime);
       nsPoint start = self->mAsyncScroll->mStartPos;
       // Allow this scroll operation to land on any pixel boundary in the
-      // right direction.
+      // right direction (as well as anywhere in the final allowed range,
+      // since we don't want intermediate steps to be more constrained than the
+      // final step!).
       static const int veryLargeDistance = nscoord_MAX/4;
       nsRect unlimitedRange(0, 0, veryLargeDistance, veryLargeDistance);
       if (destination.x < start.x) {
@@ -1679,13 +1654,13 @@ nsGfxScrollFrameInner::AsyncScrollCallback(void* anInstance, mozilla::TimeStamp 
       } else if (destination.y == start.y) {
         unlimitedRange.height = 0;
       }
-      self->ScrollToImpl(destination, unlimitedRange + destination);
+      self->ScrollToImpl(destination,
+                         (unlimitedRange + destination).UnionEdges(range));
       return;
     }
   }
 
   // Apply desired destination range since this is the last step of scrolling.
-  nsRect range = self->mAsyncScroll->mRange;
   self->mAsyncScroll = nsnull;
   self->ScrollToImpl(self->mDestination, range);
 }
@@ -2536,7 +2511,7 @@ nsGfxScrollFrameInner::GetLineScrollAmount() const
 {
   nsRefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(mOuter, getter_AddRefs(fm),
-    nsLayoutUtils::FontSizeInflationFor(mOuter, nsLayoutUtils::eNotInReflow));
+    nsLayoutUtils::FontSizeInflationFor(mOuter));
   NS_ASSERTION(fm, "FontMetrics is null, assuming fontHeight == 1 appunit");
   nscoord fontHeight = 1;
   if (fm) {

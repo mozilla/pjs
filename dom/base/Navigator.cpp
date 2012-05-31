@@ -13,6 +13,7 @@
 #include "nsMimeTypeArray.h"
 #include "nsDesktopNotification.h"
 #include "nsGeolocation.h"
+#include "nsDeviceStorage.h"
 #include "nsIHttpProtocolHandler.h"
 #include "nsICachingChannel.h"
 #include "nsIDocShell.h"
@@ -41,8 +42,8 @@
 #include "TelephonyFactory.h"
 #endif
 #ifdef MOZ_B2G_BT
-#include "nsIDOMBluetoothAdapter.h"
-#include "BluetoothAdapter.h"
+#include "nsIDOMBluetoothManager.h"
+#include "BluetoothManager.h"
 #endif
 
 // This should not be in the namespace.
@@ -89,6 +90,7 @@ NS_INTERFACE_MAP_BEGIN(Navigator)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMNavigator)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigator)
   NS_INTERFACE_MAP_ENTRY(nsIDOMClientInformation)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorDeviceStorage)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorGeolocation)
   NS_INTERFACE_MAP_ENTRY(nsIDOMMozNavigatorBattery)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorDesktopNotification)
@@ -634,10 +636,10 @@ VibrateWindowListener::RemoveListener()
  */
 bool
 GetVibrationDurationFromJsval(const jsval& aJSVal, JSContext* cx,
-                              PRInt32 *aOut)
+                              int32_t* aOut)
 {
   return JS_ValueToInt32(cx, aJSVal, aOut) &&
-         *aOut >= 0 && static_cast<PRUint32>(*aOut) <= sMaxVibrateMS;
+         *aOut >= 0 && static_cast<uint32_t>(*aOut) <= sMaxVibrateMS;
 }
 
 } // anonymous namespace
@@ -658,7 +660,7 @@ Navigator::MozVibrate(const jsval& aPattern, JSContext* cx)
     return NS_OK;
   }
 
-  nsAutoTArray<PRUint32, 8> pattern;
+  nsAutoTArray<uint32_t, 8> pattern;
 
   // null or undefined pattern is an error.
   if (JSVAL_IS_NULL(aPattern) || JSVAL_IS_VOID(aPattern)) {
@@ -666,7 +668,7 @@ Navigator::MozVibrate(const jsval& aPattern, JSContext* cx)
   }
 
   if (JSVAL_IS_PRIMITIVE(aPattern)) {
-    PRInt32 p;
+    int32_t p;
     if (GetVibrationDurationFromJsval(aPattern, cx, &p)) {
       pattern.AppendElement(p);
     }
@@ -684,7 +686,7 @@ Navigator::MozVibrate(const jsval& aPattern, JSContext* cx)
 
     for (PRUint32 i = 0; i < length; ++i) {
       jsval v;
-      PRInt32 pv;
+      int32_t pv;
       if (JS_GetElement(cx, obj, i, &v) &&
           GetVibrationDurationFromJsval(v, cx, &pv)) {
         pattern[i] = pv;
@@ -837,6 +839,26 @@ Navigator::MozIsLocallyAvailable(const nsAString &aURI,
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
   return httpChannel->GetRequestSucceeded(aIsAvailable);
+}
+
+//*****************************************************************************
+//    Navigator::nsIDOMNavigatorDeviceStorage
+//*****************************************************************************
+
+NS_IMETHODIMP Navigator::GetDeviceStorage(const nsAString &aType, nsIVariant** _retval)
+{
+  if (!Preferences::GetBool("device.storage.enabled", false)) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mWindow));
+
+  if (!win || !win->GetOuterWindow() || !win->GetDocShell()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsDOMDeviceStorage::CreateDeviceStoragesFor(win, aType, _retval);
+  return NS_OK;
 }
 
 //*****************************************************************************
@@ -1139,15 +1161,16 @@ Navigator::GetMozMobileConnection(nsIDOMMozMobileConnection** aMobileConnection)
 //*****************************************************************************
 
 NS_IMETHODIMP
-Navigator::GetMozBluetooth(nsIDOMBluetoothAdapter** aBluetooth)
+Navigator::GetMozBluetooth(nsIDOMBluetoothManager** aBluetooth)
 {
-  nsCOMPtr<nsIDOMBluetoothAdapter> bluetooth = mBluetooth;
+  nsCOMPtr<nsIDOMBluetoothManager> bluetooth = mBluetooth;
 
   if (!bluetooth) {
     nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
     NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
-    mBluetooth = new bluetooth::BluetoothAdapter(window);
+    nsresult rv = NS_NewBluetoothManager(window, getter_AddRefs(mBluetooth));
+    NS_ENSURE_SUCCESS(rv, rv);
 
     bluetooth = mBluetooth;
   }
