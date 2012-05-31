@@ -916,8 +916,8 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
         for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
             jsid pid = *v, cid = *v;
 
-            if (!m->wrapId(&cid))
-                return false;
+//            if (!m->wrapId(&cid))
+//                return false;
 
             // stop if this prop is already present on the child
             JSBool foundp;
@@ -1332,7 +1332,7 @@ TaskContext *Runner::createTaskContext(TaskHandle *handle) {
 
     if (!JS_InitStandardClasses(_cx, global))
         return NULL;
-        
+
     return TaskContext::create(_cx, handle, this, global);
 }
 
@@ -1347,7 +1347,7 @@ ThreadPool *ThreadPool::create() {
     PRLock *lock = check_null(PR_NewLock());
     PRCondVar *condVar = check_null(PR_NewCondVar(lock));
 
-    const int threadCount = 1; // for now
+    const int threadCount = 2; // for now
 
     PRThread **threads = check_null(new PRThread*[threadCount]);
     memset(threads, 0, sizeof(PRThread*) * threadCount);

@@ -123,7 +123,8 @@ public:
     bool wrap(StrictPropertyOp *propp);
     bool wrap(PropertyDescriptor *desc);
     bool wrap(JSObject **objp);
-    bool wrap(HeapPtrAtom *objp);    
+    bool wrap(HeapPtrAtom *objp);
+
 
     static bool IsCrossThreadWrapper(const JSObject *wrapper);
     

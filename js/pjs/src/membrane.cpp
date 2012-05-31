@@ -176,6 +176,7 @@ bool Membrane::wrap(JSObject **objp)
     if (!wrap(tvr.addr()))
         return false;
     *objp = &tvr.value().toObject();
+    _childCompartment->wrap(_childCx,objp);
     return true;
 }
 
@@ -246,8 +247,9 @@ bool Membrane::wrap(Value *vp) {
 
     JS_CHECK_RECURSION(cx, return false);
     
-    if (!vp->isMarkable())
+    if (!vp->isMarkable()) {
         return true;
+    }
 
     /* Unwrap incoming objects. */
     if (vp->isObject()) {
@@ -287,9 +289,10 @@ bool Membrane::wrap(Value *vp) {
 #       ifdef DEBUG_DUMPS
         {
             char *c_str = JS_EncodeString(cx, wrapped);
-            DEBUG("Wrapping string %p to %p (%s) for %p->%p\n",
+            DEBUG("Wrapping string %p to %p (%s) for %p->%p (%p)\n",
                   str, wrapped, c_str,
-                  _parentCx, _childCx);
+                  _parentCx, _childCx,
+                  _childCompartment);
             JS_free(cx, c_str);
         }
 #       endif        
@@ -327,10 +330,10 @@ bool Membrane::wrap(Value *vp) {
         JSFunction *cloned_fn = wrapper->toFunction();
         wrap(&cloned_fn->atom); // FIXME: total hack
         vp->setObject(*wrapper);
-        DEBUG("Wrapping fn %p/%p to %p/%p for %p->%p\n",
+        DEBUG("Wrapping fn %p/%p to %p/%p for %p->%p (%p)\n",
               fn, fn->maybeScript(),
               wrapper, wrapper->toFunction()->maybeScript(),
-              _parentCx, _childCx);
+              _parentCx, _childCx, _childCompartment);
 
         if (!put(OBJECT_TO_JSVAL(obj), *vp))
             return false;
@@ -380,7 +383,7 @@ bool Membrane::unwrap(Value *vp) {
     JSContext *cx = _childCx;
 
     JS_CHECK_RECURSION(cx, return false);
-    
+
     if (!vp->isMarkable())
         return true;
 
@@ -415,7 +418,7 @@ bool Membrane::unwrap(Value *vp) {
                   str, c_str, _parentCx, _childCx);
             JS_free(cx, c_str);
         }
-#       endif        
+#       endif
 
         // FIXME: This lookup is probably not actually thread-safe.
         JSAtom *atom = js_GetExistingStringAtom(_parentCx, chars, length);
