@@ -53,7 +53,7 @@
 #include "nsHTMLParts.h"
 #include "nsISelection.h"
 #include "nsISelectionPrivate.h"
-#include "nsTypedSelection.h"
+#include "mozilla/Selection.h"
 #include "nsLayoutCID.h"
 #include "nsGkAtoms.h"
 #include "nsIDOMRange.h"
@@ -483,6 +483,28 @@ public:
   nsRefPtr<PresShell> mPresShell;
 };
 
+class nsBeforeFirstPaintDispatcher : public nsRunnable
+{
+public:
+  nsBeforeFirstPaintDispatcher(nsIDocument* aDocument)
+  : mDocument(aDocument) {}
+
+  // Fires the "before-first-paint" event so that interested parties (right now, the
+  // mobile browser) are aware of it.
+  NS_IMETHOD Run()
+  {
+    nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+    if (observerService) {
+      observerService->NotifyObservers(mDocument, "before-first-paint", NULL);
+    }
+    return NS_OK;
+  }
+
+private:
+  nsCOMPtr<nsIDocument> mDocument;
+};
+
 bool PresShell::sDisableNonTestMouseEvents = false;
 
 #ifdef PR_LOGGING
@@ -849,6 +871,9 @@ PresShell::Init(nsIDocument* aDocument,
 
   // Get our activeness from the docShell.
   QueryIsActive();
+
+  // Setup our font inflation preferences.
+  SetupFontInflation();
 
   return NS_OK;
 }
@@ -2491,6 +2516,8 @@ PresShell::FrameNeedsReflow(nsIFrame *aFrame, IntrinsicDirty aIntrinsicDirty,
     if (aIntrinsicDirty == eStyleChange) {
       // Mark all descendants dirty (using an nsTArray stack rather than
       // recursion).
+      // Note that nsHTMLReflowState::InitResizeFlags has some similar
+      // code; see comments there for how and why it differs.
       nsAutoTArray<nsIFrame*, 32> stack;
       stack.AppendElement(subtreeRoot);
 
@@ -3071,7 +3098,9 @@ static void ScrollToShowRect(nsIScrollableFrame*      aScrollFrame,
                              PRUint32                 aFlags)
 {
   nsPoint scrollPt = aScrollFrame->GetScrollPosition();
-  nsRect visibleRect(scrollPt, aScrollFrame->GetScrollPortRect().Size());
+  nsRect visibleRect(scrollPt,
+                     aScrollFrame->GetScrollPositionClampingScrollPortSize());
+
   nsSize lineSize;
   // Don't call GetLineScrollAmount unless we actually need it. Not only
   // does this save time, but it's not safe to call GetLineScrollAmount
@@ -3509,7 +3538,14 @@ PresShell::UnsuppressAndInvalidate()
     // No point; we're about to be torn down anyway.
     return;
   }
-  
+
+  if (!mDocument->IsResourceDoc()) {
+    // Notify observers that a new page is about to be drawn. Execute this
+    // as soon as it is safe to run JS, which is guaranteed to be before we
+    // go back to the event loop and actually draw the page.
+    nsContentUtils::AddScriptRunner(new nsBeforeFirstPaintDispatcher(mDocument));
+  }
+
   mPaintingSuppressed = false;
   nsIFrame* rootFrame = mFrameConstructor->GetRootFrame();
   if (rootFrame) {
@@ -6351,7 +6387,7 @@ PresShell::HandleEventInternal(nsEvent* aEvent, nsEventStatus* aStatus)
     rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame, aStatus);
 
     // 2. Give event to the DOM for third party and JS use.
-    if (GetCurrentEventFrame() && NS_SUCCEEDED(rv)) {
+    if (NS_SUCCEEDED(rv)) {
       bool wasHandlingKeyBoardEvent =
         nsContentUtils::IsHandlingKeyBoardEvent();
       if (aEvent->eventStructType == NS_KEY_EVENT) {
@@ -6372,8 +6408,10 @@ PresShell::HandleEventInternal(nsEvent* aEvent, nsEventStatus* aStatus)
         }
         else {
           nsCOMPtr<nsIContent> targetContent;
-          rv = mCurrentEventFrame->GetContentForEvent(aEvent,
-                                                      getter_AddRefs(targetContent));
+          if (mCurrentEventFrame) {
+            rv = mCurrentEventFrame->GetContentForEvent(aEvent,
+                                                        getter_AddRefs(targetContent));
+          }
           if (NS_SUCCEEDED(rv) && targetContent) {
             nsEventDispatcher::Dispatch(targetContent, mPresContext, aEvent,
                                         nsnull, aStatus, &eventCB);
@@ -8007,7 +8045,7 @@ DumpToPNG(nsIPresShell* shell, nsAString& name) {
                         imgIEncoder::INPUT_FORMAT_HOSTARGB, EmptyString());
 
   // XXX not sure if this is the right way to write to a file
-  nsCOMPtr<nsILocalFile> file = do_CreateInstance("@mozilla.org/file/local;1");
+  nsCOMPtr<nsIFile> file = do_CreateInstance("@mozilla.org/file/local;1");
   NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
   rv = file->InitWithPath(name);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -8889,13 +8927,15 @@ PresShell::GetRootPresShell()
 
 void
 PresShell::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
-                               size_t *aArenasSize,
+                               nsArenaMemoryStats *aArenaObjectsSize,
+                               size_t *aPresShellSize,
                                size_t *aStyleSetsSize,
                                size_t *aTextRunsSize,
-                               size_t *aPresContextSize) const
+                               size_t *aPresContextSize)
 {
-  *aArenasSize = aMallocSizeOf(this);
-  *aArenasSize += mFrameArena.SizeOfExcludingThis(aMallocSizeOf);
+  mFrameArena.SizeOfExcludingThis(aMallocSizeOf, aArenaObjectsSize);
+  *aPresShellSize = aMallocSizeOf(this);
+  *aPresShellSize += aArenaObjectsSize->mOther;
 
   *aStyleSetsSize = StyleSet()->SizeOfIncludingThis(aMallocSizeOf);
 
@@ -8927,4 +8967,12 @@ nsIPresShell::SetScrollPositionClampingScrollPortSize(nscoord aWidth, nscoord aH
   mScrollPositionClampingScrollPortSizeSet = true;
   mScrollPositionClampingScrollPortSize.width = aWidth;
   mScrollPositionClampingScrollPortSize.height = aHeight;
+}
+
+void
+PresShell::SetupFontInflation()
+{
+  mFontSizeInflationEmPerLine = nsLayoutUtils::FontSizeInflationEmPerLine();
+  mFontSizeInflationMinTwips = nsLayoutUtils::FontSizeInflationMinTwips();
+  mFontSizeInflationLineThreshold = nsLayoutUtils::FontSizeInflationLineThreshold();
 }

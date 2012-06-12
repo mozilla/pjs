@@ -1034,9 +1034,7 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
   // We need to generate a new change list entry for every frame whose style
   // comparision returns one of these hints. These hints don't automatically
   // update all their descendant frames.
-  aMinChange = NS_SubtractHint(aMinChange, nsChangeHint_UpdateTransformLayer);
-  aMinChange = NS_SubtractHint(aMinChange, nsChangeHint_UpdateOpacityLayer);
-  aMinChange = NS_SubtractHint(aMinChange, nsChangeHint_UpdateOverflow);
+  aMinChange = NS_SubtractHint(aMinChange, nsChangeHint_NonInherited_Hints);
 
   // It would be nice if we could make stronger assertions here; they
   // would let us simplify the ?: expressions below setting |content|
@@ -1421,7 +1419,10 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
       // Make sure not to do this for pseudo-frames or frames that
       // can't have generated content.
       if (!pseudoTag &&
-          (aFrame->GetStateBits() & NS_FRAME_MAY_HAVE_GENERATED_CONTENT)) {
+          ((aFrame->GetStateBits() & NS_FRAME_MAY_HAVE_GENERATED_CONTENT) ||
+           // Our content insertion frame might have gotten flagged
+           (aFrame->GetContentInsertionFrame()->GetStateBits() &
+            NS_FRAME_MAY_HAVE_GENERATED_CONTENT))) {
         // Check for a new :before pseudo and an existing :before
         // frame, but only if the frame is the first continuation.
         nsIFrame* prevContinuation = aFrame->GetPrevContinuation();
@@ -1449,7 +1450,10 @@ nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
       // Make sure not to do this for pseudo-frames or frames that
       // can't have generated content.
       if (!pseudoTag &&
-          (aFrame->GetStateBits() & NS_FRAME_MAY_HAVE_GENERATED_CONTENT)) {
+          ((aFrame->GetStateBits() & NS_FRAME_MAY_HAVE_GENERATED_CONTENT) ||
+           // Our content insertion frame might have gotten flagged
+           (aFrame->GetContentInsertionFrame()->GetStateBits() &
+            NS_FRAME_MAY_HAVE_GENERATED_CONTENT))) {
         // Check for new :after content, but only if the frame is the
         // last continuation.
         nsIFrame* nextContinuation = aFrame->GetNextContinuation();

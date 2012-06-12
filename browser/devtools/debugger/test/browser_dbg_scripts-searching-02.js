@@ -105,7 +105,7 @@ function secondSearch() {
       });
     }
   });
-  write(".*-02\.js@debugger;");
+  write(".*-02\.js#debugger;");
 }
 
 function finalCheck() {
@@ -116,7 +116,7 @@ function finalCheck() {
   is(gScripts.visibleItemsCount, 2,
     "Not all the scripts are shown after the search. (3)");
 
-  closeDebuggerAndFinish(gTab);
+  closeDebuggerAndFinish();
 }
 
 function clear() {

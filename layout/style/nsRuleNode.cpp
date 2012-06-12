@@ -13,7 +13,6 @@
 #include "nscore.h"
 #include "nsIServiceManager.h"
 #include "nsIWidget.h"
-#include "mozilla/LookAndFeel.h"
 #include "nsIPresShell.h"
 #include "nsFontMetrics.h"
 #include "gfxFont.h"
@@ -36,9 +35,12 @@
 #include "nsCSSProps.h"
 #include "nsTArray.h"
 #include "nsContentUtils.h"
-#include "mozilla/dom/Element.h"
 #include "CSSCalc.h"
 #include "nsPrintfCString.h"
+
+#include "mozilla/Assertions.h"
+#include "mozilla/dom/Element.h"
+#include "mozilla/LookAndFeel.h"
 #include "mozilla/Util.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -733,33 +735,52 @@ static bool SetColor(const nsCSSValue& aValue, const nscolor aParentColor,
       }
     }
     else {
+      aResult = NS_RGB(0, 0, 0);
+      result = false;
       switch (intValue) {
         case NS_COLOR_MOZ_HYPERLINKTEXT:
-          aResult = aPresContext->DefaultLinkColor();
+          if (aPresContext) {
+            aResult = aPresContext->DefaultLinkColor();
+            result = true;
+          }
           break;
         case NS_COLOR_MOZ_VISITEDHYPERLINKTEXT:
-          aResult = aPresContext->DefaultVisitedLinkColor();
+          if (aPresContext) {
+            aResult = aPresContext->DefaultVisitedLinkColor();
+            result = true;
+          }
           break;
         case NS_COLOR_MOZ_ACTIVEHYPERLINKTEXT:
-          aResult = aPresContext->DefaultActiveLinkColor();
+          if (aPresContext) {
+            aResult = aPresContext->DefaultActiveLinkColor();
+            result = true;
+          }
           break;
         case NS_COLOR_CURRENTCOLOR:
           // The data computed from this can't be shared in the rule tree
           // because they could be used on a node with a different color
           aCanStoreInRuleTree = false;
-          aResult = aContext->GetStyleColor()->mColor;
+          if (aContext) {
+            aResult = aContext->GetStyleColor()->mColor;
+            result = true;
+          }
           break;
         case NS_COLOR_MOZ_DEFAULT_COLOR:
-          aResult = aPresContext->DefaultColor();
+          if (aPresContext) {
+            aResult = aPresContext->DefaultColor();
+            result = true;
+          }
           break;
         case NS_COLOR_MOZ_DEFAULT_BACKGROUND_COLOR:
-          aResult = aPresContext->DefaultBackgroundColor();
+          if (aPresContext) {
+            aResult = aPresContext->DefaultBackgroundColor();
+            result = true;
+          }
           break;
         default:
           NS_NOTREACHED("Should never have an unknown negative colorID.");
           break;
       }
-      result = true;
     }
   }
   else if (eCSSUnit_Inherit == unit) {
@@ -1108,7 +1129,7 @@ void*
 nsRuleNode::operator new(size_t sz, nsPresContext* aPresContext) CPP_THROW_NEW
 {
   // Check the recycle list first.
-  return aPresContext->AllocateFromShell(sz);
+  return aPresContext->PresShell()->AllocateByObjectID(nsPresArena::nsRuleNode_id, sz);
 }
 
 /* static */ PLDHashOperator
@@ -1171,7 +1192,7 @@ nsRuleNode::DestroyInternal(nsRuleNode ***aDestroyQueueTail)
 
   // Don't let the memory be freed, since it will be recycled
   // instead. Don't call the global operator delete.
-  mPresContext->FreeToShell(sizeof(nsRuleNode), this);
+  mPresContext->PresShell()->FreeByObjectID(nsPresArena::nsRuleNode_id, this);
 }
 
 nsRuleNode* nsRuleNode::CreateRootNode(nsPresContext* aPresContext)
@@ -6362,7 +6383,7 @@ nsRuleNode::ComputePositionData(void* aStartStruct,
            SETCOORD_LPAEH | SETCOORD_INITIAL_AUTO | SETCOORD_STORE_CALC,
            aContext, mPresContext, canStoreInRuleTree);
   SetCoord(*aRuleData->ValueForMinWidth(), pos->mMinWidth, parentPos->mMinWidth,
-           SETCOORD_LPEH | SETCOORD_INITIAL_ZERO | SETCOORD_STORE_CALC,
+           SETCOORD_LPAEH | SETCOORD_INITIAL_AUTO | SETCOORD_STORE_CALC,
            aContext, mPresContext, canStoreInRuleTree);
   SetCoord(*aRuleData->ValueForMaxWidth(), pos->mMaxWidth, parentPos->mMaxWidth,
            SETCOORD_LPOEH | SETCOORD_INITIAL_NONE | SETCOORD_STORE_CALC,
@@ -6372,11 +6393,20 @@ nsRuleNode::ComputePositionData(void* aStartStruct,
            SETCOORD_LPAH | SETCOORD_INITIAL_AUTO | SETCOORD_STORE_CALC,
            aContext, mPresContext, canStoreInRuleTree);
   SetCoord(*aRuleData->ValueForMinHeight(), pos->mMinHeight, parentPos->mMinHeight,
-           SETCOORD_LPH | SETCOORD_INITIAL_ZERO | SETCOORD_STORE_CALC,
+           SETCOORD_LPAH | SETCOORD_INITIAL_AUTO | SETCOORD_STORE_CALC,
            aContext, mPresContext, canStoreInRuleTree);
   SetCoord(*aRuleData->ValueForMaxHeight(), pos->mMaxHeight, parentPos->mMaxHeight,
            SETCOORD_LPOH | SETCOORD_INITIAL_NONE | SETCOORD_STORE_CALC,
            aContext, mPresContext, canStoreInRuleTree);
+
+
+  // Handle 'auto' values for min-width / min-height
+  if (pos->mMinWidth.GetUnit() == eStyleUnit_Auto) {
+    pos->mMinWidth.SetCoordValue(0);
+  }
+  if (pos->mMinHeight.GetUnit() == eStyleUnit_Auto) {
+    pos->mMinHeight.SetCoordValue(0);
+  }
 
   // box-sizing: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForBoxSizing(),
@@ -7713,4 +7743,21 @@ nsRuleNode::HasAuthorSpecifiedRules(nsStyleContext* aStyleContext,
   } while (haveExplicitUAInherit && styleContext);
 
   return false;
+}
+
+/* static */
+bool
+nsRuleNode::ComputeColor(const nsCSSValue& aValue, nsPresContext* aPresContext,
+                         nsStyleContext* aStyleContext, nscolor& aResult)
+{
+  MOZ_ASSERT(aValue.GetUnit() != eCSSUnit_Inherit,
+             "aValue shouldn't have eCSSUnit_Inherit");
+  MOZ_ASSERT(aValue.GetUnit() != eCSSUnit_Initial,
+             "aValue shouldn't have eCSSUnit_Initial");
+
+  bool canStoreInRuleTree;
+  bool ok = SetColor(aValue, NS_RGB(0, 0, 0), aPresContext, aStyleContext,
+                     aResult, canStoreInRuleTree);
+  MOZ_ASSERT(ok || !(aPresContext && aStyleContext));
+  return ok;
 }

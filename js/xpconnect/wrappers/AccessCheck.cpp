@@ -455,12 +455,10 @@ ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapper, jsid id, Wrapper:
         perm = PermitObjectAccess;
         return true;
     }
-    if (act == Wrapper::PUNCTURE) {
-        perm = DenyAccess;
-        return false;
-    }
 
     perm = DenyAccess;
+    if (act == Wrapper::PUNCTURE)
+        return PermitIfUniversalXPConnect(cx, id, act, perm); // Deny
 
     jsid exposedPropsId = GetRTIdByIndex(cx, XPCJSRuntime::IDX_EXPOSEDPROPS);
 
@@ -493,7 +491,8 @@ ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapper, jsid id, Wrapper:
                 nsCOMPtr<nsIDocument> doc =
                     do_QueryInterface(win->GetExtantDocument());
                 if (doc) {
-                    doc->WarnOnceAbout(nsIDocument::eNoExposedProps);
+                    doc->WarnOnceAbout(nsIDocument::eNoExposedProps,
+                                       /* asError = */ true);
                 }
             }
 

@@ -53,7 +53,6 @@
 #include "nsStyleStructInlines.h"
 #include "nsIAppShell.h"
 #include "prenv.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsIDOMEventTarget.h"
 #include "nsObjectFrame.h"
 #include "nsTransitionManager.h"
@@ -109,18 +108,20 @@ private:
 
 } // anonymous namespace
 
-static nscolor
-MakeColorPref(const nsString& aColor)
+nscolor
+nsPresContext::MakeColorPref(const nsString& aColor)
 {
-  nscolor color;
   nsCSSParser parser;
-  nsresult rv =
-    parser.ParseColorString(aColor, nsnull, 0, &color);
-  if (NS_FAILED(rv)) {
+  nsCSSValue value;
+  if (!parser.ParseColorString(aColor, nsnull, 0, value)) {
     // Any better choices?
-    color = NS_RGB(0, 0, 0);
+    return NS_RGB(0, 0, 0);
   }
-  return color;
+
+  nscolor color;
+  return nsRuleNode::ComputeColor(value, this, nsnull, color)
+    ? color
+    : NS_RGB(0, 0, 0);
 }
 
 int
@@ -1406,15 +1407,12 @@ nsPresContext::ScreenWidthInchesForFontInflation(bool* aChanged)
   float deviceWidthInches =
     float(clientRect.width) / float(dx->AppUnitsPerPhysicalInch());
 
-  if (deviceWidthInches != mLastFontInflationScreenWidth) {
-    if (mLastFontInflationScreenWidth != -1.0) {
-      if (aChanged) {
-        *aChanged = true;
-      } else {
-        NS_NOTREACHED("somebody should have checked for screen width change "
-                      "and triggered a reflow");
-      }
-    }
+  if (mLastFontInflationScreenWidth == -1.0) {
+    mLastFontInflationScreenWidth = deviceWidthInches;
+  }
+
+  if (deviceWidthInches != mLastFontInflationScreenWidth && aChanged) {
+    *aChanged = true;
     mLastFontInflationScreenWidth = deviceWidthInches;
   }
 
@@ -1822,8 +1820,10 @@ nsPresContext::EnsureVisible()
       cv->GetPresContext(getter_AddRefs(currentPresContext));
       if (currentPresContext == this) {
         // OK, this is us.  We want to call Show() on the content viewer.
-        cv->Show();
-        return true;
+        nsresult result = cv->Show();
+        if (NS_SUCCEEDED(result)) {
+          return true;
+        }
       }
     }
   }
@@ -2078,14 +2078,15 @@ nsPresContext::FireDOMPaintEvent()
   NS_NewDOMNotifyPaintEvent(getter_AddRefs(event), this, nsnull,
                             NS_AFTERPAINT,
                             &mInvalidateRequests);
-  nsCOMPtr<nsIPrivateDOMEvent> pEvent = do_QueryInterface(event);
-  if (!pEvent) return;
+  if (!event) {
+    return;
+  }
 
   // Even if we're not telling the window about the event (so eventTarget is
   // the chrome event handler, not the window), the window is still
   // logically the event target.
-  pEvent->SetTarget(eventTarget);
-  pEvent->SetTrusted(true);
+  event->SetTarget(eventTarget);
+  event->SetTrusted(true);
   nsEventDispatcher::DispatchDOMEvent(dispatchTarget, nsnull, event, this, nsnull);
 }
 

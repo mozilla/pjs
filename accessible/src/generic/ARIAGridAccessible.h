@@ -8,7 +8,7 @@
 
 #include "nsIAccessibleTable.h"
 
-#include "nsHyperTextAccessibleWrap.h"
+#include "HyperTextAccessibleWrap.h"
 #include "TableAccessible.h"
 #include "xpcAccessibleTable.h"
 
@@ -42,6 +42,8 @@ public:
   virtual PRUint32 ColCount();
   virtual PRUint32 RowCount();
   virtual Accessible* CellAt(PRUint32 aRowIndex, PRUint32 aColumnIndex);
+  virtual void SelectCol(PRUint32 aColIdx);
+  virtual void SelectRow(PRUint32 aRowIdx);
   virtual void UnselectCol(PRUint32 aColIdx);
   virtual void UnselectRow(PRUint32 aRowIdx);
 
@@ -88,7 +90,7 @@ protected:
 /**
  * Accessible for ARIA gridcell and rowheader/columnheader.
  */
-class ARIAGridCellAccessible : public nsHyperTextAccessibleWrap,
+class ARIAGridCellAccessible : public HyperTextAccessibleWrap,
                                public nsIAccessibleTableCell
 {
 public:

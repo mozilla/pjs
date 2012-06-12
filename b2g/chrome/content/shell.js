@@ -12,6 +12,7 @@ const Cr = Components.results;
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
 Cu.import('resource://gre/modules/ContactService.jsm');
+Cu.import('resource://gre/modules/SettingsChangeNotifier.jsm');
 Cu.import('resource://gre/modules/Webapps.jsm');
 
 XPCOMUtils.defineLazyServiceGetter(Services, 'env',
@@ -122,11 +123,11 @@ var shell = {
     addPermissions(domains.split(","));
 
     // Load webapi.js as a frame script
-    let frameScriptUrl = 'chrome://browser/content/webapi.js';
+    let webapiUrl = 'chrome://browser/content/webapi.js';
     try {
-      messageManager.loadFrameScript(frameScriptUrl, true);
+      messageManager.loadFrameScript(webapiUrl, true);
     } catch (e) {
-      dump('Error loading ' + frameScriptUrl + ' as a frame script: ' + e + '\n');
+      dump('shell.js: Error loading ' + webapiUrl + ' as a frame script: ' + e + '\n');
     }
 
     CustomEventManager.init();
@@ -190,13 +191,13 @@ var shell = {
     audioManager.masterVolume = volume;
   },
 
-  forwardKeyToHomescreen: function shell_forwardKeyToHomescreen(evt) {
+  forwardKeyToContent: function shell_forwardKeyToContent(evt) {
     let generatedEvent = content.document.createEvent('KeyboardEvent');
     generatedEvent.initKeyEvent(evt.type, true, true, evt.view, evt.ctrlKey,
                                 evt.altKey, evt.shiftKey, evt.metaKey,
                                 evt.keyCode, evt.charCode);
 
-    content.dispatchEvent(generatedEvent);
+    content.document.documentElement.dispatchEvent(generatedEvent);
   },
 
   handleEvent: function shell_handleEvent(evt) {
@@ -204,30 +205,9 @@ var shell = {
       case 'keydown':
       case 'keyup':
       case 'keypress':
-        // If the home key is pressed, always forward it to the homescreen
-        if (evt.eventPhase == evt.CAPTURING_PHASE) {
-          if (evt.keyCode == evt.VK_DOM_HOME) {
-            window.setTimeout(this.forwardKeyToHomescreen, 0, evt);
-            evt.preventDefault();
-            evt.stopPropagation();
-          } 
-          return;
-        }
-
-        // If one of the other keys is used in an application and is
-        // cancelled via preventDefault, do nothing.
-        let homescreen = (evt.target.ownerDocument.defaultView == content);
-        if (!homescreen && evt.defaultPrevented)
-          return;
-
-        // If one of the other keys is used in an application and is
-        // not used forward it to the homescreen
-        if (!homescreen)
-          window.setTimeout(this.forwardKeyToHomescreen, 0, evt);
-
         // For debug purposes and because some of the APIs are not yet exposed
         // to the content, let's react on some of the keyup events.
-        if (evt.type == 'keyup') {
+        if (evt.type == 'keyup' && evt.eventPhase == evt.BUBBLING_PHASE) {
           switch (evt.keyCode) {
             case evt.DOM_VK_F5:
               if (Services.prefs.getBoolPref('b2g.keys.search.enabled'))
@@ -242,6 +222,16 @@ var shell = {
               this.changeVolume(1);
               break;
           }
+        }
+
+        // Redirect the HOME key to System app and stop the applications from
+        // handling it.
+        let rootContentEvt = (evt.target.ownerDocument.defaultView == content);
+        if (!rootContentEvt && evt.eventPhase == evt.CAPTURING_PHASE &&
+            evt.keyCode == evt.DOM_VK_HOME) {
+          this.forwardKeyToContent(evt);
+          evt.preventDefault();
+          evt.stopImmediatePropagation();
         }
         break;
 
@@ -340,16 +330,6 @@ nsBrowserAccess.prototype = {
   }
 };
 
-// Pipe `console` log messages to the nsIConsoleService which writes them
-// to logcat.
-Services.obs.addObserver(function onConsoleAPILogEvent(subject, topic, data) {
-  let message = subject.wrappedJSObject;
-  let prefix = "Content JS " + message.level.toUpperCase() +
-               " at " + message.filename + ":" + message.lineNumber +
-               " in " + (message.functionName || "anonymous") + ": ";
-  Services.console.logStringMessage(prefix + Array.join(message.arguments, " "));
-}, "console-api-log-event", false);
-
 (function Repl() {
   if (!Services.prefs.getBoolPref('b2g.remote-js.enabled')) {
     return;
@@ -405,16 +385,19 @@ var CustomEventManager = {
 
   handleEvent: function custevt_handleEvent(evt) {
     let detail = evt.detail;
-    dump("XXX FIXME : Got a mozContentEvent: " + detail.type);
+    dump('XXX FIXME : Got a mozContentEvent: ' + detail.type);
 
     switch(detail.type) {
-      case "desktop-notification-click":
-      case "desktop-notification-close":
+      case 'desktop-notification-click':
+      case 'desktop-notification-close':
         AlertsHelper.handleEvent(detail);
         break;
-      case "webapps-install-granted":
-      case "webapps-install-denied":
+      case 'webapps-install-granted':
+      case 'webapps-install-denied':
         WebappsHelper.handleEvent(detail);
+        break;
+      case 'select-choicechange':
+        FormsHelper.handleEvent(detail);
         break;
     }
   }
@@ -508,11 +491,12 @@ var WebappsHelper = {
 // Start the debugger server.
 function startDebugger() {
   if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
+    // Allow remote connections.
+    DebuggerServer.init(function () { return true; });
     DebuggerServer.addActors('chrome://browser/content/dbg-browser-actors.js');
   }
 
-  let port = Services.prefs.getIntPref('devtools.debugger.port') || 6000;
+  let port = Services.prefs.getIntPref('devtools.debugger.remote-port') || 6000;
   try {
     DebuggerServer.openListener(port, false);
   } catch (e) {
@@ -521,56 +505,10 @@ function startDebugger() {
 }
 
 window.addEventListener('ContentStart', function(evt) {
-  if (Services.prefs.getBoolPref('devtools.debugger.enabled')) {
+  if (Services.prefs.getBoolPref('devtools.debugger.remote-enabled')) {
     startDebugger();
   }
 });
-
-
-// Once Bug 731746 - Allow chrome JS object to implement nsIDOMEventTarget
-// is resolved this helper could be removed.
-var SettingsListener = {
-  _callbacks: {},
-
-  init: function sl_init() {
-    if ('mozSettings' in navigator && navigator.mozSettings)
-      navigator.mozSettings.onsettingchange = this.onchange.bind(this);
-  },
-
-  onchange: function sl_onchange(evt) {
-    var callback = this._callbacks[evt.settingName];
-    if (callback) {
-      callback(evt.settingValue);
-    }
-  },
-
-  observe: function sl_observe(name, defaultValue, callback) {
-    var settings = window.navigator.mozSettings;
-    if (!settings) {
-      window.setTimeout(function() { callback(defaultValue); });
-      return;
-    }
-
-    if (!callback || typeof callback !== 'function') {
-      throw new Error('Callback is not a function');
-    }
-
-    var req = settings.getLock().get(name);
-    req.addEventListener('success', (function onsuccess() {
-      callback(typeof(req.result[name]) != 'undefined' ?
-        req.result[name] : defaultValue);
-    }));
-
-    this._callbacks[name] = callback;
-  }
-};
-
-SettingsListener.init();
-
-SettingsListener.observe('language.current', 'en-US', function(value) {
-  Services.prefs.setCharPref('intl.accept_languages', value);
-});
-
 
 (function PowerManager() {
   // This will eventually be moved to content, so use content API as
@@ -639,21 +577,6 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
   window.addEventListener('unload', function removeIdleObjects() {
     Services.idle.removeIdleObserver(idleHandler, idleTimeout);
     power.removeWakeLockListener(wakeLockHandler);
-  });
-})();
-
-
-(function RILSettingsToPrefs() {
-  ['ril.data.enabled', 'ril.data.roaming.enabled'].forEach(function(key) {
-    SettingsListener.observe(key, false, function(value) {
-      Services.prefs.setBoolPref(key, value);
-    });
-  });
-
-  ['ril.data.apn', 'ril.data.user', 'ril.data.passwd'].forEach(function(key) {
-    SettingsListener.observe(key, false, function(value) {
-      Services.prefs.setCharPref(key, value);
-    });
   });
 })();
 

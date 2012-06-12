@@ -16,24 +16,23 @@
 namespace js {
 
 inline
-SharedContext::SharedContext(JSContext *cx, bool inFunction)
+SharedContext::SharedContext(JSContext *cx, JSObject *scopeChain, JSFunction *fun,
+                             FunctionBox *funbox, unsigned staticLevel)
   : context(cx),
     bodyid(0),
     blockidGen(0),
     topStmt(NULL),
     topScopeStmt(NULL),
     blockChain(cx),
-    fun_(cx),
-    scopeChain_(cx),
-    staticLevel(0),
-    funbox(NULL),
-    functionList(NULL),
+    fun_(cx, fun),
+    funbox_(funbox),
+    scopeChain_(cx, scopeChain),
+    staticLevel(staticLevel),
     bindings(cx),
     bindingsRoot(cx, &bindings),
-    inFunction(inFunction),
-    inForInit(false),
     cxFlags(cx)
 {
+    JS_ASSERT((fun && !scopeChain_) || (!fun && !funbox));
 }
 
 inline unsigned
@@ -54,7 +53,8 @@ SharedContext::needStrictChecks() {
 }
 
 inline unsigned
-SharedContext::argumentsLocalSlot() const {
+SharedContext::argumentsLocal() const
+{
     PropertyName *arguments = context->runtime->atomState.argumentsAtom;
     unsigned slot;
     DebugOnly<BindingKind> kind = bindings.lookup(context, arguments, &slot);
@@ -70,6 +70,7 @@ TreeContext::TreeContext(Parser *prs, SharedContext *sc)
     blockNode(NULL),
     decls(prs->context),
     yieldNode(NULL),
+    functionList(NULL),
     parserTC(&prs->tc),
     lexdeps(prs->context),
     parent(prs->tc),
@@ -77,6 +78,7 @@ TreeContext::TreeContext(Parser *prs, SharedContext *sc)
     funcStmts(NULL),
     hasReturnExpr(false),
     hasReturnVoid(false),
+    inForInit(false),
     inDeclDestructuring(false)
 {
     prs->tc = this;

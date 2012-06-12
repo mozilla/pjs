@@ -17,6 +17,7 @@
 #include "jsproxy.h"
 #include "AccessCheck.h"
 #include "WrapperFactory.h"
+#include "XrayWrapper.h"
 #include "dombindings.h"
 
 #include "nsContentUtils.h"
@@ -88,16 +89,6 @@ NS_CYCLE_COLLECTION_CLASSNAME(XPCWrappedNative)::Traverse(void *p,
         JSObject *obj = tmp->GetFlatJSObjectPreserveColor();
         NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mFlatJSObject");
         cb.NoteJSChild(obj);
-    }
-
-    if (tmp->MightHaveExpandoObject()) {
-        XPCJSRuntime *rt = tmp->GetRuntime();
-        XPCCompartmentSet &set = rt->GetCompartmentSet();
-        for (XPCCompartmentRange r = set.all(); !r.empty(); r.popFront()) {
-            CompartmentPrivate *priv = GetCompartmentPrivate(r.front());
-            NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "XPCWrappedNative expando object");
-            cb.NoteJSChild(priv->LookupExpandoObjectPreserveColor(tmp));
-        }
     }
 
     // XPCWrappedNative keeps its native object alive.
@@ -1192,10 +1183,11 @@ XPCWrappedNative::Init(XPCCallContext& ccx, JSObject* parent,
 JSBool
 XPCWrappedNative::Init(XPCCallContext &ccx, JSObject *existingJSObject)
 {
+    // Set up the private to point to the WN.
     JS_SetPrivate(existingJSObject, this);
 
-    // Morph the existing object.
-    JS_SetReservedSlot(existingJSObject, 0, JSVAL_VOID);
+    // Officially mark us as non-slim.
+    MorphMultiSlot(existingJSObject);
 
     mScriptableInfo = GetProto()->GetScriptableInfo();
     mFlatJSObject = existingJSObject;
@@ -1210,6 +1202,11 @@ XPCWrappedNative::Init(XPCCallContext &ccx, JSObject *existingJSObject)
 JSBool
 XPCWrappedNative::FinishInit(XPCCallContext &ccx)
 {
+    // For all WNs, we want to make sure that the multislot starts out as null.
+    // This happens explicitly when morphing a slim wrapper, but we need to
+    // make sure it happens in the other cases too.
+    JS_SetReservedSlot(mFlatJSObject, WRAPPER_MULTISLOT, JSVAL_NULL);
+
     // This reference will be released when mFlatJSObject is finalized.
     // Since this reference will push the refcount to 2 it will also root
     // mFlatJSObject;
@@ -1614,6 +1611,12 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
             if (!propertyHolder || !JS_CopyPropertiesFrom(ccx, propertyHolder, flat))
                 return NS_ERROR_OUT_OF_MEMORY;
 
+            // Expandos from other compartments are attached to the target JS object.
+            // Copy them over, and let the old ones die a natural death.
+            SetExpandoChain(newobj, nsnull);
+            if (!XrayUtils::CloneExpandoChain(ccx, newobj, flat))
+                return NS_ERROR_FAILURE;
+
             // Before proceeding, eagerly create any same-compartment security wrappers
             // that the object might have. This forces us to take the 'WithWrapper' path
             // while transplanting that handles this stuff correctly.
@@ -1652,40 +1655,13 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
                 }
 
                 // Ok, now we do the special object-plus-wrapper transplant.
-                //
-                // This is some pretty serious brain surgery.
-                //
-                // In the case where we wrap a Location object from a same-
-                // origin compartment, we actually want our cross-compartment
-                // wrapper to point to the same-compartment wrapper in the
-                // other compartment. This double-wrapping allows expandos to
-                // be shared. So our wrapping callback (in WrapperFactory.cpp)
-                // calls XPCWrappedNative::GetSameCompartmentSecurityWrapper
-                // before wrapping same-origin Location objects.
-                //
-                // This normally works fine, but gets tricky here.
-                // js_TransplantObjectWithWrapper needs to update the old
-                // same-compartment security wrapper to be a cross-compartment
-                // wrapper to the newly transplanted object. So it needs to go
-                // through the aforementioned double-wrapping mechanism.
-                // But during the call, things aren't really in a consistent
-                // state, because mFlatJSObject hasn't yet been updated to
-                // point to the object in the new compartment.
-                //
-                // So we need to cache the new same-compartment security
-                // wrapper on the XPCWN before the call, so that
-                // GetSameCompartmentSecurityWrapper can return early before
-                // getting confused. Hold your breath.
-                JSObject *wwsaved = ww;
-                wrapper->SetWrapper(newwrapper);
                 ww = js_TransplantObjectWithWrapper(ccx, flat, ww, newobj,
                                                     newwrapper);
-                if (!ww) {
-                    wrapper->SetWrapper(wwsaved);
+                if (!ww)
                     return NS_ERROR_FAILURE;
-                }
 
                 flat = newobj;
+                wrapper->SetWrapper(ww);
             } else {
                 flat = JS_TransplantObject(ccx, flat, newobj);
                 if (!flat)
@@ -1698,11 +1674,10 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
             if (!JS_CopyPropertiesFrom(ccx, flat, propertyHolder))
                 return NS_ERROR_FAILURE;
         } else {
-            JS_SetReservedSlot(flat, 0,
-                               PRIVATE_TO_JSVAL(newProto.get()));
+            SetSlimWrapperProto(flat, newProto.get());
             if (!JS_SetPrototype(ccx, flat, newProto->GetJSProtoObject())) {
                 // this is bad, very bad
-                JS_SetReservedSlot(flat, 0, JSVAL_NULL);
+                SetSlimWrapperProto(flat, nsnull);
                 NS_ERROR("JS_SetPrototype failed");
                 return NS_ERROR_FAILURE;
             }
@@ -1727,6 +1702,80 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
     wrapper.swap(*aWrapper);
 
     return NS_OK;
+}
+
+XPCWrappedNative*
+XPCWrappedNative::GetParentWrapper()
+{
+    XPCWrappedNative *wrapper = nsnull;
+    JSObject *parent = js::GetObjectParent(mFlatJSObject);
+    if (parent && IS_WN_WRAPPER(parent)) {
+        wrapper = static_cast<XPCWrappedNative*>(js::GetObjectPrivate(parent));
+    }
+    return wrapper;
+}
+
+// Orphans are sad little things - If only we could treat them better. :-(
+//
+// When a wrapper gets reparented to another scope (for example, when calling
+// adoptNode), it's entirely possible that it previously served as the parent for
+// other wrappers (via PreCreate hooks). When it moves, the old mFlatJSObject is
+// replaced by a cross-compartment wrapper. Its descendants really _should_ move
+// too, but we have no way of locating them short of a compartment-wide sweep
+// (which we believe to be prohibitively expensive).
+//
+// So we just leave them behind. In practice, the only time this turns out to
+// be a problem is during subsequent wrapper reparenting. When this happens, we
+// call into the below fixup code at the last minute and straighten things out
+// before proceeding.
+//
+// See bug 751995 for more information.
+
+bool
+XPCWrappedNative::IsOrphan()
+{
+    JSObject *parent = js::GetObjectParent(mFlatJSObject);
+
+    // If there's no parent, we've presumably got a global, which can't be an
+    // orphan by definition.
+    if (!parent)
+        return false;
+
+    // If our parent is a cross-compartment wrapper, it has left us behind.
+    return js::IsCrossCompartmentWrapper(parent);
+}
+
+// Recursively fix up orphans on the parent chain of a wrapper. Note that this
+// can cause a wrapper to move even if IsOrphan() is false, since its parent
+// might be an orphan, and fixing the parent causes this wrapper to become an
+// orphan.
+nsresult
+XPCWrappedNative::RescueOrphans(XPCCallContext& ccx)
+{
+    // Even if we're not an orphan at the moment, one of our ancestors might
+    // be. If so, we need to recursively rescue up the parent chain.
+    nsresult rv;
+    XPCWrappedNative *parentWrapper = GetParentWrapper();
+    if (parentWrapper && parentWrapper->IsOrphan()) {
+        rv = parentWrapper->RescueOrphans(ccx);
+        NS_ENSURE_SUCCESS(rv, rv);
+    }
+
+    // Now that we know our parent is in the right place, determine if we've
+    // been orphaned. If not, we have nothing to do.
+    if (!IsOrphan())
+        return NS_OK;
+
+    // We've been orphaned. Find where our parent went, and follow it.
+    JSObject *parentGhost = js::GetObjectParent(mFlatJSObject);
+    JSObject *realParent = js::UnwrapObject(parentGhost);
+    nsRefPtr<XPCWrappedNative> ignored;
+    return ReparentWrapperIfFound(ccx,
+                                  XPCWrappedNativeScope::
+                                    FindInJSObjectScope(ccx, parentGhost),
+                                  XPCWrappedNativeScope::
+                                    FindInJSObjectScope(ccx, realParent),
+                                  realParent, mIdentity, getter_AddRefs(ignored));
 }
 
 #define IS_TEAROFF_CLASS(clazz)                                               \
@@ -2158,10 +2207,6 @@ XPCWrappedNative::GetSameCompartmentSecurityWrapper(JSContext *cx)
     JSObject *wrapper = GetWrapper();
 
     // If we already have a wrapper, it must be what we want.
-    //
-    // NB: This must come before anything below because of some trickiness
-    // with brain transplants. See the "pretty serious brain surgery" comment
-    // in ReparentWrapperIfFound.
     if (wrapper)
         return wrapper;
 
@@ -3862,7 +3907,7 @@ ConstructSlimWrapper(XPCCallContext &ccx,
         return false;
 
     JS_SetPrivate(wrapper, identityObj);
-    JS_SetReservedSlot(wrapper, 0, PRIVATE_TO_JSVAL(xpcproto.get()));
+    SetSlimWrapperProto(wrapper, xpcproto.get());
 
     // Transfer ownership to the wrapper's private.
     aHelper.forgetCanonical();

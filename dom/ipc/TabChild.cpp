@@ -32,7 +32,6 @@
 #include "nsIURI.h"
 #include "nsIWebBrowserFocus.h"
 #include "nsIDOMEvent.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsIComponentManager.h"
 #include "nsIServiceManager.h"
 #include "nsIJSRuntimeService.h"
@@ -59,12 +58,14 @@
 #include "nsEventListenerManager.h"
 #include "PCOMContentPermissionRequestChild.h"
 #include "xpcpublic.h"
+#include "IndexedDBChild.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::ipc;
 using namespace mozilla::layers;
 using namespace mozilla::layout;
 using namespace mozilla::docshell;
+using namespace mozilla::dom::indexedDB;
 
 NS_IMPL_ISUPPORTS1(ContentListener, nsIDOMEventListener)
 
@@ -119,7 +120,6 @@ NS_INTERFACE_MAP_BEGIN(TabChild)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowserChrome)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowserChrome2)
   NS_INTERFACE_MAP_ENTRY(nsIEmbeddingSiteWindow)
-  NS_INTERFACE_MAP_ENTRY(nsIEmbeddingSiteWindow2)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowserChromeFocus)
   NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
   NS_INTERFACE_MAP_ENTRY(nsIWindowProvider)
@@ -810,8 +810,7 @@ public:
     NS_NewDOMEvent(getter_AddRefs(event), nsnull, nsnull);
     if (event) {
       event->InitEvent(NS_LITERAL_STRING("unload"), false, false);
-      nsCOMPtr<nsIPrivateDOMEvent> privateEvent(do_QueryInterface(event));
-      privateEvent->SetTrusted(true);
+      event->SetTrusted(true);
 
       bool dummy;
       mTabChildGlobal->DispatchEvent(event, &dummy);
@@ -948,6 +947,20 @@ TabChild::GetMessageManager(nsIContentFrameMessageManager** aResult)
   }
   *aResult = nsnull;
   return NS_ERROR_FAILURE;
+}
+
+PIndexedDBChild*
+TabChild::AllocPIndexedDB(const nsCString& aASCIIOrigin, bool* /* aAllowed */)
+{
+  NS_NOTREACHED("Should never get here!");
+  return NULL;
+}
+
+bool
+TabChild::DeallocPIndexedDB(PIndexedDBChild* aActor)
+{
+  delete aActor;
+  return true;
 }
 
 static bool

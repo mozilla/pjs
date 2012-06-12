@@ -21,7 +21,6 @@
 #include "nsIDOMHTMLOptGroupElement.h"
 #include "nsEventStates.h"
 #include "nsGUIEvent.h"
-#include "nsIPrivateDOMEvent.h"
 
 // Notify/query select frame for selectedIndex
 #include "nsIDocument.h"
@@ -1226,7 +1225,7 @@ NS_IMPL_BOOL_ATTR(nsHTMLSelectElement, Disabled, disabled)
 NS_IMPL_BOOL_ATTR(nsHTMLSelectElement, Multiple, multiple)
 NS_IMPL_STRING_ATTR(nsHTMLSelectElement, Name, name)
 NS_IMPL_BOOL_ATTR(nsHTMLSelectElement, Required, required)
-NS_IMPL_NON_NEGATIVE_INT_ATTR_DEFAULT_VALUE(nsHTMLSelectElement, Size, size, 0)
+NS_IMPL_UINT_ATTR(nsHTMLSelectElement, Size, size)
 NS_IMPL_INT_ATTR(nsHTMLSelectElement, TabIndex, tabindex)
 
 bool

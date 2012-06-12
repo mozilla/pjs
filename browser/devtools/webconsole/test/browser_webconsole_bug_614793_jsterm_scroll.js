@@ -14,8 +14,10 @@ function consoleOpened(hud) {
   let boxObject = outputNode.scrollBoxObject.element;
 
   for (let i = 0; i < 150; i++) {
-    hud.console.log("test message " + i);
+    content.console.log("test message " + i);
   }
+
+  let oldScrollTop = -1;
 
   waitForSuccess({
     name: "console.log messages displayed",
@@ -25,11 +27,24 @@ function consoleOpened(hud) {
     },
     successFn: function()
     {
-      let oldScrollTop = boxObject.scrollTop;
+      oldScrollTop = boxObject.scrollTop;
       ok(oldScrollTop > 0, "scroll location is not at the top");
 
       hud.jsterm.execute("'hello world'");
 
+      waitForSuccess(waitForExecute);
+    },
+    failureFn: finishTest,
+  });
+
+  let waitForExecute = {
+    name: "jsterm output displayed",
+    validatorFn: function()
+    {
+      return outputNode.querySelector(".webconsole-msg-output");
+    },
+    successFn: function()
+    {
       isnot(boxObject.scrollTop, oldScrollTop, "scroll location updated");
 
       oldScrollTop = boxObject.scrollTop;
@@ -40,7 +55,7 @@ function consoleOpened(hud) {
       finishTest();
     },
     failureFn: finishTest,
-  });
+  };
 }
 
 function test() {

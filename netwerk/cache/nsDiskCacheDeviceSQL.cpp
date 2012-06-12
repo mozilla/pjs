@@ -253,7 +253,7 @@ nsOfflineCacheDeviceInfo::GetUsageReport(char ** usageReport)
   buffer.AssignLiteral("  <tr>\n"
                        "    <th>Cache Directory:</th>\n"
                        "    <td>");
-  nsILocalFile *cacheDir = mDevice->CacheDirectory();
+  nsIFile *cacheDir = mDevice->CacheDirectory();
   if (!cacheDir)
     return NS_OK;
 
@@ -626,6 +626,17 @@ NS_IMETHODIMP
 nsApplicationCache::GetClientID(nsACString &out)
 {
   out = mClientID;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsApplicationCache::GetCacheDirectory(nsIFile **out)
+{
+  if (mDevice->BaseDirectory())
+      NS_ADDREF(*out = mDevice->BaseDirectory());
+  else
+      *out = nsnull;
+
   return NS_OK;
 }
 
@@ -2339,7 +2350,7 @@ nsOfflineCacheDevice::GetGroupForCache(const nsACString &clientID,
  */
 
 void
-nsOfflineCacheDevice::SetCacheParentDirectory(nsILocalFile *parentDir)
+nsOfflineCacheDevice::SetCacheParentDirectory(nsIFile *parentDir)
 {
   if (Initialized())
   {
@@ -2360,6 +2371,8 @@ nsOfflineCacheDevice::SetCacheParentDirectory(nsILocalFile *parentDir)
     NS_WARNING("unable to create parent directory");
     return;
   }
+
+  mBaseDirectory = parentDir;
 
   // cache dir may not exist, but that's ok
   nsCOMPtr<nsIFile> dir;

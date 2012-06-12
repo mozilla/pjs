@@ -17,7 +17,6 @@
 #include "nsIContentViewer.h"
 #include "mozilla/FunctionTimer.h"
 #include "nsIDocumentViewerPrint.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsIDOMBeforeUnloadEvent.h"
 #include "nsIDocument.h"
 #include "nsPresContext.h"
@@ -469,18 +468,6 @@ public:
   }
 
   nsCOMPtr<nsIDocument> mTop;
-};
-
-class nsBeforeFirstPaintDispatcher : public nsRunnable
-{
-public:
-  nsBeforeFirstPaintDispatcher(nsIDocument* aDocument)
-  : mDocument(aDocument) {}
-
-  NS_IMETHOD Run();
-
-private:
-  nsCOMPtr<nsIDocument> mDocument;
 };
 
 class nsDocumentShownDispatcher : public nsRunnable
@@ -1111,16 +1098,14 @@ DocumentViewerImpl::PermitUnload(bool aCallerClosesWindow, bool *aPermitUnload)
   domDoc->CreateEvent(NS_LITERAL_STRING("beforeunloadevent"),
                       getter_AddRefs(event));
   nsCOMPtr<nsIDOMBeforeUnloadEvent> beforeUnload = do_QueryInterface(event);
-  nsCOMPtr<nsIPrivateDOMEvent> pEvent = do_QueryInterface(beforeUnload);
-  NS_ENSURE_STATE(pEvent);
+  NS_ENSURE_STATE(beforeUnload);
   nsresult rv = event->InitEvent(NS_LITERAL_STRING("beforeunload"),
                                  false, true);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // XXX Dispatching to |window|, but using |document| as the target.
-  nsCOMPtr<nsIDOMEventTarget> target = do_QueryInterface(mDocument);
-  pEvent->SetTarget(target);
-  pEvent->SetTrusted(true);
+  // Dispatching to |window|, but using |document| as the target.
+  event->SetTarget(mDocument);
+  event->SetTrusted(true);
 
   // In evil cases we might be destroyed while handling the
   // onbeforeunload event, don't let that happen. (see also bug#331040)
@@ -1140,7 +1125,7 @@ DocumentViewerImpl::PermitUnload(bool aCallerClosesWindow, bool *aPermitUnload)
   nsCOMPtr<nsIDocShellTreeNode> docShellNode(do_QueryReferent(mContainer));
   nsAutoString text;
   beforeUnload->GetReturnValue(text);
-  if (pEvent->GetInternalNSEvent()->flags & NS_EVENT_FLAG_NO_DEFAULT ||
+  if (event->GetInternalNSEvent()->flags & NS_EVENT_FLAG_NO_DEFAULT ||
       !text.IsEmpty()) {
     // Ask the user if it's ok to unload the current page
 
@@ -1725,6 +1710,7 @@ NS_IMETHODIMP
 DocumentViewerImpl::SetDocumentInternal(nsIDocument* aDocument,
                                         bool aForceReuseInnerWindow)
 {
+  MOZ_ASSERT(aDocument);
 
   // Set new container
   nsCOMPtr<nsISupports> container = do_QueryReferent(mContainer);
@@ -2024,11 +2010,6 @@ DocumentViewerImpl::Show(void)
       mPresShell->UnsuppressPainting();
     }
   }
-
-  // Notify observers that a new page is about to be drawn. Execute this
-  // as soon as it is safe to run JS, which is guaranteed to be before we
-  // go back to the event loop and actually draw the page.
-  nsContentUtils::AddScriptRunner(new nsBeforeFirstPaintDispatcher(mDocument));
 
   // Notify observers that a new page has been shown. This will get run
   // from the event loop after we actually draw the page.
@@ -4374,19 +4355,6 @@ DocumentViewerImpl::SetPrintPreviewPresentation(nsIViewManager* aViewManager,
   mViewManager = aViewManager;
   mPresContext = aPresContext;
   mPresShell = aPresShell;
-}
-
-// Fires the "before-first-paint" event so that interested parties (right now, the
-// mobile browser) are aware of it.
-NS_IMETHODIMP
-nsBeforeFirstPaintDispatcher::Run()
-{
-  nsCOMPtr<nsIObserverService> observerService =
-    mozilla::services::GetObserverService();
-  if (observerService) {
-    observerService->NotifyObservers(mDocument, "before-first-paint", NULL);
-  }
-  return NS_OK;
 }
 
 // Fires the "document-shown" event so that interested parties are aware of it.

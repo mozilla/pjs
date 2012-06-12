@@ -2048,9 +2048,16 @@ JS_EnumerateStandardClasses(JSContext *cx, JSObject *obj_)
     }
 
     /* Initialize any classes that have not been initialized yet. */
-    for (i = 0; standard_class_atoms[i].init; i++) {
-        if (!js::IsStandardClassResolved(obj, standard_class_atoms[i].clasp) &&
-            !standard_class_atoms[i].init(cx, obj))
+    for (unsigned i = 0; standard_class_atoms[i].init; i++) {
+        const JSStdName &stdnm = standard_class_atoms[i];
+        if (!js::IsStandardClassResolved(obj, stdnm.clasp)
+#if JS_HAS_XML_SUPPORT
+            && ((stdnm.init != js_InitXMLClass &&
+                 stdnm.init != js_InitNamespaceClass &&
+                 stdnm.init != js_InitQNameClass) ||
+                VersionHasAllowXML(cx->findVersion()))
+#endif
+            )
         {
                 return JS_FALSE;
         }
@@ -3440,49 +3447,6 @@ JS_DeepFreezeObject(JSContext *cx, JSObject *obj)
     return true;
 }
 
-JS_PUBLIC_API(JSObject *)
-JS_ConstructObject(JSContext *cx, JSClass *jsclasp, JSObject *parent)
-{
-    return JS_ConstructObjectWithArguments(cx, jsclasp, parent, 0, NULL);
-}
-
-JS_PUBLIC_API(JSObject *)
-JS_ConstructObjectWithArguments(JSContext *cx, JSClass *jsclasp, JSObject *parent,
-                                unsigned argc, jsval *argv)
-{
-    AssertNoGC(cx);
-    CHECK_REQUEST(cx);
-    assertSameCompartment(cx, parent, JSValueArray(argv, argc));
-
-    AutoArrayRooter argtvr(cx, argc, argv);
-
-    Class *clasp = Valueify(jsclasp);
-    if (!clasp)
-        clasp = &ObjectClass;    /* default class is Object */
-
-    JSProtoKey protoKey = GetClassProtoKey(clasp);
-
-    /* Protect constructor in case a crazy getter for .prototype uproots it. */
-    RootedValue value(cx);
-    if (!js_FindClassObject(cx, parent, protoKey, value.address(), clasp))
-        return NULL;
-
-    Value rval;
-    if (!InvokeConstructor(cx, value, argc, argv, &rval))
-        return NULL;
-
-    /*
-     * If the instance's class differs from what was requested, throw a type
-     * error.
-     */
-    if (!rval.isObject() || rval.toObject().getClass() != clasp) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL,
-                             JSMSG_WRONG_CONSTRUCTOR, clasp->name);
-        return NULL;
-    }
-    return &rval.toObject();
-}
-
 static JSBool
 LookupPropertyById(JSContext *cx, JSObject *obj, HandleId id, unsigned flags,
                    JSObject **objp, JSProperty **propp)
@@ -4845,6 +4809,14 @@ JS_DefineFunctionById(JSContext *cx, JSObject *obj_, jsid id_, JSNative call,
     return js_DefineFunction(cx, obj, id, call, nargs, attrs);
 }
 
+extern JS_PUBLIC_API(JSBool)
+JS_CallNonGenericMethodOnProxy(JSContext *cx, unsigned argc, jsval *vp, JSNative native,
+                               JSClass *clasp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return HandleNonGenericMethodClassMismatch(cx, args, native, Valueify(clasp));
+}
+
 struct AutoLastFrameCheck {
     AutoLastFrameCheck(JSContext *cx JS_GUARD_OBJECT_NOTIFIER_PARAM)
       : cx(cx) {
@@ -5344,7 +5316,8 @@ JS_ExecuteScript(JSContext *cx, JSObject *obj, JSScript *scriptArg, jsval *rval)
      * mozilla, but there doesn't seem to be one, so we handle it here.
      */
     if (scriptArg->compartment() != obj->compartment()) {
-        script = CloneScript(cx, scriptArg);
+        RootedScript scriptArgRoot(cx, scriptArg);
+        script = CloneScript(cx, scriptArgRoot);
         if (!script.get())
             return false;
     } else {

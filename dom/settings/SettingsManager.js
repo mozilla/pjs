@@ -4,12 +4,9 @@
 
 "use strict";
 
-/* static functions */
-let DEBUG = false;
-if (DEBUG)
-  debug = function (s) { dump("-*- SettingsManager: " + s + "\n"); };
-else
-  debug = function (s) {};
+function debug(s) {
+//  dump("-*- SettingsManager: " + s + "\n");
+}
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -19,6 +16,10 @@ Cu.import("resource://gre/modules/SettingsQueue.jsm");
 Cu.import("resource://gre/modules/SettingsDB.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+
+XPCOMUtils.defineLazyGetter(this, "cpmm", function() {
+  return Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsIFrameMessageManager);
+});
 
 const nsIClassInfo            = Ci.nsIClassInfo;
 const SETTINGSLOCK_CONTRACTID = "@mozilla.org/settingsLock;1";
@@ -42,7 +43,7 @@ SettingsLock.prototype = {
 
     while (!lock._requests.isEmpty()) {
       let info = lock._requests.dequeue();
-      debug("info:" + info.intent);
+      debug("info: " + info.intent);
       let request = info.request;
       switch (info.intent) {
         case "clear":
@@ -67,10 +68,7 @@ SettingsLock.prototype = {
             req.onsuccess = function() { 
               lock._open = true;
               Services.DOMRequest.fireSuccess(request, 0);
-              Services.obs.notifyObservers(lock, "mozsettings-changed", JSON.stringify({
-                key: key,
-                value: info.settings[key]
-              }));
+              cpmm.sendAsyncMessage("Settings:Changed", { key: key, value: info.settings[key] });
               lock._open = false;
             };
 
@@ -78,23 +76,33 @@ SettingsLock.prototype = {
           }
           break;
         case "get":
-          if (info.name == "*") {
-            req = store.getAll();
-          } else {
-            req = store.getAll(info.name);
-          }
+          req = (info.name === "*") ? store.getAll()
+                                    : store.getAll(info.name);
+
           req.onsuccess = function(event) {
             debug("Request for '" + info.name + "' successful. " + 
                   "Record count: " + event.target.result.length);
             debug("result: " + JSON.stringify(event.target.result));
-            var result = {};
-            for (var i in event.target.result)
-              result[event.target.result[i].settingName] = event.target.result[i].settingValue;
+
+            let results = {
+              __exposedProps__: {
+              }
+            };
+
+            for (var i in event.target.result) {
+              let result = event.target.result[i];
+              results[result.settingName] = result.settingValue;
+              results.__exposedProps__[result.settingName] = "r";
+            }
+
             this._open = true;
-            Services.DOMRequest.fireSuccess(request, result);
+            Services.DOMRequest.fireSuccess(request, results);
             this._open = false;
           }.bind(lock);
-          req.onerror = function() { Services.DOMRequest.fireError(request, 0)};
+
+          req.onerror = function() {
+            Services.DOMRequest.fireError(request, 0)
+          };
           break;
       }
     }
@@ -180,7 +188,7 @@ SettingsLock.prototype = {
 };
 
 const SETTINGSMANAGER_CONTRACTID = "@mozilla.org/settingsManager;1";
-const SETTINGSMANAGER_CID        = Components.ID("{5609d0a0-52a9-11e1-b86c-0800200c9a66}");
+const SETTINGSMANAGER_CID        = Components.ID("{dd9f5380-a454-11e1-b3dd-0800200c9a66}");
 const nsIDOMSettingsManager      = Ci.nsIDOMSettingsManager;
 
 let myGlobal = this;
@@ -196,6 +204,7 @@ function SettingsManager()
 
 SettingsManager.prototype = {
   _onsettingchange: null,
+  _callbacks: null,
 
   nextTick: function nextTick(aCallback, thisObj) {
     if (thisObj)
@@ -227,14 +236,73 @@ SettingsManager.prototype = {
     return lock;
   },
 
+  receiveMessage: function(aMessage) {
+    debug("Settings::receiveMessage: " + aMessage.name);
+    let msg = aMessage.json;
+
+    switch (aMessage.name) {
+      case "Settings:Change:Return:OK":
+        debug("Settings:Change:Return:OK");
+        if (this._onsettingchange || this._callbacks) {
+          debug('data:' + msg.key + ':' + msg.value + '\n');
+
+          if (this._onsettingchange) {
+            let event = new this._window.MozSettingsEvent("settingchanged", {
+              settingName: msg.key,
+              settingValue: msg.value
+            });
+            this._onsettingchange.handleEvent(event);
+          }
+          if (this._callbacks && this._callbacks[msg.key]) {
+            debug("observe callback called! " + msg.key + " " + this._callbacks[msg.key].length);
+            for (let cb in this._callbacks[msg.key]) {
+              this._callbacks[msg.key].forEach(function(cb) {
+                cb({settingName: msg.key, settingValue: msg.value});
+              });
+            }
+          }
+        } else {
+          debug("no observers stored!");
+        }
+        break;
+      default: 
+        debug("Wrong message: " + aMessage.name);
+    }
+  },
+
+  addObserver: function addObserver(aName, aCallback) {
+    debug("addObserver " + aName);
+    if (!this._callbacks)
+      this._callbacks = {};
+    if (!this._callbacks[aName]) {
+      this._callbacks[aName] = [aCallback];
+    } else {
+      this._callbacks[aName].push(aCallback);
+    }
+  },
+
+  removeObserver: function removeObserver(aName, aCallback) {
+    debug("deleteObserver " + aName);
+    if (this._callbacks && this._callbacks[aName]) {
+      let index = this._callbacks[aName].indexOf(aCallback)
+      if (index != -1) {
+        this._callbacks[aName].splice(index, 1)
+      } else {
+        debug("Callback not found for: " + aName);
+      }
+    } else {
+      debug("No observers stored for " + aName);
+    }
+  },
+
   init: function(aWindow) {
     // Set navigator.mozSettings to null.
     if (!Services.prefs.getBoolPref("dom.mozSettings.enabled"))
       return null;
 
+    cpmm.addMessageListener("Settings:Change:Return:OK", this);
     this._window = aWindow;
     Services.obs.addObserver(this, "inner-window-destroyed", false);
-    Services.obs.addObserver(this, "mozsettings-changed", false);
     let util = aWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
     this.innerWindowID = util.currentInnerWindowID;
 
@@ -253,26 +321,13 @@ SettingsManager.prototype = {
       let wId = aSubject.QueryInterface(Ci.nsISupportsPRUint64).data;
       if (wId == this.innerWindowID) {
         Services.obs.removeObserver(this, "inner-window-destroyed");
-        Services.obs.removeObserver(this, "mozsettings-changed");
+        cpmm.removeMessageListener("Settings:Change:Return:OK", this);
         this._requests = null;
         this._window = null;
         this._innerWindowID = null;
         this._onsettingchange = null;
         this._settingsDB.close();
       }
-    } else if (aTopic == "mozsettings-changed") {
-      if (!this._onsettingchange)
-        return;
-
-      let data = JSON.parse(aData);
-      debug('data:' + data.key + ':' + data.value + '\n');
-
-      let event = new this._window.MozSettingsEvent("settingchanged", {
-        settingName: data.key,
-        settingValue: data.value
-      });
-
-      this._onsettingchange.handleEvent(event);
     }
   },
 

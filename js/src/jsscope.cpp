@@ -289,7 +289,7 @@ Shape::getChildBinding(JSContext *cx, const StackShape &child)
          * the fixed slot count here, which will feed into call objects created
          * off of the bindings.
          */
-        uint32_t slots = child.slotSpan() + 1;  /* Add one for private data. */
+        uint32_t slots = child.slotSpan();
         gc::AllocKind kind = gc::GetGCObjectKind(slots);
 
         /*
@@ -300,11 +300,11 @@ Shape::getChildBinding(JSContext *cx, const StackShape &child)
          */
         uint32_t nfixed = gc::GetGCKindSlots(kind);
         if (nfixed < slots) {
-            nfixed = CallObject::RESERVED_SLOTS + 1;
-            JS_ASSERT(gc::GetGCKindSlots(gc::GetGCObjectKind(nfixed)) == CallObject::RESERVED_SLOTS + 1);
+            nfixed = CallObject::RESERVED_SLOTS;
+            JS_ASSERT(gc::GetGCKindSlots(gc::GetGCObjectKind(nfixed)) == CallObject::RESERVED_SLOTS);
         }
 
-        shape->setNumFixedSlots(nfixed - 1);
+        shape->setNumFixedSlots(nfixed);
     }
     return shape;
 }
@@ -965,7 +965,7 @@ JSObject::replaceWithNewEquivalentShape(JSContext *cx, Shape *oldShape, Shape *n
         RootedShape newRoot(cx, newShape);
         if (!toDictionaryMode(cx))
             return NULL;
-        oldShape = self->lastProperty();
+        oldShape = selfRoot->lastProperty();
         self = selfRoot;
         newShape = newRoot;
     }
@@ -976,7 +976,7 @@ JSObject::replaceWithNewEquivalentShape(JSContext *cx, Shape *oldShape, Shape *n
         newShape = js_NewGCShape(cx);
         if (!newShape)
             return NULL;
-        new (newShape) Shape(oldShape->base()->unowned(), 0);
+        new (newShape) Shape(oldRoot->base()->unowned(), 0);
         self = selfRoot;
         oldShape = oldRoot;
     }
@@ -1315,7 +1315,7 @@ EmptyShape::getInitialShape(JSContext *cx, Class *clasp, JSObject *proto, JSObje
 }
 
 void
-NewObjectCache::invalidateEntriesForShape(JSContext *cx, Shape *shape, JSObject *proto)
+NewObjectCache::invalidateEntriesForShape(JSContext *cx, Shape *shape, JSObject *proto_)
 {
     Class *clasp = shape->getObjectClass();
 
@@ -1323,7 +1323,8 @@ NewObjectCache::invalidateEntriesForShape(JSContext *cx, Shape *shape, JSObject 
     if (CanBeFinalizedInBackground(kind, clasp))
         kind = GetBackgroundAllocKind(kind);
 
-    GlobalObject *global = &shape->getObjectParent()->global();
+    Rooted<GlobalObject *> global(cx, &shape->getObjectParent()->global());
+    RootedObject proto(cx, proto_);
     types::TypeObject *type = proto->getNewType(cx);
 
     EntryIndex entry;

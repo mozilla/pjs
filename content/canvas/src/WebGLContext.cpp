@@ -35,10 +35,11 @@
 #include "prenv.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 
 #include "nsIObserverService.h"
-
+#include "mozilla/dom/WebGLRenderingContextBinding.h"
 
 using namespace mozilla;
 using namespace mozilla::gl;
@@ -72,9 +73,9 @@ NS_NewCanvasRenderingContextWebGL(nsIDOMWebGLRenderingContext** aResult)
 }
 
 WebGLContext::WebGLContext()
-    : mCanvasElement(nsnull),
-      gl(nsnull)
+    : gl(nsnull)
 {
+    SetIsDOMBinding();
     mEnabledExtensions.SetLength(WebGLExtensionID_Max);
 
     mGeneration = 0;
@@ -164,6 +165,14 @@ WebGLContext::~WebGLContext()
     mContextRestorer = nsnull;
 }
 
+JSObject*
+WebGLContext::WrapObject(JSContext *cx, JSObject *scope,
+                         bool *triedToWrap)
+{
+    return dom::WebGLRenderingContextBinding::Wrap(cx, scope, this,
+                                                   triedToWrap);
+}
+
 void
 WebGLContext::DestroyResourcesAndContext()
 {
@@ -218,7 +227,9 @@ WebGLContext::DestroyResourcesAndContext()
     // We just got rid of everything, so the context had better
     // have been going away.
 #ifdef DEBUG
-    printf_stderr("--- WebGL context destroyed: %p\n", gl.get());
+    if (gl->DebugMode()) {
+        printf_stderr("--- WebGL context destroyed: %p\n", gl.get());
+    }
 #endif
 
     gl = nsnull;
@@ -233,10 +244,10 @@ WebGLContext::Invalidate()
     if (!mCanvasElement)
         return;
 
-    nsSVGEffects::InvalidateDirectRenderingObservers(HTMLCanvasElement());
+    nsSVGEffects::InvalidateDirectRenderingObservers(mCanvasElement);
 
     mInvalidated = true;
-    HTMLCanvasElement()->InvalidateCanvasContent(nsnull);
+    mCanvasElement->InvalidateCanvasContent(nsnull);
 }
 
 /* readonly attribute nsIDOMHTMLCanvasElement canvas; */
@@ -251,14 +262,6 @@ WebGLContext::GetCanvas(nsIDOMHTMLCanvasElement **canvas)
 //
 // nsICanvasRenderingContextInternal
 //
-
-NS_IMETHODIMP
-WebGLContext::SetCanvasElement(nsHTMLCanvasElement* aParentCanvas)
-{
-    mCanvasElement = aParentCanvas;
-
-    return NS_OK;
-}
 
 static bool
 GetBoolFromPropertyBag(nsIPropertyBag *bag, const char *propName, bool *boolResult)
@@ -322,7 +325,7 @@ WebGLContext::SetDimensions(PRInt32 width, PRInt32 height)
     /*** early success return cases ***/
   
     if (mCanvasElement) {
-        HTMLCanvasElement()->InvalidateCanvas();
+        mCanvasElement->InvalidateCanvas();
     }
 
     if (gl && mWidth == width && mHeight == height)
@@ -370,6 +373,8 @@ WebGLContext::SetDimensions(PRInt32 width, PRInt32 height)
 #endif
     bool forceEnabled =
         Preferences::GetBool("webgl.force-enabled", false);
+    bool useMesaLlvmPipe =
+        Preferences::GetBool("gfx.prefer-mesa-llvmpipe", false);
     bool disabled =
         Preferences::GetBool("webgl.disabled", false);
 
@@ -455,45 +460,10 @@ WebGLContext::SetDimensions(PRInt32 width, PRInt32 height)
 
 #ifdef XP_WIN
     // allow forcing GL and not EGL/ANGLE
-    if (PR_GetEnv("MOZ_WEBGL_FORCE_OPENGL")) {
+    if (useMesaLlvmPipe || PR_GetEnv("MOZ_WEBGL_FORCE_OPENGL")) {
         preferEGL = false;
         useANGLE = false;
         useOpenGL = true;
-    }
-#endif
-
-
-#ifdef ANDROID
-    // bug 736123, blacklist WebGL on Adreno
-    //
-    // The Adreno driver in WebGL context creation, specifically in the first MakeCurrent
-    // call on the newly created OpenGL context.
-    //
-    // Notice that we can't rely on GfxInfo for this blacklisting,
-    // as GfxInfo on Android currently doesn't know the GL strings, which are,
-    // AFAIK, the only way to identify Adreno GPUs.
-    //
-    // Somehow, the Layers' OpenGL context creation doesn't crash, and neither does
-    // the global GL context creation. So we currently use the Renderer() id from the
-    // global context. This is not future-proof, as the plan is to get rid of the global
-    // context soon with OMTC. We need to replace this by getting the renderer id from
-    // the Layers' GL context, but as with OMTC the LayerManager lives on a different
-    // thread, this will have to involve some message-passing.
-    if (!forceEnabled) {
-        GLContext *globalContext = GLContextProvider::GetGlobalContext();
-        if (!globalContext) {
-            // make sure that we don't forget to update this code once the globalContext
-            // is removed
-            NS_RUNTIMEABORT("No global context anymore? Then you need to update "
-                            "this code, or force-enable WebGL.");
-        }
-        int renderer = globalContext->Renderer();
-        if (renderer == gl::GLContext::RendererAdreno200 ||
-            renderer == gl::GLContext::RendererAdreno205)
-        {
-            GenerateWarning("WebGL blocked on this Adreno driver!");
-            return NS_ERROR_FAILURE;
-        }
     }
 #endif
 
@@ -520,9 +490,14 @@ WebGLContext::SetDimensions(PRInt32 width, PRInt32 height)
 
     // try the default provider, whatever that is
     if (!gl && useOpenGL) {
-        gl = gl::GLContextProvider::CreateOffscreen(gfxIntSize(width, height), format);
+        GLContext::ContextFlags flag = useMesaLlvmPipe 
+                                       ? GLContext::ContextFlagsMesaLLVMPipe
+                                       : GLContext::ContextFlagsNone;
+        gl = gl::GLContextProvider::CreateOffscreen(gfxIntSize(width, height), 
+                                                               format, flag);
         if (gl && !InitAndValidateGL()) {
-            GenerateWarning("Error during OpenGL initialization");
+            GenerateWarning("Error during %s initialization", 
+                            useMesaLlvmPipe ? "Mesa LLVMpipe" : "OpenGL");
             return NS_ERROR_FAILURE;
         }
     }
@@ -546,7 +521,9 @@ WebGLContext::SetDimensions(PRInt32 width, PRInt32 height)
     }
 
 #ifdef DEBUG
-    printf_stderr ("--- WebGL context created: %p\n", gl.get());
+    if (gl->DebugMode()) {
+        printf_stderr("--- WebGL context created: %p\n", gl.get());
+    }
 #endif
 
     mWidth = width;
@@ -745,7 +722,7 @@ WebGLContext::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
       // releasing the reference to the element.
       // The userData will receive DidTransactionCallbacks, which flush the
       // the invalidation state to indicate that the canvas is up to date.
-      userData = new WebGLContextUserData(HTMLCanvasElement());
+      userData = new WebGLContextUserData(mCanvasElement);
       canvasLayer->SetDidTransactionCallback(
               WebGLContextUserData::DidTransactionCallback, userData);
     }
@@ -1084,7 +1061,7 @@ WebGLContext::Notify(nsITimer* timer)
 {
     TerminateContextLossTimer();
 
-    if (!HTMLCanvasElement()) {
+    if (!mCanvasElement) {
         // the canvas is gone. That happens when the page was closed before we got
         // this timer event. In this case, there's nothing to do here, just don't crash.
         return NS_OK;
@@ -1094,8 +1071,8 @@ WebGLContext::Notify(nsITimer* timer)
     // that now.
     if (mContextStatus == ContextLostAwaitingEvent) {
         bool defaultAction;
-        nsContentUtils::DispatchTrustedEvent(HTMLCanvasElement()->OwnerDoc(),
-                                             (nsIDOMHTMLCanvasElement*) HTMLCanvasElement(),
+        nsContentUtils::DispatchTrustedEvent(mCanvasElement->OwnerDoc(),
+                                             static_cast<nsIDOMHTMLCanvasElement*>(mCanvasElement),
                                              NS_LITERAL_STRING("webglcontextlost"),
                                              true,
                                              true,
@@ -1123,8 +1100,8 @@ WebGLContext::Notify(nsITimer* timer)
             return NS_OK;
         }
         mContextStatus = ContextStable;
-        nsContentUtils::DispatchTrustedEvent(HTMLCanvasElement()->OwnerDoc(),
-                                             (nsIDOMHTMLCanvasElement*) HTMLCanvasElement(),
+        nsContentUtils::DispatchTrustedEvent(mCanvasElement->OwnerDoc(),
+                                             static_cast<nsIDOMHTMLCanvasElement*>(mCanvasElement),
                                              NS_LITERAL_STRING("webglcontextrestored"),
                                              true,
                                              true);
@@ -1233,7 +1210,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(WebGLContext)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(WebGLContext)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mCanvasElement)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR_AMBIGUOUS(mCanvasElement, nsINode)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSTARRAY_OF_NSCOMPTR(mEnabledExtensions)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END

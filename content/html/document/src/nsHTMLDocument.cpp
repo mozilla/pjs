@@ -1765,6 +1765,84 @@ nsHTMLDocument::GetElementsByName(const nsAString& aElementName,
   return NS_OK;
 }
 
+static bool MatchItems(nsIContent* aContent, PRInt32 aNameSpaceID, 
+                       nsIAtom* aAtom, void* aData)
+{
+  if (!(aContent->IsElement() && aContent->AsElement()->IsHTML())) {
+    return false;
+  }
+
+  nsGenericHTMLElement* elem = static_cast<nsGenericHTMLElement*>(aContent);
+  if (!elem->HasAttr(kNameSpaceID_None, nsGkAtoms::itemscope) ||
+      elem->HasAttr(kNameSpaceID_None, nsGkAtoms::itemprop)) {
+    return false;
+  }
+
+  nsTArray<nsCOMPtr<nsIAtom> >* tokens = static_cast<nsTArray<nsCOMPtr<nsIAtom> >*>(aData);
+  if (tokens->IsEmpty()) {
+    return true;
+  }
+ 
+  const nsAttrValue* attr = elem->GetParsedAttr(nsGkAtoms::itemtype);
+  if (!attr)
+    return false;
+
+  for (PRUint32 i = 0; i < tokens->Length(); i++) {
+    if (!attr->Contains(tokens->ElementAt(i), eCaseMatters)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void DestroyTokens(void* aData)
+{
+  nsTArray<nsCOMPtr<nsIAtom> >* tokens = static_cast<nsTArray<nsCOMPtr<nsIAtom> >*>(aData);
+  delete tokens;
+}
+
+static void* CreateTokens(nsINode* aRootNode, const nsString* types)
+{
+  nsTArray<nsCOMPtr<nsIAtom> >* tokens = new nsTArray<nsCOMPtr<nsIAtom> >();
+  nsAString::const_iterator iter, end;
+  types->BeginReading(iter);
+  types->EndReading(end);
+  
+  // skip initial whitespace
+  while (iter != end && nsContentUtils::IsHTMLWhitespace(*iter)) {
+    ++iter;
+  }
+
+  // parse the tokens
+  while (iter != end) {
+    nsAString::const_iterator start(iter);
+
+    do {
+      ++iter;
+    } while (iter != end && !nsContentUtils::IsHTMLWhitespace(*iter));
+
+    tokens->AppendElement(do_GetAtom(Substring(start, iter)));
+
+    // skip whitespace
+    while (iter != end && nsContentUtils::IsHTMLWhitespace(*iter)) {
+      ++iter;
+    }
+  }
+  return tokens;
+}
+
+NS_IMETHODIMP
+nsHTMLDocument::GetItems(const nsAString& types, nsIDOMNodeList** aReturn)
+{
+  nsRefPtr<nsContentList> elements = 
+    NS_GetFuncStringContentList(this, MatchItems, DestroyTokens, 
+                                CreateTokens, types);
+  NS_ENSURE_TRUE(elements, NS_ERROR_OUT_OF_MEMORY);
+  elements.forget(aReturn);
+  return NS_OK;
+}
+
+
 void
 nsHTMLDocument::AddedForm()
 {
@@ -2806,7 +2884,6 @@ static const struct MidasCommand gMidasCommandTable[] = {
   { "insertimage",   "cmd_insertImageNoUI", "", false, false },
   { "inserthtml",    "cmd_insertHTML",      "", false, false },
   { "inserttext",    "cmd_insertText",      "", false, false },
-  { "insertparagraph", "cmd_insertText",  "\n", true,  false },
   { "gethtml",       "cmd_getContents",     "", false, false },
   { "justifyleft",   "cmd_align",       "left", true,  false },
   { "justifyright",  "cmd_align",      "right", true,  false },
@@ -2816,6 +2893,7 @@ static const struct MidasCommand gMidasCommandTable[] = {
   { "unlink",        "cmd_removeLinks",     "", true,  false },
   { "insertorderedlist",   "cmd_ol",        "", true,  false },
   { "insertunorderedlist", "cmd_ul",        "", true,  false },
+  { "insertparagraph", "cmd_paragraphState", "p", true,  false },
   { "formatblock",   "cmd_paragraphState",  "", false, false },
   { "heading",       "cmd_paragraphState",  "", false, false },
   { "styleWithCSS",  "cmd_setDocumentUseCSS", "", false, true },

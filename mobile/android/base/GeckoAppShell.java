@@ -148,6 +148,7 @@ public class GeckoAppShell
     public static native void loadSQLiteLibsNative(String apkName, boolean shouldExtract);
     public static native void loadNSSLibsNative(String apkName, boolean shouldExtract);
     public static native void onChangeNetworkLinkStatus(String status);
+    public static native Message getNextMessageFromQueue(MessageQueue queue);
 
     public static void registerGlobalExceptionHandler() {
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
@@ -384,6 +385,10 @@ public class GeckoAppShell
 
         // Enable fixed position layers
         GeckoAppShell.putenv("MOZ_ENABLE_FIXED_POSITION_LAYERS=1");
+
+        // setup the app-specific cache path
+        f = context.getCacheDir();
+        GeckoAppShell.putenv("CACHE_DIRECTORY=" + f.getPath());
 
         putLocaleEnv();
     }
@@ -802,6 +807,35 @@ public class GeckoAppShell
                 intent.putExtra("duplicate", false);
 
                 intent.setAction("com.android.launcher.action.INSTALL_SHORTCUT");
+                GeckoApp.mAppContext.sendBroadcast(intent);
+            }
+        });
+    }
+
+    public static void removeShortcut(final String aTitle, final String aURI, final String aType) {
+        getHandler().post(new Runnable() {
+            public void run() {
+                Log.w(LOGTAG, "removeShortcut for " + aURI + " [" + aTitle + "] > " + aType);
+        
+                // the intent to be launched by the shortcut
+                Intent shortcutIntent = new Intent();
+                if (aType.equalsIgnoreCase(SHORTCUT_TYPE_WEBAPP)) {
+                    shortcutIntent.setAction(GeckoApp.ACTION_WEBAPP);
+                } else {
+                    shortcutIntent.setAction(GeckoApp.ACTION_BOOKMARK);
+                }
+                shortcutIntent.setData(Uri.parse(aURI));
+                shortcutIntent.setClassName(GeckoApp.mAppContext,
+                                            GeckoApp.mAppContext.getPackageName() + ".App");
+        
+                Intent intent = new Intent();
+                intent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
+                if (aTitle != null)
+                    intent.putExtra(Intent.EXTRA_SHORTCUT_NAME, aTitle);
+                else
+                    intent.putExtra(Intent.EXTRA_SHORTCUT_NAME, aURI);
+
+                intent.setAction("com.android.launcher.action.UNINSTALL_SHORTCUT");
                 GeckoApp.mAppContext.sendBroadcast(intent);
             }
         });
@@ -1517,13 +1551,13 @@ public class GeckoAppShell
     public static void addPluginView(View view,
                                      int x, int y,
                                      int w, int h,
-                                     boolean isFullScreen, int orientation)
+                                     boolean isFullScreen)
 {
         ImmutableViewportMetrics pluginViewport;
 
-        Log.i(LOGTAG, "addPluginView:" + view + " @ x:" + x + " y:" + y + " w:" + w + " h:" + h + "fullscreen: " + isFullScreen + " orientation: " + orientation);
+        Log.i(LOGTAG, "addPluginView:" + view + " @ x:" + x + " y:" + y + " w:" + w + " h:" + h + " fullscreen: " + isFullScreen);
         
-        GeckoApp.mAppContext.addPluginView(view, new Rect(x, y, x + w, y + h), isFullScreen, orientation);
+        GeckoApp.mAppContext.addPluginView(view, new Rect(x, y, x + w, y + h), isFullScreen);
     }
 
     public static void removePluginView(View view, boolean isFullScreen) {
@@ -2105,25 +2139,15 @@ public class GeckoAppShell
     }
 
     public static void pumpMessageLoop() {
-        // We're going to run the Looper below, but we need a way to break out, so
-        // we post this Runnable that throws an AssertionError. This causes the loop
-        // to exit without marking the Looper as dead. The Runnable is added to the
-        // end of the queue, so it will be executed after anything
-        // else that has been added prior.
-        //
-        // A more civilized method would obviously be preferred. Looper.quit(),
-        // however, marks the Looper as dead and it cannot be prepared or run
-        // again. And since you can only have a single Looper per thread,
-        // here we are.
-        sGeckoHandler.post(new Runnable() {
-            public void run() {
-                throw new AssertionError();
-            }
-        });
-        
-        try {
-            Looper.loop();
-        } catch(Throwable ex) {}
+        MessageQueue mq = Looper.myQueue();
+        Message msg = getNextMessageFromQueue(mq); 
+        if (msg == null)
+            return;
+        if (msg.getTarget() == null)
+            Looper.myLooper().quit();
+        else
+            msg.getTarget().dispatchMessage(msg);
+        msg.recycle();
     }
 
     static class AsyncResultHandler extends GeckoApp.FilePickerResultHandler {
@@ -2242,5 +2266,9 @@ public class GeckoAppShell
                 (int)FloatMath.ceil(sx), (int)FloatMath.ceil(sy),
                 (int)FloatMath.floor(sw), (int)FloatMath.floor(sh),
                 dx, dy, dw, dh, GeckoAppShell.SCREENSHOT_WHOLE_PAGE));
+    }
+
+    public static void notifyWakeLockChanged(String topic, String state) {
+        GeckoApp.mAppContext.notifyWakeLockChanged(topic, state);
     }
 }

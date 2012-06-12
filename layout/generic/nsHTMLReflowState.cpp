@@ -257,6 +257,9 @@ nsHTMLReflowState::Init(nsPresContext* aPresContext,
       !(parent->GetType() == nsGkAtoms::scrollFrame &&
         parent->GetStyleDisplay()->mOverflowY != NS_STYLE_OVERFLOW_HIDDEN)) {
     frame->AddStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
+  } else if (type == nsGkAtoms::svgForeignObjectFrame) {
+    // An SVG foreignObject frame is inherently constrained height.
+    frame->AddStateBits(NS_FRAME_IN_CONSTRAINED_HEIGHT);
   } else if ((mStylePosition->mHeight.GetUnit() != eStyleUnit_Auto ||
               mStylePosition->mMaxHeight.GetUnit() != eStyleUnit_None) &&
               // Don't set NS_FRAME_IN_CONSTRAINED_HEIGHT on body or html
@@ -305,12 +308,6 @@ nsHTMLReflowState::Init(nsPresContext* aPresContext,
                    "have unconstrained width; this should only result from "
                    "very large sizes, not attempts at intrinsic width "
                    "calculation");
-
-  if (frame->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT) {
-    // Create our font inflation data if we don't have it already, and
-    // give it our current width information.
-    nsFontInflationData::UpdateFontInflationDataWidthFor(*this);
-  }
 }
 
 void nsHTMLReflowState::InitCBReflowState()
@@ -364,34 +361,91 @@ IsQuirkContainingBlockHeight(const nsHTMLReflowState* rs, nsIAtom* aFrameType)
 void
 nsHTMLReflowState::InitResizeFlags(nsPresContext* aPresContext, nsIAtom* aFrameType)
 {
-  mFlags.mHResize = !(frame->GetStateBits() & NS_FRAME_IS_DIRTY) &&
-                    frame->GetSize().width !=
-                      mComputedWidth + mComputedBorderPadding.LeftRight();
-  if (mFlags.mHResize &&
-      nsLayoutUtils::FontSizeInflationEnabled(aPresContext)) {
-    // When font size inflation is enabled, the change in the width of a
-    // block (or anything that returns true in
-    // IsContainerForFontSizeInflation) needs to cause a dirty reflow
-    // since it changes the size of text, line-heights, etc.  This is
-    // relatively similar to a classic case of style change reflow,
-    // except that because inflation doesn't affect the intrinsic sizing
-    // codepath, there's no need to invalidate intrinsic sizes.
-    //
-    // Note that this makes horizontal resizing a good bit more
-    // expensive.  However, font size inflation is targeted at a set of
-    // devices (zoom-and-pan devices) where the main use case for
-    // horizontal resizing needing to be efficient (window resizing) is
-    // not present.  It does still increase the cost of dynamic changes
-    // caused by script where a style or content change in one place
-    // causes a resize in another (e.g., rebalancing a table).
+  bool isHResize = frame->GetSize().width !=
+                     mComputedWidth + mComputedBorderPadding.LeftRight();
 
-    // FIXME: This isn't so great for the cases where
-    // nsHTMLReflowState::SetComputedWith is called, if the first time
-    // we go through InitResizeFlags we set mHResize to true, and then
-    // the second time we'd set it to false even without the
-    // NS_FRAME_IS_DIRTY bit already set.
-    frame->AddStateBits(NS_FRAME_IS_DIRTY);
+  if ((frame->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT) &&
+      nsLayoutUtils::FontSizeInflationEnabled(aPresContext)) {
+    // Create our font inflation data if we don't have it already, and
+    // give it our current width information.
+    bool dirty = nsFontInflationData::UpdateFontInflationDataWidthFor(*this);
+    if (dirty || (!frame->GetParent() && isHResize)) {
+      // When font size inflation is enabled, a change in either:
+      //  * the effective width of a font inflation flow root
+      //  * the width of the frame
+      // needs to cause a dirty reflow since they change the font size
+      // inflation calculations, which in turn change the size of text,
+      // line-heights, etc.  This is relatively similar to a classic
+      // case of style change reflow, except that because inflation
+      // doesn't affect the intrinsic sizing codepath, there's no need
+      // to invalidate intrinsic sizes.
+      //
+      // Note that this makes horizontal resizing a good bit more
+      // expensive.  However, font size inflation is targeted at a set of
+      // devices (zoom-and-pan devices) where the main use case for
+      // horizontal resizing needing to be efficient (window resizing) is
+      // not present.  It does still increase the cost of dynamic changes
+      // caused by script where a style or content change in one place
+      // causes a resize in another (e.g., rebalancing a table).
+
+      // FIXME: This isn't so great for the cases where
+      // nsHTMLReflowState::SetComputedWidth is called, if the first time
+      // we go through InitResizeFlags we set mHResize to true, and then
+      // the second time we'd set it to false even without the
+      // NS_FRAME_IS_DIRTY bit already set.
+      if (frame->GetType() == nsGkAtoms::svgForeignObjectFrame) {
+        // Foreign object frames use dirty bits in a special way.
+        frame->AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
+        nsIFrame *kid = frame->GetFirstPrincipalChild();
+        if (kid) {
+          kid->AddStateBits(NS_FRAME_IS_DIRTY);
+        }
+      } else {
+        frame->AddStateBits(NS_FRAME_IS_DIRTY);
+      }
+
+      // Mark intrinsic widths on all descendants dirty.  We need to do
+      // this (1) since we're changing the size of text and need to
+      // clear text runs on text frames and (2) since we actually are
+      // changing some intrinsic widths, but only those that live inside
+      // of containers.
+
+      // It makes sense to do this for descendants but not ancestors
+      // (which is unusual) because we're only changing the unusual
+      // inflation-dependent intrinsic widths (i.e., ones computed with
+      // nsPresContext::mInflationDisabledForShrinkWrap set to false),
+      // which should never affect anything outside of their inflation
+      // flow root (or, for that matter, even their inflation
+      // container).
+
+      // This is also different from what PresShell::FrameNeedsReflow
+      // does because it doesn't go through placeholders.  It doesn't
+      // need to because we're actually doing something that cares about
+      // frame tree geometry (the width on an ancestor) rather than
+      // style.
+
+      nsAutoTArray<nsIFrame*, 32> stack;
+      stack.AppendElement(frame);
+
+      do {
+        nsIFrame *f = stack.ElementAt(stack.Length() - 1);
+        stack.RemoveElementAt(stack.Length() - 1);
+
+        nsIFrame::ChildListIterator lists(f);
+        for (; !lists.IsDone(); lists.Next()) {
+          nsFrameList::Enumerator childFrames(lists.CurrentList());
+          for (; !childFrames.AtEnd(); childFrames.Next()) {
+            nsIFrame* kid = childFrames.get();
+            kid->MarkIntrinsicWidthsDirty();
+            stack.AppendElement(kid);
+          }
+        }
+      } while (stack.Length() != 0);
+    }
   }
+
+  mFlags.mHResize = !(frame->GetStateBits() & NS_FRAME_IS_DIRTY) &&
+                    isHResize;
 
   // XXX Should we really need to null check mCBReflowState?  (We do for
   // at least nsBoxFrame).
@@ -606,23 +660,25 @@ nsHTMLReflowState::InitFrameType(nsIAtom* aFrameType)
   mFrameType = frameType;
 }
 
-void
-nsHTMLReflowState::ComputeRelativeOffsets(const nsHTMLReflowState* cbrs,
+/* static */ void
+nsHTMLReflowState::ComputeRelativeOffsets(PRUint8 aCBDirection,
+                                          nsIFrame* aFrame,
                                           nscoord aContainingBlockWidth,
                                           nscoord aContainingBlockHeight,
-                                          nsPresContext* aPresContext)
+                                          nsMargin& aComputedOffsets)
 {
+  const nsStylePosition* position = aFrame->GetStylePosition();
+
   // Compute the 'left' and 'right' values. 'Left' moves the boxes to the right,
   // and 'right' moves the boxes to the left. The computed values are always:
   // left=-right
-  bool    leftIsAuto = eStyleUnit_Auto == mStylePosition->mOffset.GetLeftUnit();
-  bool    rightIsAuto = eStyleUnit_Auto == mStylePosition->mOffset.GetRightUnit();
+  bool    leftIsAuto = eStyleUnit_Auto == position->mOffset.GetLeftUnit();
+  bool    rightIsAuto = eStyleUnit_Auto == position->mOffset.GetRightUnit();
 
   // If neither 'left' not 'right' are auto, then we're over-constrained and
   // we ignore one of them
   if (!leftIsAuto && !rightIsAuto) {
-    if (mCBReflowState &&
-        NS_STYLE_DIRECTION_RTL == mCBReflowState->mStyleVisibility->mDirection) {
+    if (aCBDirection == NS_STYLE_DIRECTION_RTL) {
       leftIsAuto = true;
     } else {
       rightIsAuto = true;
@@ -632,42 +688,42 @@ nsHTMLReflowState::ComputeRelativeOffsets(const nsHTMLReflowState* cbrs,
   if (leftIsAuto) {
     if (rightIsAuto) {
       // If both are 'auto' (their initial values), the computed values are 0
-      mComputedOffsets.left = mComputedOffsets.right = 0;
+      aComputedOffsets.left = aComputedOffsets.right = 0;
     } else {
       // 'Right' isn't 'auto' so compute its value
-      mComputedOffsets.right = nsLayoutUtils::
+      aComputedOffsets.right = nsLayoutUtils::
         ComputeWidthDependentValue(aContainingBlockWidth,
-                                   mStylePosition->mOffset.GetRight());
+                                   position->mOffset.GetRight());
 
       // Computed value for 'left' is minus the value of 'right'
-      mComputedOffsets.left = -mComputedOffsets.right;
+      aComputedOffsets.left = -aComputedOffsets.right;
     }
 
   } else {
     NS_ASSERTION(rightIsAuto, "unexpected specified constraint");
     
     // 'Left' isn't 'auto' so compute its value
-    mComputedOffsets.left = nsLayoutUtils::
+    aComputedOffsets.left = nsLayoutUtils::
       ComputeWidthDependentValue(aContainingBlockWidth,
-                                 mStylePosition->mOffset.GetLeft());
+                                 position->mOffset.GetLeft());
 
     // Computed value for 'right' is minus the value of 'left'
-    mComputedOffsets.right = -mComputedOffsets.left;
+    aComputedOffsets.right = -aComputedOffsets.left;
   }
 
   // Compute the 'top' and 'bottom' values. The 'top' and 'bottom' properties
   // move relatively positioned elements up and down. They also must be each 
   // other's negative
-  bool    topIsAuto = eStyleUnit_Auto == mStylePosition->mOffset.GetTopUnit();
-  bool    bottomIsAuto = eStyleUnit_Auto == mStylePosition->mOffset.GetBottomUnit();
+  bool    topIsAuto = eStyleUnit_Auto == position->mOffset.GetTopUnit();
+  bool    bottomIsAuto = eStyleUnit_Auto == position->mOffset.GetBottomUnit();
 
   // Check for percentage based values and a containing block height that
   // depends on the content height. Treat them like 'auto'
   if (NS_AUTOHEIGHT == aContainingBlockHeight) {
-    if (mStylePosition->OffsetHasPercent(NS_SIDE_TOP)) {
+    if (position->OffsetHasPercent(NS_SIDE_TOP)) {
       topIsAuto = true;
     }
-    if (mStylePosition->OffsetHasPercent(NS_SIDE_BOTTOM)) {
+    if (position->OffsetHasPercent(NS_SIDE_BOTTOM)) {
       bottomIsAuto = true;
     }
   }
@@ -680,38 +736,38 @@ nsHTMLReflowState::ComputeRelativeOffsets(const nsHTMLReflowState* cbrs,
   if (topIsAuto) {
     if (bottomIsAuto) {
       // If both are 'auto' (their initial values), the computed values are 0
-      mComputedOffsets.top = mComputedOffsets.bottom = 0;
+      aComputedOffsets.top = aComputedOffsets.bottom = 0;
     } else {
       // 'Bottom' isn't 'auto' so compute its value
-      mComputedOffsets.bottom = nsLayoutUtils::
+      aComputedOffsets.bottom = nsLayoutUtils::
         ComputeHeightDependentValue(aContainingBlockHeight,
-                                    mStylePosition->mOffset.GetBottom());
+                                    position->mOffset.GetBottom());
       
       // Computed value for 'top' is minus the value of 'bottom'
-      mComputedOffsets.top = -mComputedOffsets.bottom;
+      aComputedOffsets.top = -aComputedOffsets.bottom;
     }
 
   } else {
     NS_ASSERTION(bottomIsAuto, "unexpected specified constraint");
     
     // 'Top' isn't 'auto' so compute its value
-    mComputedOffsets.top = nsLayoutUtils::
+    aComputedOffsets.top = nsLayoutUtils::
       ComputeHeightDependentValue(aContainingBlockHeight,
-                                  mStylePosition->mOffset.GetTop());
+                                  position->mOffset.GetTop());
 
     // Computed value for 'bottom' is minus the value of 'top'
-    mComputedOffsets.bottom = -mComputedOffsets.top;
+    aComputedOffsets.bottom = -aComputedOffsets.top;
   }
 
   // Store the offset
-  FrameProperties props(aPresContext->PropertyTable(), frame);
+  FrameProperties props = aFrame->Properties();
   nsPoint* offsets = static_cast<nsPoint*>
     (props.Get(nsIFrame::ComputedOffsetProperty()));
   if (offsets) {
-    offsets->MoveTo(mComputedOffsets.left, mComputedOffsets.top);
+    offsets->MoveTo(aComputedOffsets.left, aComputedOffsets.top);
   } else {
     props.Set(nsIFrame::ComputedOffsetProperty(),
-              new nsPoint(mComputedOffsets.left, mComputedOffsets.top));
+              new nsPoint(aComputedOffsets.left, aComputedOffsets.top));
   }
 }
 
@@ -1794,7 +1850,12 @@ nsHTMLReflowState::InitConstraints(nsPresContext* aPresContext,
     // the correct containing block width and height here, which is why we need
     // to do it after all the quirks-n-such above.
     if (NS_STYLE_POSITION_RELATIVE == mStyleDisplay->mPosition) {
-      ComputeRelativeOffsets(cbrs, aContainingBlockWidth, aContainingBlockHeight, aPresContext);
+      PRUint8 direction = NS_STYLE_DIRECTION_LTR;
+      if (cbrs && NS_STYLE_DIRECTION_RTL == cbrs->mStyleVisibility->mDirection) {
+        direction = NS_STYLE_DIRECTION_RTL;
+      }
+      ComputeRelativeOffsets(direction, frame, aContainingBlockWidth,
+          aContainingBlockHeight, mComputedOffsets);
     } else {
       // Initialize offsets to 0
       mComputedOffsets.SizeTo(0, 0, 0, 0);

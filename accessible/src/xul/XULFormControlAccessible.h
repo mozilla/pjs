@@ -9,7 +9,7 @@
 // NOTE: alphabetically ordered
 #include "AccessibleWrap.h"
 #include "FormControlAccessible.h"
-#include "nsHyperTextAccessibleWrap.h"
+#include "HyperTextAccessibleWrap.h"
 #include "XULSelectControlAccessible.h"
 
 namespace mozilla {
@@ -23,7 +23,7 @@ typedef ProgressMeterAccessible<100> XULProgressMeterAccessible;
 /**
  * Used for XUL button.
  *
- * @note  Don't inherit from nsLeafAccessible - it doesn't allow children
+ * @note  Don't inherit from LeafAccessible - it doesn't allow children
  *         and a button can have a dropmarker child.
  */
 class XULButtonAccessible : public AccessibleWrap
@@ -65,7 +65,7 @@ protected:
 /**
  * Used for XUL checkbox element.
  */
-class XULCheckboxAccessible : public nsLeafAccessible
+class XULCheckboxAccessible : public LeafAccessible
 {
 public:
   enum { eAction_Click = 0 };
@@ -86,7 +86,7 @@ public:
 /**
  * Used for XUL dropmarker element.
  */
-class XULDropmarkerAccessible : public nsLeafAccessible
+class XULDropmarkerAccessible : public LeafAccessible
 {
 public:
   enum { eAction_Click = 0 };
@@ -132,6 +132,7 @@ public:
 
   // Accessible
   virtual PRUint64 NativeState();
+  virtual PRUint64 NativeInteractiveState() const;
 
   // Widgets
   virtual Accessible* ContainerWidget() const;
@@ -147,7 +148,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual PRUint64 NativeState();
+  virtual PRUint64 NativeInteractiveState() const;
 
   // Widgets
   virtual bool IsWidget() const;
@@ -199,7 +200,7 @@ public:
 /**
  * Used for XUL toolbarseparator element.
  */
-class XULToolbarSeparatorAccessible : public nsLeafAccessible
+class XULToolbarSeparatorAccessible : public LeafAccessible
 {
 public:
   XULToolbarSeparatorAccessible(nsIContent* aContent,
@@ -213,7 +214,7 @@ public:
 /**
  * Used for XUL textbox element.
  */
-class XULTextFieldAccessible : public nsHyperTextAccessibleWrap
+class XULTextFieldAccessible : public HyperTextAccessibleWrap
 {
 public:
   enum { eAction_Click = 0 };
@@ -226,7 +227,7 @@ public:
   NS_IMETHOD GetActionName(PRUint8 aIndex, nsAString& aName);
   NS_IMETHOD DoAction(PRUint8 index);
 
-  // nsHyperTextAccessible
+  // HyperTextAccessible
   virtual already_AddRefed<nsIEditor> GetEditor() const;
 
   // Accessible
@@ -243,7 +244,7 @@ protected:
   // Accessible
   virtual void CacheChildren();
 
-  // nsHyperTextAccessible
+  // HyperTextAccessible
   virtual already_AddRefed<nsFrameSelection> FrameSelection();
 
   // nsXULTextFieldAccessible

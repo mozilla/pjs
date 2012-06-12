@@ -345,7 +345,7 @@ Accessible::Description(nsString& aDescription)
 }
 
 NS_IMETHODIMP
-Accessible::GetKeyboardShortcut(nsAString& aAccessKey)
+Accessible::GetAccessKey(nsAString& aAccessKey)
 {
   aAccessKey.Truncate();
 
@@ -653,7 +653,6 @@ Accessible::NativeState()
   if (!document || !document->IsInDocument(this))
     state |= states::STALE;
 
-  bool disabled = false;
   if (mContent->IsElement()) {
     nsEventStates elementState = mContent->AsElement()->State();
 
@@ -663,23 +662,7 @@ Accessible::NativeState()
     if (elementState.HasState(NS_EVENT_STATE_REQUIRED))
       state |= states::REQUIRED;
 
-    disabled = mContent->IsHTML() ? 
-      (elementState.HasState(NS_EVENT_STATE_DISABLED)) :
-      (mContent->AttrValueIs(kNameSpaceID_None,
-                             nsGkAtoms::disabled,
-                             nsGkAtoms::_true,
-                             eCaseMatters));
-  }
-
-  // Set unavailable state based on disabled state, otherwise set focus states
-  if (disabled) {
-    state |= states::UNAVAILABLE;
-  }
-  else if (mContent->IsElement()) {
-    nsIFrame* frame = GetFrame();
-    if (frame && frame->IsFocusable())
-      state |= states::FOCUSABLE;
-
+    state |= NativeInteractiveState();
     if (FocusMgr()->IsFocused(this))
       state |= states::FOCUSED;
   }
@@ -705,10 +688,36 @@ Accessible::NativeState()
 }
 
 PRUint64
+Accessible::NativeInteractiveState() const
+{
+  if (!mContent->IsElement())
+    return 0;
+
+  if (NativelyUnavailable())
+    return states::UNAVAILABLE;
+
+  nsIFrame* frame = GetFrame();
+  if (frame && frame->IsFocusable())
+    return states::FOCUSABLE;
+
+  return 0;
+}
+
+PRUint64
 Accessible::NativeLinkState() const
 {
   // Expose linked state for simple xlink.
   return nsCoreUtils::IsXLink(mContent) ? states::LINKED : 0;
+}
+
+bool
+Accessible::NativelyUnavailable() const
+{
+  if (mContent->IsHTML())
+    return mContent->AsElement()->State().HasState(NS_EVENT_STATE_DISABLED);
+
+  return mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
+                               nsGkAtoms::_true, eCaseMatters);
 }
 
   /* readonly attribute boolean focusedChild; */
@@ -872,88 +881,14 @@ Accessible::GetDeepestChildAtPoint(PRInt32 aX, PRInt32 aY,
 void
 Accessible::GetBoundsRect(nsRect& aTotalBounds, nsIFrame** aBoundingFrame)
 {
-/*
- * This method is used to determine the bounds of a content node.
- * Because HTML wraps and links are not always rectangular, this
- * method uses the following algorithm:
- *
- * 1) Start with an empty rectangle
- * 2) Add the rect for the primary frame from for the DOM node.
- * 3) For each next frame at the same depth with the same DOM node, add that rect to total
- * 4) If that frame is an inline frame, search deeper at that point in the tree, adding all rects
- */
-
-  // Initialization area
-  *aBoundingFrame = nsnull;
-  nsIFrame* firstFrame = GetFrame();
-  if (!firstFrame)
-    return;
-
-  // Find common relative parent
-  // This is an ancestor frame that will incompass all frames for this content node.
-  // We need the relative parent so we can get absolute screen coordinates
-  nsIFrame *ancestorFrame = firstFrame;
-
-  while (ancestorFrame) {  
-    *aBoundingFrame = ancestorFrame;
-    // If any other frame type, we only need to deal with the primary frame
-    // Otherwise, there may be more frames attached to the same content node
-    if (ancestorFrame->GetType() != nsGkAtoms::inlineFrame &&
-        ancestorFrame->GetType() != nsGkAtoms::textFrame)
-      break;
-    ancestorFrame = ancestorFrame->GetParent();
-  }
-
-  nsIFrame *iterFrame = firstFrame;
-  nsCOMPtr<nsIContent> firstContent(mContent);
-  nsIContent* iterContent = firstContent;
-  PRInt32 depth = 0;
-
-  // Look only at frames below this depth, or at this depth (if we're still on the content node we started with)
-  while (iterContent == firstContent || depth > 0) {
-    // Coordinates will come back relative to parent frame
-    nsRect currFrameBounds = iterFrame->GetRect();
-    
-    // Make this frame's bounds relative to common parent frame
-    currFrameBounds +=
-      iterFrame->GetParent()->GetOffsetToExternal(*aBoundingFrame);
-
-    // Add this frame's bounds to total
-    aTotalBounds.UnionRect(aTotalBounds, currFrameBounds);
-
-    nsIFrame *iterNextFrame = nsnull;
-
-    if (iterFrame->GetType() == nsGkAtoms::inlineFrame) {
-      // Only do deeper bounds search if we're on an inline frame
-      // Inline frames can contain larger frames inside of them
-      iterNextFrame = iterFrame->GetFirstPrincipalChild();
-    }
-
-    if (iterNextFrame) 
-      ++depth;  // Child was found in code above this: We are going deeper in this iteration of the loop
-    else {  
-      // Use next sibling if it exists, or go back up the tree to get the first next-in-flow or next-sibling 
-      // within our search
-      while (iterFrame) {
-        iterNextFrame = iterFrame->GetNextContinuation();
-        if (!iterNextFrame)
-          iterNextFrame = iterFrame->GetNextSibling();
-        if (iterNextFrame || --depth < 0) 
-          break;
-        iterFrame = iterFrame->GetParent();
-      }
-    }
-
-    // Get ready for the next round of our loop
-    iterFrame = iterNextFrame;
-    if (iterFrame == nsnull)
-      break;
-    iterContent = nsnull;
-    if (depth == 0)
-      iterContent = iterFrame->GetContent();
+  nsIFrame* frame = GetFrame();
+  if (frame) {
+    *aBoundingFrame = nsLayoutUtils::GetContainingBlockForClientRect(frame);
+    aTotalBounds = nsLayoutUtils::
+      GetAllInFlowRectsUnion(frame, *aBoundingFrame,
+                             nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
   }
 }
-
 
 /* void getBounds (out long x, out long y, out long width, out long height); */
 NS_IMETHODIMP
@@ -1744,34 +1679,13 @@ Accessible::SetName(const nsAString& aName)
 }
 
 NS_IMETHODIMP
-Accessible::GetDefaultKeyBinding(nsAString& aKeyBinding)
+Accessible::GetKeyboardShortcut(nsAString& aKeyBinding)
 {
   aKeyBinding.Truncate();
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
   KeyboardShortcut().ToString(aKeyBinding);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-Accessible::GetKeyBindings(PRUint8 aActionIndex,
-                             nsIDOMDOMStringList** aKeyBindings)
-{
-  // Currently we support only unique key binding on element for default action.
-  NS_ENSURE_TRUE(aActionIndex == 0, NS_ERROR_INVALID_ARG);
-
-  nsAccessibleDOMStringList* keyBindings = new nsAccessibleDOMStringList();
-  NS_ENSURE_TRUE(keyBindings, NS_ERROR_OUT_OF_MEMORY);
-
-  nsAutoString defaultKey;
-  nsresult rv = GetDefaultKeyBinding(defaultKey);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!defaultKey.IsEmpty())
-    keyBindings->Add(defaultKey);
-
-  NS_ADDREF(*aKeyBindings = keyBindings);
   return NS_OK;
 }
 
@@ -1838,7 +1752,7 @@ Accessible::GetActionCount(PRUint8* aActionCount)
 PRUint8
 Accessible::ActionCount()
 {
-  return GetActionRule(State()) == eNoAction ? 0 : 1;
+  return GetActionRule() == eNoAction ? 0 : 1;
 }
 
 /* DOMString getAccActionName (in PRUint8 index); */
@@ -1853,8 +1767,7 @@ Accessible::GetActionName(PRUint8 aIndex, nsAString& aName)
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  PRUint64 states = State();
-  PRUint32 actionRule = GetActionRule(states);
+  PRUint32 actionRule = GetActionRule();
 
  switch (actionRule) {
    case eActivateAction:
@@ -1870,20 +1783,23 @@ Accessible::GetActionName(PRUint8 aIndex, nsAString& aName)
      return NS_OK;
 
    case eCheckUncheckAction:
-     if (states & states::CHECKED)
+   {
+     PRUint64 state = State();
+     if (state & states::CHECKED)
        aName.AssignLiteral("uncheck");
-     else if (states & states::MIXED)
+     else if (state & states::MIXED)
        aName.AssignLiteral("cycle");
      else
        aName.AssignLiteral("check");
      return NS_OK;
+   }
 
    case eJumpAction:
      aName.AssignLiteral("jump");
      return NS_OK;
 
    case eOpenCloseAction:
-     if (states & states::COLLAPSED)
+     if (State() & states::COLLAPSED)
        aName.AssignLiteral("open");
      else
        aName.AssignLiteral("close");
@@ -1896,13 +1812,13 @@ Accessible::GetActionName(PRUint8 aIndex, nsAString& aName)
    case eSwitchAction:
      aName.AssignLiteral("switch");
      return NS_OK;
-     
+
    case eSortAction:
      aName.AssignLiteral("sort");
      return NS_OK;
-   
+
    case eExpandAction:
-     if (states & states::COLLAPSED)
+     if (State() & states::COLLAPSED)
        aName.AssignLiteral("expand");
      else
        aName.AssignLiteral("collapse");
@@ -1935,7 +1851,7 @@ Accessible::DoAction(PRUint8 aIndex)
   if (IsDefunct())
     return NS_ERROR_FAILURE;
 
-  if (GetActionRule(State()) != eNoAction) {
+  if (GetActionRule() != eNoAction) {
     DoCommand();
     return NS_OK;
   }
@@ -2736,7 +2652,7 @@ Accessible::StartOffset()
 {
   NS_PRECONDITION(IsLink(), "StartOffset is called not on hyper link!");
 
-  nsHyperTextAccessible* hyperText = mParent ? mParent->AsHyperText() : nsnull;
+  HyperTextAccessible* hyperText = mParent ? mParent->AsHyperText() : nsnull;
   return hyperText ? hyperText->GetChildOffset(this) : 0;
 }
 
@@ -2745,7 +2661,7 @@ Accessible::EndOffset()
 {
   NS_PRECONDITION(IsLink(), "EndOffset is called on not hyper link!");
 
-  nsHyperTextAccessible* hyperText = mParent ? mParent->AsHyperText() : nsnull;
+  HyperTextAccessible* hyperText = mParent ? mParent->AsHyperText() : nsnull;
   return hyperText ? (hyperText->GetChildOffset(this) + 1) : 0;
 }
 
@@ -3142,11 +3058,11 @@ Accessible::GetAttrValue(nsIAtom *aProperty, double *aValue)
 }
 
 PRUint32
-Accessible::GetActionRule(PRUint64 aStates)
+Accessible::GetActionRule()
 {
-  if (aStates & states::UNAVAILABLE)
+  if (InteractiveState() & states::UNAVAILABLE)
     return eNoAction;
-  
+
   // Check if it's simple xlink.
   if (nsCoreUtils::IsXLink(mContent))
     return eJumpAction;

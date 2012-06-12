@@ -41,7 +41,7 @@
 
 #elif defined(XP_WIN)
 
-#include "nsILocalFile.h"
+#include "nsIFile.h"
 
 #define GLES2_LIB "libGLESv2.dll"
 
@@ -1947,8 +1947,12 @@ GLContextProviderEGL::CreateForNativePixmapSurface(gfxASurface* aSurface)
 }
 
 GLContext *
-GLContextProviderEGL::GetGlobalContext()
+GLContextProviderEGL::GetGlobalContext(const ContextFlags)
 {
+#ifdef MOZ_JAVA_COMPOSITOR
+    return nsnull;
+#endif
+
     static bool triedToCreateContext = false;
     if (!triedToCreateContext && !gGlobalContext) {
         triedToCreateContext = true;

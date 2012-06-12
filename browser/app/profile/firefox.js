@@ -1036,22 +1036,26 @@ pref("devtools.inspector.highlighterShowVeil", true);
 pref("devtools.inspector.highlighterShowInfobar", true);
 
 // Enable the Layout View
-pref("devtools.layoutview.enabled", false);
+pref("devtools.layoutview.enabled", true);
 pref("devtools.layoutview.open", false);
+
+// Enable the Responsive UI tool
+pref("devtools.responsiveUI.enabled", true);
 
 // Enable the Debugger
 pref("devtools.debugger.enabled", true);
-pref("devtools.debugger.remote-enabled", false);
+pref("devtools.debugger.chrome-enabled", false);
 pref("devtools.debugger.remote-host", "localhost");
-pref("devtools.debugger.remote-port", 6000);
 pref("devtools.debugger.remote-autoconnect", false);
 pref("devtools.debugger.remote-connection-retries", 3);
 pref("devtools.debugger.remote-timeout", 3000);
 
-// The default Debugger UI height
+// The default Debugger UI settings
 pref("devtools.debugger.ui.height", 250);
 pref("devtools.debugger.ui.remote-win.width", 900);
 pref("devtools.debugger.ui.remote-win.height", 400);
+pref("devtools.debugger.ui.stackframes-width", 200);
+pref("devtools.debugger.ui.variables-width", 300);
 
 // Enable the style inspector
 pref("devtools.styleinspector.enabled", true);
@@ -1154,6 +1158,18 @@ pref("full-screen-api.approval-required", true);
 // number of startup crashes that can occur before starting into safe mode automatically
 // (this pref has no effect if more than 6 hours have passed since the last crash)
 pref("toolkit.startup.max_resumed_crashes", 3);
+
+// Completely disable pdf.js as an option to preview pdfs within firefox.
+// Note: if this is not disabled it does not necessarily mean pdf.js is the pdf
+// handler just that it is an option.
+pref("pdfjs.disabled", false);
+// Used by pdf.js to know the first time firefox is run with it installed so it
+// can become the default pdf viewer.
+pref("pdfjs.firstRun", true);
+// The values of preferredAction and alwaysAskBeforeHandling before pdf.js
+// became the default.
+pref("pdfjs.previousHandler.preferredAction", 0);
+pref("pdfjs.previousHandler.alwaysAskBeforeHandling", false);
 
 // The maximum amount of decoded image data we'll willingly keep around (we
 // might keep around more than this, but we'll try to get down to this value).

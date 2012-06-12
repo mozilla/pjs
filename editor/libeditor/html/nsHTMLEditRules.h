@@ -60,7 +60,7 @@ public:
                         nsIEditor::EDirection aDirection);
   NS_IMETHOD AfterEdit(nsEditor::OperationID action,
                        nsIEditor::EDirection aDirection);
-  NS_IMETHOD WillDoAction(nsTypedSelection* aSelection, nsRulesInfo* aInfo,
+  NS_IMETHOD WillDoAction(mozilla::Selection* aSelection, nsRulesInfo* aInfo,
                           bool* aCancel, bool* aHandled);
   NS_IMETHOD DidDoAction(nsISelection *aSelection, nsRulesInfo *aInfo, nsresult aResult);
   NS_IMETHOD DocumentModified();
@@ -108,18 +108,19 @@ protected:
   // nsHTMLEditRules implementation methods
   nsresult WillInsert(nsISelection *aSelection, bool *aCancel);
   nsresult WillInsertText(  nsEditor::OperationID aAction,
-                            nsISelection *aSelection, 
+                            mozilla::Selection* aSelection,
                             bool            *aCancel,
                             bool            *aHandled,
                             const nsAString *inString,
                             nsAString       *outString,
                             PRInt32          aMaxLength);
   nsresult WillLoadHTML(nsISelection *aSelection, bool *aCancel);
-  nsresult WillInsertBreak(nsISelection *aSelection, bool *aCancel, bool *aHandled);
+  nsresult WillInsertBreak(mozilla::Selection* aSelection,
+                           bool* aCancel, bool* aHandled);
   nsresult StandardBreakImpl(nsIDOMNode *aNode, PRInt32 aOffset, nsISelection *aSelection);
   nsresult DidInsertBreak(nsISelection *aSelection, nsresult aResult);
   nsresult SplitMailCites(nsISelection *aSelection, bool aPlaintext, bool *aHandled);
-  nsresult WillDeleteSelection(nsISelection* aSelection,
+  nsresult WillDeleteSelection(mozilla::Selection* aSelection,
                                nsIEditor::EDirection aAction,
                                nsIEditor::EStripWrappers aStripWrappers,
                                bool* aCancel, bool* aHandled);
@@ -185,7 +186,16 @@ protected:
                               bool aIsBlockIndentedWithCSS,
                               nsCOMPtr<nsIDOMNode> *aLeftNode = 0,
                               nsCOMPtr<nsIDOMNode> *aRightNode = 0);
-  nsresult ConvertListType(nsIDOMNode *aList, nsCOMPtr<nsIDOMNode> *outList, const nsAString& aListType, const nsAString& aItemType);
+
+  nsresult ConvertListType(nsIDOMNode* aList,
+                           nsCOMPtr<nsIDOMNode>* outList,
+                           nsIAtom* aListType,
+                           nsIAtom* aItemType);
+  nsresult ConvertListType(nsINode* aList,
+                           mozilla::dom::Element** aOutList,
+                           nsIAtom* aListType,
+                           nsIAtom* aItemType);
+
   nsresult CreateStyleForInsertText(nsISelection *aSelection, nsIDOMDocument *aDoc);
   nsresult IsEmptyBlock(nsIDOMNode *aNode, 
                         bool *outIsEmptyBlock, 
@@ -246,7 +256,7 @@ protected:
   nsresult PopListItem(nsIDOMNode *aListItem, bool *aOutOfList);
   nsresult RemoveListStructure(nsIDOMNode *aList);
   nsresult CacheInlineStyles(nsIDOMNode *aNode);
-  nsresult ReapplyCachedStyles(); 
+  nsresult ReapplyCachedStyles();
   nsresult ClearCachedStyles();
   nsresult AdjustSpecialBreaks(bool aSafeToAskFrames = false);
   nsresult AdjustWhitespace(nsISelection *aSelection);

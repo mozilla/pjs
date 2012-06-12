@@ -18,6 +18,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Date;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
 
 public class GeckoThread extends Thread {
     private static final String LOGTAG = "GeckoThread";
@@ -25,33 +26,27 @@ public class GeckoThread extends Thread {
     Intent mIntent;
     String mUri;
     int mRestoreMode;
+    CountDownLatch mStartSignal;
 
-    GeckoThread(Intent intent, String uri, int restoreMode) {
+    GeckoThread() {
+        mStartSignal = new CountDownLatch(1);
+        setName("Gecko");
+    }
+
+    public void init(Intent intent, String uri, int restoreMode) {
         mIntent = intent;
         mUri = uri;
         mRestoreMode = restoreMode;
+    }
 
-        setName("Gecko");
+    public void reallyStart() {
+        mStartSignal.countDown();
+        if (getState() == Thread.State.NEW)
+            start();
     }
 
     public void run() {
         final GeckoApp app = GeckoApp.mAppContext;
-        File cacheFile = GeckoAppShell.getCacheDir(app);
-        File libxulFile = new File(cacheFile, "libxul.so");
-
-        if ((!libxulFile.exists() ||
-             new File(app.getApplication().getPackageResourcePath()).lastModified() >= libxulFile.lastModified())) {
-            File[] libs = cacheFile.listFiles(new FilenameFilter() {
-                public boolean accept(File dir, String name) {
-                    return name.endsWith(".so");
-                }
-            });
-            if (libs != null) {
-                for (int i = 0; i < libs.length; i++) {
-                    libs[i].delete();
-                }
-            }
-        }
 
         // At some point while loading the gecko libs our default locale gets set
         // so just save it to locale here and reset it as default after the join
@@ -64,6 +59,11 @@ public class GeckoThread extends Thread {
         GeckoAppShell.loadGeckoLibs(resourcePath);
 
         Locale.setDefault(locale);
+
+        try {
+            mStartSignal.await();
+        } catch (Exception e) { }
+
         Resources res = app.getBaseContext().getResources();
         Configuration config = res.getConfiguration();
         config.locale = locale;

@@ -29,7 +29,6 @@
 #include "nsIDOMLSProgressEvent.h"
 #include "nsIDOMNSEvent.h"
 #include "nsITimer.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsDOMProgressEvent.h"
 #include "nsDOMEventTargetHelper.h"
 #include "nsContentUtils.h"
@@ -37,6 +36,7 @@
 #include "nsDOMBlobBuilder.h"
 #include "nsIPrincipal.h"
 #include "nsIScriptObjectPrincipal.h"
+#include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/XMLHttpRequestBinding.h"
 #include "mozilla/dom/XMLHttpRequestUploadBinding.h"
 
@@ -49,7 +49,7 @@ class nsIUnicodeDecoder;
 class nsIDOMFormData;
 
 #define IMPL_EVENT_HANDLER(_lowercase, _capitalized)                    \
-  JSObject* GetOn##_lowercase()                                         \
+  JSObject* GetOn##_lowercase(JSContext* /* unused */ )                 \
   {                                                                     \
     return GetListenerAsJSObject(mOn##_capitalized##Listener);          \
   }                                                                     \
@@ -180,7 +180,10 @@ public:
 
   // The WebIDL constructor.
   static already_AddRefed<nsXMLHttpRequest>
-  Constructor(nsISupports* aGlobal, ErrorResult& aRv)
+  Constructor(JSContext* aCx,
+              nsISupports* aGlobal,
+              const mozilla::dom::Optional<jsval>& aParams,
+              ErrorResult& aRv)
   {
     nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal);
     nsCOMPtr<nsIScriptObjectPrincipal> principal = do_QueryInterface(aGlobal);
@@ -191,6 +194,13 @@ public:
 
     nsRefPtr<nsXMLHttpRequest> req = new nsXMLHttpRequest();
     req->Construct(principal->GetPrincipal(), window);
+    if (aParams.WasPassed()) {
+      nsresult rv = req->InitParameters(aCx, &aParams.Value());
+      if (NS_FAILED(rv)) {
+        aRv.Throw(rv);
+        return req.forget();
+      }
+    }
     return req.forget();
   }
 
@@ -204,6 +214,9 @@ public:
     BindToOwner(aOwnerWindow);
     mBaseURI = aBaseURI;
   }
+
+  // Initialize XMLHttpRequestParameter object.
+  nsresult InitParameters(JSContext* aCx, const jsval* aParams);
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -246,6 +259,24 @@ public:
 
   // event handler
   IMPL_EVENT_HANDLER(readystatechange, Readystatechange)
+  JSObject* GetOnuploadprogress(JSContext* /* unused */)
+  {
+    nsIDocument* doc = GetOwner() ? GetOwner()->GetExtantDoc() : NULL;
+    if (doc) {
+      doc->WarnOnceAbout(nsIDocument::eOnuploadprogress);
+    }
+    return GetListenerAsJSObject(mOnUploadProgressListener);
+  }
+  void SetOnuploadprogress(JSContext* aCx, JSObject* aCallback,
+                           ErrorResult& aRv)
+  {
+    nsIDocument* doc = GetOwner() ? GetOwner()->GetExtantDoc() : NULL;
+    if (doc) {
+      doc->WarnOnceAbout(nsIDocument::eOnuploadprogress);
+    }
+    aRv = SetJSObjectListener(aCx, NS_LITERAL_STRING("uploadprogress"),
+                              mOnUploadProgressListener, aCallback);
+  }
 
   // states
   uint16_t GetReadyState();
@@ -347,6 +378,8 @@ private:
                                  nsACString& aContentType,
                                  nsACString& aCharset);
 
+  // XXXbz once the nsIVariant bits here go away, we can remove the
+  // implicitJSContext bits in Bindings.conf.
   nsresult Send(JSContext *aCx, nsIVariant* aVariant, const Nullable<RequestBody>& aBody);
   nsresult Send(JSContext *aCx, const Nullable<RequestBody>& aBody)
   {
@@ -439,6 +472,9 @@ public:
   void SetMozBackgroundRequest(bool aMozBackgroundRequest, nsresult& aRv);
   bool GetMultipart();
   void SetMultipart(bool aMultipart, nsresult& aRv);
+
+  bool GetMozAnon();
+  bool GetMozSystem();
 
   nsIChannel* GetChannel()
   {
@@ -614,7 +650,7 @@ protected:
   // Non-null only when we are able to get a os-file representation of the
   // response, i.e. when loading from a file, or when the http-stream
   // caches into a file or is reading from a cached file.
-  nsRefPtr<nsDOMFileBase> mDOMFile;
+  nsRefPtr<nsDOMFile> mDOMFile;
   // We stream data to mBuilder when response type is "blob" or "moz-blob"
   // and mDOMFile is null.
   nsRefPtr<nsDOMBlobBuilder> mBuilder;
@@ -669,6 +705,9 @@ protected:
   nsCOMPtr<nsITimer> mProgressNotifier;
   void HandleProgressTimerCallback();
 
+  bool mIsSystem;
+  bool mIsAnon;
+
   /**
    * Close the XMLHttpRequest's channels and dispatch appropriate progress
    * events.
@@ -704,8 +743,7 @@ protected:
 
 class nsXMLHttpProgressEvent : public nsIDOMProgressEvent,
                                public nsIDOMLSProgressEvent,
-                               public nsIDOMNSEvent,
-                               public nsIPrivateDOMEvent
+                               public nsIDOMNSEvent
 {
 public:
   nsXMLHttpProgressEvent(nsIDOMProgressEvent* aInner,
@@ -720,36 +758,6 @@ public:
   NS_FORWARD_NSIDOMNSEVENT(mInner->)
   NS_FORWARD_NSIDOMPROGRESSEVENT(mInner->)
   NS_DECL_NSIDOMLSPROGRESSEVENT
-  // nsPrivateDOMEvent
-  NS_IMETHOD DuplicatePrivateData()
-  {
-    return mInner->DuplicatePrivateData();
-  }
-  NS_IMETHOD SetTarget(nsIDOMEventTarget* aTarget)
-  {
-    return mInner->SetTarget(aTarget);
-  }
-  NS_IMETHOD_(bool) IsDispatchStopped()
-  {
-    return mInner->IsDispatchStopped();
-  }
-  NS_IMETHOD_(nsEvent*) GetInternalNSEvent()
-  {
-    return mInner->GetInternalNSEvent();
-  }
-  NS_IMETHOD SetTrusted(bool aTrusted)
-  {
-    return mInner->SetTrusted(aTrusted);
-  }
-  virtual void Serialize(IPC::Message* aMsg,
-                         bool aSerializeInterfaceType)
-  {
-    mInner->Serialize(aMsg, aSerializeInterfaceType);
-  }
-  virtual bool Deserialize(const IPC::Message* aMsg, void** aIter)
-  {
-    return mInner->Deserialize(aMsg, aIter);
-  }
 
 protected:
   void WarnAboutLSProgressEvent(nsIDocument::DeprecatedOperations);

@@ -22,19 +22,9 @@ DIRS = \
 EXTRA_PP_COMPONENTS = \
   ConsoleAPI.js \
   ConsoleAPI.manifest \
-  BrowserElementParent.js \
-  BrowserElementParent.manifest \
   $(NULL)
 
 EXTRA_JS_MODULES = ConsoleAPIStorage.jsm \
-  $(NULL)
-
-EXTRA_COMPONENTS = \
-  Webapps.js \
-  Webapps.manifest \
-  $(NULL)
-
-EXTRA_PP_JS_MODULES += Webapps.jsm \
   $(NULL)
 
 EXTRA_JS_MODULES += \

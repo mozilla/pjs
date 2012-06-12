@@ -836,6 +836,76 @@ static JSFunctionSpec number_methods[] = {
     JS_FS_END
 };
 
+
+// ES6 draft ES6 15.7.3.10
+static JSBool
+Number_isNaN(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1 || !args[0].isDouble()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+    args.rval().setBoolean(MOZ_DOUBLE_IS_NaN(args[0].toDouble()));
+    return true;
+}
+
+// ES6 draft ES6 15.7.3.11
+static JSBool
+Number_isFinite(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1 || !args[0].isNumber()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+    args.rval().setBoolean(args[0].isInt32() ||
+                           MOZ_DOUBLE_IS_FINITE(args[0].toDouble()));
+    return true;
+}
+
+// ES6 draft ES6 15.7.3.12
+static JSBool
+Number_isInteger(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1 || !args[0].isNumber()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+    Value val = args[0];
+    args.rval().setBoolean(val.isInt32() ||
+                           (MOZ_DOUBLE_IS_FINITE(val.toDouble()) &&
+                            ToInteger(val.toDouble()) == val.toDouble()));
+    return true;
+}
+
+// ES6 drafult ES6 15.7.3.13
+static JSBool
+Number_toInteger(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1) {
+        args.rval().setInt32(0);
+        return true;
+    }
+    double asint;
+    if (!ToInteger(cx, args[0], &asint))
+        return false;
+    args.rval().setNumber(asint);
+    return true;
+}
+
+
+static JSFunctionSpec number_static_methods[] = {
+    JS_FN("isFinite", Number_isFinite, 1, 0),
+    JS_FN("isInteger", Number_isInteger, 1, 0),
+    JS_FN("isNaN", Number_isNaN, 1, 0),
+    JS_FN("toInteger", Number_toInteger, 1, 0),
+    JS_FS_END
+};
+
+
 /* NB: Keep this in synch with number_constants[]. */
 enum nc_slot {
     NC_NaN,
@@ -996,6 +1066,9 @@ js_InitNumberClass(JSContext *cx, JSObject *obj)
 
     /* Add numeric constants (MAX_VALUE, NaN, &c.) to the Number constructor. */
     if (!JS_DefineConstDoubles(cx, ctor, number_constants))
+        return NULL;
+
+    if (!DefinePropertiesAndBrand(cx, ctor, NULL, number_static_methods))
         return NULL;
 
     if (!DefinePropertiesAndBrand(cx, numberProto, NULL, number_methods))

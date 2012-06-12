@@ -35,8 +35,6 @@
 #include "nsConsoleMessage.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsAppRunner.h"
-#include "IDBFactory.h"
-#include "IndexedDatabaseManager.h"
 #if defined(MOZ_SYDNEYAUDIO)
 #include "AudioParent.h"
 #endif
@@ -490,24 +488,6 @@ ContentParent::RecvReadPermissions(InfallibleTArray<IPC::Permission>* aPermissio
     mSendPermissionUpdates = true;
 #endif
 
-    return true;
-}
-
-bool
-ContentParent::RecvGetIndexedDBDirectory(nsString* aDirectory)
-{
-    using namespace indexedDB;
-
-    IDBFactory::NoteUsedByProcessType(GeckoProcessType_Content);
-
-    nsRefPtr<IndexedDatabaseManager> mgr =
-        IndexedDatabaseManager::GetOrCreate();
-    if (!mgr) {
-        NS_ERROR("This should not fail!");
-        return true;
-    }
-
-    *aDirectory = mgr->GetBaseDirectory();
     return true;
 }
 
@@ -1034,7 +1014,7 @@ ContentParent::RecvShowFilePicker(const PRInt16& mode,
         nsCOMPtr<nsISimpleEnumerator> fileIter;
         *result = filePicker->GetFiles(getter_AddRefs(fileIter));
 
-        nsCOMPtr<nsILocalFile> singleFile;
+        nsCOMPtr<nsIFile> singleFile;
         bool loop = true;
         while (NS_SUCCEEDED(fileIter->HasMoreElements(&loop)) && loop) {
             fileIter->GetNext(getter_AddRefs(singleFile));
@@ -1046,7 +1026,7 @@ ContentParent::RecvShowFilePicker(const PRInt16& mode,
         }
         return true;
     }
-    nsCOMPtr<nsILocalFile> file;
+    nsCOMPtr<nsIFile> file;
     filePicker->GetFile(getter_AddRefs(file));
 
     // even with NS_OK file can be null if nothing was selected 

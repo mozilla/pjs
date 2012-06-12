@@ -26,6 +26,7 @@
 #include "nsIAtom.h"
 #include "nsRange.h"
 #include "mozilla/dom/Element.h"
+#include "nsCSSStyleSheet.h"
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -166,6 +167,7 @@ inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
 
   nsRuleNode* ruleNode = nsnull;
   nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
+  NS_ENSURE_STATE(content);
   nsRefPtr<nsStyleContext> styleContext;
   GetRuleNodeForContent(content, pseudoElt, getter_AddRefs(styleContext), &ruleNode);
   if (!ruleNode) {
@@ -423,4 +425,14 @@ inDOMUtils::ClearPseudoClassLocks(nsIDOMElement *aElement)
   element->ClearStyleStateLocks();
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+inDOMUtils::ParseStyleSheet(nsIDOMCSSStyleSheet *aSheet,
+                            const nsAString& aInput)
+{
+  nsRefPtr<nsCSSStyleSheet> sheet = do_QueryObject(aSheet);
+  NS_ENSURE_ARG_POINTER(sheet);
+
+  return sheet->ParseSheet(aInput);
 }

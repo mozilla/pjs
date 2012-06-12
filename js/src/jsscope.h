@@ -882,6 +882,11 @@ struct Shape : public js::gc::Cell
 
     inline void markChildren(JSTracer *trc);
 
+    inline Shape *search(JSContext *cx, jsid id) {
+        Shape **_;
+        return search(cx, this, id, &_);
+    }
+
     /* For JIT usage */
     static inline size_t offsetOfBase() { return offsetof(Shape, base_); }
 
@@ -1107,8 +1112,8 @@ Shape::search(JSContext *cx, Shape *start, jsid id, Shape ***pspp, bool adding)
         if (start->isBigEnoughForAShapeTable()) {
             RootedShape startRoot(cx, start);
             RootedId idRoot(cx, id);
-            if (start->hashify(cx)) {
-                Shape **spp = start->table().search(id, adding);
+            if (startRoot->hashify(cx)) {
+                Shape **spp = startRoot->table().search(id, adding);
                 return SHAPE_FETCH(spp);
             }
             start = startRoot;

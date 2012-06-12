@@ -10,7 +10,7 @@
 #include "nsARIAMap.h"
 #include "nsCoreUtils.h"
 #include "DocAccessible.h"
-#include "nsHyperTextAccessible.h"
+#include "HyperTextAccessible.h"
 #include "nsIAccessibleTypes.h"
 #include "Role.h"
 #include "States.h"
@@ -152,9 +152,8 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
       if (!live.IsEmpty()) {
         SetAccAttr(aAttributes, nsGkAtoms::containerLive, live);
         if (role) {
-          nsAccUtils::SetAccAttr(aAttributes,
-                                 nsGkAtoms::containerLiveRole,
-                                 NS_ConvertASCIItoUTF16(role->roleString));
+          nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::containerLiveRole,
+                                 role->ARIARoleString());
         }
       }
     }
@@ -254,7 +253,7 @@ nsAccUtils::IsARIASelected(Accessible* aAccessible)
                 nsGkAtoms::_true, eCaseMatters);
 }
 
-nsHyperTextAccessible*
+HyperTextAccessible*
 nsAccUtils::GetTextAccessibleFromSelection(nsISelection* aSelection)
 {
   // Get accessible from selection's focus DOM point (the DOM point where
@@ -283,7 +282,7 @@ nsAccUtils::GetTextAccessibleFromSelection(nsISelection* aSelection)
   }
 
   do {
-    nsHyperTextAccessible* textAcc = accessible->AsHyperText();
+    HyperTextAccessible* textAcc = accessible->AsHyperText();
     if (textAcc)
       return textAcc;
 

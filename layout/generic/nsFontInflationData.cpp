@@ -38,7 +38,7 @@ nsFontInflationData::FindFontInflationDataFor(const nsIFrame *aFrame)
              bfc->Properties().Get(FontInflationDataProperty()));
 }
 
-/* static */ void
+/* static */ bool
 nsFontInflationData::UpdateFontInflationDataWidthFor(const nsHTMLReflowState& aReflowState)
 {
   nsIFrame *bfc = aReflowState.frame;
@@ -47,12 +47,22 @@ nsFontInflationData::UpdateFontInflationDataWidthFor(const nsHTMLReflowState& aR
   FrameProperties bfcProps(bfc->Properties());
   nsFontInflationData *data = static_cast<nsFontInflationData*>(
                                 bfcProps.Get(FontInflationDataProperty()));
-  if (!data) {
+  bool oldInflationEnabled;
+  nscoord oldNCAWidth;
+  if (data) {
+    oldNCAWidth = data->mNCAWidth;
+    oldInflationEnabled = data->mInflationEnabled;
+  } else {
     data = new nsFontInflationData(bfc);
     bfcProps.Set(FontInflationDataProperty(), data);
+    oldNCAWidth = -1;
+    oldInflationEnabled = true; /* not relevant */
   }
 
   data->UpdateWidth(aReflowState);
+
+  return oldNCAWidth != data->mNCAWidth ||
+         oldInflationEnabled != data->mInflationEnabled;
 }
 
 /* static */ void
@@ -131,6 +141,11 @@ ComputeDescendantWidth(const nsHTMLReflowState& aAncestorReflowState,
     frames.AppendElement(f);
   }
 
+  // This ignores the width contributions made by scrollbars, though in
+  // reality we don't have any scrollbars on the sorts of devices on
+  // which we use font inflation, so it's not a problem.  But it may
+  // occasionally cause problems when writing tests on desktop.
+
   PRUint32 len = frames.Length();
   nsHTMLReflowState *reflowStates = static_cast<nsHTMLReflowState*>
                                 (moz_xmalloc(sizeof(nsHTMLReflowState) * len));
@@ -194,7 +209,8 @@ nsFontInflationData::UpdateWidth(const nsHTMLReflowState &aReflowState)
 
   // See comment above "font.size.inflation.lineThreshold" in
   // modules/libpref/src/init/all.js .
-  PRUint32 lineThreshold = nsLayoutUtils::FontSizeInflationLineThreshold();
+  nsIPresShell* presShell = bfc->PresContext()->PresShell();
+  PRUint32 lineThreshold = presShell->FontSizeInflationLineThreshold();
   nscoord newTextThreshold = (newNCAWidth * lineThreshold) / 100;
 
   if (mTextThreshold <= mTextAmount && mTextAmount < newTextThreshold) {

@@ -331,6 +331,10 @@ public class GeckoAppShell
         File cacheFile = getCacheDir();
         GeckoAppShell.putenv("MOZ_LINKER_CACHE=" + cacheFile.getPath());
 
+        // setup the app-specific cache path
+        f = geckoApp.getCacheDir();
+        GeckoAppShell.putenv("CACHE_DIRECTORY=" + f.getPath());
+
         // gingerbread introduces File.getUsableSpace(). We should use that.
         long freeSpace = getFreeSpace();
         try {
@@ -1833,5 +1837,8 @@ public class GeckoAppShell
 
     /* Stubbed out because this is called from AndroidBridge for Native Fennec */
     public static void showFilePickerAsync(String aMimeType, long id) {
+    }
+
+    public static void notifyWakeLockChanged(String topic, String state) {
     }
 }

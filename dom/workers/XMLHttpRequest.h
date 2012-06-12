@@ -12,6 +12,7 @@
 // Need this for XMLHttpRequestResponseType.
 #include "mozilla/dom/XMLHttpRequestBinding.h"
 
+#include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/TypedArray.h"
 
 BEGIN_WORKERS_NAMESPACE
@@ -70,8 +71,8 @@ public:
   _finalize(JSFreeOp* aFop) MOZ_OVERRIDE;
 
   static XMLHttpRequest*
-  Constructor(JSContext* aCx, JSObject* aGlobal, ErrorResult& aRv);
-
+  Constructor(JSContext* aCx, JSObject* aGlobal,
+              const Optional<jsval>& aParams, ErrorResult& aRv);
   void
   Unpin();
 
@@ -80,13 +81,13 @@ public:
 
 #define IMPL_GETTER_AND_SETTER(_type)                                          \
   JSObject*                                                                    \
-  GetOn##_type(ErrorResult& aRv)                                               \
+  GetOn##_type(JSContext* /* unused */, ErrorResult& aRv)                      \
   {                                                                            \
     return GetEventListener(NS_LITERAL_STRING(#_type), aRv);                   \
   }                                                                            \
                                                                                \
   void                                                                         \
-  SetOn##_type(JSObject* aListener, ErrorResult& aRv)                          \
+  SetOn##_type(JSContext* /* unused */, JSObject* aListener, ErrorResult& aRv) \
   {                                                                            \
     SetEventListener(NS_LITERAL_STRING(#_type), aListener, aRv);               \
   }
@@ -94,6 +95,18 @@ public:
   IMPL_GETTER_AND_SETTER(readystatechange)
 
 #undef IMPL_GETTER_AND_SETTER
+
+  JSObject*
+  GetOnuploadprogress(JSContext* /* unused */, ErrorResult& aRv)
+  {
+    aRv = NS_ERROR_NOT_IMPLEMENTED;
+    return NULL;
+  }
+  void
+  SetOnuploadprogress(JSContext* /* unused */, JSObject* aListener, ErrorResult& aRv)
+  {
+    aRv = NS_ERROR_NOT_IMPLEMENTED;
+  }
 
   uint16_t
   GetReadyState() const
@@ -202,7 +215,7 @@ public:
   SetResponseType(XMLHttpRequestResponseType aResponseType, ErrorResult& aRv);
 
   jsval
-  GetResponse(ErrorResult& aRv);
+  GetResponse(JSContext* /* unused */, ErrorResult& aRv);
 
   void
   GetResponseText(nsAString& aResponseText, ErrorResult& aRv);
@@ -220,7 +233,7 @@ public:
   }
 
   JS::Value
-  GetInterface(JSObject* aIID, ErrorResult& aRv)
+  GetInterface(JSContext* cx, JSObject* aIID, ErrorResult& aRv)
   {
     aRv.Throw(NS_ERROR_FAILURE);
     return JSVAL_NULL;
@@ -243,6 +256,16 @@ public:
   {
     mStateData.mResponseText.SetIsVoid(true);
     mStateData.mResponse = JSVAL_NULL;
+  }
+
+  bool GetMozAnon() {
+    // TODO: bug 761227
+    return false;
+  }
+
+  bool GetMozSystem() {
+    // TODO: bug 761227
+    return false;
   }
 
 private:

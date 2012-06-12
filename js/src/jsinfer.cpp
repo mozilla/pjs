@@ -3829,7 +3829,9 @@ ScriptAnalysis::analyzeTypesBytecode(JSContext *cx, unsigned offset,
       case JSOP_ENDINIT:
         break;
 
-      case JSOP_INITELEM: {
+      case JSOP_INITELEM:
+      case JSOP_INITELEM_INC:
+      case JSOP_SPREAD: {
         const SSAValue &objv = poppedValue(pc, 2);
         jsbytecode *initpc = script->code + objv.pushedOffset();
         TypeObject *initializer = GetInitializerType(cx, script, initpc);
@@ -3850,12 +3852,23 @@ ScriptAnalysis::analyzeTypesBytecode(JSContext *cx, unsigned offset,
                 } else if (state.hasHole) {
                     if (!initializer->unknownProperties())
                         initializer->setFlags(cx, OBJECT_FLAG_NON_PACKED_ARRAY);
+                } else if (op == JSOP_SPREAD) {
+                    // Iterator could put arbitrary things into the array.
+                    types->addType(cx, Type::UnknownType());
                 } else {
                     poppedTypes(pc, 0)->addSubset(cx, types);
                 }
             }
         } else {
             pushed[0].addType(cx, Type::UnknownType());
+        }
+        switch (op) {
+          case JSOP_SPREAD:
+          case JSOP_INITELEM_INC:
+            poppedTypes(pc, 1)->addSubset(cx, &pushed[1]);
+            break;
+          default:
+            break;
         }
         state.hasGetSet = false;
         state.hasHole = false;
@@ -4265,6 +4278,11 @@ public:
 };
 
 static bool
+AnalyzePoppedThis(JSContext *cx, Vector<SSAUseChain *> *pendingPoppedThis,
+                  TypeObject *type, JSFunction *fun, JSObject **pbaseobj,
+                  Vector<TypeNewScript::Initializer> *initializerList);
+
+static bool
 AnalyzeNewScriptProperties(JSContext *cx, TypeObject *type, JSFunction *fun, JSObject **pbaseobj,
                            Vector<TypeNewScript::Initializer> *initializerList)
 {
@@ -4302,14 +4320,23 @@ AnalyzeNewScriptProperties(JSContext *cx, TypeObject *type, JSFunction *fun, JSO
 
     /*
      * Offset of the last bytecode which popped 'this' and which we have
-     * processed. For simplicity, we scan for places where 'this' is pushed
-     * and immediately analyze the place where that pushed value is popped.
-     * This runs the risk of doing things out of order, if the script looks
-     * something like 'this.f  = (this.g = ...)', so we watch and bail out if
-     * a 'this' is pushed before the previous 'this' value was popped.
+     * processed. To support compound inline assignments to properties like
+     * 'this.f = (this.g = ...)'  where multiple 'this' values are pushed
+     * and popped en masse, we keep a stack of 'this' values that have yet to
+     * be processed. If a 'this' is pushed before the previous 'this' value
+     * was popped, we defer processing it until we see a 'this' that is popped
+     * after the previous 'this' was popped, i.e. the end of the compound
+     * inline assignment, or we encounter a return from the script.
+     */
+    Vector<SSAUseChain *> pendingPoppedThis(cx);
+
+    /*
+     * lastThisPopped is the largest use offset of a 'this' value we've
+     * processed so far.
      */
     uint32_t lastThisPopped = 0;
 
+    bool entirelyAnalyzed = true;
     unsigned nextOffset = 0;
     while (nextOffset < script->length) {
         unsigned offset = nextOffset;
@@ -4330,16 +4357,20 @@ AnalyzeNewScriptProperties(JSContext *cx, TypeObject *type, JSFunction *fun, JSO
         if (op == JSOP_RETURN || op == JSOP_STOP || op == JSOP_RETRVAL) {
             if (offset < lastThisPopped) {
                 *pbaseobj = NULL;
-                return false;
+                entirelyAnalyzed = false;
+                break;
             }
-            return code->unconditional;
+
+            entirelyAnalyzed = code->unconditional;
+            break;
         }
 
         /* 'this' can escape through a call to eval. */
         if (op == JSOP_EVAL) {
             if (offset < lastThisPopped)
                 *pbaseobj = NULL;
-            return false;
+            entirelyAnalyzed = false;
+            break;
         }
 
         /*
@@ -4349,30 +4380,68 @@ AnalyzeNewScriptProperties(JSContext *cx, TypeObject *type, JSFunction *fun, JSO
         if (op != JSOP_THIS)
             continue;
 
-        /* Maintain ordering property on how 'this' is used, as described above. */
-        if (offset < lastThisPopped) {
-            *pbaseobj = NULL;
-            return false;
-        }
-
         SSAValue thisv = SSAValue::PushedValue(offset, 0);
         SSAUseChain *uses = analysis->useChain(thisv);
 
         JS_ASSERT(uses);
         if (uses->next || !uses->popped) {
             /* 'this' value popped in more than one place. */
-            return false;
+            entirelyAnalyzed = false;
+            break;
         }
-
-        lastThisPopped = uses->offset;
 
         /* Only handle 'this' values popped in unconditional code. */
         Bytecode *poppedCode = analysis->maybeCode(uses->offset);
-        if (!poppedCode || !poppedCode->unconditional)
-            return false;
+        if (!poppedCode || !poppedCode->unconditional) {
+            entirelyAnalyzed = false;
+            break;
+        }
 
-        pc = script->code + uses->offset;
-        op = JSOp(*pc);
+        /*
+         * If offset >= the offset at the top of the pending stack, we either
+         * encountered the end of a compound inline assignment or a 'this' was
+         * immediately popped and used. In either case, handle the use.
+         */
+        if (!pendingPoppedThis.empty() &&
+            offset >= pendingPoppedThis.back()->offset) {
+            lastThisPopped = pendingPoppedThis[0]->offset;
+            if (!AnalyzePoppedThis(cx, &pendingPoppedThis, type, fun, pbaseobj,
+                                   initializerList)) {
+                return false;
+            }
+        }
+
+        if (!pendingPoppedThis.append(uses)) {
+            entirelyAnalyzed = false;
+            break;
+        }
+    }
+
+    /* Handle any remaining 'this' uses on the stack. */
+    if (!pendingPoppedThis.empty() &&
+        !AnalyzePoppedThis(cx, &pendingPoppedThis, type, fun, pbaseobj,
+                           initializerList)) {
+        return false;
+    }
+
+    /* Will have hit a STOP or similar, unless the script always throws. */
+    return entirelyAnalyzed;
+}
+
+static bool
+AnalyzePoppedThis(JSContext *cx, Vector<SSAUseChain *> *pendingPoppedThis,
+                  TypeObject *type, JSFunction *fun, JSObject **pbaseobj,
+                  Vector<TypeNewScript::Initializer> *initializerList)
+{
+    JSScript *script = fun->script();
+    ScriptAnalysis *analysis = script->analysis();
+
+    while (!pendingPoppedThis->empty()) {
+        SSAUseChain *uses = pendingPoppedThis->back();
+        pendingPoppedThis->popBack();
+
+        jsbytecode *pc = script->code + uses->offset;
+        JSOp op = JSOp(*pc);
 
         RootedObject obj(cx, *pbaseobj);
 
@@ -4514,7 +4583,6 @@ AnalyzeNewScriptProperties(JSContext *cx, TypeObject *type, JSFunction *fun, JSO
         }
     }
 
-    /* Will have hit a STOP or similar, unless the script always throws. */
     return true;
 }
 
@@ -5191,9 +5259,11 @@ NestingPrologue(JSContext *cx, StackFrame *fp)
             MarkTypeObjectFlags(cx, fp->fun(), OBJECT_FLAG_REENTRANT_FUNCTION);
         }
 
+        /* Extensibility guards in the frontend guarantee the slots won't move. */
+        JS_ASSERT(!script->funHasExtensibleScope);
         nesting->activeCall = &fp->callObj();
-        nesting->argArray = fp->formalArgs();
-        nesting->varArray = fp->slots();
+        nesting->argArray = Valueify(nesting->activeCall->argArray());
+        nesting->varArray = Valueify(nesting->activeCall->varArray());
     }
 
     /* Maintain stack frame count for the function. */
@@ -5453,15 +5523,18 @@ JSObject::shouldSplicePrototype(JSContext *cx)
 }
 
 bool
-JSObject::splicePrototype(JSContext *cx, JSObject *proto)
+JSObject::splicePrototype(JSContext *cx, JSObject *proto_)
 {
+    RootedObject proto(cx, proto_);
+    RootedObject self(cx, this);
+
     /*
      * For singleton types representing only a single JSObject, the proto
      * can be rearranged as needed without destroying type information for
      * the old or new types. Note that type constraints propagating properties
      * from the old prototype are not removed.
      */
-    JS_ASSERT_IF(cx->typeInferenceEnabled(), hasSingletonType());
+    JS_ASSERT_IF(cx->typeInferenceEnabled(), self->hasSingletonType());
 
     /* Inner objects may not appear on prototype chains. */
     JS_ASSERT_IF(proto, !proto->getClass()->ext.outerObject);
@@ -5470,7 +5543,7 @@ JSObject::splicePrototype(JSContext *cx, JSObject *proto)
      * Force type instantiation when splicing lazy types. This may fail,
      * in which case inference will be disabled for the compartment.
      */
-    TypeObject *type = getType(cx);
+    TypeObject *type = self->getType(cx);
     TypeObject *protoType = NULL;
     if (proto) {
         protoType = proto->getType(cx);
@@ -5482,7 +5555,7 @@ JSObject::splicePrototype(JSContext *cx, JSObject *proto)
         TypeObject *type = proto ? proto->getNewType(cx) : cx->compartment->getEmptyType(cx);
         if (!type)
             return false;
-        type_ = type;
+        self->type_ = type;
         return true;
     }
 

@@ -14,6 +14,7 @@ let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                .getService(Ci.mozIJSSubScriptLoader);
 loader.loadSubScript("chrome://marionette/content/marionette-simpletest.js");
 loader.loadSubScript("chrome://marionette/content/marionette-log-obj.js");
+loader.loadSubScript("chrome://marionette/content/marionette-perf.js");
 Cu.import("chrome://marionette/content/marionette-elements.js");
 let utils = {};
 loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
@@ -27,6 +28,8 @@ specialpowers.specialPowersObserver = new specialpowers.SpecialPowersObserver();
 specialpowers.specialPowersObserver.init();
 
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/FileUtils.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");  
 
 Services.prefs.setBoolPref("marionette.contentListener", false);
 let appName = Services.appinfo.name;
@@ -119,16 +122,18 @@ function MarionetteDriverActor(aConnection)
   this.scriptTimeout = null;
   this.timer = null;
   this.marionetteLog = new MarionetteLogObj();
+  this.marionettePerf = new MarionettePerfData();
   this.command_id = null;
   this.mainFrame = null; //topmost chrome frame
   this.curFrame = null; //subframe that currently has focus
-
+  this.importedScripts = FileUtils.getFile('TmpD', ['marionettescriptchrome']);
+  
   //register all message listeners
   this.messageManager.addMessageListener("Marionette:ok", this);
   this.messageManager.addMessageListener("Marionette:done", this);
   this.messageManager.addMessageListener("Marionette:error", this);
   this.messageManager.addMessageListener("Marionette:log", this);
-  this.messageManager.addMessageListener("Marionette:testLog", this);
+  this.messageManager.addMessageListener("Marionette:shareData", this);
   this.messageManager.addMessageListener("Marionette:register", this);
   this.messageManager.addMessageListener("Marionette:goUrl", this);
   this.messageManager.addMessageListener("Marionette:runEmulatorCmd", this);
@@ -390,6 +395,21 @@ MarionetteDriverActor.prototype = {
   },
 
   /**
+   * Log some performance data
+   */
+  addPerfData: function MDA_addPerfData(aRequest) {
+    this.marionettePerf.addPerfData(aRequest.suite, aRequest.name, aRequest.value);
+    this.sendOk();
+  },
+
+  /**
+   * Retrieve the performance data
+   */
+  getPerfData: function MDA_getPerfData() {
+    this.sendResponse(this.marionettePerf.getPerfData());
+  },
+
+  /**
    * Sets the context of the subsequent commands to be either 'chrome' or 'content'
    *
    * @param object aRequest
@@ -470,6 +490,14 @@ MarionetteDriverActor.prototype = {
         return;
       }
 
+      if (this.importedScripts.exists()) {
+        let stream = Cc["@mozilla.org/network/file-input-stream;1"].  
+                      createInstance(Ci.nsIFileInputStream);
+        stream.init(this.importedScripts, -1, 0, 0);
+        let data = NetUtil.readInputStreamToString(stream, stream.available());
+        script = data + script;
+      }
+
       let res = Cu.evalInSandbox(script, sandbox, "1.8");
 
       if (directInject && !async &&
@@ -499,7 +527,6 @@ MarionetteDriverActor.prototype = {
    *        function body
    */
   execute: function MDA_execute(aRequest, directInject) {
-    logger.info("newSandbox: " + aRequest.newSandbox);
     if (aRequest.newSandbox == undefined) {
       //if client does not send a value in newSandbox, 
       //then they expect the same behaviour as webdriver
@@ -513,7 +540,7 @@ MarionetteDriverActor.prototype = {
     }
 
     let curWindow = this.getCurrentWindow();
-    let marionette = new Marionette(this, curWindow, "chrome", this.marionetteLog);
+    let marionette = new Marionette(this, curWindow, "chrome", this.marionetteLog, this.marionettePerf);
     let _chromeSandbox = this.createExecuteSandbox(curWindow, marionette, aRequest.args);
     if (!_chromeSandbox)
       return;
@@ -620,7 +647,7 @@ MarionetteDriverActor.prototype = {
     let curWindow = this.getCurrentWindow();
     let original_onerror = curWindow.onerror;
     let that = this;
-    let marionette = new Marionette(this, curWindow, "chrome", this.marionetteLog);
+    let marionette = new Marionette(this, curWindow, "chrome", this.marionetteLog, this.marionettePerf);
     marionette.command_id = this.command_id;
 
     function chromeAsyncReturnFunc(value, status) {
@@ -770,7 +797,7 @@ MarionetteDriverActor.prototype = {
     let winEn = this.getWinEnumerator(); 
     while(winEn.hasMoreElements()) {
       let foundWin = winEn.getNext();
-      let winId = foundWin.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils).outerWindowID;
+      let winId = foundWin.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
       winId = winId + ((appName == "B2G") ? '-b2g' : '');
       res.push(winId)
     }
@@ -788,7 +815,7 @@ MarionetteDriverActor.prototype = {
     let winEn = this.getWinEnumerator(); 
     while(winEn.hasMoreElements()) {
       let foundWin = winEn.getNext();
-      let winId = foundWin.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils).outerWindowID;
+      let winId = foundWin.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
       winId = winId + ((appName == "B2G") ? '-b2g' : '');
       if (aRequest.value == foundWin.name || aRequest.value == winId) {
         if (this.browsers[winId] == undefined) {
@@ -1191,11 +1218,16 @@ MarionetteDriverActor.prototype = {
     this.messageManager.removeMessageListener("Marionette:done", this);
     this.messageManager.removeMessageListener("Marionette:error", this);
     this.messageManager.removeMessageListener("Marionette:log", this);
-    this.messageManager.removeMessageListener("Marionette:testLog", this);
+    this.messageManager.removeMessageListener("Marionette:shareData", this);
     this.messageManager.removeMessageListener("Marionette:register", this);
     this.messageManager.removeMessageListener("Marionette:goUrl", this);
     this.messageManager.removeMessageListener("Marionette:runEmulatorCmd", this);
     this.curBrowser = null;
+    try {
+      this.importedScripts.remove(false);
+    }
+    catch (e) {
+    }
   },
 
   _emu_cb_id: 0,
@@ -1234,6 +1266,24 @@ MarionetteDriverActor.prototype = {
       return;
     }
   },
+  
+  importScript: function MDA_importScript(aRequest) {
+    if (this.context == "chrome") {
+      let file;
+      if (this.importedScripts.exists()) {
+        file = FileUtils.openFileOutputStream(this.importedScripts, FileUtils.MODE_APPEND);
+      }
+      else {
+        file = FileUtils.openFileOutputStream(this.importedScripts, FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE);
+      }
+      file.write(aRequest.script, aRequest.script.length);
+      file.close();
+      this.sendOk();
+    }
+    else {
+      this.sendAsync("importScript", {script: aRequest.script});
+    }
+  },
 
   /**
    * Receives all messages from content messageManager
@@ -1257,9 +1307,14 @@ MarionetteDriverActor.prototype = {
         //log server-side messages
         logger.info(message.json.message);
         break;
-      case "Marionette:testLog":
+      case "Marionette:shareData":
         //log messages from tests
-        this.marionetteLog.addLogs(message.json.value);
+        if (message.json.log) {
+          this.marionetteLog.addLogs(message.json.log);
+        }
+        if (message.json.perf) {
+          this.marionettePerf.appendPerfData(message.json.perf);
+        }
         break;
       case "Marionette:runEmulatorCmd":
         this.sendToClient(message.json);
@@ -1269,7 +1324,7 @@ MarionetteDriverActor.prototype = {
         // and either accepts the listener, or ignores it
         let nullPrevious = (this.curBrowser.curFrameId == null);
         let curWin = this.getCurrentWindow();
-        let frameObject = curWin.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils).getOuterWindowWithId(message.json.value);
+        let frameObject = curWin.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).getOuterWindowWithId(message.json.value);
         let reg = this.curBrowser.register(message.json.value, message.json.href);
         if (reg) {
           this.curBrowser.elementManager.seenItems[reg] = frameObject; //add to seenItems
@@ -1298,6 +1353,8 @@ MarionetteDriverActor.prototype.requestTypes = {
   "newSession": MarionetteDriverActor.prototype.newSession,
   "log": MarionetteDriverActor.prototype.log,
   "getLogs": MarionetteDriverActor.prototype.getLogs,
+  "addPerfData": MarionetteDriverActor.prototype.addPerfData,
+  "getPerfData": MarionetteDriverActor.prototype.getPerfData,
   "setContext": MarionetteDriverActor.prototype.setContext,
   "executeScript": MarionetteDriverActor.prototype.execute,
   "setScriptTimeout": MarionetteDriverActor.prototype.setScriptTimeout,
@@ -1324,7 +1381,8 @@ MarionetteDriverActor.prototype.requestTypes = {
   "switchToFrame": MarionetteDriverActor.prototype.switchToFrame,
   "switchToWindow": MarionetteDriverActor.prototype.switchToWindow,
   "deleteSession": MarionetteDriverActor.prototype.deleteSession,
-  "emulatorCmdResult": MarionetteDriverActor.prototype.emulatorCmdResult
+  "emulatorCmdResult": MarionetteDriverActor.prototype.emulatorCmdResult,
+  "importScript": MarionetteDriverActor.prototype.importScript
 };
 
 /**

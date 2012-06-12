@@ -18,6 +18,10 @@ class nsDisplayItem;
 class nsFontMetrics;
 class nsClientRectList;
 class nsFontFaceList;
+class nsHTMLCanvasElement;
+class nsHTMLVideoElement;
+class nsIImageLoadingContent;
+class nsHTMLImageElement;
 
 #include "prtypes.h"
 #include "nsChangeHint.h"
@@ -805,8 +809,13 @@ public:
    * If aFrame is an out of flow frame, return its placeholder, otherwise
    * return its parent.
    */
-  static nsIFrame* GetParentOrPlaceholderFor(nsFrameManager* aFrameManager,
-                                             nsIFrame* aFrame);
+  static nsIFrame* GetParentOrPlaceholderFor(nsIFrame* aFrame);
+
+  /**
+   * If aFrame is an out of flow frame, return its placeholder, otherwise
+   * return its (possibly cross-doc) parent.
+   */
+  static nsIFrame* GetParentOrPlaceholderForCrossDoc(nsIFrame* aFrame);
 
   /**
    * Get a frame's next-in-flow, or, if it doesn't have one, its special sibling.
@@ -1393,6 +1402,17 @@ public:
   };
 
   static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::Element *aElement,
+                                                     PRUint32 aSurfaceFlags = 0);
+  static SurfaceFromElementResult SurfaceFromElement(nsIImageLoadingContent *aElement,
+                                                     PRUint32 aSurfaceFlags = 0);
+  // Need an nsHTMLImageElement overload, because otherwise the
+  // nsIImageLoadingContent and mozilla::dom::Element overloads are ambiguous
+  // for nsHTMLImageElement.
+  static SurfaceFromElementResult SurfaceFromElement(nsHTMLImageElement *aElement,
+                                                     PRUint32 aSurfaceFlags = 0);
+  static SurfaceFromElementResult SurfaceFromElement(nsHTMLCanvasElement *aElement,
+                                                     PRUint32 aSurfaceFlags = 0);
+  static SurfaceFromElementResult SurfaceFromElement(nsHTMLVideoElement *aElement,
                                                      PRUint32 aSurfaceFlags = 0);
 
   /**

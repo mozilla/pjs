@@ -361,16 +361,17 @@ nsHTMLEditor::FindSelectionRoot(nsINode *aNode)
                   aNode->IsNodeOfType(nsINode::eCONTENT),
                   "aNode must be content or document node");
 
-  nsCOMPtr<nsIContent> content = do_QueryInterface(aNode);
   nsCOMPtr<nsIDocument> doc = aNode->GetCurrentDoc();
   if (!doc) {
     return nsnull;
   }
 
-  if (doc->HasFlag(NODE_IS_EDITABLE) || !content) {
+  nsCOMPtr<nsIContent> content;
+  if (doc->HasFlag(NODE_IS_EDITABLE) || !aNode->IsContent()) {
     content = doc->GetRootElement();
     return content.forget();
   }
+  content = aNode->AsContent();
 
   // XXX If we have readonly flag, shouldn't return the element which has
   // contenteditable="true"?  However, such case isn't there without chrome
@@ -976,7 +977,7 @@ static const PRUnichar nbsp = 160;
 ///////////////////////////////////////////////////////////////////////////
 // IsNextCharWhitespace: checks the adjacent content in the same block
 //                       to see if following selection is whitespace or nbsp
-nsresult 
+void
 nsHTMLEditor::IsNextCharWhitespace(nsIDOMNode *aParentNode, 
                                    PRInt32 aOffset,
                                    bool *outIsSpace,
@@ -984,7 +985,7 @@ nsHTMLEditor::IsNextCharWhitespace(nsIDOMNode *aParentNode,
                                    nsCOMPtr<nsIDOMNode> *outNode,
                                    PRInt32 *outOffset)
 {
-  NS_ENSURE_TRUE(outIsSpace && outIsNBSP, NS_ERROR_NULL_POINTER);
+  MOZ_ASSERT(outIsSpace && outIsNBSP);
   *outIsSpace = false;
   *outIsNBSP = false;
   if (outNode) *outNode = nsnull;
@@ -1004,7 +1005,7 @@ nsHTMLEditor::IsNextCharWhitespace(nsIDOMNode *aParentNode,
       *outIsNBSP = (tempString.First() == nbsp);
       if (outNode) *outNode = do_QueryInterface(aParentNode);
       if (outOffset) *outOffset = aOffset+1;  // yes, this is _past_ the character; 
-      return NS_OK;
+      return;
     }
   }
   
@@ -1028,7 +1029,7 @@ nsHTMLEditor::IsNextCharWhitespace(nsIDOMNode *aParentNode,
           *outIsNBSP = (tempString.First() == nbsp);
           if (outNode) *outNode = do_QueryInterface(node);
           if (outOffset) *outOffset = 1;  // yes, this is _past_ the character; 
-          return NS_OK;
+          return;
         }
         // else it's an empty text node, or not editable; skip it.
       }
@@ -1040,15 +1041,13 @@ nsHTMLEditor::IsNextCharWhitespace(nsIDOMNode *aParentNode,
     tmp = node;
     node = NextNodeInBlock(tmp, kIterForward);
   }
-  
-  return NS_OK;
 }
 
 
 ///////////////////////////////////////////////////////////////////////////
 // IsPrevCharWhitespace: checks the adjacent content in the same block
 //                       to see if following selection is whitespace
-nsresult 
+void
 nsHTMLEditor::IsPrevCharWhitespace(nsIDOMNode *aParentNode, 
                                    PRInt32 aOffset,
                                    bool *outIsSpace,
@@ -1056,7 +1055,7 @@ nsHTMLEditor::IsPrevCharWhitespace(nsIDOMNode *aParentNode,
                                    nsCOMPtr<nsIDOMNode> *outNode,
                                    PRInt32 *outOffset)
 {
-  NS_ENSURE_TRUE(outIsSpace && outIsNBSP, NS_ERROR_NULL_POINTER);
+  MOZ_ASSERT(outIsSpace && outIsNBSP);
   *outIsSpace = false;
   *outIsNBSP = false;
   if (outNode) *outNode = nsnull;
@@ -1075,7 +1074,7 @@ nsHTMLEditor::IsPrevCharWhitespace(nsIDOMNode *aParentNode,
       *outIsNBSP = (tempString.First() == nbsp);
       if (outNode) *outNode = do_QueryInterface(aParentNode);
       if (outOffset) *outOffset = aOffset-1;  
-      return NS_OK;
+      return;
     }
   }
   
@@ -1100,7 +1099,7 @@ nsHTMLEditor::IsPrevCharWhitespace(nsIDOMNode *aParentNode,
           *outIsNBSP = (tempString.First() == nbsp);
           if (outNode) *outNode = do_QueryInterface(aParentNode);
           if (outOffset) *outOffset = strLength-1;  
-          return NS_OK;
+          return;
         }
         // else it's an empty text node, or not editable; skip it.
       }
@@ -1113,9 +1112,6 @@ nsHTMLEditor::IsPrevCharWhitespace(nsIDOMNode *aParentNode,
     tmp = node;
     node = NextNodeInBlock(tmp, kIterBackward);
   }
-  
-  return NS_OK;
-  
 }
 
 
@@ -1699,7 +1695,7 @@ nsHTMLEditor::InsertElementAtSelection(nsIDOMElement* aElement, bool aDeleteSele
   nsAutoEditBatch beginBatching(this);
   nsAutoRules beginRulesSniffing(this, kOpInsertElement, nsIEditor::eNext);
 
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   if (!selection) {
     return NS_ERROR_FAILURE;
   }
@@ -2093,11 +2089,11 @@ nsHTMLEditor::GetHTMLBackgroundColorState(bool *aMixed, nsAString &aOutColor)
                                                  getter_AddRefs(domElement));
   NS_ENSURE_SUCCESS(res, res);
 
-  nsCOMPtr<nsINode> element = do_QueryInterface(domElement);
+  nsCOMPtr<dom::Element> element = do_QueryInterface(domElement);
 
   while (element) {
     // We are in a cell or selected table
-    element->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::bgcolor, aOutColor);
+    element->GetAttr(kNameSpaceID_None, nsGkAtoms::bgcolor, aOutColor);
 
     // Done if we have a color explicitly set
     if (!aOutColor.IsEmpty()) {
@@ -2105,7 +2101,7 @@ nsHTMLEditor::GetHTMLBackgroundColorState(bool *aMixed, nsAString &aOutColor)
     }
 
     // Once we hit the body, we're done
-    if (element->AsElement()->IsHTML(nsGkAtoms::body)) {
+    if (element->IsHTML(nsGkAtoms::body)) {
       return NS_OK;
     }
 
@@ -2184,7 +2180,7 @@ nsHTMLEditor::MakeOrChangeList(const nsAString& aListType, bool entireList, cons
   nsAutoRules beginRulesSniffing(this, kOpMakeList, nsIEditor::eNext);
   
   // pre-process
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
 
   nsTextRulesInfo ruleInfo(kOpMakeList);
@@ -2260,7 +2256,7 @@ nsHTMLEditor::RemoveList(const nsAString& aListType)
   nsAutoRules beginRulesSniffing(this, kOpRemoveList, nsIEditor::eNext);
   
   // pre-process
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
 
   nsTextRulesInfo ruleInfo(kOpRemoveList);
@@ -2291,7 +2287,7 @@ nsHTMLEditor::MakeDefinitionItem(const nsAString& aItemType)
   nsAutoRules beginRulesSniffing(this, kOpMakeDefListItem, nsIEditor::eNext);
   
   // pre-process
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
   nsTextRulesInfo ruleInfo(kOpMakeDefListItem);
   ruleInfo.blockType = &aItemType;
@@ -2322,7 +2318,7 @@ nsHTMLEditor::InsertBasicBlock(const nsAString& aBlockType)
   nsAutoRules beginRulesSniffing(this, kOpMakeBasicBlock, nsIEditor::eNext);
   
   // pre-process
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
   nsTextRulesInfo ruleInfo(kOpMakeBasicBlock);
   ruleInfo.blockType = &aBlockType;
@@ -2396,7 +2392,7 @@ nsHTMLEditor::Indent(const nsAString& aIndent)
   nsAutoRules beginRulesSniffing(this, opID, nsIEditor::eNext);
   
   // pre-process
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
 
   nsTextRulesInfo ruleInfo(opID);
@@ -2473,7 +2469,7 @@ nsHTMLEditor::Align(const nsAString& aAlignType)
   bool cancel, handled;
   
   // Find out if the selection is collapsed:
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
   nsTextRulesInfo ruleInfo(kOpAlign);
   ruleInfo.alignType = &aAlignType;
@@ -2861,7 +2857,7 @@ nsHTMLEditor::CreateElementWithDefaults(const nsAString& aTagName, nsIDOMElement
   //  go through the transaction system
 
   nsCOMPtr<nsIDOMElement>newElement;
-  nsCOMPtr<nsIContent> newContent;
+  nsCOMPtr<dom::Element> newContent;
   nsCOMPtr<nsIDOMDocument> doc = do_QueryReferent(mDocWeak);
   NS_ENSURE_TRUE(doc, NS_ERROR_NOT_INITIALIZED);
 
@@ -3394,21 +3390,24 @@ nsHTMLEditor::DeleteSelectionImpl(EDirection aAction,
     return NS_OK;
   }
 
-  nsRefPtr<nsTypedSelection> typedSel = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
   // Just checking that the selection itself is collapsed doesn't seem to work
   // right in the multi-range case
-  NS_ENSURE_STATE(typedSel);
-  NS_ENSURE_STATE(typedSel->GetAnchorFocusRange());
-  NS_ENSURE_STATE(typedSel->GetAnchorFocusRange()->Collapsed());
+  NS_ENSURE_STATE(selection);
+  NS_ENSURE_STATE(selection->GetAnchorFocusRange());
+  NS_ENSURE_STATE(selection->GetAnchorFocusRange()->Collapsed());
 
-  nsCOMPtr<nsIContent> content = do_QueryInterface(typedSel->GetAnchorNode());
-  NS_ENSURE_STATE(content);
+  NS_ENSURE_STATE(selection->GetAnchorNode()->IsContent());
+  nsCOMPtr<nsIContent> content = selection->GetAnchorNode()->AsContent();
 
   // Don't strip wrappers if this is the only wrapper in the block.  Then we'll
   // add a <br> later, so it won't be an empty wrapper in the end.
   nsCOMPtr<nsIContent> blockParent = content;
-  while (!IsBlockNode(blockParent)) {
+  while (blockParent && !IsBlockNode(blockParent)) {
     blockParent = blockParent->GetParent();
+  }
+  if (!blockParent) {
+    return NS_OK;
   }
   bool emptyBlockParent;
   res = IsEmptyNode(blockParent, &emptyBlockParent);
@@ -3775,13 +3774,6 @@ nsHTMLEditor::TagCanContainTag(nsIAtom* aParentTag, nsIAtom* aChildTag)
 }
 
 bool
-nsHTMLEditor::IsContainer(nsINode* aNode)
-{
-  nsCOMPtr<nsIDOMNode> node = do_QueryInterface(aNode);
-  return IsContainer(node);
-}
-
-bool
 nsHTMLEditor::IsContainer(nsIDOMNode *aNode)
 {
   if (!aNode) {
@@ -3878,6 +3870,20 @@ nsHTMLEditor::SelectAll()
 
 // this will NOT find aAttribute unless aAttribute has a non-null value
 // so singleton attributes like <Table border> will not be matched!
+bool nsHTMLEditor::IsTextPropertySetByContent(nsIContent*      aContent,
+                                              nsIAtom*         aProperty,
+                                              const nsAString* aAttribute,
+                                              const nsAString* aValue,
+                                              nsAString*       outValue)
+{
+  MOZ_ASSERT(aContent && aProperty);
+  MOZ_ASSERT_IF(aAttribute, aValue);
+  bool isSet;
+  IsTextPropertySetByContent(aContent->AsDOMNode(), aProperty, aAttribute,
+                             aValue, isSet, outValue);
+  return isSet;
+}
+
 void nsHTMLEditor::IsTextPropertySetByContent(nsIDOMNode        *aNode,
                                               nsIAtom           *aProperty, 
                                               const nsAString   *aAttribute, 
@@ -4611,9 +4617,8 @@ nsHTMLEditor::IsVisTextNode(nsIContent* aNode,
       nsCOMPtr<nsIDOMNode> visNode;
       PRInt32 outVisOffset=0;
       PRInt16 visType=0;
-      nsresult res = wsRunObj.NextVisibleNode(node, 0, address_of(visNode),
-                                              &outVisOffset, &visType);
-      NS_ENSURE_SUCCESS(res, res);
+      wsRunObj.NextVisibleNode(node, 0, address_of(visNode),
+                               &outVisOffset, &visType);
       if ( (visType == nsWSRunObject::eNormalWS) ||
            (visType == nsWSRunObject::eText) )
       {
@@ -4683,7 +4688,7 @@ nsHTMLEditor::IsEmptyNodeImpl(nsINode* aNode,
   // anchors are containers, named anchors are "empty" but we don't
   // want to treat them as such.  Also, don't call ListItems or table
   // cells empty if caller desires.  Form Widgets not empty.
-  if (!IsContainer(aNode)                                   ||
+  if (!IsContainer(aNode->AsDOMNode())                      ||
       (aNode->IsElement() &&
        (nsHTMLEditUtils::IsNamedAnchor(aNode->AsElement())  ||
         nsHTMLEditUtils::IsFormWidget(aNode->AsElement())   ||
@@ -4858,8 +4863,7 @@ nsHTMLEditor::SetIsCSSEnabled(bool aIsCSSPrefChecked)
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  nsresult rv = mHTMLCSSUtils->SetCSSEnabled(aIsCSSPrefChecked);
-  NS_ENSURE_SUCCESS(rv, rv);
+  mHTMLCSSUtils->SetCSSEnabled(aIsCSSPrefChecked);
 
   // Disable the eEditorNoCSSMask flag if we're enabling StyleWithCSS.
   PRUint32 flags = mFlags;
@@ -4884,7 +4888,7 @@ nsHTMLEditor::SetCSSBackgroundColor(const nsAString& aColor)
   // Protect the edit rules object from dying
   nsCOMPtr<nsIEditRules> kungFuDeathGrip(mRules);
 
-  nsRefPtr<nsTypedSelection> selection = GetTypedSelection();
+  nsRefPtr<Selection> selection = GetSelection();
 
   bool isCollapsed = selection->Collapsed();
 
@@ -5337,6 +5341,12 @@ nsHTMLEditor::SetReturnInParagraphCreatesNewParagraph(bool aCreatesNewParagraph)
 {
   mCRInParagraphCreatesParagraph = aCreatesNewParagraph;
   return NS_OK;
+}
+
+bool
+nsHTMLEditor::GetReturnInParagraphCreatesNewParagraph()
+{
+  return mCRInParagraphCreatesParagraph;
 }
 
 nsresult

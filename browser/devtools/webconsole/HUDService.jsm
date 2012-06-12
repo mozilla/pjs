@@ -19,18 +19,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                    "@mozilla.org/widget/clipboardhelper;1",
                                    "nsIClipboardHelper");
 
-XPCOMUtils.defineLazyGetter(this, "gcli", function () {
-  var obj = {};
-  Cu.import("resource:///modules/gcli.jsm", obj);
-  return obj.gcli;
-});
-
-XPCOMUtils.defineLazyGetter(this, "template", function () {
-  var obj = {};
-  Cu.import("resource:///modules/devtools/Templater.jsm", obj);
-  return obj.template;
-});
-
 XPCOMUtils.defineLazyModuleGetter(this, "PropertyPanel",
                                   "resource:///modules/PropertyPanel.jsm");
 
@@ -39,17 +27,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
 
 XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
                                   "resource:///modules/AutocompletePopup.jsm");
-
-XPCOMUtils.defineLazyGetter(this, "ScratchpadManager", function () {
-  var obj = {};
-  try {
-    Cu.import("resource:///modules/devtools/scratchpad-manager.jsm", obj);
-  }
-  catch (err) {
-    Cu.reportError(err);
-  }
-  return obj.ScratchpadManager;
-});
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetworkPanel",
                                   "resource:///modules/NetworkPanel.jsm");
@@ -71,12 +48,6 @@ function LogFactory(aMessagePrefix)
 }
 
 let log = LogFactory("*** HUDService:");
-
-const HUD_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
-
-XPCOMUtils.defineLazyGetter(this, "stringBundle", function () {
-  return Services.strings.createBundle(HUD_STRINGS_URI);
-});
 
 // The amount of time in milliseconds that must pass between messages to
 // trigger the display of a new group.
@@ -202,6 +173,14 @@ const GROUP_INDENT = 12;
 // The pref prefix for webconsole filters
 const PREFS_PREFIX = "devtools.webconsole.filter.";
 
+// The number of messages to display in a single display update. If we display
+// too many messages at once we slow the Firefox UI too much.
+const MESSAGES_IN_INTERVAL = 30;
+
+// The delay between display updates - tells how often we should push new
+// messages to screen.
+const OUTPUT_INTERVAL = 90; // milliseconds
+
 ///////////////////////////////////////////////////////////////////////////
 //// Helper for creating the network panel.
 
@@ -241,58 +220,21 @@ function createElement(aDocument, aTag, aAttributes)
  * @param integer aCategory
  *        The category of message nodes to limit.
  * @return number
- *         The current user-selected log limit.
+ *         The number of removed nodes.
  */
 function pruneConsoleOutputIfNecessary(aHUDId, aCategory)
 {
-  // Get the log limit, either from the pref or from the constant.
-  let logLimit;
-  try {
-    let prefName = CATEGORY_CLASS_FRAGMENTS[aCategory];
-    logLimit = Services.prefs.getIntPref("devtools.hud.loglimit." + prefName);
-  } catch (e) {
-    logLimit = DEFAULT_LOG_LIMIT;
-  }
-
   let hudRef = HUDService.getHudReferenceById(aHUDId);
   let outputNode = hudRef.outputNode;
+  let logLimit = hudRef.logLimitForCategory(aCategory);
 
-  let scrollBox = outputNode.scrollBoxObject.element;
-  let oldScrollHeight = scrollBox.scrollHeight;
-  let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
-
-  // Prune the nodes.
-  let messageNodes = outputNode.querySelectorAll(".webconsole-msg-" +
+  let messageNodes = outputNode.getElementsByClassName("webconsole-msg-" +
       CATEGORY_CLASS_FRAGMENTS[aCategory]);
-  let removeNodes = messageNodes.length - logLimit;
-  for (let i = 0; i < removeNodes; i++) {
-    let node = messageNodes[i];
-    if (node._evalCacheId && !node._panelOpen) {
-      hudRef.jsterm.clearObjectCache(node._evalCacheId);
-    }
+  let n = Math.max(0, messageNodes.length - logLimit);
+  let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
+  toRemove.forEach(hudRef.removeOutputMessage, hudRef);
 
-    if (node.classList.contains("webconsole-msg-cssparser")) {
-      let desc = messageNodes[i].childNodes[2].textContent;
-      let location = "";
-      if (node.childNodes[4]) {
-        location = node.childNodes[4].getAttribute("title");
-      }
-      delete hudRef.cssNodes[desc + location];
-    }
-    else if (node.classList.contains("webconsole-msg-inspector")) {
-      hudRef.pruneConsoleDirNode(node);
-      continue;
-    }
-
-    node.parentNode.removeChild(node);
-  }
-
-  if (!scrolledToBottom && removeNodes > 0 &&
-      oldScrollHeight != scrollBox.scrollHeight) {
-    scrollBox.scrollTop -= oldScrollHeight - scrollBox.scrollHeight;
-  }
-
-  return logLimit;
+  return n;
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -300,16 +242,6 @@ function pruneConsoleOutputIfNecessary(aHUDId, aCategory)
 
 function HUD_SERVICE()
 {
-  // TODO: provide mixins for FENNEC: bug 568621
-  if (appName() == "FIREFOX") {
-    var mixins = new FirefoxApplicationHooks();
-  }
-  else {
-    throw new Error("Unsupported Application");
-  }
-
-  this.mixins = mixins;
-
   // These methods access the "this" object, but they're registered as
   // event listeners. So we hammer in the "this" binding.
   this.onTabClose = this.onTabClose.bind(this);
@@ -317,17 +249,6 @@ function HUD_SERVICE()
 
   // Remembers the last console height, in pixels.
   this.lastConsoleHeight = Services.prefs.getIntPref("devtools.hud.height");
-
-  /**
-   * Collection of HUDIds that map to the tabs/windows/contexts
-   * that a HeadsUpDisplay can be activated for.
-   */
-  this.activatedContexts = [];
-
-  /**
-   * Collection of outer window IDs mapping to HUD IDs.
-   */
-  this.windowIds = {};
 
   /**
    * Each HeadsUpDisplay has a set of filter preferences
@@ -358,148 +279,86 @@ HUD_SERVICE.prototype =
   sequencer: null,
 
   /**
-   * Tell the HUDService that a HeadsUpDisplay can be activated
-   * for the window or context that has 'aContextDOMId' node id
-   *
-   * @param string aContextDOMId
-   * @return void
-   */
-  registerActiveContext: function HS_registerActiveContext(aContextDOMId)
-  {
-    this.activatedContexts.push(aContextDOMId);
-  },
-
-  /**
    * Firefox-specific current tab getter
    *
    * @returns nsIDOMWindow
    */
   currentContext: function HS_currentContext() {
-    return this.mixins.getCurrentContext();
-  },
-
-  /**
-   * Tell the HUDService that a HeadsUpDisplay should be deactivated
-   *
-   * @param string aContextDOMId
-   * @return void
-   */
-  unregisterActiveContext: function HS_deregisterActiveContext(aContextDOMId)
-  {
-    var domId = aContextDOMId.split("_")[1];
-    var idx = this.activatedContexts.indexOf(domId);
-    if (idx > -1) {
-      this.activatedContexts.splice(idx, 1);
-    }
-  },
-
-  /**
-   * Tells callers that a HeadsUpDisplay can be activated for the context
-   *
-   * @param string aContextDOMId
-   * @return boolean
-   */
-  canActivateContext: function HS_canActivateContext(aContextDOMId)
-  {
-    var domId = aContextDOMId.split("_")[1];
-    for (var idx in this.activatedContexts) {
-      if (this.activatedContexts[idx] == domId){
-        return true;
-      }
-    }
-    return false;
+    return Services.wm.getMostRecentWindow("navigator:browser");
   },
 
   /**
    * Activate a HeadsUpDisplay for the given tab context.
    *
-   * @param Element aContext the tab element.
-   * @param boolean aAnimated animate opening the Web Console?
-   * @returns void
+   * @param nsIDOMElement aTab
+   *        The xul:tab element.
+   * @param boolean aAnimated
+   *        True if you want to animate the opening of the Web console.
+   * @return object
+   *         The new HeadsUpDisplay instance.
    */
-  activateHUDForContext: function HS_activateHUDForContext(aContext, aAnimated)
+  activateHUDForContext: function HS_activateHUDForContext(aTab, aAnimated)
   {
+    let hudId = "hud_" + aTab.linkedPanel;
+    if (hudId in this.hudReferences) {
+      return this.hudReferences[hudId];
+    }
+
     this.wakeup();
 
-    let window = aContext.linkedBrowser.contentWindow;
-    let chromeDocument = aContext.ownerDocument;
-    let nBox = chromeDocument.defaultView.getNotificationBox(window);
-    this.registerActiveContext(nBox.id);
-    this.windowInitializer(window);
+    let window = aTab.ownerDocument.defaultView;
+    let gBrowser = window.gBrowser;
 
-    let hudId = "hud_" + nBox.id;
-    let hudRef = this.hudReferences[hudId];
+    // TODO: check that this works as intended
+    gBrowser.tabContainer.addEventListener("TabClose", this.onTabClose, false);
+    window.addEventListener("unload", this.onWindowUnload, false);
 
-    if (!aAnimated || hudRef.consolePanel) {
+    this.registerDisplay(hudId);
+
+    let hud = new HeadsUpDisplay(aTab);
+    this.hudReferences[hudId] = hud;
+
+    // register the controller to handle "select all" properly
+    this.createController(window);
+
+    if (!aAnimated || hud.consolePanel) {
       this.disableAnimation(hudId);
     }
 
-    // Create a processing instruction for GCLIs CSS stylesheet, but only if
-    // we don't have one for this document. Also record the context we're
-    // adding this for so we know when to remove it.
-    let procInstr = aContext.ownerDocument.gcliCssProcInstr;
-    if (!procInstr) {
-      procInstr = aContext.ownerDocument.createProcessingInstruction(
-              "xml-stylesheet",
-              "href='chrome://browser/skin/devtools/gcli.css' type='text/css'");
-      procInstr.contexts = [];
-
-      let root = aContext.ownerDocument.getElementsByTagName('window')[0];
-      root.parentNode.insertBefore(procInstr, root);
-      aContext.ownerDocument.gcliCssProcInstr = procInstr;
-    }
-    if (procInstr.contexts.indexOf(hudId) == -1) {
-      procInstr.contexts.push(hudId);
-    }
     HeadsUpDisplayUICommands.refreshCommand();
+
+    return hud;
   },
 
   /**
    * Deactivate a HeadsUpDisplay for the given tab context.
    *
-   * @param nsIDOMWindow aContext
-   * @param aAnimated animate closing the web console?
-   * @returns void
+   * @param nsIDOMElement aTab
+   *        The xul:tab element you want to enable the Web Console for.
+   * @param boolean aAnimated
+   *        True if you want to animate the closing of the Web console.
+   * @return void
    */
-  deactivateHUDForContext: function HS_deactivateHUDForContext(aContext, aAnimated)
+  deactivateHUDForContext: function HS_deactivateHUDForContext(aTab, aAnimated)
   {
-    let browser = aContext.linkedBrowser;
-    let window = browser.contentWindow;
-    let chromeDocument = aContext.ownerDocument;
-    let nBox = chromeDocument.defaultView.getNotificationBox(window);
-    let hudId = "hud_" + nBox.id;
-    let displayNode = chromeDocument.getElementById(hudId);
-    let hudFound = (hudId in this.hudReferences) && displayNode;
-
-    if (hudFound) {
-      if (!aAnimated) {
-        this.storeHeight(hudId);
-      }
-
-      this.unregisterDisplay(hudId);
-
-      window.focus();
-      HeadsUpDisplayUICommands.refreshCommand();
+    let hudId = "hud_" + aTab.linkedPanel;
+    if (!(hudId in this.hudReferences)) {
+      return;
     }
 
-    // Remove this context from the list of contexts that need the GCLI CSS
-    // processing instruction and then remove the processing instruction if it
-    // isn't needed any more.
-    let procInstr = aContext.ownerDocument.gcliCssProcInstr;
-    if (procInstr) {
-      procInstr.contexts = procInstr.contexts.filter(function(id) {
-        return id !== hudId;
-      });
-      if (procInstr.contexts.length == 0 && procInstr.parentNode) {
-        procInstr.parentNode.removeChild(procInstr);
-        delete aContext.ownerDocument.gcliCssProcInstr;
-      }
+    if (!aAnimated) {
+      this.storeHeight(hudId);
     }
 
-    if (hudFound) {
-      let id = WebConsoleUtils.supportsString(hudId);
-      Services.obs.notifyObservers(id, "web-console-destroyed", null);
-    }
+    this.unregisterDisplay(hudId);
+
+    let contentWindow = aTab.linkedBrowser.contentWindow;
+    contentWindow.focus();
+
+    HeadsUpDisplayUICommands.refreshCommand();
+
+    let id = WebConsoleUtils.supportsString(hudId);
+    Services.obs.notifyObservers(id, "web-console-destroyed", null);
   },
 
   /**
@@ -582,11 +441,10 @@ HUD_SERVICE.prototype =
   {
     // Go through the nodes and adjust the placement of "webconsole-new-group"
     // classes.
-
     let nodes = aOutputNode.querySelectorAll(".hud-msg-node" +
       ":not(.hud-filtered-by-string):not(.hud-filtered-by-type)");
     let lastTimestamp;
-    for (let i = 0; i < nodes.length; i++) {
+    for (let i = 0, n = nodes.length; i < n; i++) {
       let thisTimestamp = nodes[i].timestamp;
       if (lastTimestamp != null &&
           thisTimestamp >= lastTimestamp + NEW_GROUP_DELAY) {
@@ -677,9 +535,9 @@ HUD_SERVICE.prototype =
   {
     let outputNode = this.getHudReferenceById(aHUDId).outputNode;
 
-    let nodes = outputNode.querySelectorAll(".hud-msg-node");
+    let nodes = outputNode.getElementsByClassName("hud-msg-node");
 
-    for (let i = 0; i < nodes.length; ++i) {
+    for (let i = 0, n = nodes.length; i < n; ++i) {
       let node = nodes[i];
 
       // hide nodes that match the strings
@@ -695,15 +553,6 @@ HUD_SERVICE.prototype =
     }
 
     this.regroupOutput(outputNode);
-  },
-
-  /**
-   * Register a reference of each HeadsUpDisplay that is created
-   */
-  registerHUDReference:
-  function HS_registerHUDReference(aHUD)
-  {
-    this.hudReferences[aHUD.hudId] = aHUD;
   },
 
   /**
@@ -741,52 +590,11 @@ HUD_SERVICE.prototype =
   unregisterDisplay: function HS_unregisterDisplay(aHUDId)
   {
     let hud = this.getHudReferenceById(aHUDId);
-
-    // Remove children from the output. If the output is not cleared, there can
-    // be leaks as some nodes has node.onclick = function; set and GC can't
-    // remove the nodes then.
-    if (hud.gcliterm) {
-      hud.gcliterm.clearOutput();
-    }
-
     let document = hud.chromeDocument;
 
     hud.destroy();
 
-    // Make sure that the console panel does not try to call
-    // deactivateHUDForContext() again.
-    hud.consoleWindowUnregisterOnHide = false;
-
-    // Remove the HUDBox and the consolePanel if the Web Console is inside a
-    // floating panel.
-    if (hud.consolePanel && hud.consolePanel.parentNode) {
-      hud.consolePanel.hidePopup();
-      hud.consolePanel.parentNode.removeChild(hud.consolePanel);
-      hud.consolePanel.removeAttribute("hudId");
-      hud.consolePanel = null;
-    }
-
-    hud.HUDBox.parentNode.removeChild(hud.HUDBox);
-
-    if (hud.splitter.parentNode) {
-      hud.splitter.parentNode.removeChild(hud.splitter);
-    }
-
     delete this.hudReferences[aHUDId];
-
-    for (let windowID in this.windowIds) {
-      if (this.windowIds[windowID] == aHUDId) {
-        delete this.windowIds[windowID];
-      }
-    }
-
-    this.unregisterActiveContext(aHUDId);
-
-    let popupset = document.getElementById("mainPopupSet");
-    let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
-    for (let i = 0; i < panels.length; i++) {
-      panels[i].hidePopup();
-    }
 
     if (Object.keys(this.hudReferences).length == 0) {
       let autocompletePopup = document.
@@ -794,6 +602,14 @@ HUD_SERVICE.prototype =
       if (autocompletePopup) {
         autocompletePopup.parentNode.removeChild(autocompletePopup);
       }
+
+      let window = document.defaultView;
+
+      window.removeEventListener("unload", this.onWindowUnload, false);
+
+      let gBrowser = window.gBrowser;
+      let tabContainer = gBrowser.tabContainer;
+      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
 
       this.suspend();
     }
@@ -829,14 +645,14 @@ HUD_SERVICE.prototype =
   },
 
   /**
-   * Shutdown all HeadsUpDisplays on xpcom-shutdown
+   * Shutdown all HeadsUpDisplays on quit-application-granted.
    *
    * @returns void
    */
   shutdown: function HS_shutdown()
   {
-    for (let hudId in this.hudReferences) {
-      this.deactivateHUDForContext(this.hudReferences[hudId].tab, false);
+    for (let hud of this.hudReferences) {
+      this.deactivateHUDForContext(hud.tab, false);
     }
   },
 
@@ -861,8 +677,16 @@ HUD_SERVICE.prototype =
    */
   getHudIdByWindow: function HS_getHudIdByWindow(aContentWindow)
   {
-    let windowId = WebConsoleUtils.getOuterWindowId(aContentWindow);
-    return this.getHudIdByWindowId(windowId);
+    let window = this.currentContext();
+    let index =
+      window.gBrowser.getBrowserIndexForDocument(aContentWindow.document);
+    if (index == -1) {
+      return null;
+    }
+
+    let tab = window.gBrowser.tabs[index];
+    let hudId = "hud_" + tab.linkedPanel;
+    return hudId in this.hudReferences ? hudId : null;
   },
 
   /**
@@ -874,18 +698,6 @@ HUD_SERVICE.prototype =
   getHudReferenceById: function HS_getHudReferenceById(aId)
   {
     return aId in this.hudReferences ? this.hudReferences[aId] : null;
-  },
-
-  /**
-   * Returns the hudId that is corresponding to the given outer window ID.
-   *
-   * @param number aWindowId
-   *        the outer window ID
-   * @returns string the hudId
-   */
-  getHudIdByWindowId: function HS_getHudIdByWindowId(aWindowId)
-  {
-    return this.windowIds[aWindowId];
   },
 
   /**
@@ -910,50 +722,6 @@ HUD_SERVICE.prototype =
     var hudId = aTextBoxNode.getAttribute("hudId");
     this.adjustVisibilityOnSearchStringChange(hudId, aTextBoxNode.value);
   },
-
-  /**
-   * Inform user that the Web Console API has been replaced by a script
-   * in a content page.
-   *
-   * @param string aHUDId
-   *        The ID of the Web Console to which to send the message.
-   * @return void
-   */
-  logWarningAboutReplacedAPI:
-  function HS_logWarningAboutReplacedAPI(aHUDId)
-  {
-    let hud = this.hudReferences[aHUDId];
-    let chromeDocument = hud.HUDBox.ownerDocument;
-    let message = stringBundle.GetStringFromName("ConsoleAPIDisabled");
-    let node = ConsoleUtils.createMessageNode(chromeDocument, CATEGORY_JS,
-                                              SEVERITY_WARNING, message,
-                                              aHUDId);
-    ConsoleUtils.outputMessageNode(node, aHUDId);
-  },
-
-  /**
-   * Register a Gecko app's specialized ApplicationHooks object
-   *
-   * @returns void or throws "UNSUPPORTED APPLICATION" error
-   */
-  registerApplicationHooks:
-  function HS_registerApplications(aAppName, aHooksObject)
-  {
-    switch(aAppName) {
-      case "FIREFOX":
-        this.applicationHooks = aHooksObject;
-        return;
-      default:
-        throw new Error("MOZ APPLICATION UNSUPPORTED");
-    }
-  },
-
-  /**
-   * Registry of ApplicationHooks used by specified Gecko Apps
-   *
-   * @returns Specific Gecko 'ApplicationHooks' Object/Mixin
-   */
-  applicationHooks: null,
 
   /**
    * Assign a function to this property to listen for every request that
@@ -1061,113 +829,15 @@ HUD_SERVICE.prototype =
   },
 
   /**
-   * windowInitializer - checks what Gecko app is running and inits the HUD
-   *
-   * @param nsIDOMWindow aContentWindow
-   * @returns void
-   */
-  windowInitializer: function HS_WindowInitalizer(aContentWindow)
-  {
-    var xulWindow = aContentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
-      .getInterface(Ci.nsIWebNavigation)
-                      .QueryInterface(Ci.nsIDocShell)
-                      .chromeEventHandler.ownerDocument.defaultView;
-
-    let xulWindow = WebConsoleUtils.unwrap(xulWindow);
-
-    let docElem = xulWindow.document.documentElement;
-    if (!docElem || docElem.getAttribute("windowtype") != "navigator:browser" ||
-        !xulWindow.gBrowser) {
-      // Do not do anything unless we have a browser window.
-      // This may be a view-source window or other type of non-browser window.
-      return;
-    }
-
-    let gBrowser = xulWindow.gBrowser;
-
-    let _browser = gBrowser.
-      getBrowserForDocument(aContentWindow.top.document);
-
-    // ignore newly created documents that don't belong to a tab's browser
-    if (!_browser) {
-      return;
-    }
-
-    let nBox = gBrowser.getNotificationBox(_browser);
-    let nBoxId = nBox.getAttribute("id");
-    let hudId = "hud_" + nBoxId;
-    let windowUI = nBox.ownerDocument.getElementById("console_window_" + hudId);
-    if (windowUI) {
-      // The Web Console popup is already open, no need to continue.
-      if (aContentWindow == aContentWindow.top) {
-        let hud = this.hudReferences[hudId];
-        hud.reattachConsole(aContentWindow);
-      }
-      return;
-    }
-
-    if (!this.canActivateContext(hudId)) {
-      return;
-    }
-
-    xulWindow.addEventListener("unload", this.onWindowUnload, false);
-    gBrowser.tabContainer.addEventListener("TabClose", this.onTabClose, false);
-
-    this.registerDisplay(hudId);
-
-    let hudNode;
-    let childNodes = nBox.childNodes;
-
-    for (let i = 0; i < childNodes.length; i++) {
-      let id = childNodes[i].getAttribute("id");
-      // `id` is a string with the format "hud_<number>".
-      if (id.split("_")[0] == "hud") {
-        hudNode = childNodes[i];
-        break;
-      }
-    }
-
-    let hud;
-    // If there is no HUD for this tab create a new one.
-    if (!hudNode) {
-      // get nBox object and call new HUD
-      let config = { parentNode: nBox,
-                     contentWindow: aContentWindow.top
-                   };
-
-      hud = new HeadsUpDisplay(config);
-
-      HUDService.registerHUDReference(hud);
-      let windowId = WebConsoleUtils.getOuterWindowId(aContentWindow.top);
-      this.windowIds[windowId] = hudId;
-    }
-    else {
-      hud = this.hudReferences[hudId];
-      if (aContentWindow == aContentWindow.top) {
-        // TODO: name change?? doesn't actually re-attach the console
-        hud.reattachConsole(aContentWindow);
-      }
-    }
-
-    // Need to detect that the console component has been paved over.
-    let consoleObject = WebConsoleUtils.unwrap(aContentWindow).console;
-    if (!("__mozillaConsole__" in consoleObject))
-      this.logWarningAboutReplacedAPI(hudId);
-
-    // register the controller to handle "select all" properly
-    this.createController(xulWindow);
-  },
-
-  /**
    * Adds the command controller to the XUL window if it's not already present.
    *
    * @param nsIDOMWindow aWindow
    *        The browser XUL window.
    * @returns void
    */
-  createController: function HUD_createController(aWindow)
+  createController: function HS_createController(aWindow)
   {
-    if (aWindow.webConsoleCommandController == null) {
+    if (!aWindow.webConsoleCommandController) {
       aWindow.webConsoleCommandController = new CommandController(aWindow);
       aWindow.controllers.insertControllerAt(0,
         aWindow.webConsoleCommandController);
@@ -1232,8 +902,8 @@ HUD_SERVICE.prototype =
   resetHeight: function HS_resetHeight(aHUDId)
   {
     let HUD = this.hudReferences[aHUDId];
-    let innerHeight = HUD.contentWindow.innerHeight;
-    let chromeWindow = HUD.chromeDocument.defaultView;
+    let innerHeight = HUD.browser.clientHeight;
+    let chromeWindow = HUD.chromeWindow;
     if (!HUD.consolePanel) {
       let splitterStyle = chromeWindow.getComputedStyle(HUD.splitter, null);
       innerHeight += parseInt(splitterStyle.height) +
@@ -1252,7 +922,8 @@ HUD_SERVICE.prototype =
     if ((innerHeight - height) < MINIMUM_PAGE_HEIGHT) {
       height = innerHeight - MINIMUM_PAGE_HEIGHT;
     }
-    else if (height < MINIMUM_CONSOLE_HEIGHT) {
+
+    if (isNaN(height) || height < MINIMUM_CONSOLE_HEIGHT) {
       height = MINIMUM_CONSOLE_HEIGHT;
     }
 
@@ -1328,100 +999,21 @@ HUD_SERVICE.prototype =
 // HeadsUpDisplay
 //////////////////////////////////////////////////////////////////////////
 
-/*
+/**
  * HeadsUpDisplay is an interactive console initialized *per tab*  that
  * displays console log data as well as provides an interactive terminal to
  * manipulate the current tab's document content.
- * */
-function HeadsUpDisplay(aConfig)
+ *
+ * @param nsIDOMElement aTab
+ *        The xul:tab for which you want the HeadsUpDisplay object.
+ */
+function HeadsUpDisplay(aTab)
 {
-  // sample config: { parentNode: aDOMNode,
-  //                  // or
-  //                  parentNodeId: "myHUDParent123",
-  //
-  //                  placement: "appendChild"
-  //                  // or
-  //                  placement: "insertBefore",
-  //                  placementChildNodeIndex: 0,
-  //                }
-
-  this.HUDBox = null;
-
-  if (aConfig.parentNode) {
-    // TODO: need to replace these DOM calls with internal functions
-    // that operate on each application's node structure
-    // better yet, we keep these functions in a "bridgeModule" or the HUDService
-    // to keep a registry of nodeGetters for each application
-    // see bug 568647
-    this.parentNode = aConfig.parentNode;
-    this.notificationBox = aConfig.parentNode;
-    this.chromeDocument = aConfig.parentNode.ownerDocument;
-    this.contentWindow = aConfig.contentWindow;
-    this.uriSpec = aConfig.contentWindow.location.href;
-    this.hudId = "hud_" + aConfig.parentNode.getAttribute("id");
-  }
-  else {
-    // parentNodeId is the node's id where we attach the HUD
-    // TODO: is the "navigator:browser" below used in all Gecko Apps?
-    // see bug 568647
-    let windowEnum = Services.wm.getEnumerator("navigator:browser");
-    let parentNode;
-    let contentDocument;
-    let contentWindow;
-    let chromeDocument;
-
-    // TODO: the following  part is still very Firefox specific
-    // see bug 568647
-
-    while (windowEnum.hasMoreElements()) {
-      let window = windowEnum.getNext();
-      try {
-        let gBrowser = window.gBrowser;
-        let _browsers = gBrowser.browsers;
-        let browserLen = _browsers.length;
-
-        for (var i = 0; i < browserLen; i++) {
-          var _notificationBox = gBrowser.getNotificationBox(_browsers[i]);
-          this.notificationBox = _notificationBox;
-
-          if (_notificationBox.getAttribute("id") == aConfig.parentNodeId) {
-            this.parentNodeId = _notificationBox.getAttribute("id");
-            this.hudId = "hud_" + this.parentNodeId;
-
-            parentNode = _notificationBox;
-
-            this.contentDocument =
-              _notificationBox.childNodes[0].contentDocument;
-            this.contentWindow =
-              _notificationBox.childNodes[0].contentWindow;
-            this.uriSpec = aConfig.contentWindow.location.href;
-
-            this.chromeDocument =
-              _notificationBox.ownerDocument;
-
-            break;
-          }
-        }
-      }
-      catch (ex) {
-        Cu.reportError(ex);
-      }
-
-      if (parentNode) {
-        break;
-      }
-    }
-    if (!parentNode) {
-      throw new Error(this.ERRORS.PARENTNODE_NOT_FOUND);
-    }
-    this.parentNode = parentNode;
-    this.notificationBox = parentNode;
-  }
-
-  // create textNode Factory:
-  this.textFactory = NodeFactory("text", "xul", this.chromeDocument);
-
+  this.tab = aTab;
+  this.hudId = "hud_" + this.tab.linkedPanel;
+  this.chromeDocument = this.tab.ownerDocument;
   this.chromeWindow = this.chromeDocument.defaultView;
+  this.notificationBox = this.chromeDocument.getElementById(this.tab.linkedPanel);
   this.browser = this.tab.linkedBrowser;
   this.messageManager = this.browser.messageManager;
 
@@ -1431,16 +1023,13 @@ function HeadsUpDisplay(aConfig)
 
   // create a panel dynamically and attach to the parentNode
   this.createHUD();
-  this.HUDBox.lastTimestamp = 0;
+
+  this._outputQueue = [];
+  this._pruneCategoriesQueue = {};
 
   // create the JSTerm input element
-  this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-  if (this.jsterm) {
-    this.jsterm.inputNode.focus();
-  }
-  else if (this.gcliterm) {
-    this.gcliterm.inputNode.focus();
-  }
+  this.jsterm = new JSTerm(this);
+  this.jsterm.inputNode.focus();
 
   // A cache for tracking repeated CSS Nodes.
   this.cssNodes = {};
@@ -1449,6 +1038,40 @@ function HeadsUpDisplay(aConfig)
 }
 
 HeadsUpDisplay.prototype = {
+  /**
+   * Last time when we displayed any message in the output. Timestamp in
+   * milliseconds since the Unix epoch.
+   *
+   * @private
+   * @type number
+   */
+  _lastOutputFlush: 0,
+
+  /**
+   * The number of messages displayed in the last interval. The interval is
+   * given by OUTPUT_INTERVAL.
+   *
+   * @private
+   * @type number
+   */
+  _messagesDisplayedInInterval: 0,
+
+  /**
+   * Message nodes are stored here in a queue for later display.
+   *
+   * @private
+   * @type array
+   */
+  _outputQueue: null,
+
+  /**
+   * Keep track of the categories we need to prune from time to time.
+   *
+   * @private
+   * @type array
+   */
+  _pruneCategoriesQueue: null,
+
   /**
    * Message names that the HUD listens for. These messages come from the remote
    * Web Console content script.
@@ -1460,9 +1083,12 @@ HeadsUpDisplay.prototype = {
     "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
     "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
     "JSTerm:InspectObject", "WebConsole:NetworkActivity",
-    "WebConsole:FileActivity"],
+    "WebConsole:FileActivity", "WebConsole:LocationChange",
+    "JSTerm:NonNativeConsoleAPI"],
 
   consolePanel: null,
+
+  contentLocation: "",
 
   /**
    * The nesting depth of the currently active console group.
@@ -1503,27 +1129,6 @@ HeadsUpDisplay.prototype = {
   },
 
   /**
-   * Get the tab associated to the HeadsUpDisplay object.
-   */
-  get tab()
-  {
-    // TODO: we should only keep a reference to the tab object and use
-    // getters to determine the rest of objects we need - the chrome window,
-    // document, etc. We should simplify the entire code to use only a single
-    // tab object ref. See bug 656231.
-    let tab = null;
-    let id = this.notificationBox.id;
-    Array.some(this.chromeDocument.defaultView.gBrowser.tabs, function(aTab) {
-      if (aTab.linkedPanel == id) {
-        tab = aTab;
-        return true;
-      }
-    });
-
-    return tab;
-  },
-
-  /**
    * Create a panel to open the web console if it should float above
    * the content in its own window.
    */
@@ -1540,7 +1145,7 @@ HeadsUpDisplay.prototype = {
     catch (ex) {}
 
     if (width < 1) {
-      width = this.HUDBox.clientWidth || this.contentWindow.innerWidth;
+      width = this.HUDBox.clientWidth || this.chromeWindow.innerWidth;
     }
 
     let height = this.HUDBox.clientHeight;
@@ -1596,12 +1201,7 @@ HeadsUpDisplay.prototype = {
         this.outputNode.ensureIndexIsVisible(lastIndex);
       }
 
-      if (this.jsterm) {
-        this.jsterm.inputNode.focus();
-      }
-      if (this.gcliterm) {
-        this.gcliterm.inputNode.focus();
-      }
+      this.jsterm.inputNode.focus();
     }).bind(this);
 
     panel.addEventListener("popupshown", onPopupShown,false);
@@ -1626,8 +1226,6 @@ HeadsUpDisplay.prototype = {
       // Are we destroying the HUD or repositioning it?
       if (this.consoleWindowUnregisterOnHide) {
         HUDService.deactivateHUDForContext(this.tab, false);
-      } else {
-        this.consoleWindowUnregisterOnHide = true;
       }
     }).bind(this);
 
@@ -1680,7 +1278,7 @@ HeadsUpDisplay.prototype = {
    */
   getPanelTitle: function HUD_getPanelTitle()
   {
-    return l10n.getFormatStr("webConsoleWindowTitleAndURL", [this.uriSpec]);
+    return l10n.getFormatStr("webConsoleWindowTitleAndURL", [this.contentLocation]);
   },
 
   positions: {
@@ -1779,9 +1377,6 @@ HeadsUpDisplay.prototype = {
     if (this.jsterm) {
       this.jsterm.inputNode.focus();
     }
-    if (this.gcliterm) {
-      this.gcliterm.inputNode.focus();
-    }
   },
 
   /**
@@ -1789,42 +1384,6 @@ HeadsUpDisplay.prototype = {
    *
    */
   jsterm: null,
-
-  /**
-   * The GcliTerm object that contains the console's GCLI
-   */
-  gcliterm: null,
-
-  /**
-   * creates and attaches the console input node
-   *
-   * @param nsIDOMWindow aWindow
-   * @returns void
-   */
-  createConsoleInput:
-  function HUD_createConsoleInput(aWindow, aParentNode, aExistingConsole)
-  {
-    let usegcli = false;
-    try {
-      // usegcli = Services.prefs.getBoolPref("devtools.gcli.enable");
-    }
-    catch (ex) {}
-
-    if (appName() == "FIREFOX") {
-      if (!usegcli) {
-        let mixin = new JSTermFirefoxMixin(aParentNode, aExistingConsole);
-        this.jsterm = new JSTerm(this, mixin);
-      }
-      else {
-        this.gcliterm = new GcliTerm(aWindow, this.hudId, this.chromeDocument,
-                                     this.console, this.hintNode, this.consoleWrap);
-        aParentNode.appendChild(this.gcliterm.element);
-      }
-    }
-    else {
-      throw new Error("Unsupported Gecko Application");
-    }
-  },
 
   /**
    * Display cached messages that may have been collected before the UI is
@@ -1842,10 +1401,6 @@ HeadsUpDisplay.prototype = {
       return;
     }
 
-    // Turn off scrolling for the moment.
-    ConsoleUtils.scroll = false;
-    this.outputNode.hidden = true;
-
     aRemoteMessages.forEach(function(aMessage) {
       switch (aMessage._type) {
         case "PageError":
@@ -1856,41 +1411,6 @@ HeadsUpDisplay.prototype = {
           break;
       }
     }, this);
-
-    this.outputNode.hidden = false;
-    ConsoleUtils.scroll = true;
-
-    // Scroll to bottom.
-    let numChildren = this.outputNode.childNodes.length;
-    if (numChildren && this.outputNode.clientHeight) {
-      // We also check the clientHeight to force a reflow, otherwise
-      // ensureIndexIsVisible() does not work after outputNode.hidden = false.
-      this.outputNode.ensureIndexIsVisible(numChildren - 1);
-    }
-  },
-
-  /**
-   * Re-attaches a console when the contentWindow is recreated
-   *
-   * @param nsIDOMWindow aContentWindow
-   * @returns void
-   */
-  reattachConsole: function HUD_reattachConsole(aContentWindow)
-  {
-    this.contentWindow = aContentWindow;
-    this.contentDocument = this.contentWindow.document;
-    this.uriSpec = this.contentWindow.location.href;
-
-    if (this.consolePanel) {
-      this.consolePanel.label = this.getPanelTitle();
-    }
-
-    if (this.gcliterm) {
-      this.gcliterm.reattachConsole(this.contentWindow, this.console);
-    }
-    else if (!this.jsterm) {
-      this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-    }
   },
 
   /**
@@ -1912,8 +1432,6 @@ HeadsUpDisplay.prototype = {
    */
   makeHUDNodes: function HUD_makeHUDNodes()
   {
-    let self = this;
-
     this.splitter = this.makeXULNode("splitter");
     this.splitter.setAttribute("class", "hud-splitter");
 
@@ -1921,6 +1439,7 @@ HeadsUpDisplay.prototype = {
     this.HUDBox.setAttribute("id", this.hudId);
     this.HUDBox.setAttribute("class", "hud-box animated");
     this.HUDBox.style.height = 0;
+    this.HUDBox.lastTimestamp = 0;
 
     let outerWrap = this.makeXULNode("vbox");
     outerWrap.setAttribute("class", "hud-outer-wrapper");
@@ -1985,7 +1504,7 @@ HeadsUpDisplay.prototype = {
 
     this.HUDBox.lastTimestamp = 0;
 
-    this.jsTermParentNode = outerWrap;
+    this.jsTermParentNode = this.consoleWrap;
     this.HUDBox.appendChild(outerWrap);
 
     return this.HUDBox;
@@ -2295,12 +1814,7 @@ HeadsUpDisplay.prototype = {
     let hudId = this.hudId;
     function HUD_clearButton_onCommand() {
       let hud = HUDService.getHudReferenceById(hudId);
-      if (hud.jsterm) {
-        hud.jsterm.clearOutput(true);
-      }
-      if (hud.gcliterm) {
-        hud.gcliterm.clearOutput();
-      }
+      hud.jsterm.clearOutput(true);
     }
 
     let clearButton = this.makeXULNode("toolbarbutton");
@@ -2348,8 +1862,6 @@ HeadsUpDisplay.prototype = {
   },
 
   uiInOwnWindow: false,
-
-  get console() { return this.contentWindow.wrappedJSObject.console; },
 
   /**
    * Logs a message to the Web Console that originates from the remote Web
@@ -2670,6 +2182,19 @@ HeadsUpDisplay.prototype = {
     ConsoleUtils.outputMessageNode(outputNode, this.hudId);
   },
 
+  /**
+   * Inform user that the Web Console API has been replaced by a script
+   * in a content page.
+   */
+  logWarningAboutReplacedAPI: function HUD_logWarningAboutReplacedAPI()
+  {
+    let message = l10n.getStr("ConsoleAPIDisabled");
+    let node = ConsoleUtils.createMessageNode(this.chromeDocument, CATEGORY_JS,
+                                              SEVERITY_WARNING, message,
+                                              this.hudId);
+    ConsoleUtils.outputMessageNode(node, this.hudId);
+  },
+
   ERRORS: {
     HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
     TAB_ID_REQUIRED: "Tab DOM ID is required",
@@ -2692,9 +2217,11 @@ HeadsUpDisplay.prototype = {
     }, this);
 
     let message = {
-      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor"],
+      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor",
+                 "LocationChange"],
       cachedMessages: ["ConsoleAPI", "PageError"],
       NetworkMonitor: { monitorFileActivity: true },
+      JSTerm: { notifyNonNativeConsoleAPI: true },
       preferences: {
         "NetworkMonitor.saveRequestAndResponseBodies":
           this.saveRequestAndResponseBodies,
@@ -2745,6 +2272,12 @@ HeadsUpDisplay.prototype = {
         break;
       case "WebConsole:FileActivity":
         this.logFileActivity(aMessage.json.uri);
+        break;
+      case "WebConsole:LocationChange":
+        this.onLocationChange(aMessage.json);
+        break;
+      case "JSTerm:NonNativeConsoleAPI":
+        this.logWarningAboutReplacedAPI();
         break;
     }
   },
@@ -2818,7 +2351,6 @@ HeadsUpDisplay.prototype = {
         callback: aCallback,
       };
     }
-
     this.messageManager.sendAsyncMessage(aName, aMessage);
   },
 
@@ -2892,6 +2424,22 @@ HeadsUpDisplay.prototype = {
   },
 
   /**
+   * Handler for the "WebConsole:LocationChange" message. If the Web Console is
+   * opened in a panel the panel title is updated.
+   *
+   * @param object aMessage
+   *        The message received from the content script. It needs to hold two
+   *        properties: location and title.
+   */
+  onLocationChange: function HUD_onLocationChange(aMessage)
+  {
+    this.contentLocation = aMessage.location;
+    if (this.consolePanel) {
+      this.consolePanel.label = this.getPanelTitle();
+    }
+  },
+
+  /**
    * Make a link given an output element.
    *
    * @param nsIDOMNode aNode
@@ -2930,11 +2478,272 @@ HeadsUpDisplay.prototype = {
   },
 
   /**
+   * Output a message node. This filters a node appropriately, then sends it to
+   * the output, regrouping and pruning output as necessary.
+   *
+   * Note: this call is async - the given message node may not be displayed when
+   * you call this method.
+   *
+   * @param nsIDOMNode aNode
+   *        The message node to send to the output.
+   * @param nsIDOMNode [aNodeAfter]
+   *        Insert the node after the given aNodeAfter (optional).
+   */
+  outputMessageNode: function HUD_outputMessageNode(aNode, aNodeAfter)
+  {
+    this._outputQueue.push([aNode, aNodeAfter]);
+    this._flushMessageQueue();
+  },
+
+  /**
+   * Try to flush the output message queue. This takes the messages in the
+   * output queue and displays them. Outputting stops at MESSAGES_IN_INTERVAL.
+   * Further output is queued to happen later - see OUTPUT_INTERVAL.
+   *
+   * @private
+   */
+  _flushMessageQueue: function HUD__flushMessageQueue()
+  {
+    if ((Date.now() - this._lastOutputFlush) >= OUTPUT_INTERVAL) {
+      this._messagesDisplayedInInterval = 0;
+    }
+
+    // Determine how many messages we can display now.
+    let toDisplay = Math.min(this._outputQueue.length,
+                             MESSAGES_IN_INTERVAL -
+                             this._messagesDisplayedInInterval);
+
+    if (!toDisplay) {
+      if (!this._outputTimeout && this._outputQueue.length > 0) {
+        this._outputTimeout =
+          this.chromeWindow.setTimeout(function() {
+            delete this._outputTimeout;
+            this._flushMessageQueue();
+          }.bind(this), OUTPUT_INTERVAL);
+      }
+      return;
+    }
+
+    // Try to prune the message queue.
+    let shouldPrune = false;
+    if (this._outputQueue.length > toDisplay && this._pruneOutputQueue()) {
+      toDisplay = Math.min(this._outputQueue.length, toDisplay);
+      shouldPrune = true;
+    }
+
+    let batch = this._outputQueue.splice(0, toDisplay);
+    if (!batch.length) {
+      return;
+    }
+
+    let outputNode = this.outputNode;
+    let lastVisibleNode = null;
+    let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
+    let scrollBox = outputNode.scrollBoxObject.element;
+
+    let hudIdSupportsString = WebConsoleUtils.supportsString(this.hudId);
+
+    // Output the current batch of messages.
+    for (let item of batch) {
+      if (this._outputMessageFromQueue(hudIdSupportsString, item)) {
+        lastVisibleNode = item[0];
+      }
+    }
+
+    // Keep track of how many messages we displayed, so we do not display too
+    // many at once.
+    this._messagesDisplayedInInterval += batch.length;
+
+    let oldScrollHeight = 0;
+
+    // Prune messages if needed. We do not do this for every flush call to
+    // improve performance.
+    let removedNodes = 0;
+    if (shouldPrune || !(this._outputQueue.length % 20)) {
+      oldScrollHeight = scrollBox.scrollHeight;
+
+      let categories = Object.keys(this._pruneCategoriesQueue);
+      categories.forEach(function _pruneOutput(aCategory) {
+        removedNodes += pruneConsoleOutputIfNecessary(this.hudId, aCategory);
+      }, this);
+      this._pruneCategoriesQueue = {};
+    }
+
+    // Regroup messages at the end of the queue.
+    if (!this._outputQueue.length) {
+      HUDService.regroupOutput(outputNode);
+    }
+
+    let isInputOutput = lastVisibleNode &&
+      (lastVisibleNode.classList.contains("webconsole-msg-input") ||
+       lastVisibleNode.classList.contains("webconsole-msg-output"));
+
+    // Scroll to the new node if it is not filtered, and if the output node is
+    // scrolled at the bottom or if the new node is a jsterm input/output
+    // message.
+    if (lastVisibleNode && (scrolledToBottom || isInputOutput)) {
+      ConsoleUtils.scrollToVisible(lastVisibleNode);
+    }
+    else if (!scrolledToBottom && removedNodes > 0 &&
+             oldScrollHeight != scrollBox.scrollHeight) {
+      // If there were pruned messages and if scroll is not at the bottom, then
+      // we need to adjust the scroll location.
+      scrollBox.scrollTop -= oldScrollHeight - scrollBox.scrollHeight;
+    }
+
+    // If the queue is not empty, schedule another flush.
+    if (!this._outputTimeout && this._outputQueue.length > 0) {
+      this._outputTimeout =
+        this.chromeWindow.setTimeout(function() {
+          delete this._outputTimeout;
+          this._flushMessageQueue();
+        }.bind(this), OUTPUT_INTERVAL);
+    }
+
+    this._lastOutputFlush = Date.now();
+  },
+
+  /**
+   * Output a message from the queue.
+   *
+   * @private
+   * @param nsISupportsString aHudIdSupportsString
+   *        The HUD ID as an nsISupportsString.
+   * @param array aItem
+   *        An item from the output queue - this item represents a message.
+   * @return boolean
+   *         True if the message is visible, false otherwise.
+   */
+  _outputMessageFromQueue:
+  function HUD__outputMessageFromQueue(aHudIdSupportsString, aItem)
+  {
+    let [node, afterNode] = aItem;
+
+    let isFiltered = ConsoleUtils.filterMessageNode(node, this.hudId);
+
+    let isRepeated = false;
+    if (node.classList.contains("webconsole-msg-cssparser")) {
+      isRepeated = ConsoleUtils.filterRepeatedCSS(node, this.outputNode,
+                                                  this.hudId);
+    }
+
+    if (!isRepeated &&
+        (node.classList.contains("webconsole-msg-console") ||
+         node.classList.contains("webconsole-msg-exception") ||
+         node.classList.contains("webconsole-msg-error"))) {
+      isRepeated = ConsoleUtils.filterRepeatedConsole(node, this.outputNode);
+    }
+
+    if (!isRepeated) {
+      this.outputNode.insertBefore(node,
+                                   afterNode ? afterNode.nextSibling : null);
+      this._pruneCategoriesQueue[node.category] = true;
+    }
+
+    let nodeID = node.getAttribute("id");
+    Services.obs.notifyObservers(aHudIdSupportsString,
+                                 "web-console-message-created", nodeID);
+
+    return !isRepeated && !isFiltered;
+  },
+
+  /**
+   * Prune the queue of messages to display. This avoids displaying messages
+   * that will be removed at the end of the queue anyway.
+   * @private
+   */
+  _pruneOutputQueue: function HUD__pruneOutputQueue()
+  {
+    let nodes = {};
+
+    // Group the messages per category.
+    this._outputQueue.forEach(function(aItem, aIndex) {
+      let [node] = aItem;
+      let category = node.category;
+      if (!(category in nodes)) {
+        nodes[category] = [];
+      }
+      nodes[category].push(aIndex);
+    }, this);
+
+    let pruned = 0;
+
+    // Loop through the categories we found and prune if needed.
+    for (let category in nodes) {
+      let limit = this.logLimitForCategory(category);
+      let indexes = nodes[category];
+      if (indexes.length > limit) {
+        let n = Math.max(0, indexes.length - limit);
+        pruned += n;
+        for (let i = n - 1; i >= 0; i--) {
+          let node = this._outputQueue[indexes[i]][0];
+          this._outputQueue.splice(indexes[i], 1);
+        }
+      }
+    }
+
+    return pruned;
+  },
+
+  /**
+   * Retrieve the limit of messages for a specific category.
+   *
+   * @param number aCategory
+   *        The category of messages you want to retrieve the limit for. See the
+   *        CATEGORY_* constants.
+   * @return number
+   *         The number of messages allowed for the specific category.
+   */
+  logLimitForCategory: function HUD_logLimitForCategory(aCategory)
+  {
+    let logLimit = DEFAULT_LOG_LIMIT;
+
+    try {
+      let prefName = CATEGORY_CLASS_FRAGMENTS[aCategory];
+      logLimit = Services.prefs.getIntPref("devtools.hud.loglimit." + prefName);
+      logLimit = Math.max(logLimit, 1);
+    }
+    catch (e) { }
+
+    return logLimit;
+  },
+
+  /**
+   * Remove a given message from the output.
+   *
+   * @param nsIDOMNode aNode
+   *        The message node you want to remove.
+   */
+  removeOutputMessage: function HUD_removeOutputMessage(aNode)
+  {
+    if (aNode._evalCacheId && !aNode._panelOpen) {
+      this.jsterm.clearObjectCache(aNode._evalCacheId);
+    }
+
+    if (aNode.classList.contains("webconsole-msg-cssparser")) {
+      let desc = aNode.childNodes[2].textContent;
+      let location = "";
+      if (aNode.childNodes[4]) {
+        location = aNode.childNodes[4].getAttribute("title");
+      }
+      delete this.cssNodes[desc + location];
+    }
+    else if (aNode.classList.contains("webconsole-msg-inspector")) {
+      this.pruneConsoleDirNode(aNode);
+      return;
+    }
+
+    aNode.parentNode.removeChild(aNode);
+  },
+
+  /**
    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
    * Console is closed.
    */
   destroy: function HUD_destroy()
   {
+    this._outputQueue = [];
+
     this.sendMessageToContent("WebConsole:Destroy", {});
 
     this._messageListeners.forEach(function(aName) {
@@ -2944,14 +2753,41 @@ HeadsUpDisplay.prototype = {
     if (this.jsterm) {
       this.jsterm.destroy();
     }
-    if (this.gcliterm) {
-      this.gcliterm.destroy();
+
+    // Make sure that the console panel does not try to call
+    // deactivateHUDForContext() again.
+    this.consoleWindowUnregisterOnHide = false;
+
+    let popupset = this.chromeDocument.getElementById("mainPopupSet");
+    let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
+    for (let panel of panels) {
+      if (panel != this.consolePanel) {
+        panel.hidePopup();
+      }
+    }
+
+    // Remove the HUDBox and the consolePanel if the Web Console is inside a
+    // floating panel.
+    if (this.consolePanel && this.consolePanel.parentNode) {
+      this.consolePanel.hidePopup();
+      this.consolePanel.parentNode.removeChild(this.consolePanel);
+      this.consolePanel = null;
+    }
+
+    if (this.HUDBox.parentNode) {
+      this.HUDBox.parentNode.removeChild(this.HUDBox);
+    }
+
+    if (this.splitter.parentNode) {
+      this.splitter.parentNode.removeChild(this.splitter);
     }
 
     delete this.asyncRequests;
     delete this.messageManager;
     delete this.browser;
     delete this.chromeDocument;
+    delete this.chromeWindow;
+    delete this.outputNode;
 
     this.positionMenuitems.above.removeEventListener("command",
       this._positionConsoleAbove, false);
@@ -3002,21 +2838,16 @@ function NodeFactory(aFactoryType, ignored, aDocument)
  * @constructor
  * @param object aHud
  *        The HeadsUpDisplay object that owns this JSTerm instance.
- * @param object aMixin
- *        Gecko-app (or Jetpack) specific utility object
  */
-function JSTerm(aHud, aMixin)
+function JSTerm(aHud)
 {
-  // attach the UI by appending to aParentNode
-
-  this.application = appName();
   this.hud = aHud;
-  this.mixins = aMixin;
   this.document = this.hud.chromeDocument;
+  this.parentNode = this.hud.jsTermParentNode;
 
   this.hudId = this.hud.hudId;
 
-  this.lastCompletion = {};
+  this.lastCompletion = { value: null };
   this.history = [];
   this.historyIndex = 0;
   this.historyPlaceHolder = 0;  // this.history.length;
@@ -3032,38 +2863,53 @@ JSTerm.prototype = {
   COMPLETE_BACKWARD: 1,
   COMPLETE_HINT_ONLY: 2,
 
+  /**
+   * Initialize the JSTerminal instance.
+   */
   init: function JST_init()
   {
-    this.inputNode = this.mixins.inputNode;
-    this.outputNode = this.mixins.outputNode;
-    this.completeNode = this.mixins.completeNode;
+    this._generateUI();
 
     this._keyPress = this.keyPress.bind(this);
     this._inputEventHandler = this.inputEventHandler.bind(this);
 
-    this.inputNode.addEventListener("keypress",
-      this._keyPress, false);
-    this.inputNode.addEventListener("input",
-      this._inputEventHandler, false);
-    this.inputNode.addEventListener("keyup",
-      this._inputEventHandler, false);
+    this.inputNode.addEventListener("keypress", this._keyPress, false);
+    this.inputNode.addEventListener("input", this._inputEventHandler, false);
+    this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
   },
 
-  get codeInputString()
+  /**
+   * Generate the JSTerminal UI.
+   * @private
+   */
+  _generateUI: function JST__generateUI()
   {
-    return this.inputNode.value;
+    this.completeNode = this.hud.makeXULNode("textbox");
+    this.completeNode.setAttribute("class", "jsterm-complete-node");
+    this.completeNode.setAttribute("multiline", "true");
+    this.completeNode.setAttribute("rows", "1");
+    this.completeNode.setAttribute("tabindex", "-1");
+
+    this.inputNode = this.hud.makeXULNode("textbox");
+    this.inputNode.setAttribute("class", "jsterm-input-node");
+    this.inputNode.setAttribute("multiline", "true");
+    this.inputNode.setAttribute("rows", "1");
+
+    let inputStack = this.hud.makeXULNode("stack");
+    inputStack.setAttribute("class", "jsterm-stack-node");
+    inputStack.setAttribute("flex", "1");
+    inputStack.appendChild(this.completeNode);
+    inputStack.appendChild(this.inputNode);
+
+    let term = this.hud.makeXULNode("hbox");
+    term.setAttribute("class", "jsterm-input-container");
+    term.setAttribute("style", "direction: ltr;");
+    term.appendChild(inputStack);
+
+    this.parentNode.appendChild(term);
   },
 
-  generateUI: function JST_generateUI()
-  {
-    this.mixins.generateUI();
-  },
-
-  attachUI: function JST_attachUI()
-  {
-    this.mixins.attachUI();
-  },
-
+  get outputNode() this.hud.outputNode,
 
   /**
    * Asynchronously evaluate a string in the content process sandbox.
@@ -3293,23 +3139,13 @@ JSTerm.prototype = {
    */
   clearOutput: function JST_clearOutput(aClearStorage)
   {
-    let hud = HUDService.getHudReferenceById(this.hudId);
+    let hud = this.hud;
     hud.cssNodes = {};
 
     let outputNode = hud.outputNode;
     let node;
     while ((node = outputNode.firstChild)) {
-      if (node._evalCacheId && !node._panelOpen) {
-        this.clearObjectCache(node._evalCacheId);
-      }
-
-      if (node.classList &&
-          node.classList.contains("webconsole-msg-inspector")) {
-        hud.pruneConsoleDirNode(node);
-      }
-      else {
-        outputNode.removeChild(node);
-      }
+      hud.removeOutputMessage(node);
     }
 
     hud.HUDBox.lastTimestamp = 0;
@@ -3514,12 +3350,6 @@ JSTerm.prototype = {
     return true;
   },
 
-  refocus: function JSTF_refocus()
-  {
-    this.inputNode.blur();
-    this.inputNode.focus();
-  },
-
   /**
    * Check if the caret is at a location that allows selecting the previous item
    * in history when the user presses the Up arrow key.
@@ -3659,7 +3489,11 @@ JSTerm.prototype = {
       input: this.inputNode.value,
     };
 
-    this.lastCompletion = {requestId: message.id, completionType: aType};
+    this.lastCompletion = {
+      requestId: message.id,
+      completionType: aType,
+      value: null,
+    };
     let callback = this._receiveAutocompleteProperties.bind(this, aCallback);
     this.hud.sendMessageToContent("JSTerm:Autocomplete", message, callback);
   },
@@ -3751,7 +3585,7 @@ JSTerm.prototype = {
   clearCompletion: function JSTF_clearCompletion()
   {
     this.autocompletePopup.clearItems();
-    this.lastCompletion = {};
+    this.lastCompletion = { value: null };
     this.updateCompleteNode("");
     if (this.autocompletePopup.isOpen) {
       this.autocompletePopup.hidePopup();
@@ -3804,7 +3638,10 @@ JSTerm.prototype = {
    */
   clearObjectCache: function JST_clearObjectCache(aCacheId)
   {
-    this.hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
+    if (this.hud) {
+      this.hud.sendMessageToContent("JSTerm:ClearObjectCache",
+                                    { cacheId: aCacheId });
+    }
   },
 
   /**
@@ -3992,107 +3829,6 @@ JSTerm.prototype = {
     delete this.hud;
     delete this.autocompletePopup;
     delete this.document;
-    delete this.mixins;
-  },
-};
-
-/**
- * Generates and attaches the JS Terminal part of the Web Console, which
- * essentially consists of the interactive JavaScript input facility.
- *
- * @param nsIDOMNode aParentNode
- *        The Web Console wrapper node.
- * @param nsIDOMNode aExistingConsole
- *        The Web Console output node.
- * @return void
- */
-function JSTermFirefoxMixin(aParentNode, aExistingConsole)
-{
-  // aExisting Console is the existing outputNode to use in favor of
-  // creating a new outputNode - this is so we can just attach the inputNode to
-  // a normal HeadsUpDisplay console output, and re-use code.
-  this.parentNode = aParentNode;
-  this.existingConsoleNode = aExistingConsole;
-
-  if (aParentNode.ownerDocument) {
-    this.xulElementFactory =
-      NodeFactory("xul", "xul", aParentNode.ownerDocument);
-
-    this.textFactory = NodeFactory("text", "xul", aParentNode.ownerDocument);
-    this.generateUI();
-    this.attachUI();
-  }
-  else {
-    throw new Error("aParentNode should be a DOM node with an ownerDocument property ");
-  }
-}
-
-JSTermFirefoxMixin.prototype = {
-  /**
-   * Generates and attaches the UI for an entire JS Workspace or
-   * just the input node used under the console output
-   *
-   * @returns void
-   */
-  generateUI: function JSTF_generateUI()
-  {
-    this.completeNode = this.xulElementFactory("textbox");
-    this.completeNode.setAttribute("class", "jsterm-complete-node");
-    this.completeNode.setAttribute("multiline", "true");
-    this.completeNode.setAttribute("rows", "1");
-    this.completeNode.setAttribute("tabindex", "-1");
-
-    this.inputNode = this.xulElementFactory("textbox");
-    this.inputNode.setAttribute("class", "jsterm-input-node");
-    this.inputNode.setAttribute("multiline", "true");
-    this.inputNode.setAttribute("rows", "1");
-
-    let inputStack = this.xulElementFactory("stack");
-    inputStack.setAttribute("class", "jsterm-stack-node");
-    inputStack.setAttribute("flex", "1");
-    inputStack.appendChild(this.completeNode);
-    inputStack.appendChild(this.inputNode);
-
-    if (this.existingConsoleNode == undefined) {
-      throw new Error("This can't happen");
-    }
-
-    this.outputNode = this.existingConsoleNode;
-
-    this.term = this.xulElementFactory("hbox");
-    this.term.setAttribute("class", "jsterm-input-container");
-    this.term.setAttribute("style", "direction: ltr;");
-    this.term.appendChild(inputStack);
-  },
-
-  get inputValue()
-  {
-    return this.inputNode.value;
-  },
-
-  attachUI: function JSTF_attachUI()
-  {
-    this.parentNode.appendChild(this.term);
-  }
-};
-
-/**
- * Firefox-specific Application Hooks.
- * Each Gecko-based application will need an object like this in
- * order to use the Heads Up Display
- */
-function FirefoxApplicationHooks()
-{ }
-
-FirefoxApplicationHooks.prototype = {
-  /**
-   * gets the current contentWindow (Firefox-specific)
-   *
-   * @returns nsIDOMWindow
-   */
-  getCurrentContext: function FAH_getCurrentContext()
-  {
-    return Services.wm.getMostRecentWindow("navigator:browser");
   },
 };
 
@@ -4104,7 +3840,6 @@ FirefoxApplicationHooks.prototype = {
  * ConsoleUtils: a collection of globally used functions
  *
  */
-
 ConsoleUtils = {
   /**
    * Flag to turn on and off scrolling.
@@ -4404,13 +4139,18 @@ ConsoleUtils = {
    *        The newly-created message node.
    * @param string aHUDId
    *        The ID of the HUD which this node is to be inserted into.
+   * @return boolean
+   *         True if the message was filtered or false otherwise.
    */
   filterMessageNode: function ConsoleUtils_filterMessageNode(aNode, aHUDId) {
+    let isFiltered = false;
+
     // Filter by the message type.
     let prefKey = MESSAGE_PREFERENCE_KEYS[aNode.category][aNode.severity];
     if (prefKey && !HUDService.getFilterState(aHUDId, prefKey)) {
       // The node is filtered by type.
       aNode.classList.add("hud-filtered-by-type");
+      isFiltered = true;
     }
 
     // Filter on the search string.
@@ -4420,7 +4160,10 @@ ConsoleUtils = {
     // if string matches the filter text
     if (!HUDService.stringMatchesFilters(text, search)) {
       aNode.classList.add("hud-filtered-by-string");
+      isFiltered = true;
     }
+
+    return isFiltered;
   },
 
   /**
@@ -4527,50 +4270,8 @@ ConsoleUtils = {
    */
   outputMessageNode:
   function ConsoleUtils_outputMessageNode(aNode, aHUDId, aNodeAfter) {
-    ConsoleUtils.filterMessageNode(aNode, aHUDId);
-    let outputNode = HUDService.hudReferences[aHUDId].outputNode;
-
-    let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
-
-    let isRepeated = false;
-    if (aNode.classList.contains("webconsole-msg-cssparser")) {
-      isRepeated = this.filterRepeatedCSS(aNode, outputNode, aHUDId);
-    }
-
-    if (!isRepeated &&
-        (aNode.classList.contains("webconsole-msg-console") ||
-         aNode.classList.contains("webconsole-msg-exception") ||
-         aNode.classList.contains("webconsole-msg-error"))) {
-      isRepeated = this.filterRepeatedConsole(aNode, outputNode);
-    }
-
-    if (!isRepeated) {
-      outputNode.insertBefore(aNode, aNodeAfter ? aNodeAfter.nextSibling : null);
-    }
-
-    HUDService.regroupOutput(outputNode);
-
-    if (pruneConsoleOutputIfNecessary(aHUDId, aNode.category) == 0) {
-      // We can't very well scroll to make the message node visible if the log
-      // limit is zero and the node was destroyed in the first place.
-      return;
-    }
-
-    let isInputOutput = aNode.classList.contains("webconsole-msg-input") ||
-                        aNode.classList.contains("webconsole-msg-output");
-    let isFiltered = aNode.classList.contains("hud-filtered-by-string") ||
-                     aNode.classList.contains("hud-filtered-by-type");
-
-    // Scroll to the new node if it is not filtered, and if the output node is
-    // scrolled at the bottom or if the new node is a jsterm input/output
-    // message.
-    if (!isFiltered && !isRepeated && (scrolledToBottom || isInputOutput)) {
-      ConsoleUtils.scrollToVisible(aNode);
-    }
-
-    let id = WebConsoleUtils.supportsString(aHUDId);
-    let nodeID = aNode.getAttribute("id");
-    Services.obs.notifyObservers(id, "web-console-message-created", nodeID);
+    let hud = HUDService.getHudReferenceById(aHUDId);
+    hud.outputMessageNode(aNode, aNodeAfter);
   },
 
   /**
@@ -4600,6 +4301,10 @@ ConsoleUtils = {
 HeadsUpDisplayUICommands = {
   refreshCommand: function UIC_refreshCommand() {
     var window = HUDService.currentContext();
+    if (!window) {
+      return;
+    }
+
     let command = window.document.getElementById("Tools:WebConsole");
     if (this.getOpenHUD() != null) {
       command.setAttribute("checked", true);
@@ -4650,8 +4355,8 @@ HeadsUpDisplayUICommands = {
    */
   getOpenHUD: function UIC_getOpenHUD() {
     let chromeWindow = HUDService.currentContext();
-    let contentWindow = chromeWindow.gBrowser.selectedBrowser.contentWindow;
-    return HUDService.getHudIdByWindow(contentWindow);
+    let hudId = "hud_" + chromeWindow.gBrowser.selectedTab.linkedPanel;
+    return hudId in HUDService.hudReferences ? hudId : null;
   },
 
   /**
@@ -4758,23 +4463,18 @@ let WebConsoleObserver = {
 
   init: function WCO_init()
   {
-    Services.obs.addObserver(this, "content-document-global-created", false);
     Services.obs.addObserver(this, "quit-application-granted", false);
   },
 
   observe: function WCO_observe(aSubject, aTopic)
   {
-    if (aTopic == "content-document-global-created") {
-      HUDService.windowInitializer(aSubject);
-    }
-    else if (aTopic == "quit-application-granted") {
+    if (aTopic == "quit-application-granted") {
       HUDService.shutdown();
     }
   },
 
   uninit: function WCO_uninit()
   {
-    Services.obs.removeObserver(this, "content-document-global-created");
     Services.obs.removeObserver(this, "quit-application-granted");
   },
 };
@@ -4869,407 +4569,7 @@ CommandController.prototype = {
   }
 };
 
-///////////////////////////////////////////////////////////////////////////
-// appName
-///////////////////////////////////////////////////////////////////////////
-
-/**
- * Get the app's name so we can properly dispatch app-specific
- * methods per API call
- * @returns Gecko application name
- */
-function appName()
-{
-  let APP_ID = Services.appinfo.QueryInterface(Ci.nsIXULRuntime).ID;
-
-  let APP_ID_TABLE = {
-    "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}": "FIREFOX" ,
-    "{3550f703-e582-4d05-9a08-453d09bdfdc6}": "THUNDERBIRD",
-    "{a23983c0-fd0e-11dc-95ff-0800200c9a66}": "FENNEC" ,
-    "{92650c4d-4b8e-4d2a-b7eb-24ecf4f6b63a}": "SEAMONKEY",
-  };
-
-  let name = APP_ID_TABLE[APP_ID];
-
-  if (name){
-    return name;
-  }
-  throw new Error("appName: UNSUPPORTED APPLICATION UUID");
-}
-
 XPCOMUtils.defineLazyGetter(this, "HUDService", function () {
-  try {
-    return new HUD_SERVICE();
-  }
-  catch (ex) {
-    Cu.reportError(ex);
-  }
+  return new HUD_SERVICE();
 });
 
-///////////////////////////////////////////////////////////////////////////
-// GcliTerm
-///////////////////////////////////////////////////////////////////////////
-
-/**
- * Some commands need customization - this is how we get at them.
- */
-let commandExports = undefined;
-
-/**
- * GcliTerm
- *
- * Initialize GCLI by creating a set of startup options from the available
- * properties.
- *
- * @param nsIDOMWindow aContentWindow
- *        The content window that we're providing as the context to commands
- * @param string aHudId
- *        The HUD to which we should send console messages.
- * @param nsIDOMDocument aDocument
- *        The DOM document from which to create nodes.
- * @param object aConsole
- *        Console object to use within the GcliTerm.
- * @param nsIDOMElement aHintNode
- *        The node to which we add GCLI's hints.
- * @constructor
- */
-function GcliTerm(aContentWindow, aHudId, aDocument, aConsole, aHintNode, aConsoleWrap)
-{
-  this.context = Cu.getWeakReference(aContentWindow);
-  this.hudId = aHudId;
-  this.document = aDocument;
-  this.console = aConsole;
-  this.hintNode = aHintNode;
-  this._window = this.context.get().QueryInterface(Ci.nsIDOMWindow);
-
-  this.createUI();
-  this.createSandbox();
-
-  this.gcliConsole = gcli._internal.createDisplay({
-    contentDocument: aContentWindow.document,
-    chromeDocument: this.document,
-    outputDocument: this.document,
-    chromeWindow: this.document.defaultView,
-
-    hintElement: this.hintNode,
-    inputElement: this.inputNode,
-    completeElement: this.completeNode,
-    backgroundElement: this.inputStack,
-    consoleWrap: aConsoleWrap,
-
-    eval: this.evalInSandbox.bind(this),
-
-    environment: {
-      chromeDocument: this.document,
-      contentDocument: aContentWindow.document
-    },
-
-    tooltipClass: 'gcliterm-tooltip',
-
-    // Allow GCLI:Inputter to decide how and when to open a scratchpad window
-    scratchpad: {
-      shouldActivate: function Scratchpad_shouldActivate(aEvent) {
-        return aEvent.shiftKey &&
-            aEvent.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_RETURN;
-      },
-      activate: function Scratchpad_activate(aValue) {
-        aValue = aValue.replace(/^\s*{\s*/, '');
-        ScratchpadManager.openScratchpad({ text: aValue });
-        return true;
-      },
-      linkText: stringBundle.GetStringFromName('scratchpad.linkText')
-    },
-  });
-
-  this.gcliConsole.onVisibilityChange.add(this.onVisibilityChange, this);
-  this.gcliConsole.onOutput.add(this.onOutput, this);
-}
-
-GcliTerm.prototype = {
-  /**
-   * Show or remove the hint column from the display.
-   */
-  onVisibilityChange: function GcliTerm_onVisibilityChange(ev)
-  {
-    if (ev.visible) {
-      this.hintNode.parentNode.hidden = false;
-    }
-    else {
-      let permaHint = false;
-      try {
-        permaHint = Services.prefs.getBoolPref("devtools.gcli.permaHint");
-      }
-      catch (ex) {}
-
-      if (!permaHint) {
-        this.hintNode.parentNode.hidden = true;
-      }
-    }
-  },
-
-  /**
-   * Destroy the GcliTerm object. Call this method to avoid memory leaks.
-   */
-  destroy: function Gcli_destroy()
-  {
-    this.gcliConsole.onVisibilityChange.remove(this.onVisibilityChange, this);
-    this.gcliConsole.onOutput.remove(this.onOutput, this);
-    this.gcliConsole.destroy();
-
-    delete this.context;
-    delete this.document;
-    delete this.console;
-    delete this.hintNode;
-    delete this._window;
-
-    delete this.sandbox;
-    delete this.element;
-    delete this.inputStack;
-    delete this.completeNode;
-    delete this.inputNode;
-  },
-
-  /**
-   * Re-attaches a console when the contentWindow is recreated.
-   *
-   * @param nsIDOMWindow aContentWindow
-   *        The content window that we're providing as the context to commands
-   * @param object aConsole
-   *        Console object to use within the GcliTerm.
-   */
-  reattachConsole: function Gcli_reattachConsole(aContentWindow, aConsole)
-  {
-    this.context = Cu.getWeakReference(aContentWindow);
-    this.console = aConsole;
-    this.createSandbox();
-
-    this.gcliConsole.reattach({
-      contentDocument: aContentWindow.document,
-      environment: {
-        chromeDocument: this.document,
-        contentDocument: aContentWindow.document
-      },
-    });
-  },
-
-  /**
-   * Generates and attaches the GCLI Terminal part of the Web Console, which
-   * essentially consists of the interactive JavaScript input facility.
-   */
-  createUI: function Gcli_createUI()
-  {
-    this.element = this.document.createElement("vbox");
-    this.element.setAttribute("class", "gcliterm-input-container");
-    this.element.setAttribute("flex", "0");
-
-    this.inputStack = this.document.createElement("stack");
-    this.inputStack.setAttribute("class", "gcliterm-stack-node");
-    this.element.appendChild(this.inputStack);
-
-    this.completeNode = this.document.createElementNS(HTML_NS, "div");
-    this.completeNode.setAttribute("class", "gcliterm-complete-node");
-    this.completeNode.setAttribute("aria-live", "polite");
-    this.inputStack.appendChild(this.completeNode);
-
-    this.inputNode = this.document.createElement("textbox");
-    this.inputNode.setAttribute("class", "gcliterm-input-node");
-    this.inputNode.setAttribute("rows", "1");
-    this.inputStack.appendChild(this.inputNode);
-  },
-
-  /**
-   * Called by GCLI/canon when command line output changes.
-   */
-  onOutput: function Gcli_onOutput(aEvent)
-  {
-    // When we can update the history of the console, then we should stop
-    // filtering incomplete reports.
-    if (!aEvent.output.completed) {
-      return;
-    }
-
-    this.writeOutput(aEvent.output.typed, CATEGORY_INPUT);
-
-    // This is an experiment to see how much people yell when we stop reporting
-    // undefined replies.
-    if (aEvent.output.output === undefined) {
-      return;
-    }
-
-    let output = aEvent.output.output;
-    let declaredType = aEvent.output.command.returnType || "";
-
-    if (declaredType == "object") {
-      let actualType = typeof output;
-      if (output === null) {
-        output = "null";
-      }
-      else if (actualType == "string") {
-        output = "\"" + output + "\"";
-      }
-      else if (actualType == "object" || actualType == "function") {
-        let formatOpts = [ nameObject(output) ];
-        output = stringBundle.formatStringFromName('gcliterm.instanceLabel',
-                formatOpts, formatOpts.length);
-        let linkNode = this.document.createElementNS(HTML_NS, 'html:span');
-        linkNode.appendChild(this.document.createTextNode(output));
-        linkNode.classList.add("hud-clickable");
-        linkNode.setAttribute("aria-haspopup", "true");
-
-        // Make the object bring up the property panel.
-        linkNode.addEventListener("mousedown", function(aEv) {
-          this._startX = aEv.clientX;
-          this._startY = aEv.clientY;
-        }.bind(this), false);
-
-        linkNode.addEventListener("click", function(aEv) {
-          if (aEv.detail != 1 || aEv.button != 0 ||
-              (this._startX != aEv.clientX && this._startY != aEv.clientY)) {
-            return;
-          }
-
-          if (!this._panelOpen) {
-            let propPanel = this.openPropertyPanel(aEvent.output.typed, aEvent.output.output, this);
-            propPanel.panel.setAttribute("hudId", this.hudId);
-            this._panelOpen = true;
-          }
-        }.bind(this), false);
-
-        output = linkNode;
-      }
-      // else if (actualType == number/boolean/undefined) do nothing
-    }
-
-    if (declaredType == "html" && typeof output == "string") {
-      output = this.document.createRange().createContextualFragment(
-          '<div xmlns="' + HTML_NS + '" xmlns:xul="' + XUL_NS + '">' +
-          output + '</div>');
-    }
-
-    // See https://github.com/mozilla/domtemplate/blob/master/README.md
-    // for docs on the template() function
-    let element = this.document.createRange().createContextualFragment(
-      '<richlistitem xmlns="' + XUL_NS + '" _clipboardText="${clipboardText}"' +
-      '    _timestamp="${timestamp}" _id="${id}" class="hud-msg-node">' +
-      '  <label class="webconsole-timestamp" _value="${timestampString}"/>' +
-      '  <vbox class="webconsole-msg-icon-container" _style="${iconContainerStyle}">' +
-      '    <image class="webconsole-msg-icon"/>' +
-      '    <spacer flex="1"/>' +
-      '  </vbox>' +
-      '  <hbox flex="1" class="gcliterm-msg-body">${output}</hbox>' +
-      '  <hbox align="start"><label value="1" class="webconsole-msg-repeat"/></hbox>' +
-      '</richlistitem>').firstChild;
-
-    let hud = HUDService.getHudReferenceById(this.hudId);
-    let timestamp = Date.now();
-    template(element, {
-      iconContainerStyle: "margin-left=" + (hud.groupDepth * GROUP_INDENT) + "px",
-      output: output,
-      timestamp: timestamp,
-      timestampString: l10n.timestampString(timestamp),
-      clipboardText: output.innerText,
-      id: "console-msg-" + HUDService.sequenceId()
-    });
-
-    ConsoleUtils.setMessageType(element, CATEGORY_OUTPUT, SEVERITY_LOG);
-    ConsoleUtils.outputMessageNode(element, this.hudId);
-  },
-
-  /**
-   * Setup the eval sandbox, should be called whenever we are attached.
-   */
-  createSandbox: function Gcli_createSandbox()
-  {
-    // create a JS Sandbox out of this.context
-    this.sandbox = new Cu.Sandbox(this._window, {
-      sandboxPrototype: this._window,
-      wantXrays: false
-    });
-    this.sandbox.console = this.console;
-
-    JSTermHelper(this);
-  },
-
-  /**
-   * Evaluates a string in the sandbox.
-   *
-   * @param string aString
-   *        String to evaluate in the sandbox
-   * @return The result of the evaluation
-   */
-  evalInSandbox: function Gcli_evalInSandbox(aString)
-  {
-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
-    let temp$ = null;
-    let temp$$ = null;
-
-    // We prefer to execute the page-provided implementations for the $() and
-    // $$() functions.
-    if (typeof window.$ == "function") {
-      temp$ = this.sandbox.$;
-      delete this.sandbox.$;
-    }
-    if (typeof window.$$ == "function") {
-      temp$$ = this.sandbox.$$;
-      delete this.sandbox.$$;
-    }
-
-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8", "Web Console", 1);
-
-    if (temp$) {
-      this.sandbox.$ = temp$;
-    }
-    if (temp$$) {
-      this.sandbox.$$ = temp$$;
-    }
-
-    return result;
-  },
-
-  /**
-   * Writes a message to the HUD that originates from the interactive
-   * JavaScript console.
-   *
-   * @param string aOutputMessage
-   *        The message to display.
-   * @param number aCategory
-   *        One of the CATEGORY_ constants.
-   * @param number aSeverity
-   *        One of the SEVERITY_ constants.
-   */
-  writeOutput: function Gcli_writeOutput(aOutputMessage, aCategory, aSeverity, aOptions)
-  {
-    aOptions = aOptions || {};
-
-    let node = ConsoleUtils.createMessageNode(
-                    this.document,
-                    aCategory || CATEGORY_OUTPUT,
-                    aSeverity || SEVERITY_LOG,
-                    aOutputMessage,
-                    this.hudId,
-                    aOptions.sourceUrl || undefined,
-                    aOptions.sourceLine || undefined,
-                    aOptions.clipboardText || undefined);
-
-    ConsoleUtils.outputMessageNode(node, this.hudId);
-  },
-
-  clearOutput: JSTerm.prototype.clearOutput,
-  openPropertyPanel: JSTerm.prototype.openPropertyPanel,
-
-  formatResult: WebConsoleUtils.formatResult,
-  getResultType: WebConsoleUtils.getResultType,
-  formatString: WebConsoleUtils.formatResultString,
-};
-
-/**
- * A fancy version of toString()
- */
-function nameObject(aObj) {
-  if (aObj.constructor && aObj.constructor.name) {
-    return aObj.constructor.name;
-  }
-  // If that fails, use Objects toString which sometimes gives something
-  // better than 'Object', and at least defaults to Object if nothing better
-  return Object.prototype.toString.call(aObj).slice(8, -1);
-}

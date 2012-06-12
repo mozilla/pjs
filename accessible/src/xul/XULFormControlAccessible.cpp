@@ -12,10 +12,10 @@
 #include "nsCoreUtils.h"
 #include "DocAccessible.h"
 #include "nsIAccessibleRelation.h"
-#include "nsXULMenuAccessible.h"
 #include "Relation.h"
 #include "Role.h"
 #include "States.h"
+#include "XULMenuAccessible.h"
 
 #include "nsIDOMHTMLInputElement.h"
 #include "nsIDOMNSEditableElement.h"
@@ -94,16 +94,6 @@ XULButtonAccessible::NativeState()
 
   // get focus and disable status from base class
   PRUint64 state = Accessible::NativeState();
-
-  bool disabled = false;
-  nsCOMPtr<nsIDOMXULControlElement> xulFormElement(do_QueryInterface(mContent));
-  if (xulFormElement) {
-    xulFormElement->GetDisabled(&disabled);
-    if (disabled)
-      state |= states::UNAVAILABLE;
-    else 
-      state |= states::FOCUSABLE;
-  }
 
   // Buttons can be checked -- they simply appear pressed in rather than checked
   nsCOMPtr<nsIDOMXULButtonElement> xulButtonElement(do_QueryInterface(mContent));
@@ -249,7 +239,7 @@ XULButtonAccessible::ContainsMenu()
 
 XULDropmarkerAccessible::
   XULDropmarkerAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  nsLeafAccessible(aContent, aDoc)
+  LeafAccessible(aContent, aDoc)
 {
 }
 
@@ -333,7 +323,7 @@ XULDropmarkerAccessible::NativeState()
 
 XULCheckboxAccessible::
   XULCheckboxAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  nsLeafAccessible(aContent, aDoc)
+  LeafAccessible(aContent, aDoc)
 {
 }
 
@@ -386,7 +376,7 @@ XULCheckboxAccessible::NativeState()
 {
   // Possible states: focused, focusable, unavailable(disabled), checked
   // Get focus and disable status from base class
-  PRUint64 state = nsLeafAccessible::NativeState();
+  PRUint64 state = LeafAccessible::NativeState();
   
   state |= states::CHECKABLE;
   
@@ -478,11 +468,8 @@ XULRadioButtonAccessible::
 PRUint64
 XULRadioButtonAccessible::NativeState()
 {
-  PRUint64 state = nsLeafAccessible::NativeState();
+  PRUint64 state = LeafAccessible::NativeState();
   state |= states::CHECKABLE;
-
-  if (!(state & states::UNAVAILABLE))
-    state |= states::FOCUSABLE;
 
   nsCOMPtr<nsIDOMXULSelectControlItemElement> radioButton =
     do_QueryInterface(mContent);
@@ -495,6 +482,12 @@ XULRadioButtonAccessible::NativeState()
   }
 
   return state;
+}
+
+PRUint64
+XULRadioButtonAccessible::NativeInteractiveState() const
+{
+  return NativelyUnavailable() ? states::UNAVAILABLE : states::FOCUSABLE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -533,12 +526,12 @@ XULRadioGroupAccessible::NativeRole()
 }
 
 PRUint64
-XULRadioGroupAccessible::NativeState()
+XULRadioGroupAccessible::NativeInteractiveState() const
 {
   // The radio group is not focusable. Sometimes the focus controller will
   // report that it is focused. That means that the actual selected radio button
   // should be considered focused.
-  return Accessible::NativeState() & ~(states::FOCUSABLE | states::FOCUSED);
+  return NativelyUnavailable() ? states::UNAVAILABLE : 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -666,7 +659,7 @@ XULToolbarAccessible::GetNameInternal(nsAString& aName)
 
 XULToolbarSeparatorAccessible::
   XULToolbarSeparatorAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  nsLeafAccessible(aContent, aDoc)
+  LeafAccessible(aContent, aDoc)
 {
 }
 
@@ -688,13 +681,13 @@ XULToolbarSeparatorAccessible::NativeState()
 
 XULTextFieldAccessible::
  XULTextFieldAccessible(nsIContent* aContent, DocAccessible* aDoc) :
- nsHyperTextAccessibleWrap(aContent, aDoc)
+ HyperTextAccessibleWrap(aContent, aDoc)
 {
 }
 
 NS_IMPL_ISUPPORTS_INHERITED3(XULTextFieldAccessible,
                              Accessible,
-                             nsHyperTextAccessible,
+                             HyperTextAccessible,
                              nsIAccessibleText,
                              nsIAccessibleEditableText)
 
@@ -722,7 +715,7 @@ XULTextFieldAccessible::Value(nsString& aValue)
 void
 XULTextFieldAccessible::ApplyARIAState(PRUint64* aState) const
 {
-  nsHyperTextAccessibleWrap::ApplyARIAState(aState);
+  HyperTextAccessibleWrap::ApplyARIAState(aState);
 
   aria::MapToState(aria::eARIAAutoComplete, mContent->AsElement(), aState);
 }
@@ -730,7 +723,7 @@ XULTextFieldAccessible::ApplyARIAState(PRUint64* aState) const
 PRUint64
 XULTextFieldAccessible::NativeState()
 {
-  PRUint64 state = nsHyperTextAccessibleWrap::NativeState();
+  PRUint64 state = HyperTextAccessibleWrap::NativeState();
 
   nsCOMPtr<nsIContent> inputField(GetInputField());
   NS_ENSURE_TRUE(inputField, state);
@@ -846,7 +839,7 @@ XULTextFieldAccessible::CacheChildren()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// XULTextFieldAccessible: nsHyperTextAccessible protected
+// XULTextFieldAccessible: HyperTextAccessible protected
 
 already_AddRefed<nsFrameSelection>
 XULTextFieldAccessible::FrameSelection()

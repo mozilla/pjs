@@ -85,6 +85,7 @@ import android.os.StatFs;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Surface;
 import android.view.WindowManager;
 
 public class DoCommand {
@@ -121,6 +122,7 @@ public class DoCommand {
         SETTIME ("settime"),
         SYSTIME ("systime"),
         SCREEN ("screen"),
+        ROTATION ("rotation"),
         MEMORY ("memory"),
         POWER ("power"),
         PROCESS ("process"),
@@ -413,6 +415,8 @@ public class DoCommand {
                     strReturn += "\n";
                     strReturn += GetScreenInfo();
                     strReturn += "\n";
+                    strReturn += GetRotationInfo();
+                    strReturn += "\n";
                     strReturn += GetMemoryInfo();
                     strReturn += "\n";
                     strReturn += GetPowerInfo();
@@ -430,6 +434,10 @@ public class DoCommand {
 
                         case SCREEN:
                             strReturn = GetScreenInfo();
+                            break;
+
+                        case ROTATION:
+                            strReturn = GetRotationInfo();
                             break;
 
                         case PROCESS:
@@ -2294,6 +2302,25 @@ private void CancelNotification()
             return(nRetXY);
         }
 
+    public String GetRotationInfo()
+        {
+            WindowManager wMgr = (WindowManager) contextWrapper.getSystemService(Context.WINDOW_SERVICE);
+            int nRotationDegrees = 0; // default
+            switch(wMgr.getDefaultDisplay().getRotation())
+                {
+                case Surface.ROTATION_90:
+                    nRotationDegrees = 90;
+                    break;
+                case Surface.ROTATION_180:
+                    nRotationDegrees = 180;
+                    break;
+                case Surface.ROTATION_270:
+                    nRotationDegrees = 270;
+                    break;
+                }
+            return "ROTATION:" + nRotationDegrees;
+        }
+
     public String SetADB(String sWhat) {
         String sRet = "";
         String sTmp = "";
@@ -2353,45 +2380,32 @@ private void CancelNotification()
 
     public String KillProcess(String sProcName, OutputStream out)
         {
-        String sTmp = "";
-        String sCmd = "kill";
-
         String sRet = sErrorPrefix + "Unable to kill " + sProcName + "\n";
         ActivityManager aMgr = (ActivityManager) contextWrapper.getSystemService(Activity.ACTIVITY_SERVICE);
         List <ActivityManager.RunningAppProcessInfo> lProcesses = aMgr.getRunningAppProcesses();
         int lcv = 0;
-        String strProcName = "";
-        int    nPID = 0;
+        String sFoundProcName = "";
         int nProcs = 0;
+        boolean bFoundAppProcess = false;
 
-        if (lProcesses != null) 
+        if (lProcesses != null)
             nProcs = lProcesses.size();
 
         for (lcv = 0; lcv < nProcs; lcv++)
             {
             if (lProcesses.get(lcv).processName.contains(sProcName))
                 {
-                strProcName = lProcesses.get(lcv).processName;
-                nPID = lProcesses.get(lcv).pid;
-                sRet = sErrorPrefix + "Failed to kill " + nPID + " " + strProcName + "\n";
-
-                sCmd += " " + nPID;
+                sFoundProcName = lProcesses.get(lcv).processName;
+                bFoundAppProcess = true;
 
                 try
                     {
-                    pProc = Runtime.getRuntime().exec(this.getSuArgs(sCmd));
+                    pProc = Runtime.getRuntime().exec(this.getSuArgs("kill " + lProcesses.get(lcv).pid));
                     RedirOutputThread outThrd = new RedirOutputThread(pProc, null);
                     outThrd.start();
                     outThrd.join(15000);
-                    sTmp = outThrd.strOutput;
+                    String sTmp = outThrd.strOutput;
                     Log.e("KILLPROCESS", sTmp);
-                    if (outThrd.nExitCode == 0) {
-                        sRet = "Successfully killed " + nPID + " " + strProcName + "\n";
-                        nPID = 0;
-                        break;
-                    } else {
-                        sRet = sErrorPrefix + "Failed to kill " + nPID + " " + strProcName + "\n";
-                    }
                     }
                 catch (IOException e)
                     {
@@ -2402,31 +2416,30 @@ private void CancelNotification()
                     {
                     e.printStackTrace();
                     }
-
-                // Give the messages a chance to be processed
-                try {
-                    Thread.sleep(2000);
-                    }
-                catch (InterruptedException e)
-                    {
-                    e.printStackTrace();
-                    }
-                break;
                 }
             }
 
-        if (nPID > 0)
+        if (bFoundAppProcess)
             {
-            sRet = "Successfully killed " + nPID + " " + strProcName + "\n";
+            // Give the messages a chance to be processed
+            try {
+                Thread.sleep(2000);
+                }
+            catch (InterruptedException e)
+                {
+                e.printStackTrace();
+                }
+
+            sRet = "Successfully killed " + sProcName + "\n";
             lProcesses = aMgr.getRunningAppProcesses();
             nProcs = 0;
-            if (lProcesses != null) 
+            if (lProcesses != null)
                 nProcs = lProcesses.size();
             for (lcv = 0; lcv < nProcs; lcv++)
                 {
                 if (lProcesses.get(lcv).processName.contains(sProcName))
                     {
-                    sRet = sErrorPrefix + "Unable to kill " + nPID + " " + strProcName + "\n";
+                    sRet = sErrorPrefix + "Unable to kill " + sProcName + " (couldn't kill " + sFoundProcName +")\n";
                     break;
                     }
                 }
@@ -2442,7 +2455,7 @@ private void CancelNotification()
                 RedirOutputThread outThrd = new RedirOutputThread(pProc, null);
                 outThrd.start();
                 outThrd.join(10000);
-                sTmp = outThrd.strOutput;
+                String sTmp = outThrd.strOutput;
                 StringTokenizer stokLines = new StringTokenizer(sTmp, "\n");
                 while(stokLines.hasMoreTokens())
                     {
@@ -2463,7 +2476,7 @@ private void CancelNotification()
                         if (sName.contains(sProcName))
                             {
                             NewKillProc(sPid, out);
-                            sRet = "Successfully killed " + sPid + " " + sName + "\n";
+                            sRet = "Successfully killed " + sName + "\n";
                             }
                         }
                     }

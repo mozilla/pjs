@@ -107,15 +107,7 @@ public:
 
   virtual JSContext* GetNativeContext();
   virtual JSObject* GetNativeGlobal();
-  virtual nsresult CreateNativeGlobalForInner(
-                                      nsIScriptGlobalObject *aGlobal,
-                                      nsIURI *aURI,
-                                      bool aIsChrome,
-                                      nsIPrincipal *aPrincipal,
-                                      JSObject** aNativeGlobal,
-                                      nsISupports **aHolder);
   virtual nsresult InitContext();
-  virtual nsresult InitOuterWindow();
   virtual bool IsContextInitialized();
 
   virtual void ScriptEvaluated(bool aTerminated);
@@ -171,6 +163,7 @@ public:
   static void MaybePokeCC();
   static void KillCCTimer();
   static void KillFullGCTimer();
+  static void KillInterSliceGCTimer();
 
   virtual void GC(js::gcreason::Reason aReason);
 

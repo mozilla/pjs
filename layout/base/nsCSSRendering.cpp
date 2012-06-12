@@ -804,8 +804,7 @@ nsCSSRendering::FindNonTransparentBackgroundFrame(nsIFrame* aFrame,
 
   nsIFrame* frame = nsnull;
   if (aStartAtParent) {
-    frame = nsLayoutUtils::GetParentOrPlaceholderFor(
-              aFrame->PresContext()->FrameManager(), aFrame);
+    frame = nsLayoutUtils::GetParentOrPlaceholderFor(aFrame);
   }
   if (!frame) {
     frame = aFrame;
@@ -820,8 +819,7 @@ nsCSSRendering::FindNonTransparentBackgroundFrame(nsIFrame* aFrame,
     if (frame->IsThemed())
       break;
 
-    nsIFrame* parent = nsLayoutUtils::GetParentOrPlaceholderFor(
-                         frame->PresContext()->FrameManager(), frame);
+    nsIFrame* parent = nsLayoutUtils::GetParentOrPlaceholderFor(frame);
     if (!parent)
       break;
 
@@ -4093,6 +4091,8 @@ nsImageRenderer::IsRasterImage()
 already_AddRefed<mozilla::layers::ImageContainer>
 nsImageRenderer::GetContainer()
 {
+  if (mType != eStyleImageType_Image)
+    return nsnull;
   nsCOMPtr<imgIContainer> img;
   nsresult rv = mImage->GetImageData()->GetImage(getter_AddRefs(img));
   if (NS_FAILED(rv) || !img)
@@ -4141,12 +4141,12 @@ nsContextBoxBlur::Init(const nsRect& aRect, nscoord aSpreadRadius,
   gfxFloat scaleX = 1;
   gfxFloat scaleY = 1;
 
-  // Do blurs in device space when possible
-  // If the scale is not uniform we fall back to transforming on paint.
+  // Do blurs in device space when possible.
   // Chrome/Skia always does the blurs in device space
   // and will sometimes get incorrect results (e.g. rotated blurs)
   gfxMatrix transform = aDestinationCtx->CurrentMatrix();
-  if (transform.HasNonAxisAlignedTransform()) {
+  // XXX: we could probably handle negative scales but for now it's easier just to fallback
+  if (transform.HasNonAxisAlignedTransform() || transform.xx <= 0.0 || transform.yy <= 0.0) {
     transform = gfxMatrix();
   } else {
     scaleX = transform.xx;

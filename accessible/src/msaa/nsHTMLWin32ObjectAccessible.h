@@ -6,7 +6,7 @@
 #ifndef _nsHTMLWin32ObjectAccessible_H_
 #define _nsHTMLWin32ObjectAccessible_H_
 
-#include "nsBaseWidgetAccessible.h"
+#include "BaseAccessibles.h"
 
 struct IAccessible;
 
@@ -28,7 +28,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual PRUint64 NativeState();
+  virtual bool NativelyUnavailable() const;
 
 protected:
 
@@ -48,11 +48,11 @@ protected:
   *   object returned by us in Accessible::NewAccessible() that gets the IAccessible
   *   from the windows system from the window handle.
   */
-class nsHTMLWin32ObjectAccessible : public nsLeafAccessible
+class nsHTMLWin32ObjectAccessible : public mozilla::a11y::LeafAccessible
 {
 public:
 
-  nsHTMLWin32ObjectAccessible(void *aHwnd);
+  nsHTMLWin32ObjectAccessible(void* aHwnd);
   virtual ~nsHTMLWin32ObjectAccessible() {}
 
   NS_DECL_ISUPPORTS_INHERITED

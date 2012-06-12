@@ -23,7 +23,6 @@
 #include "nsPlaceholderFrame.h"
 #include "nsIScrollableFrame.h"
 #include "nsCSSFrameConstructor.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsIDOMEvent.h"
 #include "nsGUIEvent.h"
 #include "nsDisplayList.h"
@@ -57,6 +56,7 @@
 #ifdef MOZ_MEDIA
 #include "nsHTMLVideoElement.h"
 #endif
+#include "nsHTMLImageElement.h"
 #include "imgIRequest.h"
 #include "nsIImageLoadingContent.h"
 #include "nsCOMPtr.h"
@@ -667,12 +667,12 @@ nsLayoutUtils::DoCompareTreePosition(nsIContent* aContent1,
 }
 
 static nsIFrame* FillAncestors(nsIFrame* aFrame,
-                               nsIFrame* aStopAtAncestor, nsFrameManager* aFrameManager,
+                               nsIFrame* aStopAtAncestor,
                                nsTArray<nsIFrame*>* aAncestors)
 {
   while (aFrame && aFrame != aStopAtAncestor) {
     aAncestors->AppendElement(aFrame);
-    aFrame = nsLayoutUtils::GetParentOrPlaceholderFor(aFrameManager, aFrame);
+    aFrame = nsLayoutUtils::GetParentOrPlaceholderFor(aFrame);
   }
   return aFrame;
 }
@@ -705,17 +705,16 @@ nsLayoutUtils::DoCompareTreePosition(nsIFrame* aFrame1,
     NS_ERROR("no common ancestor at all, different documents");
     return 0;
   }
-  nsFrameManager* frameManager = presContext->PresShell()->FrameManager();
 
   nsAutoTArray<nsIFrame*,20> frame1Ancestors;
-  if (!FillAncestors(aFrame1, aCommonAncestor, frameManager, &frame1Ancestors)) {
+  if (!FillAncestors(aFrame1, aCommonAncestor, &frame1Ancestors)) {
     // We reached the root of the frame tree ... if aCommonAncestor was set,
     // it is wrong
     aCommonAncestor = nsnull;
   }
 
   nsAutoTArray<nsIFrame*,20> frame2Ancestors;
-  if (!FillAncestors(aFrame2, aCommonAncestor, frameManager, &frame2Ancestors) &&
+  if (!FillAncestors(aFrame2, aCommonAncestor, &frame2Ancestors) &&
       aCommonAncestor) {
     // We reached the root of the frame tree ... aCommonAncestor was wrong.
     // Try again with no hint.
@@ -938,11 +937,9 @@ nsLayoutUtils::HasPseudoStyle(nsIContent* aContent,
 nsPoint
 nsLayoutUtils::GetDOMEventCoordinatesRelativeTo(nsIDOMEvent* aDOMEvent, nsIFrame* aFrame)
 {
-  nsCOMPtr<nsIPrivateDOMEvent> privateEvent(do_QueryInterface(aDOMEvent));
-  NS_ASSERTION(privateEvent, "bad implementation");
-  if (!privateEvent)
+  if (!aDOMEvent)
     return nsPoint(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
-  nsEvent *event = privateEvent->GetInternalNSEvent();
+  nsEvent *event = aDOMEvent->GetInternalNSEvent();
   if (!event)
     return nsPoint(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
   return GetEventCoordinatesRelativeTo(event, aFrame);
@@ -2097,23 +2094,31 @@ nsLayoutUtils::GetNonGeneratedAncestor(nsIFrame* aFrame)
   if (!(aFrame->GetStateBits() & NS_FRAME_GENERATED_CONTENT))
     return aFrame;
 
-  nsFrameManager* frameManager = aFrame->PresContext()->FrameManager();
   nsIFrame* f = aFrame;
   do {
-    f = GetParentOrPlaceholderFor(frameManager, f);
+    f = GetParentOrPlaceholderFor(f);
   } while (f->GetStateBits() & NS_FRAME_GENERATED_CONTENT);
   return f;
 }
 
 nsIFrame*
-nsLayoutUtils::GetParentOrPlaceholderFor(nsFrameManager* aFrameManager,
-                                         nsIFrame* aFrame)
+nsLayoutUtils::GetParentOrPlaceholderFor(nsIFrame* aFrame)
 {
   if ((aFrame->GetStateBits() & NS_FRAME_OUT_OF_FLOW)
       && !aFrame->GetPrevInFlow()) {
-    return aFrameManager->GetPlaceholderFrameFor(aFrame);
+    return aFrame->PresContext()->PresShell()->FrameManager()->
+      GetPlaceholderFrameFor(aFrame);
   }
   return aFrame->GetParent();
+}
+
+nsIFrame*
+nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(nsIFrame* aFrame)
+{
+  nsIFrame* f = GetParentOrPlaceholderFor(aFrame);
+  if (f)
+    return f;
+  return GetCrossDocParentFrame(aFrame);
 }
 
 nsIFrame*
@@ -4054,7 +4059,7 @@ nsLayoutUtils::IsReallyFixedPos(nsIFrame* aFrame)
 }
 
 nsLayoutUtils::SurfaceFromElementResult
-nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
+nsLayoutUtils::SurfaceFromElement(nsIImageLoadingContent* aElement,
                                   PRUint32 aSurfaceFlags)
 {
   SurfaceFromElementResult result;
@@ -4069,101 +4074,6 @@ nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
     wantImageSurface = true;
   }
 
-  // If it's a <canvas>, we may be able to just grab its internal surface
-  if (nsHTMLCanvasElement* canvas = nsHTMLCanvasElement::FromContent(aElement)) {
-    gfxIntSize size = canvas->GetSize();
-
-    nsRefPtr<gfxASurface> surf;
-
-    if (!forceCopy && canvas->CountContexts() == 1) {
-      nsICanvasRenderingContextInternal *srcCanvas = canvas->GetContextAtIndex(0);
-      rv = srcCanvas->GetThebesSurface(getter_AddRefs(surf));
-
-      if (NS_FAILED(rv))
-        surf = nsnull;
-    }
-
-    if (surf && wantImageSurface && surf->GetType() != gfxASurface::SurfaceTypeImage)
-      surf = nsnull;
-
-    if (!surf) {
-      if (wantImageSurface) {
-        surf = new gfxImageSurface(size, gfxASurface::ImageFormatARGB32);
-      } else {
-        surf = gfxPlatform::GetPlatform()->CreateOffscreenSurface(size, gfxASurface::CONTENT_COLOR_ALPHA);
-      }
-
-      nsRefPtr<gfxContext> ctx = new gfxContext(surf);
-      // XXX shouldn't use the external interface, but maybe we can layerify this
-      PRUint32 flags = premultAlpha ? nsHTMLCanvasElement::RenderFlagPremultAlpha : 0;
-      rv = canvas->RenderContextsExternal(ctx, gfxPattern::FILTER_NEAREST, flags);
-      if (NS_FAILED(rv))
-        return result;
-    }
-
-    // Ensure that any future changes to the canvas trigger proper invalidation,
-    // in case this is being used by -moz-element()
-    canvas->MarkContextClean();
-
-    result.mSurface = surf;
-    result.mSize = size;
-    result.mPrincipal = aElement->NodePrincipal();
-    result.mIsWriteOnly = canvas->IsWriteOnly();
-
-    return result;
-  }
-
-#ifdef MOZ_MEDIA
-  // Maybe it's <video>?
-  if (nsHTMLVideoElement* video = nsHTMLVideoElement::FromContent(aElement)) {
-    PRUint16 readyState;
-    if (NS_SUCCEEDED(video->GetReadyState(&readyState)) &&
-        (readyState == nsIDOMHTMLMediaElement::HAVE_NOTHING ||
-         readyState == nsIDOMHTMLMediaElement::HAVE_METADATA)) {
-      result.mIsStillLoading = true;
-      return result;
-    }
-
-    // If it doesn't have a principal, just bail
-    nsCOMPtr<nsIPrincipal> principal = video->GetCurrentPrincipal();
-    if (!principal)
-      return result;
-
-    ImageContainer *container = video->GetImageContainer();
-    if (!container)
-      return result;
-
-    gfxIntSize size;
-    nsRefPtr<gfxASurface> surf = container->GetCurrentAsSurface(&size);
-    if (!surf)
-      return result;
-
-    if (wantImageSurface && surf->GetType() != gfxASurface::SurfaceTypeImage) {
-      nsRefPtr<gfxImageSurface> imgSurf =
-        new gfxImageSurface(size, gfxASurface::ImageFormatARGB32);
-
-      nsRefPtr<gfxContext> ctx = new gfxContext(imgSurf);
-      ctx->SetOperator(gfxContext::OPERATOR_SOURCE);
-      ctx->DrawSurface(surf, size);
-      surf = imgSurf;
-    }
-
-    result.mCORSUsed = video->GetCORSMode() != CORS_NONE;
-    result.mSurface = surf;
-    result.mSize = size;
-    result.mPrincipal = principal.forget();
-    result.mIsWriteOnly = false;
-
-    return result;
-  }
-#endif
-
-  // Finally, check if it's a normal image
-  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(aElement);
-
-  if (!imageLoader)
-    return result;
-
   // Push a null JSContext on the stack so that code that runs within
   // the below code doesn't think it's being called by JS. See bug
   // 604262.
@@ -4171,8 +4081,8 @@ nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
   pusher.PushNull();
 
   nsCOMPtr<imgIRequest> imgRequest;
-  rv = imageLoader->GetRequest(nsIImageLoadingContent::CURRENT_REQUEST,
-                               getter_AddRefs(imgRequest));
+  rv = aElement->GetRequest(nsIImageLoadingContent::CURRENT_REQUEST,
+                            getter_AddRefs(imgRequest));
   if (NS_FAILED(rv) || !imgRequest)
     return result;
 
@@ -4250,6 +4160,152 @@ nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
   result.mImageRequest = imgRequest.forget();
 
   return result;
+}
+
+nsLayoutUtils::SurfaceFromElementResult
+nsLayoutUtils::SurfaceFromElement(nsHTMLImageElement *aElement,
+                                  PRUint32 aSurfaceFlags)
+{
+  return SurfaceFromElement(static_cast<nsIImageLoadingContent*>(aElement),
+                            aSurfaceFlags);
+}
+
+nsLayoutUtils::SurfaceFromElementResult
+nsLayoutUtils::SurfaceFromElement(nsHTMLCanvasElement* aElement,
+                                  PRUint32 aSurfaceFlags)
+{
+  SurfaceFromElementResult result;
+  nsresult rv;
+
+  bool forceCopy = (aSurfaceFlags & SFE_WANT_NEW_SURFACE) != 0;
+  bool wantImageSurface = (aSurfaceFlags & SFE_WANT_IMAGE_SURFACE) != 0;
+  bool premultAlpha = (aSurfaceFlags & SFE_NO_PREMULTIPLY_ALPHA) == 0;
+
+  if (!premultAlpha) {
+    forceCopy = true;
+    wantImageSurface = true;
+  }
+
+  gfxIntSize size = aElement->GetSize();
+
+  nsRefPtr<gfxASurface> surf;
+
+  if (!forceCopy && aElement->CountContexts() == 1) {
+    nsICanvasRenderingContextInternal *srcCanvas = aElement->GetContextAtIndex(0);
+    rv = srcCanvas->GetThebesSurface(getter_AddRefs(surf));
+
+    if (NS_FAILED(rv))
+      surf = nsnull;
+  }
+
+  if (surf && wantImageSurface && surf->GetType() != gfxASurface::SurfaceTypeImage)
+    surf = nsnull;
+
+  if (!surf) {
+    if (wantImageSurface) {
+      surf = new gfxImageSurface(size, gfxASurface::ImageFormatARGB32);
+    } else {
+      surf = gfxPlatform::GetPlatform()->CreateOffscreenSurface(size, gfxASurface::CONTENT_COLOR_ALPHA);
+    }
+
+    nsRefPtr<gfxContext> ctx = new gfxContext(surf);
+    // XXX shouldn't use the external interface, but maybe we can layerify this
+    PRUint32 flags = premultAlpha ? nsHTMLCanvasElement::RenderFlagPremultAlpha : 0;
+    rv = aElement->RenderContextsExternal(ctx, gfxPattern::FILTER_NEAREST, flags);
+    if (NS_FAILED(rv))
+      return result;
+  }
+
+  // Ensure that any future changes to the canvas trigger proper invalidation,
+  // in case this is being used by -moz-element()
+  aElement->MarkContextClean();
+
+  result.mSurface = surf;
+  result.mSize = size;
+  result.mPrincipal = aElement->NodePrincipal();
+  result.mIsWriteOnly = aElement->IsWriteOnly();
+
+  return result;
+}
+
+nsLayoutUtils::SurfaceFromElementResult
+nsLayoutUtils::SurfaceFromElement(nsHTMLVideoElement* aElement,
+                                  PRUint32 aSurfaceFlags)
+{
+  SurfaceFromElementResult result;
+
+  bool wantImageSurface = (aSurfaceFlags & SFE_WANT_IMAGE_SURFACE) != 0;
+  bool premultAlpha = (aSurfaceFlags & SFE_NO_PREMULTIPLY_ALPHA) == 0;
+
+  if (!premultAlpha) {
+    wantImageSurface = true;
+  }
+
+  PRUint16 readyState;
+  if (NS_SUCCEEDED(aElement->GetReadyState(&readyState)) &&
+      (readyState == nsIDOMHTMLMediaElement::HAVE_NOTHING ||
+       readyState == nsIDOMHTMLMediaElement::HAVE_METADATA)) {
+    result.mIsStillLoading = true;
+    return result;
+  }
+
+  // If it doesn't have a principal, just bail
+  nsCOMPtr<nsIPrincipal> principal = aElement->GetCurrentPrincipal();
+  if (!principal)
+    return result;
+
+  ImageContainer *container = aElement->GetImageContainer();
+  if (!container)
+    return result;
+
+  gfxIntSize size;
+  nsRefPtr<gfxASurface> surf = container->GetCurrentAsSurface(&size);
+  if (!surf)
+    return result;
+
+  if (wantImageSurface && surf->GetType() != gfxASurface::SurfaceTypeImage) {
+    nsRefPtr<gfxImageSurface> imgSurf =
+      new gfxImageSurface(size, gfxASurface::ImageFormatARGB32);
+
+    nsRefPtr<gfxContext> ctx = new gfxContext(imgSurf);
+    ctx->SetOperator(gfxContext::OPERATOR_SOURCE);
+    ctx->DrawSurface(surf, size);
+    surf = imgSurf;
+  }
+
+  result.mCORSUsed = aElement->GetCORSMode() != CORS_NONE;
+  result.mSurface = surf;
+  result.mSize = size;
+  result.mPrincipal = principal.forget();
+  result.mIsWriteOnly = false;
+
+  return result;
+}
+
+nsLayoutUtils::SurfaceFromElementResult
+nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
+                                  PRUint32 aSurfaceFlags)
+{
+  // If it's a <canvas>, we may be able to just grab its internal surface
+  if (nsHTMLCanvasElement* canvas = nsHTMLCanvasElement::FromContent(aElement)) {
+    return SurfaceFromElement(canvas, aSurfaceFlags);
+  }
+
+#ifdef MOZ_MEDIA
+  // Maybe it's <video>?
+  if (nsHTMLVideoElement* video = nsHTMLVideoElement::FromContent(aElement)) {
+    return SurfaceFromElement(video, aSurfaceFlags);
+  }
+#endif
+
+  // Finally, check if it's a normal image
+  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(aElement);
+
+  if (!imageLoader) {
+    return SurfaceFromElementResult();
+  }
+
+  return SurfaceFromElement(imageLoader, aSurfaceFlags);
 }
 
 /* static */
@@ -4655,8 +4711,10 @@ nsReflowFrameRunnable::Run()
 static nscoord
 MinimumFontSizeFor(nsPresContext* aPresContext, nscoord aContainerWidth)
 {
-  PRUint32 emPerLine = nsLayoutUtils::FontSizeInflationEmPerLine();
-  PRUint32 minTwips = nsLayoutUtils::FontSizeInflationMinTwips();
+  nsIPresShell* presShell = aPresContext->PresShell();
+
+  PRUint32 emPerLine = presShell->FontSizeInflationEmPerLine();
+  PRUint32 minTwips = presShell->FontSizeInflationMinTwips();
   if (emPerLine == 0 && minTwips == 0) {
     return 0;
   }
@@ -4706,10 +4764,15 @@ nsLayoutUtils::FontSizeInflationInner(const nsIFrame *aFrame,
        f && !IsContainerForFontSizeInflation(f);
        f = f->GetParent()) {
     nsIContent* content = f->GetContent();
+    nsIAtom* fType = f->GetType();
     // Also, if there is more than one frame corresponding to a single
     // content node, we want the outermost one.
     if (!(f->GetParent() && f->GetParent()->GetContent() == content) &&
-        f->GetType() != nsGkAtoms::inlineFrame) {
+        // ignore width/height on inlines since they don't apply
+        fType != nsGkAtoms::inlineFrame &&
+        // ignore width on radios and checkboxes since we enlarge them and
+        // they have width/height in ua.css
+        fType != nsGkAtoms::formControlFrame) {
       nsStyleCoord stylePosWidth = f->GetStylePosition()->mWidth;
       nsStyleCoord stylePosHeight = f->GetStylePosition()->mHeight;
       if (stylePosWidth.GetUnit() != eStyleUnit_Auto ||
@@ -4802,8 +4865,11 @@ nsLayoutUtils::FontSizeInflationFor(const nsIFrame *aFrame)
 /* static */ bool
 nsLayoutUtils::FontSizeInflationEnabled(nsPresContext *aPresContext)
 {
-  if ((sFontSizeInflationEmPerLine == 0 &&
-       sFontSizeInflationMinTwips == 0) ||
+  nsIPresShell* presShell = aPresContext->GetPresShell();
+
+  if (!presShell ||
+      (presShell->FontSizeInflationEmPerLine() == 0 &&
+       presShell->FontSizeInflationMinTwips() == 0) ||
        aPresContext->IsChrome()) {
     return false;
   }

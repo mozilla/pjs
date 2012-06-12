@@ -5,8 +5,9 @@
 
 #include "WebGLContext.h"
 
-#include "mozilla/Preferences.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
 
 #include "jsfriendapi.h"
 
@@ -596,6 +597,20 @@ WebGLContext::InitAndValidateGL()
         GenerateWarning("GL error 0x%x occurred during OpenGL context initialization, before WebGL initialization!", error);
         return false;
     }
+
+#ifdef MOZ_JAVA_COMPOSITOR
+    // bug 736123, blacklist WebGL on Adreno
+    bool forceEnabled = Preferences::GetBool("webgl.force-enabled", false);
+    if (!forceEnabled) {
+        int renderer = gl->Renderer();
+        if (renderer == gl::GLContext::RendererAdreno200 ||
+            renderer == gl::GLContext::RendererAdreno205)
+        {
+            GenerateWarning("WebGL blocked on this Adreno driver!");
+            return false;
+        }
+    }
+#endif
 
     mMinCapability = Preferences::GetBool("webgl.min_capability_mode", false);
     mDisableExtensions = Preferences::GetBool("webgl.disable-extensions", false);

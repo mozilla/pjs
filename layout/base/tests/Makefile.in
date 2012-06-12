@@ -154,6 +154,7 @@ _TEST_FILES =	\
 		test_bug718809.html \
 		test_bug725426.html \
 		test_bug731777.html \
+		test_bug761572.html \
 		$(NULL)
 
 # Tests for bugs 441782, 467672 and 570378 don't pass reliably on Windows, because of bug 469208
@@ -339,6 +340,7 @@ _TEST_FILES += \
 		test_bug570378-persian-5g.html \
 		bug570378-persian-5.html \
 		bug570378-persian-5-ref.html \
+                test_bug749186.html \
 		$(NULL)
 # THESE TESTS (ABOVE AND BELOW) DO NOT RUN ON WINDOWS
 _TEST_FILES += \

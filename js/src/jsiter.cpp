@@ -795,11 +795,21 @@ iterator_iterator(JSContext *cx, HandleObject obj, JSBool keysonly)
 static JSBool
 Iterator(JSContext *cx, unsigned argc, Value *vp)
 {
-    Value *argv = JS_ARGV(cx, vp);
-    bool keyonly = argc >= 2 ? js_ValueToBoolean(argv[1]) : false;
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() == 0) {
+        js_ReportMissingArg(cx, args.calleev(), 0);
+        return false;
+    }
+
+    bool keyonly = false;
+    if (args.length() >= 2)
+        keyonly = js_ValueToBoolean(args[1]);
     unsigned flags = JSITER_OWNONLY | (keyonly ? 0 : (JSITER_FOREACH | JSITER_KEYVALUE));
-    *vp = argc >= 1 ? argv[0] : UndefinedValue();
-    return ValueToIterator(cx, flags, vp);
+
+    if (!ValueToIterator(cx, flags, &args[0]))
+        return false;
+    args.rval() = args[0];
+    return true;
 }
 
 JSBool
@@ -818,12 +828,13 @@ iterator_next(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    bool ok;
-    RootedObject obj(cx, NonGenericMethodGuard(cx, args, iterator_next, &IteratorClass, &ok));
-    if (!obj)
-        return ok;
+    RootedObject thisObj(cx);
+    if (!NonGenericMethodGuard(cx, args, iterator_next, &IteratorClass, thisObj.address()))
+        return false;
+    if (!thisObj)
+        return true;
 
-    if (!js_IteratorMore(cx, obj, &args.rval()))
+    if (!js_IteratorMore(cx, thisObj, &args.rval()))
         return false;
 
     if (!args.rval().toBoolean()) {
@@ -831,7 +842,7 @@ iterator_next(JSContext *cx, unsigned argc, Value *vp)
         return false;
     }
 
-    return js_IteratorNext(cx, obj, &args.rval());
+    return js_IteratorNext(cx, thisObj, &args.rval());
 }
 
 #define JSPROP_ROPERM   (JSPROP_READONLY | JSPROP_PERMANENT)
@@ -875,7 +886,7 @@ js::ValueToIterator(JSContext *cx, unsigned flags, Value *vp)
          * but it's "web JS" compatible. ES5 fixed for-in to match this de-facto
          * standard.
          */
-        if ((flags & JSITER_ENUMERATE)) {
+        if (flags & JSITER_ENUMERATE) {
             if (!js_ValueToObjectOrNull(cx, *vp, obj.address()))
                 return false;
             /* fall through */
@@ -1314,32 +1325,23 @@ generator_finalize(FreeOp *fop, JSObject *obj)
     JS_ASSERT(gen->state == JSGEN_NEWBORN ||
               gen->state == JSGEN_CLOSED ||
               gen->state == JSGEN_OPEN);
+    JS_POISON(gen->fp, JS_FREE_PATTERN, sizeof(StackFrame));
+    JS_POISON(gen, JS_FREE_PATTERN, sizeof(JSGenerator));
     fop->free_(gen);
 }
 
 static void
-MarkGenerator(JSTracer *trc, JSGenerator *gen)
+MarkGeneratorFrame(JSTracer *trc, JSGenerator *gen)
 {
-    StackFrame *fp = gen->floatingFrame();
-
-    /*
-     * MarkGenerator should only be called when regs is based on the floating frame.
-     * See calls to RebaseRegsFromTo.
-     */
-    JS_ASSERT(size_t(gen->regs.sp - fp->slots()) <= fp->numSlots());
-
-    /*
-     * Currently, generators are not mjitted. Still, (overflow) args can be
-     * pushed by the mjit and need to be conservatively marked. Technically, the
-     * formal args and generator slots are safe for exact marking, but since the
-     * plan is to eventually mjit generators, it makes sense to future-proof
-     * this code and save someone an hour later.
-     */
-    MarkValueRange(trc, (HeapValue *)fp->formalArgsEnd() - gen->floatingStack,
-                   gen->floatingStack, "Generator Floating Args");
-    fp->mark(trc);
-    MarkValueRange(trc, gen->regs.sp - fp->slots(),
-                   (HeapValue *)fp->slots(), "Generator Floating Stack");
+    MarkValueRange(trc,
+                   HeapValueify(gen->fp->generatorArgsSnapshotBegin()),
+                   HeapValueify(gen->fp->generatorArgsSnapshotEnd()),
+                   "Generator Floating Args");
+    gen->fp->mark(trc);
+    MarkValueRange(trc,
+                   HeapValueify(gen->fp->generatorSlotsSnapshotBegin()),
+                   HeapValueify(gen->regs.sp),
+                   "Generator Floating Stack");
 }
 
 static void
@@ -1347,7 +1349,31 @@ GeneratorWriteBarrierPre(JSContext *cx, JSGenerator *gen)
 {
     JSCompartment *comp = cx->compartment;
     if (comp->needsBarrier())
-        MarkGenerator(comp->barrierTracer(), gen);
+        MarkGeneratorFrame(comp->barrierTracer(), gen);
+}
+
+/*
+ * Only mark generator frames/slots when the generator is not active on the
+ * stack or closed. Barriers when copying onto the stack or closing preserve
+ * gc invariants.
+ */
+static bool
+GeneratorHasMarkableFrame(JSGenerator *gen)
+{
+    return gen->state == JSGEN_NEWBORN || gen->state == JSGEN_OPEN;
+}
+
+/*
+ * When a generator is closed, the GC things reachable from the contained frame
+ * and slots become unreachable and thus require a write barrier.
+ */
+static void
+SetGeneratorClosed(JSContext *cx, JSGenerator *gen)
+{
+    JS_ASSERT(gen->state != JSGEN_CLOSED);
+    if (GeneratorHasMarkableFrame(gen))
+        GeneratorWriteBarrierPre(cx, gen);
+    gen->state = JSGEN_CLOSED;
 }
 
 static void
@@ -1357,15 +1383,8 @@ generator_trace(JSTracer *trc, JSObject *obj)
     if (!gen)
         return;
 
-    /*
-     * Do not mark if the generator is running; the contents may be trash and
-     * will be replaced when the generator stops.
-     */
-    if (gen->state == JSGEN_RUNNING || gen->state == JSGEN_CLOSING)
-        return;
-
-    JS_ASSERT(gen->liveFrame() == gen->floatingFrame());
-    MarkGenerator(trc, gen);
+    if (GeneratorHasMarkableFrame(gen))
+        MarkGeneratorFrame(trc, gen);
 }
 
 Class js::GeneratorClass = {
@@ -1405,9 +1424,8 @@ JSObject *
 js_NewGenerator(JSContext *cx)
 {
     FrameRegs &stackRegs = cx->regs();
+    JS_ASSERT(stackRegs.stackDepth() == 0);
     StackFrame *stackfp = stackRegs.fp();
-    JS_ASSERT(stackfp->base() == cx->regs().sp);
-    JS_ASSERT(stackfp->actualArgs() <= stackfp->formalArgs());
 
     Rooted<GlobalObject*> global(cx, &stackfp->global());
     JSObject *proto = global->getOrCreateGeneratorPrototype(cx);
@@ -1418,15 +1436,15 @@ js_NewGenerator(JSContext *cx)
         return NULL;
 
     /* Load and compute stack slot counts. */
-    Value *stackvp = stackfp->actualArgs() - 2;
-    unsigned vplen = stackfp->formalArgsEnd() - stackvp;
+    Value *stackvp = stackfp->generatorArgsSnapshotBegin();
+    unsigned vplen = stackfp->generatorArgsSnapshotEnd() - stackvp;
 
     /* Compute JSGenerator size. */
     unsigned nbytes = sizeof(JSGenerator) +
                    (-1 + /* one Value included in JSGenerator */
                     vplen +
                     VALUES_PER_STACK_FRAME +
-                    stackfp->numSlots()) * sizeof(HeapValue);
+                    stackfp->script()->nslots) * sizeof(HeapValue);
 
     JS_ASSERT(nbytes % sizeof(Value) == 0);
     JS_STATIC_ASSERT(sizeof(StackFrame) % sizeof(HeapValue) == 0);
@@ -1437,34 +1455,27 @@ js_NewGenerator(JSContext *cx)
     SetValueRangeToUndefined((Value *)gen, nbytes / sizeof(Value));
 
     /* Cut up floatingStack space. */
-    HeapValue *genvp = gen->floatingStack;
+    HeapValue *genvp = gen->stackSnapshot;
     StackFrame *genfp = reinterpret_cast<StackFrame *>(genvp + vplen);
 
     /* Initialize JSGenerator. */
     gen->obj.init(obj);
     gen->state = JSGEN_NEWBORN;
     gen->enumerators = NULL;
-    gen->floating = genfp;
+    gen->fp = genfp;
+    gen->prevGenerator = NULL;
 
     /* Copy from the stack to the generator's floating frame. */
     gen->regs.rebaseFromTo(stackRegs, *genfp);
-    genfp->stealFrameAndSlots<HeapValue, Value, StackFrame::DoPostBarrier>(
-                              cx, genfp, genvp, stackfp, stackvp, stackRegs.sp);
-    genfp->initFloatingGenerator();
-    stackfp->setYielding();  /* XXX: to be removed */
+    genfp->copyFrameAndValues<HeapValue, Value, StackFrame::DoPostBarrier>(
+                              cx, genvp, stackfp, stackvp, stackRegs.sp);
 
     obj->setPrivate(gen);
     return obj;
 }
 
-JSGenerator *
-js_FloatingFrameToGenerator(StackFrame *fp)
-{
-    JS_ASSERT(fp->isGeneratorFrame() && fp->isFloatingGenerator());
-    char *floatingStackp = (char *)(fp->actualArgs() - 2);
-    char *p = floatingStackp - offsetof(JSGenerator, floatingStack);
-    return reinterpret_cast<JSGenerator *>(p);
-}
+static void
+SetGeneratorClosed(JSContext *cx, JSGenerator *gen);
 
 typedef enum JSGeneratorOp {
     JSGENOP_NEXT,
@@ -1482,15 +1493,9 @@ SendToGenerator(JSContext *cx, JSGeneratorOp op, JSObject *obj,
                 JSGenerator *gen, const Value &arg)
 {
     if (gen->state == JSGEN_RUNNING || gen->state == JSGEN_CLOSING) {
-        js_ReportValueError(cx, JSMSG_NESTING_GENERATOR,
-                            JSDVG_SEARCH_STACK, ObjectOrNullValue(obj),
-                            JS_GetFunctionId(gen->floatingFrame()->fun()));
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_NESTING_GENERATOR);
         return JS_FALSE;
     }
-
-    /* Check for OOM errors here, where we can fail easily. */
-    if (!cx->ensureGeneratorStackSpace())
-        return JS_FALSE;
 
     /*
      * Write barrier is needed since the generator stack can be updated,
@@ -1531,19 +1536,16 @@ SendToGenerator(JSContext *cx, JSGeneratorOp op, JSObject *obj,
         break;
     }
 
-    StackFrame *genfp = gen->floatingFrame();
-
     JSBool ok;
     {
         GeneratorFrameGuard gfg;
         if (!cx->stack.pushGeneratorFrame(cx, gen, &gfg)) {
-            gen->state = JSGEN_CLOSED;
+            SetGeneratorClosed(cx, gen);
             return JS_FALSE;
         }
 
         StackFrame *fp = gfg.fp();
         gen->regs = cx->regs();
-        JS_ASSERT(gen->liveFrame() == fp);
 
         cx->enterGenerator(gen);   /* OOM check above. */
         JSObject *enumerators = cx->enumerators;
@@ -1556,19 +1558,19 @@ SendToGenerator(JSContext *cx, JSGeneratorOp op, JSObject *obj,
         cx->leaveGenerator(gen);
     }
 
-    if (gen->floatingFrame()->isYielding()) {
+    if (gen->fp->isYielding()) {
         /* Yield cannot fail, throw or be called on closing. */
         JS_ASSERT(ok);
         JS_ASSERT(!cx->isExceptionPending());
         JS_ASSERT(gen->state == JSGEN_RUNNING);
         JS_ASSERT(op != JSGENOP_CLOSE);
-        genfp->clearYielding();
+        gen->fp->clearYielding();
         gen->state = JSGEN_OPEN;
         return JS_TRUE;
     }
 
-    genfp->clearReturnValue();
-    gen->state = JSGEN_CLOSED;
+    gen->fp->clearReturnValue();
+    SetGeneratorClosed(cx, gen);
     if (ok) {
         /* Returned, explicitly or by falling off the end. */
         if (op == JSGENOP_CLOSE)
@@ -1608,12 +1610,13 @@ generator_op(JSContext *cx, Native native, JSGeneratorOp op, Value *vp, unsigned
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    bool ok;
-    JSObject *obj = NonGenericMethodGuard(cx, args, native, &GeneratorClass, &ok);
-    if (!obj)
-        return ok;
+    JSObject *thisObj;
+    if (!NonGenericMethodGuard(cx, args, native, &GeneratorClass, &thisObj))
+        return false;
+    if (!thisObj)
+        return true;
 
-    JSGenerator *gen = (JSGenerator *) obj->getPrivate();
+    JSGenerator *gen = (JSGenerator *) thisObj->getPrivate();
     if (!gen) {
         /* This happens when obj is the generator prototype. See bug 352885. */
         goto closed_generator;
@@ -1635,7 +1638,7 @@ generator_op(JSContext *cx, Native native, JSGeneratorOp op, Value *vp, unsigned
 
           default:
             JS_ASSERT(op == JSGENOP_CLOSE);
-            gen->state = JSGEN_CLOSED;
+            SetGeneratorClosed(cx, gen);
             args.rval().setUndefined();
             return true;
         }
@@ -1656,10 +1659,10 @@ generator_op(JSContext *cx, Native native, JSGeneratorOp op, Value *vp, unsigned
     }
 
     bool undef = ((op == JSGENOP_SEND || op == JSGENOP_THROW) && args.length() != 0);
-    if (!SendToGenerator(cx, op, obj, gen, undef ? args[0] : UndefinedValue()))
+    if (!SendToGenerator(cx, op, thisObj, gen, undef ? args[0] : UndefinedValue()))
         return false;
 
-    args.rval() = gen->floatingFrame()->returnValue();
+    args.rval() = gen->fp->returnValue();
     return true;
 }
 

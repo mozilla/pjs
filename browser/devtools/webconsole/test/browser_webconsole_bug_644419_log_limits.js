@@ -52,18 +52,19 @@ function testWebDevLimits(aEvent) {
 function testWebDevLimits2() {
   // Fill the log with Web Developer errors.
   for (let i = 0; i < 11; i++) {
-    hud.console.log("test message " + i);
+    content.console.log("test message " + i);
   }
 
   waitForSuccess({
-    name: "11 console.log messages displayed",
+    name: "10 console.log messages displayed and one pruned",
     validatorFn: function()
     {
-      return outputNode.textContent.indexOf("test message 10") > -1;
+      let message0 = outputNode.textContent.indexOf("test message 0");
+      let message10 = outputNode.textContent.indexOf("test message 10");
+      return message0 == -1 && message10 > -1;
     },
     successFn: function()
     {
-      testLogEntry(outputNode, "test message 0", "first message is pruned", false, true);
       findLogEntry("test message 1");
       // Check if the sentinel entry is still there.
       findLogEntry("bar is not defined");
@@ -80,7 +81,7 @@ function testJsLimits() {
   Services.prefs.setIntPref("devtools.hud.loglimit.exception", 10);
 
   hud.jsterm.clearOutput();
-  hud.console.log("testing JS limits");
+  content.console.log("testing JS limits");
 
   // Find the sentinel entry.
   waitForSuccess({
@@ -131,7 +132,7 @@ function testNetLimits() {
   Services.prefs.setIntPref("devtools.hud.loglimit.network", 10);
 
   hud.jsterm.clearOutput();
-  hud.console.log("testing Net limits");
+  content.console.log("testing Net limits");
 
   // Find the sentinel entry.
   waitForSuccess({
@@ -161,14 +162,28 @@ function loadImage() {
     gCounter++;
     return;
   }
-  is(gCounter, 11, "loaded 11 files");
-  testLogEntry(outputNode, "test-image.png?_fubar=0", "first message is pruned", false, true);
-  findLogEntry("test-image.png?_fubar=1");
-  // Check if the sentinel entry is still there.
-  findLogEntry("testing Net limits");
 
-  Services.prefs.setIntPref("devtools.hud.loglimit.network", gOldPref);
-  testCssLimits();
+  is(gCounter, 11, "loaded 11 files");
+
+  waitForSuccess({
+    name: "loaded 11 files, one message pruned",
+    validatorFn: function()
+    {
+      let message0 = outputNode.querySelector('*[value*="test-image.png?_fubar=0"]');
+      let message10 = outputNode.querySelector('*[value*="test-image.png?_fubar=10"]');
+      return !message0 && message10;
+    },
+    successFn: function()
+    {
+      findLogEntry("test-image.png?_fubar=1");
+      // Check if the sentinel entry is still there.
+      findLogEntry("testing Net limits");
+
+      Services.prefs.setIntPref("devtools.hud.loglimit.network", gOldPref);
+      testCssLimits();
+    },
+    failureFn: testCssLimits,
+  });
 }
 
 function testCssLimits() {
@@ -176,7 +191,7 @@ function testCssLimits() {
   Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", 10);
 
   hud.jsterm.clearOutput();
-  hud.console.log("testing CSS limits");
+  content.console.log("testing CSS limits");
 
   // Find the sentinel entry.
   waitForSuccess({

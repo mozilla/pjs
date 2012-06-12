@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.GeneralSecurityException;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -59,6 +60,8 @@ public class BaseResource implements Resource {
 
   private static final int MAX_TOTAL_CONNECTIONS     = 20;
   private static final int MAX_CONNECTIONS_PER_ROUTE = 10;
+
+  private boolean retryOnFailedRequest = true;
 
   public static boolean rewriteLocalhost = true;
 
@@ -237,19 +240,45 @@ public class BaseResource implements Resource {
   }
 
   private void execute() {
+    HttpResponse response;
     try {
-      HttpResponse response = client.execute(request, context);
+      response = client.execute(request, context);
       Logger.debug(LOG_TAG, "Response: " + response.getStatusLine().toString());
-      HttpResponseObserver observer = getHttpResponseObserver();
-      if (observer != null) {
-        observer.observeHttpResponse(response);
-      }
-      delegate.handleHttpResponse(response);
     } catch (ClientProtocolException e) {
       delegate.handleHttpProtocolException(e);
+      return;
     } catch (IOException e) {
-      delegate.handleHttpIOException(e);
+      Logger.debug(LOG_TAG, "I/O exception returned from execute.");
+      if (!retryOnFailedRequest) {
+        delegate.handleHttpIOException(e);
+      } else {
+        retryRequest();
+      }
+      return;
+    } catch (Exception e) {
+      // Bug 740731: Don't let an exception fall through. Wrapping isn't
+      // optimal, but often the exception is treated as an Exception anyway.
+      if (!retryOnFailedRequest) {
+        delegate.handleHttpIOException(new IOException(e));
+      } else {
+        retryRequest();
+      }
+      return;
     }
+
+    // Don't retry if the observer or delegate throws!
+    HttpResponseObserver observer = getHttpResponseObserver();
+    if (observer != null) {
+      observer.observeHttpResponse(response);
+    }
+    delegate.handleHttpResponse(response);
+  }
+
+  private void retryRequest() {
+    // Only retry once.
+    retryOnFailedRequest = false;
+    Logger.debug(LOG_TAG, "Retrying request...");
+    this.execute();
   }
 
   private void go(HttpRequestBase request) {
@@ -262,9 +291,16 @@ public class BaseResource implements Resource {
     } catch (KeyManagementException e) {
       Logger.error(LOG_TAG, "Couldn't prepare client.", e);
       delegate.handleTransportException(e);
+      return;
     } catch (NoSuchAlgorithmException e) {
       Logger.error(LOG_TAG, "Couldn't prepare client.", e);
       delegate.handleTransportException(e);
+      return;
+    } catch (Exception e) {
+      // Bug 740731: Don't let an exception fall through. Wrapping isn't
+      // optimal, but often the exception is treated as an Exception anyway.
+      delegate.handleTransportException(new GeneralSecurityException(e));
+      return;
     }
     this.execute();
   }

@@ -76,9 +76,10 @@ UINT nsClipboard::GetFormat(const char* aMimeStr)
   else if (strcmp(aMimeStr, kUnicodeMime) == 0)
     format = CF_UNICODETEXT;
   else if (strcmp(aMimeStr, kJPEGImageMime) == 0 ||
+           strcmp(aMimeStr, kJPGImageMime) == 0 ||
            strcmp(aMimeStr, kPNGImageMime) == 0)
     format = CF_DIB;
-  else if (strcmp(aMimeStr, kFileMime) == 0 || 
+  else if (strcmp(aMimeStr, kFileMime) == 0 ||
            strcmp(aMimeStr, kFilePromiseMime) == 0)
     format = CF_HDROP;
   else if (strcmp(aMimeStr, kNativeHTMLMime) == 0)
@@ -186,7 +187,8 @@ nsresult nsClipboard::SetupNativeDataObject(nsITransferable * aTransferable, IDa
         dObj->AddDataFlavor(kURLMime, &shortcutFE);      
       }
       else if ( strcmp(flavorStr, kPNGImageMime) == 0 || strcmp(flavorStr, kJPEGImageMime) == 0 ||
-                  strcmp(flavorStr, kGIFImageMime) == 0 || strcmp(flavorStr, kNativeImageMime) == 0  ) {
+                strcmp(flavorStr, kJPGImageMime) == 0 || strcmp(flavorStr, kGIFImageMime) == 0 ||
+                strcmp(flavorStr, kNativeImageMime) == 0  ) {
         // if we're an image, register the native bitmap flavor
         FORMATETC imageFE;
         SET_FORMATETC(imageFE, CF_DIB, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL)
@@ -606,7 +608,7 @@ nsresult nsClipboard::GetDataFromDataObject(IDataObject     * aDataObject,
           if ( strcmp(flavorStr, kFileMime) == 0 ) {
             // we have a file path in |data|. Create an nsLocalFile object.
             nsDependentString filepath(reinterpret_cast<PRUnichar*>(data));
-            nsCOMPtr<nsILocalFile> file;
+            nsCOMPtr<nsIFile> file;
             if ( NS_SUCCEEDED(NS_NewLocalFile(filepath, false, getter_AddRefs(file))) )
               genericDataWrapper = do_QueryInterface(file);
             nsMemory::Free(data);
@@ -625,6 +627,7 @@ nsresult nsClipboard::GetDataFromDataObject(IDataObject     * aDataObject,
           nsMemory::Free(data);
         }
         else if ( strcmp(flavorStr, kJPEGImageMime) == 0 ||
+                  strcmp(flavorStr, kJPGImageMime) == 0 ||
                   strcmp(flavorStr, kPNGImageMime) == 0) {
           nsIInputStream * imageStream = reinterpret_cast<nsIInputStream*>(data);
           genericDataWrapper = do_QueryInterface(imageStream);
@@ -761,7 +764,7 @@ nsClipboard :: FindURLFromLocalFile ( IDataObject* inDataObject, UINT inIndex, v
   if ( NS_SUCCEEDED(loadResult) && *outData ) {
     // we have a file path in |data|. Is it an internet shortcut or a normal file?
     const nsDependentString filepath(static_cast<PRUnichar*>(*outData));
-    nsCOMPtr<nsILocalFile> file;
+    nsCOMPtr<nsIFile> file;
     nsresult rv = NS_NewLocalFile(filepath, true, getter_AddRefs(file));
     if (NS_FAILED(rv)) {
       nsMemory::Free(*outData);
@@ -862,7 +865,7 @@ nsClipboard :: FindURLFromNativeURL ( IDataObject* inDataObject, UINT inIndex, v
 // ResolveShortcut
 //
 void
-nsClipboard :: ResolveShortcut ( nsILocalFile* aFile, nsACString& outURL )
+nsClipboard :: ResolveShortcut ( nsIFile* aFile, nsACString& outURL )
 {
   nsCOMPtr<nsIFileProtocolHandler> fph;
   nsresult rv = NS_GetFileProtocolHandler(getter_AddRefs(fph));

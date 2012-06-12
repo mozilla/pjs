@@ -176,6 +176,9 @@ include image-rect/reftest.list
 # image-region/
 include image-region/reftest.list
 
+# indic shaping with harfbuzz
+include indic-shaping/reftest.list
+
 # inline borders and padding
 include inline-borderpadding/reftest.list
 
@@ -223,6 +226,10 @@ include pixel-rounding/reftest.list
 
 # plugin/
 include ../../dom/plugins/test/reftest/reftest.list
+
+# position-dynamic-changes/
+# Disabled on Native Fennec for now, because running them takes too long
+skip-if(Android&&!browserIsRemote) include position-dynamic-changes/reftest.list # Bug 762181
 
 # printing
 include printing/reftest.list

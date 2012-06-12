@@ -17,7 +17,7 @@ using namespace mozilla::a11y;
 
 TextLeafAccessible::
   TextLeafAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  nsLinkableAccessible(aContent, aDoc)
+  LinkableAccessible(aContent, aDoc)
 {
   mFlags |= eTextLeafAccessible;
 }
@@ -49,18 +49,6 @@ TextLeafAccessible::Name(nsString& aName)
   // Text node, ARIA can't be used.
   aName = mText;
   return eNameOK;
-}
-
-nsresult
-TextLeafAccessible::GetAttributesInternal(nsIPersistentProperties *aAttributes)
-{
-  if (NativeRole() == roles::STATICTEXT) {
-    nsAutoString oldValueUnused;
-    aAttributes->SetStringProperty(NS_LITERAL_CSTRING("auto-generated"),
-                                  NS_LITERAL_STRING("true"), oldValueUnused);
-  }
-
-  return NS_OK;
 }
 
 void

@@ -21,14 +21,14 @@ interface nsIDOMContact : nsIDOMContactProperties
   void init(in nsIDOMContactProperties properties);  // Workaround BUG 723206
 };
 
-[scriptable, uuid(a8cd4ba0-93d1-11e1-b0c4-0800200c9a66)]
+[scriptable, builtinclass, uuid(50e09826-d08e-4a75-8efb-5dfb2aa70874)]
 interface mozIDOMContactEvent : nsIDOMEvent
 {
   readonly attribute DOMString contactID;
   readonly attribute DOMString reason;
 };
 
-[scriptable, uuid(d9ca0950-93d1-11e1-b0c4-0800200c9a66)]
+[scriptable, uuid(d88af7e0-a45f-11e1-b3dd-0800200c9a66)]
 interface nsIDOMContactManager : nsISupports
 {
   nsIDOMDOMRequest find(in nsIDOMContactFindOptions options);
@@ -38,6 +38,8 @@ interface nsIDOMContactManager : nsISupports
   nsIDOMDOMRequest save(in nsIDOMContact contact);
   
   nsIDOMDOMRequest remove(in nsIDOMContact contact);
+
+  nsIDOMDOMRequest getSimContacts(in DOMString type);
 
   attribute nsIDOMEventListener oncontactchange;
 };

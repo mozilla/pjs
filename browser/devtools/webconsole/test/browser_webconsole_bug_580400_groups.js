@@ -9,46 +9,70 @@ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/te
 
 function test() {
   addTab(TEST_URI);
-  browser.addEventListener("DOMContentLoaded", testGroups, false);
+  browser.addEventListener("load", function onLoad() {
+    browser.removeEventListener("load", onLoad, true);
+    openConsole(null, testGroups);
+  }, true);
 }
 
-function testGroups() {
-  browser.removeEventListener("DOMContentLoaded", testGroups, false);
-
-  openConsole();
-
-  let HUD = HUDService.getHudByWindow(content);
+function testGroups(HUD) {
   let jsterm = HUD.jsterm;
-  let outputNode = jsterm.outputNode;
+  let outputNode = HUD.outputNode;
+  jsterm.clearOutput();
 
   // We test for one group by testing for zero "new" groups. The
   // "webconsole-new-group" class creates a divider. Thus one group is
   // indicated by zero new groups, two groups are indicated by one new group,
   // and so on.
 
+  let waitForSecondMessage = {
+    name: "second console message",
+    validatorFn: function()
+    {
+      return outputNode.querySelectorAll(".webconsole-msg-output").length == 2;
+    },
+    successFn: function()
+    {
+      let timestamp1 = Date.now();
+      if (timestamp1 - timestamp0 < 5000) {
+        is(outputNode.querySelectorAll(".webconsole-new-group").length, 0,
+           "no group dividers exist after the second console message");
+      }
+
+      for (let i = 0; i < outputNode.itemCount; i++) {
+        outputNode.getItemAtIndex(i).timestamp = 0;   // a "far past" value
+      }
+
+      jsterm.execute("2");
+      waitForSuccess(waitForThirdMessage);
+    },
+    failureFn: finishTest,
+  };
+
+  let waitForThirdMessage = {
+    name: "one group divider exists after the third console message",
+    validatorFn: function()
+    {
+      return outputNode.querySelectorAll(".webconsole-new-group").length == 1;
+    },
+    successFn: finishTest,
+    failureFn: finishTest,
+  };
+
   let timestamp0 = Date.now();
   jsterm.execute("0");
-  is(outputNode.querySelectorAll(".webconsole-new-group").length, 0,
-     "no group dividers exist after the first console message");
 
-  jsterm.execute("1");
-  let timestamp1 = Date.now();
-  if (timestamp1 - timestamp0 < 5000) {
-    is(outputNode.querySelectorAll(".webconsole-new-group").length, 0,
-       "no group dividers exist after the second console message");
-  }
-
-  for (let i = 0; i < outputNode.itemCount; i++) {
-    outputNode.getItemAtIndex(i).timestamp = 0;   // a "far past" value
-  }
-
-  jsterm.execute("2");
-  is(outputNode.querySelectorAll(".webconsole-new-group").length, 1,
-     "one group divider exists after the third console message");
-
-  jsterm.clearOutput();
-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
-
-  finishTest();
+  waitForSuccess({
+    name: "no group dividers exist after the first console message",
+    validatorFn: function()
+    {
+      return outputNode.querySelectorAll(".webconsole-new-group").length == 0;
+    },
+    successFn: function()
+    {
+      jsterm.execute("1");
+      waitForSuccess(waitForSecondMessage);
+    },
+    failureFn: finishTest,
+  });
 }
-

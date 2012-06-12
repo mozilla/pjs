@@ -118,9 +118,13 @@ function wrapPrivileged(obj) {
 
       // Constructors are tricky, because we can't easily call apply on them.
       // As a workaround, we create a wrapper constructor with the same
-      // |prototype| property.
+      // |prototype| property. ES semantics dictate that the return value from
+      // |new| is the return value of the |new|-ed function i.f.f. the returned
+      // value is an object. We can thus mimic the behavior of |new|-ing the
+      // underlying constructor just be passing along its return value in our
+      // constructor.
       var FakeConstructor = function() {
-        doApply(obj, this, unwrappedArgs);
+        return doApply(obj, this, unwrappedArgs);
       };
       FakeConstructor.prototype = obj.prototype;
 
@@ -767,8 +771,7 @@ SpecialPowersAPI.prototype = {
   },
 
   createSystemXHR: function() {
-    return Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
-             .createInstance(Ci.nsIXMLHttpRequest);
+    return this.wrap(Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(Ci.nsIXMLHttpRequest));
   },
 
   snapshotWindow: function (win, withCaret) {
@@ -814,13 +817,13 @@ SpecialPowersAPI.prototype = {
     doPreciseGCandCC();
   },
 
-  hasContentProcesses: function() {
+  isMainProcess: function() {
     try {
-      var rt = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime);
-      return rt.processType != Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-    } catch (e) {
-      return true;
-    }
+      return Cc["@mozilla.org/xre/app-info;1"].
+               getService(Ci.nsIXULRuntime).
+               processType == Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
+    } catch (e) { }
+    return true;
   },
 
   _xpcomabi: null,
@@ -1080,5 +1083,44 @@ SpecialPowersAPI.prototype = {
     var pm = Cc["@mozilla.org/permissionmanager;1"].getService(Ci.nsIPermissionManager);
     var uri = this.getDocumentURIObject(document);
     pm.remove(uri.host, "fullscreen");
+  },
+
+  _getURI: function(urlOrDocument) {
+    if (typeof(urlOrDocument) == "string") {
+      return Cc["@mozilla.org/network/io-service;1"].
+               getService(Ci.nsIIOService).
+               newURI(url, null, null);
+    }
+    // Assume document.
+    return this.getDocumentURIObject(urlOrDocument);
+  },
+
+  addPermission: function(type, allow, urlOrDocument) {
+    let uri = this._getURI(urlOrDocument);
+
+    let permission = allow ?
+                     Ci.nsIPermissionManager.ALLOW_ACTION :
+                     Ci.nsIPermissionManager.DENY_ACTION;
+
+    var msg = {
+      'op': "add",
+      'type': type,
+      'url': uri.spec,
+      'permission': permission
+    };
+
+    this._sendSyncMessage('SPPermissionManager', msg);
+  },
+
+  removePermission: function(type, urlOrDocument) {
+    let uri = this._getURI(urlOrDocument);
+
+    var msg = {
+      'op': "remove",
+      'type': type,
+      'url': uri.spec
+    };
+
+    this._sendSyncMessage('SPPermissionManager', msg);
   }
 };

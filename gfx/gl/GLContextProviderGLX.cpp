@@ -658,7 +658,9 @@ public:
                                              GLX_DOUBLEBUFFER, &db);
         if (GLX_BAD_ATTRIBUTE != err) {
 #ifdef DEBUG
-            printf("[GLX] FBConfig is %sdouble-buffered\n", db ? "" : "not ");
+            if (DebugMode()) {
+                printf("[GLX] FBConfig is %sdouble-buffered\n", db ? "" : "not ");
+            }
 #endif
         }
 
@@ -1355,7 +1357,7 @@ GLContextProviderGLX::CreateForNativePixmapSurface(gfxASurface *aSurface)
 static nsRefPtr<GLContext> gGlobalContext;
 
 GLContext *
-GLContextProviderGLX::GetGlobalContext()
+GLContextProviderGLX::GetGlobalContext(const ContextFlags)
 {
     static bool triedToCreateContext = false;
     if (!triedToCreateContext && !gGlobalContext) {

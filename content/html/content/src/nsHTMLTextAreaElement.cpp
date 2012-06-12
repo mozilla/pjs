@@ -31,7 +31,6 @@
 #include "nsLinebreakConverter.h"
 #include "nsIDocument.h"
 #include "nsIFrame.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsGUIEvent.h"
 #include "nsPresState.h"
 #include "nsReadableUtils.h"
@@ -539,7 +538,7 @@ nsHTMLTextAreaElement::SetValueInternal(const nsAString& aValue,
   // nsTextControlFrame::UpdateValueDisplay retrieves the correct value
   // if needed.
   SetValueChanged(true);
-  mState.SetValue(aValue, aUserInput);
+  mState.SetValue(aValue, aUserInput, true);
 
   return NS_OK;
 }

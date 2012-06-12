@@ -39,7 +39,6 @@ let _alive = true; // Track if this content script should still be alive.
  */
 let Manager = {
   get window() content,
-  sandbox: null,
   hudId: null,
   _sequence: 0,
   _messageListeners: ["WebConsole:Init", "WebConsole:EnableFeature",
@@ -261,6 +260,8 @@ let Manager = {
    *    to the remote process.
    *    - NetworkMonitor - log all the network activity and send HAR-like
    *    messages to the remote Web Console process.
+   *    - LocationChange - log page location changes. See
+   *    ConsoleProgressListener.
    *
    * @param string aFeature
    *        One of the supported features.
@@ -286,6 +287,11 @@ let Manager = {
         break;
       case "NetworkMonitor":
         NetworkMonitor.init(aMessage);
+        break;
+      case "LocationChange":
+        ConsoleProgressListener.startMonitor(ConsoleProgressListener
+                                             .MONITOR_LOCATION_CHANGE);
+        ConsoleProgressListener.sendLocation();
         break;
       default:
         Cu.reportError("Web Console content: unknown feature " + aFeature);
@@ -323,6 +329,10 @@ let Manager = {
         break;
       case "NetworkMonitor":
         NetworkMonitor.destroy();
+        break;
+      case "LocationChange":
+        ConsoleProgressListener.stopMonitor(ConsoleProgressListener
+                                            .MONITOR_LOCATION_CHANGE);
         break;
       default:
         Cu.reportError("Web Console content: unknown feature " + aFeature);
@@ -488,9 +498,8 @@ let Manager = {
     Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = NetworkMonitor =
       NetworkResponseListener = ConsoleProgressListener = null;
 
-    Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
-      WebConsoleUtils = l10n = JSPropertyProvider = NetworkHelper =
-      NetUtil = activityDistributor = null;
+    XPCOMUtils = gConsoleStorage = WebConsoleUtils = l10n = JSPropertyProvider =
+      NetworkHelper = NetUtil = activityDistributor = null;
   },
 };
 
@@ -728,6 +737,7 @@ let JSTerm = {
    */
   sandbox: null,
 
+  _sandboxLocation: null,
   _messageHandlers: {},
 
   /**
@@ -738,8 +748,18 @@ let JSTerm = {
 
   /**
    * Initialize the JavaScript terminal feature.
+   *
+   * @param object aMessage
+   *        Options for JSTerm sent from the remote Web Console instance. This
+   *        object holds the following properties:
+   *
+   *          - notifyNonNativeConsoleAPI - boolean that tells if you want to be
+   *          notified if the window.console API object in the page is not the
+   *          native one (if the page overrides it).
+   *          A "JSTerm:NonNativeConsoleAPI" message will be sent if this is the
+   *          case.
    */
-  init: function JST_init()
+  init: function JST_init(aMessage)
   {
     this._objectCache = {};
     this._messageHandlers = {
@@ -754,7 +774,12 @@ let JSTerm = {
       Manager.addMessageHandler(name, handler);
     }
 
-    this._createSandbox();
+    if (aMessage && aMessage.notifyNonNativeConsoleAPI) {
+      let consoleObject = WebConsoleUtils.unwrap(this.window).console;
+      if (!("__mozillaConsole__" in consoleObject)) {
+        Manager.sendMessage("JSTerm:NonNativeConsoleAPI", {});
+      }
+    }
   },
 
   /**
@@ -959,6 +984,7 @@ let JSTerm = {
    */
   _createSandbox: function JST__createSandbox()
   {
+    this._sandboxLocation = this.window.location;
     this.sandbox = new Cu.Sandbox(this.window, {
       sandboxPrototype: this.window,
       wantXrays: false,
@@ -974,11 +1000,17 @@ let JSTerm = {
    *
    * @param string aString
    *        String to evaluate in the sandbox.
-   * @returns something
-   *          The result of the evaluation.
+   * @return mixed
+   *         The result of the evaluation.
    */
   evalInSandbox: function JST_evalInSandbox(aString)
   {
+    // If the user changed to a different location, we need to update the
+    // sandbox.
+    if (this._sandboxLocation !== this.window.location) {
+      this._createSandbox();
+    }
+
     // The help function needs to be easy to guess, so we make the () optional
     if (aString.trim() == "help" || aString.trim() == "?") {
       aString = "help()";
@@ -1021,6 +1053,7 @@ let JSTerm = {
     }
 
     delete this.sandbox;
+    delete this._sandboxLocation;
     delete this._messageHandlers;
     delete this._objectCache;
   },
@@ -1475,7 +1508,7 @@ NetworkResponseListener.prototype = {
    */
   _findOpenResponse: function NRL__findOpenResponse()
   {
-    if (this._foundOpenResponse) {
+    if (!_alive || this._foundOpenResponse) {
       return;
     }
 
@@ -1583,7 +1616,9 @@ NetworkResponseListener.prototype = {
 
     this.receivedData = "";
 
-    NetworkMonitor.sendActivity(this.httpActivity);
+    if (_alive) {
+      NetworkMonitor.sendActivity(this.httpActivity);
+    }
 
     this.httpActivity.channel = null;
     this.httpActivity = null;
@@ -1697,10 +1732,8 @@ let NetworkMonitor = {
 
     // Monitor file:// activity as well.
     if (aMessage && aMessage.monitorFileActivity) {
-      let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
-      this.progressListener = new ConsoleProgressListener();
-      webProgress.addProgressListener(this.progressListener,
-        Ci.nsIWebProgress.NOTIFY_STATE_ALL);
+      ConsoleProgressListener.startMonitor(ConsoleProgressListener
+                                           .MONITOR_FILE_ACTIVITY);
     }
   },
 
@@ -1719,7 +1752,7 @@ let NetworkMonitor = {
     // NetworkResponseListener is responsible with updating the httpActivity
     // object with the data from the new object in openResponses.
 
-    if (aTopic != "http-on-examine-response" ||
+    if (!_alive || aTopic != "http-on-examine-response" ||
         !(aSubject instanceof Ci.nsIHttpChannel)) {
       return;
     }
@@ -2240,11 +2273,8 @@ let NetworkMonitor = {
 
     activityDistributor.removeObserver(this);
 
-    if (this.progressListener) {
-      let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
-      webProgress.removeProgressListener(this.progressListener);
-      delete this.progressListener;
-    }
+    ConsoleProgressListener.stopMonitor(ConsoleProgressListener
+                                        .MONITOR_FILE_ACTIVITY);
 
     delete this.openRequests;
     delete this.openResponses;
@@ -2252,23 +2282,149 @@ let NetworkMonitor = {
 };
 
 /**
- * A WebProgressListener that listens for location changes. This progress
- * listener is used to track file loads. When a file:// URI is loaded
- * a "WebConsole:FileActivity" message is sent to the remote Web Console
- * instance. The message JSON holds only one property: uri (the file URI).
+ * A WebProgressListener that listens for location changes.
  *
- * @constructor
+ * This progress listener is used to track file loads and other kinds of
+ * location changes.
+ *
+ * When a file:// URI is loaded a "WebConsole:FileActivity" message is sent to
+ * the remote Web Console instance. The message JSON holds only one property:
+ * uri (the file URI).
+ *
+ * When the current page location changes a "WebConsole:LocationChange" message
+ * is sent. See ConsoleProgressListener.sendLocation() for details.
  */
-function ConsoleProgressListener() { }
+let ConsoleProgressListener = {
+  /**
+   * Constant used for startMonitor()/stopMonitor() that tells you want to
+   * monitor file loads.
+   */
+  MONITOR_FILE_ACTIVITY: 1,
 
-ConsoleProgressListener.prototype = {
+  /**
+   * Constant used for startMonitor()/stopMonitor() that tells you want to
+   * monitor page location changes.
+   */
+  MONITOR_LOCATION_CHANGE: 2,
+
+  /**
+   * Tells if you want to monitor file activity.
+   * @private
+   * @type boolean
+   */
+  _fileActivity: false,
+
+  /**
+   * Tells if you want to monitor location changes.
+   * @private
+   * @type boolean
+   */
+  _locationChange: false,
+
+  /**
+   * Tells if the console progress listener is initialized or not.
+   * @private
+   * @type boolean
+   */
+  _initialized: false,
+
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
                                          Ci.nsISupportsWeakReference]),
 
-  onStateChange: function CPL_onStateChange(aProgress, aRequest, aState,
-                                            aStatus)
+  /**
+   * Initialize the ConsoleProgressListener.
+   * @private
+   */
+  _init: function CPL__init()
   {
-    if (!_alive || !(aState & Ci.nsIWebProgressListener.STATE_START)) {
+    if (this._initialized) {
+      return;
+    }
+
+    this._initialized = true;
+    let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
+    webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
+  },
+
+  /**
+   * Start a monitor/tracker related to the current nsIWebProgressListener
+   * instance.
+   *
+   * @param number aMonitor
+   *        Tells what you want to track. Available constants:
+   *        - this.MONITOR_FILE_ACTIVITY
+   *          Track file loads.
+   *        - this.MONITOR_LOCATION_CHANGE
+   *          Track location changes for the top window.
+   */
+  startMonitor: function CPL_startMonitor(aMonitor)
+  {
+    switch (aMonitor) {
+      case this.MONITOR_FILE_ACTIVITY:
+        this._fileActivity = true;
+        break;
+      case this.MONITOR_LOCATION_CHANGE:
+        this._locationChange = true;
+        break;
+      default:
+        throw new Error("HUDService-content: unknown monitor type " +
+                        aMonitor + " for the ConsoleProgressListener!");
+    }
+    this._init();
+  },
+
+  /**
+   * Stop a monitor.
+   *
+   * @param number aMonitor
+   *        Tells what you want to stop tracking. See this.startMonitor() for
+   *        the list of constants.
+   */
+  stopMonitor: function CPL_stopMonitor(aMonitor)
+  {
+    switch (aMonitor) {
+      case this.MONITOR_FILE_ACTIVITY:
+        this._fileActivity = false;
+        break;
+      case this.MONITOR_LOCATION_CHANGE:
+        this._locationChange = false;
+        break;
+      default:
+        throw new Error("HUDService-content: unknown monitor type " +
+                        aMonitor + " for the ConsoleProgressListener!");
+    }
+
+    if (!this._fileActivity && !this._locationChange) {
+      this.destroy();
+    }
+  },
+
+  onStateChange:
+  function CPL_onStateChange(aProgress, aRequest, aState, aStatus)
+  {
+    if (!_alive) {
+      return;
+    }
+
+    if (this._fileActivity) {
+      this._checkFileActivity(aProgress, aRequest, aState, aStatus);
+    }
+
+    if (this._locationChange) {
+      this._checkLocationChange(aProgress, aRequest, aState, aStatus);
+    }
+  },
+
+  /**
+   * Check if there is any file load, given the arguments of
+   * nsIWebProgressListener.onStateChange. If the state change tells that a file
+   * URI has been loaded, then the remote Web Console instance is notified.
+   * @private
+   */
+  _checkFileActivity:
+  function CPL__checkFileActivity(aProgress, aRequest, aState, aStatus)
+  {
+    if (!(aState & Ci.nsIWebProgressListener.STATE_START)) {
       return;
     }
 
@@ -2289,10 +2445,62 @@ ConsoleProgressListener.prototype = {
     Manager.sendMessage("WebConsole:FileActivity", {uri: uri.spec});
   },
 
+  /**
+   * Check if the current window.top location is changing, given the arguments
+   * of nsIWebProgressListener.onStateChange. If that is the case, the remote
+   * Web Console instance is notified.
+   * @private
+   */
+  _checkLocationChange:
+  function CPL__checkLocationChange(aProgress, aRequest, aState, aStatus)
+  {
+    let isStop = aState & Ci.nsIWebProgressListener.STATE_STOP;
+    let isNetwork = aState & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+    let isWindow = aState & Ci.nsIWebProgressListener.STATE_IS_WINDOW;
+
+    // Skip non-interesting states.
+    if (!isStop || !isNetwork || !isWindow ||
+        aProgress.DOMWindow != Manager.window) {
+      return;
+    }
+
+    this.sendLocation();
+  },
+
   onLocationChange: function() {},
   onStatusChange: function() {},
   onProgressChange: function() {},
   onSecurityChange: function() {},
+
+  /**
+   * Send the location of the current top window to the remote Web Console.
+   * A "WebConsole:LocationChange" message is sent. The JSON object holds two
+   * properties: location and title.
+   */
+  sendLocation: function CPL_sendLocation()
+  {
+    let message = {
+      "location": Manager.window.location.href,
+      "title": Manager.window.document.title,
+    };
+    Manager.sendMessage("WebConsole:LocationChange", message);
+  },
+
+  /**
+   * Destroy the ConsoleProgressListener.
+   */
+  destroy: function CPL_destroy()
+  {
+    if (!this._initialized) {
+      return;
+    }
+
+    this._initialized = false;
+    this._fileActivity = false;
+    this._locationChange = false;
+    let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
+    webProgress.removeProgressListener(this);
+  },
 };
 
 Manager.init();

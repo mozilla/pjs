@@ -396,6 +396,11 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther)
              this##struct_->CalcDifference(*other##struct_),                  \
              nsStyle##struct_::MaxDifference()),                              \
              "CalcDifference() returned bigger hint than MaxDifference()");   \
+        NS_ASSERTION(nsStyle##struct_::ForceCompare() ||                      \
+             NS_IsHintSubset(nsStyle##struct_::MaxDifference(),               \
+                             nsChangeHint(~nsChangeHint_NonInherited_Hints)), \
+             "Structs that can return non-inherited hints must return true "  \
+             "from ForceCompare");                                            \
         NS_UpdateHint(hint, this##struct_->CalcDifference(*other##struct_));  \
       }                                                                       \
     }                                                                         \
@@ -431,6 +436,10 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther)
   DO_STRUCT_DIFFERENCE(SVGReset);
   DO_STRUCT_DIFFERENCE(SVG);
 
+  maxHint = nsChangeHint(NS_STYLE_HINT_REFLOW |
+      nsChangeHint_UpdateOverflow | nsChangeHint_RecomputePosition);
+  DO_STRUCT_DIFFERENCE(Position);
+
   // At this point, we know that the worst kind of damage we could do is
   // a reflow.
   maxHint = NS_STYLE_HINT_REFLOW;
@@ -442,7 +451,6 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther)
   DO_STRUCT_DIFFERENCE(Margin);
   DO_STRUCT_DIFFERENCE(Padding);
   DO_STRUCT_DIFFERENCE(Border);
-  DO_STRUCT_DIFFERENCE(Position);
   DO_STRUCT_DIFFERENCE(TextReset);
 
   // Most backgrounds only require a re-render (i.e., a VISUAL change), but
@@ -657,7 +665,7 @@ void*
 nsStyleContext::operator new(size_t sz, nsPresContext* aPresContext) CPP_THROW_NEW
 {
   // Check the recycle list first.
-  return aPresContext->AllocateFromShell(sz);
+  return aPresContext->PresShell()->AllocateByObjectID(nsPresArena::nsStyleContext_id, sz);
 }
 
 // Overridden to prevent the global delete from being called, since the memory
@@ -673,7 +681,7 @@ nsStyleContext::Destroy()
 
   // Don't let the memory be freed, since it will be recycled
   // instead. Don't call the global operator delete.
-  presContext->FreeToShell(sizeof(nsStyleContext), this);
+  presContext->PresShell()->FreeByObjectID(nsPresArena::nsStyleContext_id, this);
 }
 
 already_AddRefed<nsStyleContext>

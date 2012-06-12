@@ -89,11 +89,15 @@
 #include "nsDOMMutationObserver.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/FromParser.h"
+#include "mozilla/BloomFilter.h"
+
+#include "HTMLPropertiesCollection.h"
+#include "nsVariant.h"
+#include "nsDOMSettableTokenList.h"
+#include "nsThreadUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-#include "nsThreadUtils.h"
 
 class nsINodeInfo;
 class nsIDOMNodeList;
@@ -246,7 +250,6 @@ NS_INTERFACE_TABLE_HEAD(nsGenericHTMLElementTearoff)
                                 nsIDOMElementCSSInlineStyle)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(nsGenericHTMLElementTearoff)
 NS_INTERFACE_MAP_END_AGGREGATED(mElement)
-
 
 NS_IMPL_INT_ATTR_DEFAULT_VALUE(nsGenericHTMLElement, TabIndex, tabindex, -1)
 NS_IMPL_BOOL_ATTR(nsGenericHTMLElement, Hidden, hidden)
@@ -632,19 +635,609 @@ nsGenericHTMLElement::GetOffsetParent(nsIDOMElement** aOffsetParent)
   return NS_OK;
 }
 
+// Try to keep the size of StringBuilder close to a jemalloc bucket size.
+#define STRING_BUFFER_UNITS 1020
+
+class StringBuilder
+{
+private:
+  class Unit
+  {
+  public:
+    Unit() : mType(eUnknown), mLength(0) {}
+    ~Unit()
+    {
+      if (mType == eString || mType == eStringWithEncode) {
+        delete mString;
+      }
+    }
+
+    enum Type
+    {
+      eUnknown,
+      eAtom,
+      eString,
+      eStringWithEncode,
+      eLiteral,
+      eTextFragment,
+      eTextFragmentWithEncode,
+    };
+
+    union
+    {
+      nsIAtom*              mAtom;
+      const char*           mLiteral;
+      nsAutoString*         mString;
+      const nsTextFragment* mTextFragment;
+    };
+    Type     mType;
+    PRUint32 mLength;
+  };
+public:
+  StringBuilder() : mLast(this), mLength(0) {}
+
+  void Append(nsIAtom* aAtom)
+  {
+    Unit* u = AddUnit();
+    u->mAtom = aAtom;
+    u->mType = Unit::eAtom;
+    PRUint32 len = aAtom->GetLength();
+    u->mLength = len;
+    mLength += len;
+  }
+
+  template<int N>
+  void Append(const char (&aLiteral)[N])
+  {
+    Unit* u = AddUnit();
+    u->mLiteral = aLiteral;
+    u->mType = Unit::eLiteral;
+    PRUint32 len = N - 1;
+    u->mLength = len;
+    mLength += len;
+  }
+
+  template<int N>
+  void Append(char (&aLiteral)[N])
+  {
+    Unit* u = AddUnit();
+    u->mLiteral = aLiteral;
+    u->mType = Unit::eLiteral;
+    PRUint32 len = N - 1;
+    u->mLength = len;
+    mLength += len;
+  }
+
+  void Append(const nsAString& aString)
+  {
+    Unit* u = AddUnit();
+    u->mString = new nsAutoString(aString);
+    u->mType = Unit::eString;
+    PRUint32 len = aString.Length();
+    u->mLength = len;
+    mLength += len;
+  }
+
+  void Append(nsAutoString* aString)
+  {
+    Unit* u = AddUnit();
+    u->mString = aString;
+    u->mType = Unit::eString;
+    PRUint32 len = aString->Length();
+    u->mLength = len;
+    mLength += len;
+  }
+
+  void AppendWithAttrEncode(nsAutoString* aString, PRUint32 aLen)
+  {
+    Unit* u = AddUnit();
+    u->mString = aString;
+    u->mType = Unit::eStringWithEncode;
+    u->mLength = aLen;
+    mLength += aLen;
+  }
+
+  void Append(const nsTextFragment* aTextFragment)
+  {
+    Unit* u = AddUnit();
+    u->mTextFragment = aTextFragment;
+    u->mType = Unit::eTextFragment;
+    PRUint32 len = aTextFragment->GetLength();
+    u->mLength = len;
+    mLength += len;
+  }
+
+  void AppendWithEncode(const nsTextFragment* aTextFragment, PRUint32 aLen)
+  {
+    Unit* u = AddUnit();
+    u->mTextFragment = aTextFragment;
+    u->mType = Unit::eTextFragmentWithEncode;
+    u->mLength = aLen;
+    mLength += aLen;
+  }
+
+  bool ToString(nsAString& aOut)
+  {
+    if (!aOut.SetCapacity(mLength, fallible_t())) {
+      return false;
+    }
+
+    for (StringBuilder* current = this; current; current = current->mNext) {
+      PRUint32 len = current->mUnits.Length();
+      for (PRUint32 i = 0; i < len; ++i) {
+        Unit& u = current->mUnits[i];
+        switch (u.mType) {
+          case Unit::eAtom:
+            aOut.Append(nsDependentAtomString(u.mAtom));
+            break;
+          case Unit::eString:
+            aOut.Append(*(u.mString));
+            break;
+          case Unit::eStringWithEncode:
+            EncodeAttrString(*(u.mString), aOut);
+            break;
+          case Unit::eLiteral:
+            aOut.AppendASCII(u.mLiteral, u.mLength);
+            break;
+          case Unit::eTextFragment:
+            u.mTextFragment->AppendTo(aOut);
+            break;
+          case Unit::eTextFragmentWithEncode:
+            EncodeTextFragment(u.mTextFragment, aOut);
+            break;
+          default:
+            MOZ_NOT_REACHED("Unknown unit type?");
+        }
+      }
+    }
+    return true;
+  }
+private:
+  Unit* AddUnit()
+  {
+    if (mLast->mUnits.Length() == STRING_BUFFER_UNITS) {
+      new StringBuilder(this);
+    }
+    return mLast->mUnits.AppendElement();
+  }
+
+  StringBuilder(StringBuilder* aFirst)
+  : mLast(nsnull), mLength(0)
+  {
+    aFirst->mLast->mNext = this;
+    aFirst->mLast = this;
+  }
+
+  void EncodeAttrString(const nsAutoString& aValue, nsAString& aOut)
+  {
+    const PRUnichar* c = aValue.BeginReading();
+    const PRUnichar* end = aValue.EndReading();
+    while (c < end) {
+      switch (*c) {
+      case '"':
+        aOut.AppendLiteral("&quot;");
+        break;
+      case '&':
+        aOut.AppendLiteral("&amp;");
+        break;
+      case 0x00A0:
+        aOut.AppendLiteral("&nbsp;");
+        break;
+      default:
+        aOut.Append(*c);
+        break;
+      }
+      ++c;
+    }
+  }
+
+  void EncodeTextFragment(const nsTextFragment* aValue, nsAString& aOut)
+  {
+    PRUint32 len = aValue->GetLength();
+    if (aValue->Is2b()) {
+      const PRUnichar* data = aValue->Get2b();
+      for (PRUint32 i = 0; i < len; ++i) {
+        const PRUnichar c = data[i];
+        switch (c) {
+          case '<':
+            aOut.AppendLiteral("&lt;");
+            break;
+          case '>':
+            aOut.AppendLiteral("&gt;");
+            break;
+          case '&':
+            aOut.AppendLiteral("&amp;");
+            break;
+          case 0x00A0:
+            aOut.AppendLiteral("&nbsp;");
+            break;
+          default:
+            aOut.Append(c);
+            break;
+        }
+      }
+    } else {
+      const char* data = aValue->Get1b();
+      for (PRUint32 i = 0; i < len; ++i) {
+        const unsigned char c = data[i];
+        switch (c) {
+          case '<':
+            aOut.AppendLiteral("&lt;");
+            break;
+          case '>':
+            aOut.AppendLiteral("&gt;");
+            break;
+          case '&':
+            aOut.AppendLiteral("&amp;");
+            break;
+          case 0x00A0:
+            aOut.AppendLiteral("&nbsp;");
+            break;
+          default:
+            aOut.Append(c);
+            break;
+        }
+      }
+    }
+  }
+
+  nsAutoTArray<Unit, STRING_BUFFER_UNITS> mUnits;
+  nsAutoPtr<StringBuilder>                mNext;
+  StringBuilder*                          mLast;
+  // mLength is used only in the first StringBuilder object in the linked list.
+  PRUint32                                mLength;
+};
+
+static void
+AppendEncodedCharacters(const nsTextFragment* aText, StringBuilder& aBuilder)
+{
+  PRUint32 extraSpaceNeeded = 0;
+  PRUint32 len = aText->GetLength();
+  if (aText->Is2b()) {
+    const PRUnichar* data = aText->Get2b();
+    for (PRUint32 i = 0; i < len; ++i) {
+      const PRUnichar c = data[i];
+      switch (c) {
+        case '<':
+          extraSpaceNeeded += ArrayLength("&lt;") - 2;
+          break;
+        case '>':
+          extraSpaceNeeded += ArrayLength("&gt;") - 2;
+          break;
+        case '&':
+          extraSpaceNeeded += ArrayLength("&amp;") - 2;
+          break;
+        case 0x00A0:
+          extraSpaceNeeded += ArrayLength("&nbsp;") - 2;
+          break;
+        default:
+          break;
+      }
+    }
+  } else {
+    const char* data = aText->Get1b();
+    for (PRUint32 i = 0; i < len; ++i) {
+      const unsigned char c = data[i];
+      switch (c) {
+        case '<':
+          extraSpaceNeeded += ArrayLength("&lt;") - 2;
+          break;
+        case '>':
+          extraSpaceNeeded += ArrayLength("&gt;") - 2;
+          break;
+        case '&':
+          extraSpaceNeeded += ArrayLength("&amp;") - 2;
+          break;
+        case 0x00A0:
+          extraSpaceNeeded += ArrayLength("&nbsp;") - 2;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  if (extraSpaceNeeded) {
+    aBuilder.AppendWithEncode(aText, len + extraSpaceNeeded);
+  } else {
+    aBuilder.Append(aText);
+  }
+}
+
+static void
+AppendEncodedAttributeValue(nsAutoString* aValue, StringBuilder& aBuilder)
+{
+  const PRUnichar* c = aValue->BeginReading();
+  const PRUnichar* end = aValue->EndReading();
+
+  PRUint32 extraSpaceNeeded = 0;
+  while (c < end) {
+    switch (*c) {
+      case '"':
+        extraSpaceNeeded += ArrayLength("&quot;") - 2;
+        break;
+      case '&':
+        extraSpaceNeeded += ArrayLength("&amp;") - 2;
+        break;
+      case 0x00A0:
+        extraSpaceNeeded += ArrayLength("&nbsp;") - 2;
+        break;
+      default:
+        break;
+    }
+    ++c;
+  }
+
+  if (extraSpaceNeeded) {
+    aBuilder.AppendWithAttrEncode(aValue, aValue->Length() + extraSpaceNeeded);
+  } else {
+    aBuilder.Append(aValue);
+  }
+}
+
+static void
+StartElement(Element* aContent, StringBuilder& aBuilder)
+{
+  nsIAtom* localName = aContent->Tag();
+  PRInt32 tagNS = aContent->GetNameSpaceID();
+
+  aBuilder.Append("<");
+  if (aContent->IsHTML() || aContent->IsSVG() || aContent->IsMathML()) {
+    aBuilder.Append(localName);
+  } else {
+    aBuilder.Append(aContent->NodeName());
+  }
+
+  PRInt32 count = aContent->GetAttrCount();
+  for (PRInt32 i = count; i > 0;) {
+    --i;
+    const nsAttrName* name = aContent->GetAttrNameAt(i);
+    PRInt32 attNs = name->NamespaceID();
+    nsIAtom* attName = name->LocalName();
+
+    // Filter out any attribute starting with [-|_]moz
+    nsDependentAtomString attrNameStr(attName);
+    if (StringBeginsWith(attrNameStr, NS_LITERAL_STRING("_moz")) ||
+        StringBeginsWith(attrNameStr, NS_LITERAL_STRING("-moz"))) {
+      continue;
+    }
+
+    nsAutoString* attValue = new nsAutoString();
+    aContent->GetAttr(attNs, attName, *attValue);
+
+    // Filter out special case of <br type="_moz*"> used by the editor.
+    // Bug 16988.  Yuck.
+    if (localName == nsGkAtoms::br && tagNS == kNameSpaceID_XHTML &&
+        attName == nsGkAtoms::type && attNs == kNameSpaceID_None &&
+        StringBeginsWith(*attValue, NS_LITERAL_STRING("_moz"))) {
+      delete attValue;
+      continue;
+    }
+    
+    if (NS_LIKELY(attNs == kNameSpaceID_None) ||
+        (attNs == kNameSpaceID_XMLNS &&
+         attName == nsGkAtoms::xmlns)) {
+      aBuilder.Append(" ");
+    } else if (attNs == kNameSpaceID_XML) {
+      aBuilder.Append(" xml:");
+    } else if (attNs == kNameSpaceID_XMLNS) {
+      aBuilder.Append(" xmlns:");
+    } else if (attNs == kNameSpaceID_XLink) {
+      aBuilder.Append(" xlink:");
+    } else {
+      nsIAtom* prefix = name->GetPrefix();
+      if (prefix) {
+        aBuilder.Append(" ");
+        aBuilder.Append(prefix);
+        aBuilder.Append(":");
+      }
+    }
+
+    aBuilder.Append(attName);
+    aBuilder.Append("=\"");
+    AppendEncodedAttributeValue(attValue, aBuilder);
+    aBuilder.Append("\"");
+  }
+
+  aBuilder.Append(">");
+
+  /*
+  // Per HTML spec we should append one \n if the first child of
+  // pre/textarea/listing is a textnode and starts with a \n.
+  // But because browsers haven't traditionally had that behavior,
+  // we're not changing our behavior either - yet.
+  if (aContent->IsHTML()) {
+    if (localName == nsGkAtoms::pre || localName == nsGkAtoms::textarea ||
+        localName == nsGkAtoms::listing) {
+      nsIContent* fc = aContent->GetFirstChild();
+      if (fc &&
+          (fc->NodeType() == nsIDOMNode::TEXT_NODE ||
+           fc->NodeType() == nsIDOMNode::CDATA_SECTION_NODE)) {
+        const nsTextFragment* text = fc->GetText();
+        if (text && text->GetLength() && text->CharAt(0) == PRUnichar('\n')) {
+          aBuilder.Append("\n");
+        }
+      }
+    }
+  }*/
+}
+
+static inline bool
+ShouldEscape(nsIContent* aParent)
+{
+  if (!aParent || !aParent->IsHTML()) {
+    return true;
+  }
+
+  static const nsIAtom* nonEscapingElements[] = {
+    nsGkAtoms::style, nsGkAtoms::script, nsGkAtoms::xmp,
+    nsGkAtoms::iframe, nsGkAtoms::noembed, nsGkAtoms::noframes,
+    nsGkAtoms::plaintext, 
+    // Per the current spec noscript should be escaped in case
+    // scripts are disabled or if document doesn't have
+    // browsing context. However the latter seems to be a spec bug
+    // and Gecko hasn't traditionally done the former.
+    nsGkAtoms::noscript    
+  };
+  static mozilla::BloomFilter<12, nsIAtom> sFilter;
+  static bool sInitialized = false;
+  if (!sInitialized) {
+    sInitialized = true;
+    for (PRUint32 i = 0; i < ArrayLength(nonEscapingElements); ++i) {
+      sFilter.add(nonEscapingElements[i]);
+    }
+  }
+
+  nsIAtom* tag = aParent->Tag();
+  if (sFilter.mightContain(tag)) {
+    for (PRUint32 i = 0; i < ArrayLength(nonEscapingElements); ++i) {
+      if (tag == nonEscapingElements[i]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static inline bool
+IsVoidTag(Element* aElement)
+{
+  if (!aElement->IsHTML()) {
+    return false;
+  }
+
+  static const nsIAtom* voidElements[] = {
+    nsGkAtoms::area, nsGkAtoms::base, nsGkAtoms::basefont,
+    nsGkAtoms::bgsound, nsGkAtoms::br, nsGkAtoms::col,
+    nsGkAtoms::command, nsGkAtoms::embed, nsGkAtoms::frame,
+    nsGkAtoms::hr, nsGkAtoms::img, nsGkAtoms::input,
+    nsGkAtoms::keygen, nsGkAtoms::link, nsGkAtoms::meta,
+    nsGkAtoms::param, nsGkAtoms::source, nsGkAtoms::track,
+    nsGkAtoms::wbr
+  };
+
+  static mozilla::BloomFilter<12, nsIAtom> sFilter;
+  static bool sInitialized = false;
+  if (!sInitialized) {
+    sInitialized = true;
+    for (PRUint32 i = 0; i < ArrayLength(voidElements); ++i) {
+      sFilter.add(voidElements[i]);
+    }
+  }
+  
+  nsIAtom* tag = aElement->Tag();
+  if (sFilter.mightContain(tag)) {
+    for (PRUint32 i = 0; i < ArrayLength(voidElements); ++i) {
+      if (tag == voidElements[i]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static bool
+Serialize(Element* aRoot, bool aDescendentsOnly, nsAString& aOut)
+{
+  nsINode* current = aDescendentsOnly ? aRoot->GetFirstChild() : aRoot;
+  if (!current) {
+    return true;
+  }
+
+  StringBuilder builder;
+  nsIContent* next;
+  while (true) {
+    bool isVoid = false;
+    switch (current->NodeType()) {
+      case nsIDOMNode::ELEMENT_NODE: {
+        Element* elem = current->AsElement();
+        StartElement(elem, builder);
+        isVoid = IsVoidTag(elem);
+        if (!isVoid && (next = current->GetFirstChild())) {
+          current = next;
+          continue;
+        }
+        break;
+      }
+
+      case nsIDOMNode::TEXT_NODE:
+      case nsIDOMNode::CDATA_SECTION_NODE: {
+        const nsTextFragment* text = static_cast<nsIContent*>(current)->GetText();
+        nsIContent* parent = current->GetParent();
+        if (ShouldEscape(parent)) {
+          AppendEncodedCharacters(text, builder);
+        } else {
+          builder.Append(text);
+        }
+        break;
+      }
+
+      case nsIDOMNode::COMMENT_NODE: {
+        builder.Append("<!--");
+        builder.Append(static_cast<nsIContent*>(current)->GetText());
+        builder.Append("-->");
+        break;
+      }
+
+      case nsIDOMNode::DOCUMENT_TYPE_NODE: {
+        builder.Append("<!DOCTYPE ");
+        builder.Append(current->NodeName());
+        builder.Append(">");
+        break;
+      }
+
+      case nsIDOMNode::PROCESSING_INSTRUCTION_NODE: {
+        builder.Append("<?");
+        builder.Append(current->NodeName());
+        builder.Append(" ");
+        builder.Append(static_cast<nsIContent*>(current)->GetText());
+        builder.Append(">");
+        break;
+      }
+    }
+
+    while (true) {
+      if (!isVoid && current->NodeType() == nsIDOMNode::ELEMENT_NODE) {
+        builder.Append("</");
+        nsIContent* elem = static_cast<nsIContent*>(current);
+        if (elem->IsHTML() || elem->IsSVG() || elem->IsMathML()) {
+          builder.Append(elem->Tag());
+        } else {
+          builder.Append(current->NodeName());
+        }
+        builder.Append(">");
+      }
+      isVoid = false;
+
+      if (current == aRoot) {
+        return builder.ToString(aOut);
+      }
+
+      if ((next = current->GetNextSibling())) {
+        current = next;
+        break;
+      }
+
+      current = current->GetNodeParent();
+      if (aDescendentsOnly && current == aRoot) {
+        return builder.ToString(aOut);
+      }
+    }
+  }
+}
+
 nsresult
 nsGenericHTMLElement::GetMarkup(bool aIncludeSelf, nsAString& aMarkup)
 {
   aMarkup.Truncate();
 
   nsIDocument* doc = OwnerDoc();
+  if (IsInHTMLDocument()) {
+    return Serialize(this, !aIncludeSelf, aMarkup) ? NS_OK : NS_ERROR_OUT_OF_MEMORY;
+  }
 
   nsAutoString contentType;
-  if (IsInHTMLDocument()) {
-    contentType.AssignLiteral("text/html");
-  } else {
-    doc->GetContentType(contentType);
-  }
+  doc->GetContentType(contentType);
 
   nsCOMPtr<nsIDocumentEncoder> docEncoder = doc->GetCachedEncoder();
   if (!docEncoder) {
@@ -654,7 +1247,7 @@ nsGenericHTMLElement::GetMarkup(bool aIncludeSelf, nsAString& aMarkup)
         NS_ConvertUTF16toUTF8(contentType)
       ).get());
   }
-  if (!(docEncoder || doc->IsHTML())) {
+  if (!docEncoder) {
     // This could be some type for which we create a synthetic document.  Try
     // again as XML
     contentType.AssignLiteral("application/xml");
@@ -1108,6 +1701,13 @@ nsGenericHTMLElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (aDocument) {
+    if (HasProperties()) {
+      HTMLPropertiesCollection* properties = 
+        static_cast<HTMLPropertiesCollection*>(GetProperty(nsGkAtoms::microdataProperties));
+      if (properties) {
+        properties->SetDocument(aDocument);
+      }
+    }
     RegAccessKey();
     if (HasName()) {
       aDocument->
@@ -1129,6 +1729,14 @@ nsGenericHTMLElement::UnbindFromTree(bool aDeep, bool aNullParent)
 {
   if (IsInDoc()) {
     UnregAccessKey();
+  }
+  
+  if(HasProperties()) {
+    HTMLPropertiesCollection* properties = 
+      static_cast<HTMLPropertiesCollection*>(GetProperty(nsGkAtoms::microdataProperties));
+    if (properties) {
+      properties->SetDocument(nsnull);
+    }
   }
 
   RemoveFromNameTable();
@@ -1480,6 +2088,13 @@ nsGenericHTMLElement::ParseAttribute(PRInt32 aNamespaceID,
 
     if (aAttribute == nsGkAtoms::contenteditable) {
       aResult.ParseAtom(aValue);
+      return true;
+    }
+
+    if (aAttribute == nsGkAtoms::itemref ||
+        aAttribute == nsGkAtoms::itemprop ||
+        aAttribute == nsGkAtoms::itemtype) {
+      aResult.ParseAtomArray(aValue);
       return true;
     }
   }
@@ -2491,6 +3106,13 @@ nsGenericHTMLElement::GetContextMenu(nsIDOMHTMLMenuElement** aContextMenu)
   return NS_OK;
 }
 
+bool
+nsGenericHTMLElement::IsLabelable() const
+{
+  return Tag() == nsGkAtoms::progress ||
+         Tag() == nsGkAtoms::meter;
+}
+
 //----------------------------------------------------------------------
 
 nsGenericHTMLFormElement::nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo> aNodeInfo)
@@ -3139,6 +3761,20 @@ nsGenericHTMLFormElement::FieldSetDisabledChanged(bool aNotify)
   UpdateState(aNotify);
 }
 
+bool
+nsGenericHTMLFormElement::IsLabelable() const
+{
+  // TODO: keygen should be in that list, see bug 101019.
+  // TODO: NS_FORM_INPUT_HIDDEN should be removed, see bug 597650.
+  PRUint32 type = GetType();
+  return type & NS_FORM_INPUT_ELEMENT ||
+         type & NS_FORM_BUTTON_ELEMENT ||
+         // type == NS_FORM_KEYGEN ||
+         type == NS_FORM_OUTPUT ||
+         type == NS_FORM_SELECT ||
+         type == NS_FORM_TEXTAREA;
+}
+
 //----------------------------------------------------------------------
 
 nsresult
@@ -3490,3 +4126,162 @@ nsGenericHTMLElement::ChangeEditableState(PRInt32 aChange)
   nsAutoScriptBlocker scriptBlocker;
   MakeContentDescendantsEditable(this, document);
 }
+
+NS_IMPL_BOOL_ATTR(nsGenericHTMLElement, ItemScope, itemscope)
+NS_IMPL_URI_ATTR(nsGenericHTMLElement, ItemId, itemid)
+
+NS_IMETHODIMP
+nsGenericHTMLElement::GetItemValue(nsIVariant** aValue)
+{
+  nsCOMPtr<nsIWritableVariant> out = new nsVariant();
+
+  if (!HasAttr(kNameSpaceID_None, nsGkAtoms::itemprop)) {
+    out->SetAsEmpty();
+    out.forget(aValue);
+    return NS_OK;
+  }
+
+  bool itemScope;
+  GetItemScope(&itemScope);
+  if (itemScope) {
+    out->SetAsISupports(static_cast<nsISupports*>(this));
+  } else {
+    nsAutoString string;
+    GetItemValueText(string);
+    out->SetAsAString(string);
+  }
+
+  out.forget(aValue);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::SetItemValue(nsIVariant* aValue)
+{
+  if (!HasAttr(kNameSpaceID_None, nsGkAtoms::itemprop) ||
+      HasAttr(kNameSpaceID_None, nsGkAtoms::itemscope)) {
+    return NS_ERROR_DOM_INVALID_ACCESS_ERR;
+  }
+
+  nsAutoString string;
+  aValue->GetAsAString(string);
+  SetItemValueText(string);
+  return NS_OK;
+}
+
+void
+nsGenericHTMLElement::GetItemValueText(nsAString& text)
+{
+  GetTextContent(text);
+}
+
+void
+nsGenericHTMLElement::SetItemValueText(const nsAString& text)
+{
+  SetTextContent(text);
+}
+
+static void
+nsDOMSettableTokenListPropertyDestructor(void *aObject, nsIAtom *aProperty,
+                                         void *aPropertyValue, void *aData)
+{
+  nsDOMSettableTokenList* list =
+    static_cast<nsDOMSettableTokenList*>(aPropertyValue);
+  NS_IF_RELEASE(list);
+}
+
+nsDOMSettableTokenList*
+nsGenericHTMLElement::GetTokenList(nsIAtom* aAtom)
+{
+  nsDOMSettableTokenList* list = NULL;
+  if (HasProperties()) {
+    list = static_cast<nsDOMSettableTokenList*>(GetProperty(aAtom));
+  }
+  if (!list) {
+    list = new nsDOMSettableTokenList(this, aAtom);
+    NS_ADDREF(list);
+    SetProperty(aAtom, list, nsDOMSettableTokenListPropertyDestructor);
+  }                       
+  return list;
+}  
+
+NS_IMETHODIMP
+nsGenericHTMLElement::GetItemRef(nsIVariant** aResult)
+{
+  nsIDOMDOMSettableTokenList* itemRef = GetTokenList(nsGkAtoms::itemref);
+  nsCOMPtr<nsIWritableVariant> out = new nsVariant();
+  out->SetAsInterface(NS_GET_IID(nsIDOMDOMSettableTokenList), itemRef);
+  out.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::SetItemRef(nsIVariant* aValue)
+{
+  nsDOMSettableTokenList* itemRef = GetTokenList(nsGkAtoms::itemref);
+  nsAutoString string;
+  aValue->GetAsAString(string);
+  return itemRef->SetValue(string);
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::GetItemProp(nsIVariant** aResult)
+{
+  nsIDOMDOMSettableTokenList* itemProp = GetTokenList(nsGkAtoms::itemprop);
+  nsCOMPtr<nsIWritableVariant> out = new nsVariant();
+  out->SetAsInterface(NS_GET_IID(nsIDOMDOMSettableTokenList), itemProp);
+  out.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::SetItemProp(nsIVariant* aValue)
+{
+  nsDOMSettableTokenList* itemProp = GetTokenList(nsGkAtoms::itemprop);
+  nsAutoString string;
+  aValue->GetAsAString(string);
+  return itemProp->SetValue(string);
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::GetItemType(nsIVariant** aResult)
+{
+  nsIDOMDOMSettableTokenList* itemType = GetTokenList(nsGkAtoms::itemtype);
+  nsCOMPtr<nsIWritableVariant> out = new nsVariant();
+  out->SetAsInterface(NS_GET_IID(nsIDOMDOMSettableTokenList), itemType);
+  out.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::SetItemType(nsIVariant* aValue)
+{
+  nsDOMSettableTokenList* itemType = GetTokenList(nsGkAtoms::itemtype);
+  nsAutoString string;
+  aValue->GetAsAString(string);
+  return itemType->SetValue(string);
+}
+
+static void
+nsIDOMHTMLPropertiesCollectionDestructor(void *aObject, nsIAtom *aProperty,
+                                         void *aPropertyValue, void *aData)
+{
+  nsIDOMHTMLPropertiesCollection* properties = 
+    static_cast<nsIDOMHTMLPropertiesCollection*>(aPropertyValue);
+  NS_IF_RELEASE(properties);
+}
+
+NS_IMETHODIMP
+nsGenericHTMLElement::GetProperties(nsIDOMHTMLPropertiesCollection** aReturn)
+{
+  nsIDOMHTMLPropertiesCollection* properties = 
+    static_cast<nsIDOMHTMLPropertiesCollection*>(GetProperty(nsGkAtoms::microdataProperties));
+  if (!properties) {
+     properties = new HTMLPropertiesCollection(this);
+     NS_ADDREF(properties);
+     SetProperty(nsGkAtoms::microdataProperties, properties, nsIDOMHTMLPropertiesCollectionDestructor);
+  }
+  NS_ADDREF(*aReturn = properties);
+  return NS_OK;
+}
+

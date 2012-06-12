@@ -51,6 +51,7 @@ SDK_XPIDLSRCS =					\
 	nsIDOMHTMLMenuElement.idl		\
 	nsIDOMHTMLMenuItemElement.idl		\
 	nsIDOMHTMLMetaElement.idl		\
+	nsIDOMHTMLMeterElement.idl		\
 	nsIDOMHTMLModElement.idl		\
 	nsIDOMHTMLOListElement.idl		\
 	nsIDOMHTMLObjectElement.idl		\
@@ -61,6 +62,8 @@ SDK_XPIDLSRCS =					\
 	nsIDOMHTMLParagraphElement.idl		\
 	nsIDOMHTMLParamElement.idl		\
 	nsIDOMHTMLPreElement.idl		\
+	nsIDOMHTMLPropertiesCollection.idl  \
+	nsIDOMPropertyNodeList.idl  \
 	nsIDOMHTMLProgressElement.idl		\
 	nsIDOMHTMLQuoteElement.idl		\
 	nsIDOMHTMLScriptElement.idl		\

@@ -870,10 +870,10 @@ nsXPConnect::Traverse(void *p, nsCycleCollectionTraversalCallback &cb)
         nsISupports *identity =
             static_cast<nsISupports*>(js::GetProxyPrivate(obj).toPrivate());
         cb.NoteXPCOMChild(identity);
-    } else if ((clazz->flags & JSCLASS_IS_DOMJSCLASS) &&
+    } else if (IsDOMClass(clazz) &&
                DOMJSClass::FromJSClass(clazz)->mDOMObjectIsISupports) {
         NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "UnwrapDOMObject(obj)");
-        nsISupports *identity = UnwrapDOMObject<nsISupports>(obj, clazz);
+        nsISupports *identity = UnwrapDOMObject<nsISupports>(obj);
         cb.NoteXPCOMChild(identity);
     }
 
@@ -1547,6 +1547,19 @@ MoveWrapper(XPCCallContext& ccx, XPCWrappedNative *wrapper,
         return NS_OK;
     }
 
+    // For performance reasons, we wait to fix up orphaned wrappers (wrappers
+    // whose parents have moved to another scope) until right before they
+    // threaten to confuse us.
+    //
+    // If this wrapper is an orphan, reunite it with its parent. If, following
+    // that, the wrapper is no longer in the old scope, then we don't need to
+    // reparent it.
+    MOZ_ASSERT(wrapper->GetScope() == oldScope);
+    nsresult rv = wrapper->RescueOrphans(ccx);
+    NS_ENSURE_SUCCESS(rv, rv);
+    if (wrapper->GetScope() != oldScope)
+        return NS_OK;
+
     nsISupports *identity = wrapper->GetIdentityObject();
     nsCOMPtr<nsIClassInfo> info(do_QueryInterface(identity));
 
@@ -1571,9 +1584,9 @@ MoveWrapper(XPCCallContext& ccx, XPCWrappedNative *wrapper,
         return NS_OK;
 
     JSObject *newParent = oldScope->GetGlobalJSObject();
-    nsresult rv = sciWrapper.GetCallback()->PreCreate(identity, ccx,
-                                                      newParent,
-                                                      &newParent);
+    rv = sciWrapper.GetCallback()->PreCreate(identity, ccx,
+                                             newParent,
+                                             &newParent);
     if (NS_FAILED(rv))
         return rv;
 
@@ -1915,8 +1928,8 @@ nsXPConnect::CreateSandbox(JSContext *cx, nsIPrincipal *principal,
     jsval rval = JSVAL_VOID;
     AUTO_MARK_JSVAL(ccx, &rval);
 
-    nsresult rv = xpc_CreateSandboxObject(cx, &rval, principal, NULL, false, true,
-                                          EmptyCString());
+    SandboxOptions options;
+    nsresult rv = xpc_CreateSandboxObject(cx, &rval, principal, options);
     NS_ASSERTION(NS_FAILED(rv) || !JSVAL_IS_PRIMITIVE(rval),
                  "Bad return value from xpc_CreateSandboxObject()!");
 

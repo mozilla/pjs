@@ -120,6 +120,8 @@ class nsIDOMHTMLInputElement;
 
 namespace mozilla {
 
+class Selection;
+
 namespace layers {
   class LayerManager;
 } // namespace layers
@@ -550,8 +552,10 @@ public:
    * @return boolean indicating whether a BOM was detected.
    */
   static bool CheckForBOM(const unsigned char* aBuffer, PRUint32 aLength,
-                            nsACString& aCharset, bool *bigEndian = nsnull);
+                          nsACString& aCharset, bool *bigEndian = nsnull);
 
+  static nsresult GuessCharset(const char *aData, PRUint32 aDataLen,
+                               nsACString &aCharset);
 
   /**
    * Determine whether aContent is in some way associated with aForm.  If the
@@ -2025,6 +2029,22 @@ public:
    */
   static nsresult IsOnPrefWhitelist(nsPIDOMWindow* aWindow,
                                     const char* aPrefURL, bool *aAllowed);
+
+  /**
+   * Takes a selection, and a text control element (<input> or <textarea>), and
+   * returns the offsets in the text content corresponding to the selection.
+   * The selection's anchor and focus must both be in the root node passed or a
+   * descendant.
+   *
+   * @param aSelection      Selection to check
+   * @param aRoot           Root <input> or <textarea> element
+   * @param aOutStartOffset Output start offset
+   * @param aOutEndOffset   Output end offset
+   */
+  static void GetSelectionInTextControl(mozilla::Selection* aSelection,
+                                        Element* aRoot,
+                                        PRInt32& aOutStartOffset,
+                                        PRInt32& aOutEndOffset);
   
 private:
   static bool InitializeEventTable();

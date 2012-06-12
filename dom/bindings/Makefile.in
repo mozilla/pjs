@@ -64,14 +64,14 @@ EXPORTS_$(binding_include_path) = \
   PrototypeList.h \
   RegisterBindings.h \
   Nullable.h \
-  PrimitiveConversions.h \
   TypedArray.h \
   BindingUtils.h \
   $(exported_binding_headers) \
   $(NULL)
 
 LOCAL_INCLUDES += -I$(topsrcdir)/js/xpconnect/src \
-  -I$(topsrcdir)/js/xpconnect/wrappers
+  -I$(topsrcdir)/js/xpconnect/wrappers \
+  -I$(topsrcdir)/content/html/content/src
 
 include $(topsrcdir)/config/rules.mk
 
@@ -82,6 +82,7 @@ bindinggen_dependencies := \
   Bindings.conf \
   Configuration.py \
   Codegen.py \
+  parser/WebIDL.py \
   ParserResults.pkl \
   $(GLOBAL_DEPS) \
   $(NULL)
@@ -119,6 +120,7 @@ globalgen_dependencies := \
   Bindings.conf \
   Configuration.py \
   Codegen.py \
+  parser/WebIDL.py \
   $(CACHE_DIR)/.done \
   $(GLOBAL_DEPS) \
   $(NULL)

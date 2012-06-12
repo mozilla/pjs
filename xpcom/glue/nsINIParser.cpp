@@ -6,7 +6,7 @@
 // Moz headers (alphabetical)
 #include "nsCRTGlue.h"
 #include "nsError.h"
-#include "nsILocalFile.h"
+#include "nsIFile.h"
 #include "nsINIParser.h"
 #include "mozilla/FileUtils.h" // AutoFILE
 
@@ -54,7 +54,7 @@ private:
 };
 
 nsresult
-nsINIParser::Init(nsILocalFile* aFile)
+nsINIParser::Init(nsIFile* aFile)
 {
     /* open the file. Don't use OpenANSIFileDesc, because you mustn't
        pass FILE* across shared library boundaries, which may be using
@@ -158,7 +158,7 @@ nsINIParser::InitFromFILE(FILE *fd)
             return NS_ERROR_FAILURE;
         }
 
-        nsAutoArrayPtr<char> utf8Buffer = new char[flen];
+        nsAutoArrayPtr<char> utf8Buffer(new char[flen]);
         if (0 == WideCharToMultiByte(CP_UTF8,
                                      0,
                                      reinterpret_cast<LPWSTR>(buffer),

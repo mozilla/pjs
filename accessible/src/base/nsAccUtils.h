@@ -23,13 +23,9 @@
 
 class nsAccessNode;
 class Accessible;
-class nsHyperTextAccessible;
-class nsHTMLTableAccessible;
+class HyperTextAccessible;
 class DocAccessible;
 struct nsRoleMapEntry;
-#ifdef MOZ_XUL
-class nsXULTreeAccessible;
-#endif
 
 class nsAccUtils
 {
@@ -157,7 +153,7 @@ public:
    * @param aSelection  [in] the given selection
    * @return            text accessible
    */
-  static nsHyperTextAccessible*
+  static HyperTextAccessible*
     GetTextAccessibleFromSelection(nsISelection* aSelection);
 
   /**

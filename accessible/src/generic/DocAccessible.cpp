@@ -32,7 +32,6 @@
 #include "nsIEditingSession.h"
 #include "nsEventStateManager.h"
 #include "nsIFrame.h"
-#include "nsHTMLSelectAccessible.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsINameSpaceManager.h"
 #include "nsIPresShell.h"
@@ -78,7 +77,7 @@ static const PRUint32 kRelationAttrsLen = NS_ARRAY_LENGTH(kRelationAttrs);
 DocAccessible::
   DocAccessible(nsIDocument* aDocument, nsIContent* aRootContent,
                   nsIPresShell* aPresShell) :
-  nsHyperTextAccessibleWrap(aRootContent, this),
+  HyperTextAccessibleWrap(aRootContent, this),
   mDocument(aDocument), mScrollPositionChangedTicks(0),
   mLoadState(eTreeConstructionPending), mLoadEventType(0),
   mVirtualCursor(nsnull),
@@ -162,14 +161,13 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(DocAccessible)
 
   nsresult status;
   if (!foundInterface) {
-    // HTML document accessible must inherit from nsHyperTextAccessible to get
+    // HTML document accessible must inherit from HyperTextAccessible to get
     // support text interfaces. XUL document accessible doesn't need this.
     // However at some point we may push <body> to implement the interfaces and
     // return DocAccessible to inherit from AccessibleWrap.
 
     status = IsHyperText() ? 
-      nsHyperTextAccessible::QueryInterface(aIID,
-                                            (void**)&foundInterface) :
+      HyperTextAccessible::QueryInterface(aIID, (void**)&foundInterface) :
       Accessible::QueryInterface(aIID, (void**)&foundInterface);
   } else {
     NS_ADDREF(foundInterface);
@@ -180,8 +178,8 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(DocAccessible)
   return status;
 }
 
-NS_IMPL_ADDREF_INHERITED(DocAccessible, nsHyperTextAccessible)
-NS_IMPL_RELEASE_INHERITED(DocAccessible, nsHyperTextAccessible)
+NS_IMPL_ADDREF_INHERITED(DocAccessible, HyperTextAccessible)
+NS_IMPL_RELEASE_INHERITED(DocAccessible, HyperTextAccessible)
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsIAccessible
@@ -286,7 +284,7 @@ DocAccessible::NativeState()
     0 : states::STALE;
 
   // Document is always focusable.
-  state |= states::FOCUSABLE;
+  state |= states::FOCUSABLE; // keep in sync with NativeIteractiveState() impl
   if (FocusMgr()->IsFocused(this))
     state |= states::FOCUSED;
 
@@ -310,6 +308,19 @@ DocAccessible::NativeState()
   state |= editor ? states::EDITABLE : states::READONLY;
 
   return state;
+}
+
+PRUint64
+DocAccessible::NativeInteractiveState() const
+{
+  // Document is always focusable.
+  return states::FOCUSABLE;
+}
+
+bool
+DocAccessible::NativelyUnavailable() const
+{
+  return false;
 }
 
 // Accessible public method
@@ -531,7 +542,7 @@ DocAccessible::GetVirtualCursor(nsIAccessiblePivot** aVirtualCursor)
   return NS_OK;
 }
 
-// nsHyperTextAccessible method
+// HyperTextAccessible method
 already_AddRefed<nsIEditor>
 DocAccessible::GetEditor() const
 {
@@ -632,7 +643,9 @@ DocAccessible::Shutdown()
   RemoveEventListeners();
 
   // Mark the document as shutdown before AT is notified about the document
-  // removal from its container (valid for root documents on ATK).
+  // removal from its container (valid for root documents on ATK and due to
+  // some reason for MSAA, refer to bug 757392 for details).
+  mFlags |= eIsDefunct;
   nsCOMPtr<nsIDocument> kungFuDeathGripDoc = mDocument;
   mDocument = nsnull;
 
@@ -663,7 +676,7 @@ DocAccessible::Shutdown()
   mNodeToAccessibleMap.Clear();
   ClearCache(mAccessibleCache);
 
-  nsHyperTextAccessibleWrap::Shutdown();
+  HyperTextAccessibleWrap::Shutdown();
 
   GetAccService()->NotifyOfDocumentShutdown(kungFuDeathGripDoc);
 }
@@ -1305,7 +1318,7 @@ DocAccessible::HandleAccEvent(AccEvent* aEvent)
   if (logging::IsEnabled(logging::eDocLoad))
     logging::DocLoadEventHandled(aEvent);
 
-  return nsHyperTextAccessible::HandleAccEvent(aEvent);
+  return HyperTextAccessible::HandleAccEvent(aEvent);
 }
 #endif
 
@@ -1762,7 +1775,7 @@ DocAccessible::ProcessPendingEvent(AccEvent* aEvent)
 {
   PRUint32 eventType = aEvent->GetEventType();
   if (eventType == nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED) {
-    nsHyperTextAccessible* hyperText = aEvent->GetAccessible()->AsHyperText();
+    HyperTextAccessible* hyperText = aEvent->GetAccessible()->AsHyperText();
     PRInt32 caretOffset;
     if (hyperText &&
         NS_SUCCEEDED(hyperText->GetCaretOffset(&caretOffset))) {
@@ -1837,6 +1850,21 @@ DocAccessible::UpdateTree(Accessible* aContainer, nsIContent* aChildNode,
 
   // If child node is not accessible then look for its accessible children.
   Accessible* child = GetAccessible(aChildNode);
+#ifdef DEBUG
+  if (logging::IsEnabled(logging::eTree)) {
+    logging::MsgBegin("TREE", "process content %s",
+                      (aIsInsert ? "insertion" : "removal"));
+    logging::Node("container", aContainer->GetNode());
+    logging::Node("child", aChildNode);
+    if (child)
+      logging::Address("child", child);
+    else
+      logging::MsgEntry("child accessible: null");
+
+    logging::MsgEnd();
+  }
+#endif
+
   if (child) {
     updateFlags |= UpdateTreeInternal(child, aIsInsert);
 
@@ -1978,6 +2006,15 @@ DocAccessible::CacheChildrenInSubtree(Accessible* aRoot)
     if (child && child->IsContent())
       CacheChildrenInSubtree(child);
   }
+
+  // Fire document load complete on ARIA documents.
+  // XXX: we should delay an event if the ARIA document has aria-busy.
+  if (aRoot->HasARIARole() && !aRoot->IsDoc()) {
+    a11y::role role = aRoot->ARIARole();
+    if (role == roles::DIALOG || role == roles::DOCUMENT)
+      FireDelayedAccessibleEvent(nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE,
+                                 aRoot->GetContent());
+  }
 }
 
 void
@@ -2029,8 +2066,12 @@ DocAccessible::IsLoadEventTarget() const
 
   // Return true if it's not a root document (either tab document or
   // frame/iframe document) and its parent document is not in loading state.
-  if (parentTreeItem)
-    return ParentDocument()->HasLoadState(eCompletelyLoaded);
+  // Note: we can get notifications while document is loading (and thus
+  // while there's no parent document yet).
+  if (parentTreeItem) {
+    DocAccessible* parentDoc = ParentDocument();
+    return parentDoc && parentDoc->HasLoadState(eCompletelyLoaded);
+  }
 
   // It's content (not chrome) root document.
   PRInt32 contentType;

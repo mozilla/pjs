@@ -127,7 +127,7 @@ fun_getProperty(JSContext *cx, HandleObject obj_, HandleId id, Value *vp)
          * innermost function as uninlineable to expand its frame and allow us
          * to recover its callee object.
          */
-        JSInlinedSite *inlined;
+        InlinedSite *inlined;
         jsbytecode *prevpc = fp->prev()->pcQuadratic(cx->stack, fp, &inlined);
         if (inlined) {
             mjit::JITChunk *chunk = fp->prev()->jit()->chunk(prevpc);
@@ -426,7 +426,7 @@ js::CloneInterpretedFunction(JSContext *cx, JSFunction *srcFun)
     if (!clone->clearType(cx))
         return NULL;
 
-    JSScript *clonedScript = CloneScript(cx, srcFun->script());
+    JSScript *clonedScript = CloneScript(cx, RootedScript(cx, srcFun->script()));
     if (!clonedScript)
         return NULL;
 
@@ -696,7 +696,7 @@ js_fun_apply(JSContext *cx, unsigned argc, Value *vp)
         args.thisv() = vp[2];
 
         /* Steps 7-8. */
-        cx->fp()->forEachCanonicalActualArg(CopyTo(args.array()));
+        cx->fp()->forEachUnaliasedActual(CopyTo(args.array()));
     } else {
         /* Step 3. */
         if (!vp[3].isObject()) {
@@ -1295,7 +1295,7 @@ js_CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
          * functions.
          */
         if (clone->isInterpreted()) {
-            JSScript *script = clone->script();
+            RootedScript script(cx, clone->script());
             JS_ASSERT(script);
             JS_ASSERT(script->compartment() == fun->compartment());
             JS_ASSERT(script->compartment() != cx->compartment);

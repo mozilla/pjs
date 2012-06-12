@@ -642,6 +642,13 @@ Debugger::wrapEnvironment(JSContext *cx, Handle<Env*> env, Value *rval)
             js_ReportOutOfMemory(cx);
             return false;
         }
+
+        CrossCompartmentKey key(CrossCompartmentKey::DebuggerEnvironment, object, env);
+        if (!object->compartment()->crossCompartmentWrappers.put(key, ObjectValue(*envobj))) {
+            environments.remove(env);
+            js_ReportOutOfMemory(cx);
+            return false;
+        }
     }
     rval->setObject(*envobj);
     return true;
@@ -671,6 +678,16 @@ Debugger::wrapDebuggeeValue(JSContext *cx, Value *vp)
                 js_ReportOutOfMemory(cx);
                 return false;
             }
+
+            if (obj->compartment() != object->compartment()) {
+                CrossCompartmentKey key(CrossCompartmentKey::DebuggerObject, object, obj);
+                if (!object->compartment()->crossCompartmentWrappers.put(key, ObjectValue(*dobj))) {
+                    objects.remove(obj);
+                    js_ReportOutOfMemory(cx);
+                    return false;
+                }
+            }
+
             vp->setObject(*dobj);
         }
     } else if (!cx->compartment->wrap(cx, vp)) {
@@ -941,7 +958,7 @@ Debugger::fireEnterFrame(JSContext *cx, Value *vp)
 }
 
 void
-Debugger::fireNewScript(JSContext *cx, Handle<JSScript*> script)
+Debugger::fireNewScript(JSContext *cx, HandleScript script)
 {
     RootedObject hook(cx, getHook(OnNewScript));
     JS_ASSERT(hook);
@@ -2376,7 +2393,7 @@ Class DebuggerScript_class = {
 };
 
 JSObject *
-Debugger::newDebuggerScript(JSContext *cx, Handle<JSScript*> script)
+Debugger::newDebuggerScript(JSContext *cx, HandleScript script)
 {
     assertSameCompartment(cx, object.get());
 
@@ -2392,17 +2409,28 @@ Debugger::newDebuggerScript(JSContext *cx, Handle<JSScript*> script)
 }
 
 JSObject *
-Debugger::wrapScript(JSContext *cx, Handle<JSScript*> script)
+Debugger::wrapScript(JSContext *cx, HandleScript script)
 {
     assertSameCompartment(cx, object.get());
     JS_ASSERT(cx->compartment != script->compartment());
     ScriptWeakMap::AddPtr p = scripts.lookupForAdd(script);
     if (!p) {
         JSObject *scriptobj = newDebuggerScript(cx, script);
+        if (!scriptobj)
+            return NULL;
 
         /* The allocation may have caused a GC, which can remove table entries. */
-        if (!scriptobj || !scripts.relookupOrAdd(p, script.value(), scriptobj))
+        if (!scripts.relookupOrAdd(p, script, scriptobj)) {
+            js_ReportOutOfMemory(cx);
             return NULL;
+        }
+
+        CrossCompartmentKey key(CrossCompartmentKey::DebuggerScript, object, script);
+        if (!object->compartment()->crossCompartmentWrappers.put(key, ObjectValue(*scriptobj))) {
+            scripts.remove(script);
+            js_ReportOutOfMemory(cx);
+            return NULL;
+        }
     }
 
     JS_ASSERT(GetScriptReferent(p->value) == script);
@@ -3137,10 +3165,16 @@ DebuggerArguments_getArg(JSContext *cx, unsigned argc, Value *vp)
      */
     JS_ASSERT(i >= 0);
     Value arg;
-    if (unsigned(i) < fp->numActualArgs())
-        arg = fp->canonicalActualArg(i);
-    else
+    if (unsigned(i) < fp->numActualArgs()) {
+        if (unsigned(i) < fp->numFormalArgs() && fp->script()->formalLivesInCallObject(i))
+            arg = fp->callObj().arg(i);
+        else if (fp->script()->argsObjAliasesFormals())
+            arg = fp->argsObj().arg(i);
+        else
+            arg = fp->unaliasedActual(i);
+    } else {
         arg.setUndefined();
+    }
 
     if (!Debugger::fromChildJSObject(thisobj)->wrapDebuggeeValue(cx, &arg))
         return false;
@@ -3354,9 +3388,8 @@ js::EvaluateInEnv(JSContext *cx, Handle<Env*> env, StackFrame *fp, const jschar 
 
     /*
      * NB: This function breaks the assumption that the compiler can see all
-     * calls and properly compute a static level. In order to get around this,
-     * we use a static level that will cause us not to attempt to optimize
-     * variable references made by this frame.
+     * calls and properly compute a static level. In practice, any non-zero
+     * static level will suffice.
      */
     JSPrincipals *prin = fp->scopeChain()->principals(cx);
     bool compileAndGo = true;
@@ -3365,11 +3398,11 @@ js::EvaluateInEnv(JSContext *cx, Handle<Env*> env, StackFrame *fp, const jschar 
     JSScript *script = frontend::CompileScript(cx, env, fp, prin, prin,
                                                compileAndGo, noScriptRval, needScriptGlobal,
                                                chars, length, filename, lineno,
-                                               cx->findVersion(), NULL,
-                                               UpvarCookie::UPVAR_LEVEL_LIMIT);
+                                               cx->findVersion(), NULL, /* staticLimit = */ 1);
     if (!script)
         return false;
 
+    script->isActiveEval = true;
     return ExecuteKernel(cx, script, *env, fp->thisValue(), EXECUTE_DEBUG, fp, rval);
 }
 
@@ -4278,14 +4311,42 @@ DebuggerEnv_getObject(JSContext *cx, unsigned argc, Value *vp)
         return false;
     }
 
-    JSObject *obj = IsWith(env)
-                    ? &env->asDebugScope().scope().asWith().object()
-                    : env;
+    JSObject *obj;
+    if (IsWith(env)) {
+        obj = &env->asDebugScope().scope().asWith().object();
+    } else {
+        obj = env;
+        JS_ASSERT(!obj->isDebugScope());
+    }
 
     Value rval = ObjectValue(*obj);
     if (!dbg->wrapDebuggeeValue(cx, &rval))
         return false;
     args.rval() = rval;
+    return true;
+}
+
+static JSBool
+DebuggerEnv_getCallee(JSContext *cx, unsigned argc, Value *vp)
+{
+    THIS_DEBUGENV_OWNER(cx, argc, vp, "get callee", args, envobj, env, dbg);
+
+    args.rval().setNull();
+
+    if (!env->isDebugScope())
+        return true;
+
+    JSObject &scope = env->asDebugScope().scope();
+    if (!scope.isCall())
+        return true;
+
+    JSObject *callee = scope.asCall().getCallee();
+    if (!callee)
+        return true;
+
+    args.rval() = ObjectValue(*callee);
+    if (!dbg->wrapDebuggeeValue(cx, &args.rval()))
+        return false;
     return true;
 }
 
@@ -4361,7 +4422,7 @@ DebuggerEnv_getVariable(JSContext *cx, unsigned argc, Value *vp)
     if (!ValueToIdentifier(cx, args[0], id.address()))
         return false;
 
-    Value v;
+    RootedValue v(cx);
     {
         AutoCompartment ac(cx, env);
         if (!ac.enter() || !cx->compartment->wrapId(cx, id.address()))
@@ -4369,11 +4430,11 @@ DebuggerEnv_getVariable(JSContext *cx, unsigned argc, Value *vp)
 
         /* This can trigger getters. */
         ErrorCopier ec(ac, dbg->toJSObject());
-        if (!env->getGeneric(cx, id, &v))
+        if (!env->getGeneric(cx, id, v.address()))
             return false;
     }
 
-    if (!dbg->wrapDebuggeeValue(cx, &v))
+    if (!dbg->wrapDebuggeeValue(cx, v.address()))
         return false;
     args.rval() = v;
     return true;
@@ -4427,6 +4488,7 @@ static JSPropertySpec DebuggerEnv_properties[] = {
     JS_PSG("type", DebuggerEnv_getType, 0),
     JS_PSG("object", DebuggerEnv_getObject, 0),
     JS_PSG("parent", DebuggerEnv_getParent, 0),
+    JS_PSG("callee", DebuggerEnv_getCallee, 0),
     JS_PS_END
 };
 

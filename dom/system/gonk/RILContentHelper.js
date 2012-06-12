@@ -19,12 +19,15 @@ const RILCONTENTHELPER_CID =
   Components.ID("{472816e1-1fd6-4405-996c-806f9ea68174}");
 const MOBILECONNECTIONINFO_CID =
   Components.ID("{a35cfd39-2d93-4489-ac7d-396475dacb27}");
+const MOBILEOPERATORINFO_CID =
+  Components.ID("{a6c8416c-09b4-46d1-bf29-6520d677d085}");
 
 const RIL_IPC_MSG_NAMES = [
   "RIL:CardStateChanged",
   "RIL:VoiceInfoChanged",
   "RIL:DataInfoChanged",
   "RIL:EnumerateCalls",
+  "RIL:GetAvailableNetworks",
   "RIL:CallStateChanged",
   "RIL:CallError",
   "RIL:GetCardLock:Return:OK",
@@ -33,11 +36,17 @@ const RIL_IPC_MSG_NAMES = [
   "RIL:SetCardLock:Return:KO",
   "RIL:UnlockCardLock:Return:OK",
   "RIL:UnlockCardLock:Return:KO",
+  "RIL:UssdReceived",
+  "RIL:SendUssd:Return:OK",
+  "RIL:SendUssd:Return:KO",
+  "RIL:CancelUssd:Return:OK",
+  "RIL:CancelUssd:Return:KO"
 ];
 
 const kVoiceChangedTopic     = "mobile-connection-voice-changed";
 const kDataChangedTopic      = "mobile-connection-data-changed";
 const kCardStateChangedTopic = "mobile-connection-cardstate-changed";
+const kUssdReceivedTopic     = "mobile-connection-ussd-received";
 
 XPCOMUtils.defineLazyServiceGetter(this, "cpmm",
                                    "@mozilla.org/childprocessmessagemanager;1",
@@ -65,6 +74,25 @@ MobileConnectionInfo.prototype = {
   relSignalStrength: null
 };
 
+function MobileOperatorInfo() {}
+MobileOperatorInfo.prototype = {
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMMozMobileOperatorInfo]),
+  classID:        MOBILEOPERATORINFO_CID,
+  classInfo:      XPCOMUtils.generateCI({
+    classID:          MOBILEOPERATORINFO_CID,
+    classDescription: "MobileOperatorInfo",
+    flags:            Ci.nsIClassInfo.DOM_OBJECT,
+    interfaces:       [Ci.nsIDOMMozMobileOperatorInfo]
+  }),
+
+  // nsIDOMMozMobileOperatorInfo
+
+  shortName: null,
+  longName: null,
+  mcc: 0,
+  mnc: 0,
+  state: null
+};
 
 function RILContentHelper() {
   this.voiceConnectionInfo = new MobileConnectionInfo();
@@ -108,8 +136,16 @@ RILContentHelper.prototype = {
   dataConnectionInfo:  null,
 
   getNetworks: function getNetworks(window) {
-    //TODO bug 744344
-    throw Components.Exception("Not implemented", Cr.NS_ERROR_NOT_IMPLEMENTED);
+    if (window == null) {
+      throw Components.Exception("Can't get window object",
+                                  Cr.NS_ERROR_UNEXPECTED);
+    }
+
+    let request = Services.DOMRequest.createRequest(window);
+    let requestId = this.getRequestId(request);
+
+    cpmm.sendAsyncMessage("RIL:GetAvailableNetworks", requestId);
+    return request;
   },
 
   getCardLock: function getCardLock(window, lockType) {
@@ -142,6 +178,30 @@ RILContentHelper.prototype = {
     let request = Services.DOMRequest.createRequest(window);
     info.requestId = this.getRequestId(request);
     cpmm.sendAsyncMessage("RIL:SetCardLock", info);
+    return request;
+  },
+
+  sendUSSD: function sendUSSD(window, ussd) {
+    debug("Sending USSD " + ussd);
+    if (!window) {
+      throw Components.Exception("Can't get window object",
+                                 Cr.NS_ERROR_EXPECTED);
+    }
+    let request = Services.DOMRequest.createRequest(window);
+    let requestId = this.getRequestId(request);
+    cpmm.sendAsyncMessage("RIL:SendUSSD", {ussd: ussd, requestId: requestId});
+    return request;
+  },
+
+  cancelUSSD: function cancelUSSD(window) {
+    debug("Cancel USSD");
+    if (!window) {
+      throw Components.Exception("Can't get window object",
+                                 Cr.NS_ERROR_UNEXPECTED);
+    }
+    let request = Services.DOMRequest.createRequest(window);
+    let requestId = this.getRequestId(request);
+    cpmm.sendAsyncMessage("RIL:CancelUSSD", {requestId: requestId});
     return request;
   },
 
@@ -269,6 +329,9 @@ RILContentHelper.prototype = {
       case "RIL:EnumerateCalls":
         this.handleEnumerateCalls(msg.json);
         break;
+      case "RIL:GetAvailableNetworks":
+        this.handleGetAvailableNetworks(msg.json);
+        break;
       case "RIL:CallStateChanged":
         this._deliverTelephonyCallback("callStateChanged",
                                        [msg.json.callIndex, msg.json.state,
@@ -276,9 +339,9 @@ RILContentHelper.prototype = {
         break;
       case "RIL:CallError":
         this._deliverTelephonyCallback("notifyError",
-                                        [msg.json.callIndex, 
-                                         msg.json.error]);    	  
-    	break;
+                                        [msg.json.callIndex,
+                                         msg.json.error]);
+        break;
       case "RIL:GetCardLock:Return:OK":
       case "RIL:SetCardLock:Return:OK":
       case "RIL:UnlockCardLock:Return:OK":
@@ -290,6 +353,24 @@ RILContentHelper.prototype = {
       case "RIL:GetCardLock:Return:KO":
       case "RIL:SetCardLock:Return:KO":
       case "RIL:UnlockCardLock:Return:KO":
+        request = this.takeRequest(msg.json.requestId);
+        if (request) {
+          Services.DOMRequest.fireError(request, msg.json.errorMsg);
+        }
+        break;
+      case "RIL:UssdReceived":
+        Services.obs.notifyObservers(null, kUssdReceivedTopic,
+                                     msg.json.message);
+        break;
+      case "RIL:SendUssd:Return:OK":
+      case "RIL:CancelUssd:Return:OK":
+        request = this.takeRequest(msg.json.requestId);
+        if (request) {
+          Services.DOMRequest.fireSuccess(request, msg.json);
+        }
+        break;
+      case "RIL:SendUssd:Return:KO":
+      case "RIL:CancelUssd:Return:KO":
         request = this.takeRequest(msg.json.requestId);
         if (request) {
           Services.DOMRequest.fireError(request, msg.json.errorMsg);
@@ -317,6 +398,37 @@ RILContentHelper.prototype = {
         break;
       }
     }
+  },
+
+  handleGetAvailableNetworks: function handleGetAvailableNetworks(message) {
+    debug("handleGetAvailableNetworks: " + JSON.stringify(message));
+
+    let requestId = message.requestId;
+    let request = this.takeRequest(requestId);
+    if (!request) {
+      debug("no DOMRequest found with request ID: " + requestId);
+      return;
+    }
+
+    if (message.error) {
+      debug("Received error from getAvailableNetworks: " + message.error);
+      Services.DOMRequest.fireError(request, message.error);
+      return;
+    }
+
+    let networks = message.networks;
+    for (let i = 0; i < networks.length; i++) {
+      let network = networks[i];
+      let info = new MobileOperatorInfo();
+
+      for (let key in network) {
+        info[key] = network[key];
+      }
+
+      networks[i] = info;
+    }
+
+    Services.DOMRequest.fireSuccess(request, networks);
   },
 
   _deliverTelephonyCallback: function _deliverTelephonyCallback(name, args) {

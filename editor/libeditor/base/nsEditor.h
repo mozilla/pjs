@@ -16,9 +16,7 @@
 
 #include "nsIAtom.h"
 #include "nsIDOMDocument.h"
-#include "nsISelection.h"
-#include "nsRange.h"
-#include "nsTypedSelection.h"
+#include "mozilla/Selection.h"
 #include "nsIDOMCharacterData.h"
 #include "nsIPrivateTextRange.h"
 #include "nsITransactionManager.h"
@@ -178,6 +176,12 @@ public:
                                            nsIDOMNode ** aNewNode);
 
   /* helper routines for node/parent manipulations */
+  nsresult ReplaceContainer(nsINode* inNode,
+                            mozilla::dom::Element** outNode,
+                            const nsAString& aNodeType,
+                            const nsAString* aAttribute = nsnull,
+                            const nsAString* aValue = nsnull,
+                            bool aCloneAttributes = false);
   nsresult ReplaceContainer(nsIDOMNode *inNode, 
                             nsCOMPtr<nsIDOMNode> *outNode, 
                             const nsAString &aNodeType,
@@ -187,11 +191,18 @@ public:
 
   nsresult RemoveContainer(nsINode* aNode);
   nsresult RemoveContainer(nsIDOMNode *inNode);
+  nsresult InsertContainerAbove(nsIContent* aNode,
+                                mozilla::dom::Element** aOutNode,
+                                const nsAString& aNodeType,
+                                const nsAString* aAttribute = nsnull,
+                                const nsAString* aValue = nsnull);
   nsresult InsertContainerAbove(nsIDOMNode *inNode, 
                                 nsCOMPtr<nsIDOMNode> *outNode, 
                                 const nsAString &aNodeType,
                                 const nsAString *aAttribute = nsnull,
                                 const nsAString *aValue = nsnull);
+  nsresult JoinNodes(nsINode* aNodeToKeep, nsIContent* aNodeToMove);
+  nsresult MoveNode(nsIContent* aNode, nsINode* aParent, PRInt32 aOffset);
   nsresult MoveNode(nsIDOMNode *aNode, nsIDOMNode *aParent, PRInt32 aOffset);
 
   /* Method to replace certain CreateElementNS() calls. 
@@ -199,7 +210,8 @@ public:
       nsString& aTag          - tag you want
       nsIContent** aContent   - returned Content that was created with above namespace.
   */
-  nsresult CreateHTMLContent(const nsAString& aTag, nsIContent** aContent);
+  nsresult CreateHTMLContent(const nsAString& aTag,
+                             mozilla::dom::Element** aContent);
 
   // IME event handlers
   virtual nsresult BeginIMEComposition();
@@ -385,7 +397,7 @@ public:
   /** routines for managing the preservation of selection across 
    *  various editor actions */
   bool     ArePreservingSelection();
-  nsresult PreserveSelectionAcrossActions(nsISelection *aSel);
+  void     PreserveSelectionAcrossActions(nsISelection *aSel);
   nsresult RestorePreservedSelection(nsISelection *aSel);
   void     StopPreservingSelection();
 
@@ -521,14 +533,6 @@ public:
     return GetTag(aNode) == aTag;
   }
 
-  // we should get rid of this method if we can
-  static inline bool NodeIsTypeString(nsIDOMNode *aNode, const nsAString &aTag)
-  {
-    nsIAtom *nodeAtom = GetTag(aNode);
-    return nodeAtom && nodeAtom->Equals(aTag);
-  }
-
-
   /** returns true if aParent can contain a child of type aTag */
   bool CanContain(nsIDOMNode* aParent, nsIDOMNode* aChild);
   bool CanContainTag(nsIDOMNode* aParent, nsIAtom* aTag);
@@ -562,14 +566,14 @@ public:
   bool IsMozEditorBogusNode(nsIContent *aNode);
 
   /** counts number of editable child nodes */
-  nsresult CountEditableChildren(nsIDOMNode *aNode, PRUint32 &outCount);
+  PRUint32 CountEditableChildren(nsINode* aNode);
   
   /** Find the deep first and last children. */
   nsINode* GetFirstEditableNode(nsINode* aRoot);
 
-  nsresult GetIMEBufferLength(PRInt32* length);
-  bool     IsIMEComposing();    /* test if IME is in composition state */
-  void     SetIsIMEComposing(); /* call this before |IsIMEComposing()| */
+  PRInt32 GetIMEBufferLength();
+  bool IsIMEComposing();    /* test if IME is in composition state */
+  void SetIsIMEComposing(); /* call this before |IsIMEComposing()| */
 
   /** from html rules code - migration in progress */
   static nsresult GetTagString(nsIDOMNode *aNode, nsAString& outString);
@@ -590,7 +594,7 @@ public:
 #if DEBUG_JOE
   static void DumpNode(nsIDOMNode *aNode, PRInt32 indent=0);
 #endif
-  nsTypedSelection* GetTypedSelection();
+  mozilla::Selection* GetSelection();
 
   // Helpers to add a node to the selection. 
   // Used by table cell selection methods
@@ -616,7 +620,7 @@ public:
 
   nsresult GetString(const nsAString& name, nsAString& value);
 
-  nsresult BeginUpdateViewBatch(void);
+  void BeginUpdateViewBatch(void);
   virtual nsresult EndUpdateViewBatch(void);
 
   bool GetShouldTxnSetSelection();

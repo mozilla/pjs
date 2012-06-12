@@ -117,7 +117,7 @@ DOMJSClass Class = {
     JSCLASS_NO_INTERNAL_MEMBERS
   },
   { %s },
-  -1, %s, DOM_OBJECT_SLOT,
+  -1, %s,
   %s
 };
 """ % (self.descriptor.interface.identifier.name,
@@ -464,8 +464,7 @@ class CGAbstractClassHook(CGAbstractStaticMethod):
 
     def definition_body_prologue(self):
         return """
-  MOZ_ASSERT(js::GetObjectJSClass(obj) == Class.ToJSClass());
-  %s* self = UnwrapDOMObject<%s>(obj, Class.ToJSClass());
+  %s* self = UnwrapDOMObject<%s>(obj);
 """ % (self.descriptor.nativeType, self.descriptor.nativeType)
 
     def definition_body(self):
@@ -2074,25 +2073,28 @@ def wrapForType(type, descriptorProvider, templateValues):
     defaultValues = {'obj': 'obj'}
     return string.Template(wrap).substitute(defaultValues, **templateValues)
 
-# Returns a tuple consisting of a CGThing containing the type of the return
-# value and a boolean signalling whether we need to pass a JSContext as the
-# first argument of the call.
+def typeNeedsCx(type):
+    return (type is not None and
+            (type.isCallback() or type.isAny() or type.isObject()))
+
+# Returns a CGThing containing the type of the return value, or None
+# if there is no need for a return value.
 def getRetvalDeclarationForType(returnType, descriptorProvider,
                                 resultAlreadyAddRefed):
     if returnType is None or returnType.isVoid():
         # Nothing to declare
-        return None, False
+        return None
     if returnType.isPrimitive() and returnType.tag() in builtinNames:
         result = CGGeneric(builtinNames[returnType.tag()])
         if returnType.nullable():
             result = CGWrapper(result, pre="Nullable<", post=">")
-        return result, False
+        return result
     if returnType.isString():
-        return CGGeneric("nsString"), False
+        return CGGeneric("nsString")
     if returnType.isEnum():
         if returnType.nullable():
             raise TypeError("We don't support nullable enum return values")
-        return CGGeneric(returnType.inner.identifier.name), False
+        return CGGeneric(returnType.inner.identifier.name)
     if returnType.isGeckoInterface():
         result = CGGeneric(descriptorProvider.getDescriptor(
             returnType.unroll().inner.identifier.name).nativeType)
@@ -2100,32 +2102,30 @@ def getRetvalDeclarationForType(returnType, descriptorProvider,
             result = CGWrapper(result, pre="nsRefPtr<", post=">")
         else:
             result = CGWrapper(result, post="*")
-        return result, False
+        return result
     if returnType.isCallback():
         # XXXbz we're going to assume that callback types are always
         # nullable for now.
-        return CGGeneric("JSObject*"), False
-    if returnType.tag() is IDLType.Tags.any:
-        return CGGeneric("JS::Value"), False
+        return CGGeneric("JSObject*")
+    if returnType.isAny():
+        return CGGeneric("JS::Value")
     if returnType.isObject():
-        return CGGeneric("JSObject*"), True
+        return CGGeneric("JSObject*")
     if returnType.isSequence():
         nullable = returnType.nullable()
         if nullable:
             returnType = returnType.inner
         # If our result is already addrefed, use the right type in the
         # sequence argument here.
-        (result, needsCx) = getRetvalDeclarationForType(returnType.inner,
-                                                        descriptorProvider,
-                                                        resultAlreadyAddRefed)
+        result = getRetvalDeclarationForType(returnType.inner,
+                                             descriptorProvider,
+                                             resultAlreadyAddRefed)
         result = CGWrapper(result, pre="nsTArray< ", post=" >")
         if nullable:
             result = CGWrapper(result, pre="Nullable< ", post=" >")
-        return result, needsCx
+        return result
     raise TypeError("Don't know how to declare return value for %s" %
                     returnType)
-
-
 
 def isResultAlreadyAddRefed(descriptor, extendedAttributes):
     # Default to already_AddRefed on the main thread, raw pointer in workers
@@ -2159,15 +2159,14 @@ class CGCallGenerator(CGThing):
 
         resultAlreadyAddRefed = isResultAlreadyAddRefed(descriptorProvider,
                                                         extendedAttributes)
-        (result, needsCx) = getRetvalDeclarationForType(returnType,
-                                                        descriptorProvider,
-                                                        resultAlreadyAddRefed)
+        result = getRetvalDeclarationForType(returnType,
+                                             descriptorProvider,
+                                             resultAlreadyAddRefed)
+        needsCx = (typeNeedsCx(returnType) or
+                   any(typeNeedsCx(a.type) for a in arguments) or
+                   'implicitJSContext' in extendedAttributes)
 
-        if not needsCx:
-            needsCx = reduce(lambda b, a: b or a.type.isObject(), arguments,
-                             False)
-
-        if not "cx" in argsPre and (needsCx or 'implicitJSContext' in extendedAttributes):
+        if not "cx" in argsPre and needsCx:
             args.prepend(CGGeneric("cx"))
 
         # Build up our actual call
@@ -2433,9 +2432,11 @@ class CGMethodCall(CGThing):
                                          "." + method.identifier.name +
                                          " have different types at index %d" +
                                          " which is before distinguishing" +
-                                         " index %d") % (argCount,
-                                                         idx,
-                                                         distinguishingIndex))
+                                         " index %d.  Types are %s and %s") %
+                                        (argCount, idx,
+                                         distinguishingIndex,
+                                         str(possibleSignatures[sigIdx][1][idx].type),
+                                         str(firstSigType)))
 
             # Convert all our arguments up to the distinguishing index.
             # Doesn't matter which of the possible signatures we use, since
@@ -3402,7 +3403,9 @@ class CGBindingRoot(CGThing):
         for x in descriptors:
             nativeType = x.nativeType
             components = x.nativeType.split('::')
-            declare = CGClassForwardDeclare(components[-1])
+            className = components[-1]
+            # JSObject is a struct, not a class
+            declare = CGClassForwardDeclare(className, className is "JSObject")
             if len(components) > 1:
                 declare = CGNamespace.build(components[:-1],
                                             CGWrapper(declare, declarePre='\n',
@@ -3458,13 +3461,16 @@ class CGBindingRoot(CGThing):
                          ['mozilla/dom/BindingUtils.h',
                           'mozilla/dom/DOMJSClass.h'],
                          ['mozilla/dom/Nullable.h',
-                          'mozilla/dom/PrimitiveConversions.h',
+                          'PrimitiveConversions.h',
                           'XPCQuickStubs.h',
                           'nsDOMQS.h',
                           'AccessCheck.h',
                           'WorkerPrivate.h',
                           'nsContentUtils.h',
-                          'mozilla/Preferences.h'
+                          'mozilla/Preferences.h',
+                          # Have to include nsDOMQS.h to get fast arg unwrapping
+                          # for old-binding things with castability.
+                          'nsDOMQS.h'
                           ],
                          curr)
 

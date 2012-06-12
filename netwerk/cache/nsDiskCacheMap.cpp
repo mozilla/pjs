@@ -27,24 +27,22 @@
  */
 
 nsresult
-nsDiskCacheMap::Open(nsILocalFile *  cacheDirectory)
+nsDiskCacheMap::Open(nsIFile *  cacheDirectory)
 {
     NS_ENSURE_ARG_POINTER(cacheDirectory);
     if (mMapFD)  return NS_ERROR_ALREADY_INITIALIZED;
 
     mCacheDirectory = cacheDirectory;   // save a reference for ourselves
     
-    // create nsILocalFile for _CACHE_MAP_
+    // create nsIFile for _CACHE_MAP_
     nsresult rv;
     nsCOMPtr<nsIFile> file;
     rv = cacheDirectory->Clone(getter_AddRefs(file));
-    nsCOMPtr<nsILocalFile> localFile(do_QueryInterface(file, &rv));
-    NS_ENSURE_SUCCESS(rv, rv);
-    rv = localFile->AppendNative(NS_LITERAL_CSTRING("_CACHE_MAP_"));
+    rv = file->AppendNative(NS_LITERAL_CSTRING("_CACHE_MAP_"));
     NS_ENSURE_SUCCESS(rv, rv);
 
     // open the file - restricted to user, the data could be confidential
-    rv = localFile->OpenNSPRFileDesc(PR_RDWR | PR_CREATE_FILE, 00600, &mMapFD);
+    rv = file->OpenNSPRFileDesc(PR_RDWR | PR_CREATE_FILE, 00600, &mMapFD);
     NS_ENSURE_SUCCESS(rv, NS_ERROR_FILE_CORRUPTED);
 
     bool cacheFilesExist = CacheFilesExist();
@@ -76,6 +74,8 @@ nsDiskCacheMap::Open(nsILocalFile *  cacheDirectory)
         // if _CACHE_MAP_ exists, so should the block files
         if (!cacheFilesExist)
             goto error_exit;
+
+        CACHE_LOG_DEBUG(("CACHE: nsDiskCacheMap::Open [this=%p] reading map", this));
 
         // read the header
         PRUint32 bytesRead = PR_Read(mMapFD, &mHeader, sizeof(nsDiskCacheHeader));
@@ -587,8 +587,8 @@ nsDiskCacheMap::EvictRecords( nsDiskCacheRecordVisitor * visitor)
 nsresult
 nsDiskCacheMap::OpenBlockFiles()
 {
-    // create nsILocalFile for block file
-    nsCOMPtr<nsILocalFile> blockFile;
+    // create nsIFile for block file
+    nsCOMPtr<nsIFile> blockFile;
     nsresult rv = NS_OK;
     
     for (int i = 0; i < kNumBlockFiles; ++i) {
@@ -623,7 +623,7 @@ nsDiskCacheMap::CloseBlockFiles(bool flush)
 bool
 nsDiskCacheMap::CacheFilesExist()
 {
-    nsCOMPtr<nsILocalFile> blockFile;
+    nsCOMPtr<nsIFile> blockFile;
     nsresult rv;
     
     for (int i = 0; i < kNumBlockFiles; ++i) {
@@ -655,8 +655,7 @@ nsDiskCacheMap::CreateCacheSubDirectories()
         if (NS_FAILED(rv))
             return rv;
 
-        nsCOMPtr<nsILocalFile> localFile = do_QueryInterface(file, &rv);
-        rv = localFile->Create(nsIFile::DIRECTORY_TYPE, 0700);
+        rv = file->Create(nsIFile::DIRECTORY_TYPE, 0700);
         if (NS_FAILED(rv))
             return rv;
     }
@@ -679,14 +678,18 @@ nsDiskCacheMap::ReadDiskCacheEntry(nsDiskCacheRecord * record)
     
     if (metaFile == 0) {  // entry/metadata stored in separate file
         // open and read the file
-        nsCOMPtr<nsILocalFile> file;
+        nsCOMPtr<nsIFile> file;
         rv = GetLocalFileForDiskCacheRecord(record,
                                             nsDiskCache::kMetaData,
                                             false,
                                             getter_AddRefs(file));
         NS_ENSURE_SUCCESS(rv, nsnull);
 
+        CACHE_LOG_DEBUG(("CACHE: nsDiskCacheMap::ReadDiskCacheEntry"
+                         "[this=%p] reading disk cache entry", this));
+
         PRFileDesc * fd = nsnull;
+
         // open the file - restricted to user, the data could be confidential
         rv = file->OpenNSPRFileDesc(PR_RDONLY, 00600, &fd);
         NS_ENSURE_SUCCESS(rv, nsnull);
@@ -865,7 +868,7 @@ nsDiskCacheMap::WriteDiskCacheEntry(nsDiskCacheBinding *  binding)
         rv = UpdateRecord(&binding->mRecord);
         NS_ENSURE_SUCCESS(rv, rv);
 
-        nsCOMPtr<nsILocalFile> localFile;
+        nsCOMPtr<nsIFile> localFile;
         rv = GetLocalFileForDiskCacheRecord(&binding->mRecord,
                                             nsDiskCache::kMetaData,
                                             true,
@@ -1023,8 +1026,7 @@ nsDiskCacheMap::GetFileForDiskCacheRecord(nsDiskCacheRecord * record,
 
     bool exists;
     if (createPath && (NS_FAILED(file->Exists(&exists)) || !exists)) {
-        nsCOMPtr<nsILocalFile> localFile = do_QueryInterface(file, &rv);
-        rv = localFile->Create(nsIFile::DIRECTORY_TYPE, 0700);
+        rv = file->Create(nsIFile::DIRECTORY_TYPE, 0700);
         if (NS_FAILED(rv))  return rv;
     }
 
@@ -1045,7 +1047,7 @@ nsresult
 nsDiskCacheMap::GetLocalFileForDiskCacheRecord(nsDiskCacheRecord * record,
                                                bool                meta,
                                                bool                createPath,
-                                               nsILocalFile **     result)
+                                               nsIFile **          result)
 {
     nsCOMPtr<nsIFile> file;
     nsresult rv = GetFileForDiskCacheRecord(record,
@@ -1054,16 +1056,13 @@ nsDiskCacheMap::GetLocalFileForDiskCacheRecord(nsDiskCacheRecord * record,
                                             getter_AddRefs(file));
     if (NS_FAILED(rv))  return rv;
     
-    nsCOMPtr<nsILocalFile> localFile = do_QueryInterface(file, &rv);
-    if (NS_FAILED(rv))  return rv;
-    
-    NS_IF_ADDREF(*result = localFile);
+    NS_IF_ADDREF(*result = file);
     return rv;
 }
 
 
 nsresult
-nsDiskCacheMap::GetBlockFileForIndex(PRUint32 index, nsILocalFile ** result)
+nsDiskCacheMap::GetBlockFileForIndex(PRUint32 index, nsIFile ** result)
 {
     if (!mCacheDirectory)  return NS_ERROR_NOT_AVAILABLE;
     
@@ -1076,8 +1075,7 @@ nsDiskCacheMap::GetBlockFileForIndex(PRUint32 index, nsILocalFile ** result)
     rv = file->AppendNative(nsDependentCString(name));
     if (NS_FAILED(rv))  return rv;
     
-    nsCOMPtr<nsILocalFile> localFile = do_QueryInterface(file, &rv);
-    NS_IF_ADDREF(*result = localFile);
+    NS_IF_ADDREF(*result = file);
 
     return rv;
 }

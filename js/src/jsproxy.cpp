@@ -205,6 +205,7 @@ BaseProxyHandler::set(JSContext *cx, JSObject *proxy, JSObject *receiver_, jsid 
             if (!(desc.attrs & JSPROP_GETTER))
                 desc.getter = JS_PropertyStub;
         }
+        desc.value = *vp;
         return defineProperty(cx, receiver, id, &desc);
     }
 
@@ -459,6 +460,7 @@ bool
 IndirectProxyHandler::nativeCall(JSContext *cx, JSObject *proxy, Class *clasp,
                                  Native native, CallArgs args)
 {
+    args.thisv() = ObjectValue(*GetProxyTargetObject(proxy));
     return CallJSNative(cx, native, args);
 }
 

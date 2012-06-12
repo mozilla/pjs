@@ -26,18 +26,19 @@ class AccGroupInfo;
 class EmbeddedObjCollector;
 class KeyBinding;
 class Accessible;
-class nsHyperTextAccessible;
-class nsHTMLImageAccessible;
-class nsHTMLImageMapAccessible;
+class HyperTextAccessible;
 struct nsRoleMapEntry;
-class Relation;
 
 namespace mozilla {
 namespace a11y {
 
+class HTMLImageMapAccessible;
 class HTMLLIAccessible;
+class ImageAccessible;
+class Relation;
 class TableAccessible;
 class TextLeafAccessible;
+class XULTreeAccessible;
 
 /**
  * Name type flags.
@@ -67,8 +68,6 @@ struct GroupPos
 
 } // namespace a11y
 } // namespace mozilla
-
-class nsXULTreeAccessible;
 
 struct nsRect;
 class nsIContent;
@@ -100,8 +99,8 @@ NS_ERROR_GENERATE_SUCCESS(NS_ERROR_MODULE_GENERAL, 0x25)
   { 0xbd, 0x50, 0x42, 0x6b, 0xd1, 0xd6, 0xe1, 0xad }    \
 }
 
-class Accessible : public nsAccessNodeWrap, 
-                   public nsIAccessible, 
+class Accessible : public nsAccessNodeWrap,
+                   public nsIAccessible,
                    public nsIAccessibleHyperLink,
                    public nsIAccessibleSelectable,
                    public nsIAccessibleValue
@@ -208,6 +207,17 @@ public:
   virtual PRUint64 State();
 
   /**
+   * Return interactive states present on the accessible
+   * (@see NativeInteractiveState).
+   */
+  PRUint64 InteractiveState() const
+  {
+    PRUint64 state = NativeInteractiveState();
+    ApplyARIAState(&state);
+    return state;
+  }
+
+  /**
    * Return link states present on the accessible.
    */
   PRUint64 LinkState() const
@@ -224,6 +234,11 @@ public:
   virtual PRUint64 NativeState();
 
   /**
+   * Return native interactice state (unavailable, focusable or selectable).
+   */
+  virtual PRUint64 NativeInteractiveState() const;
+
+  /**
    * Return native link states present on the accessible.
    */
   virtual PRUint64 NativeLinkState() const;
@@ -232,6 +247,11 @@ public:
    * Return bit set of invisible and offscreen states.
    */
   PRUint64 VisibilityState();
+
+  /**
+   * Return true if native unavailable state present.
+   */
+  virtual bool NativelyUnavailable() const;
 
   /**
    * Returns attributes for accessible without explicitly setted ARIA
@@ -244,7 +264,6 @@ public:
    */
   virtual mozilla::a11y::GroupPos GroupPosition();
 
-  /**
   /**
    * Used by ChildAtPoint() method to get direct or deepest child at point.
    */
@@ -287,7 +306,7 @@ public:
   /**
    * Get the relation of the given type.
    */
-  virtual Relation RelationByType(PRUint32 aType);
+  virtual mozilla::a11y::Relation RelationByType(PRUint32 aType);
 
   //////////////////////////////////////////////////////////////////////////////
   // Initializing methods
@@ -296,7 +315,7 @@ public:
    * Set the ARIA role map entry for a new accessible.
    * For a newly created accessible, specify which role map entry should be used.
    *
-   * @param aRoleMapEntry The ARIA nsRoleMapEntry* for the accessible, or 
+   * @param aRoleMapEntry The ARIA nsRoleMapEntry* for the accessible, or
    *                      nsnull if none.
    */
   virtual void SetRoleMapEntry(nsRoleMapEntry* aRoleMapEntry);
@@ -473,7 +492,7 @@ public:
   DocAccessible* AsDoc();
 
   inline bool IsHyperText() const { return mFlags & eHyperTextAccessible; }
-  nsHyperTextAccessible* AsHyperText();
+  HyperTextAccessible* AsHyperText();
 
   inline bool IsHTMLFileInput() const { return mFlags & eHTMLFileInputAccessible; }
 
@@ -481,13 +500,13 @@ public:
   mozilla::a11y::HTMLLIAccessible* AsHTMLListItem();
 
   inline bool IsImage() const { return mFlags & eImageAccessible; }
-  nsHTMLImageAccessible* AsImage();
+  mozilla::a11y::ImageAccessible* AsImage();
 
   bool IsImageMapAccessible() const { return mFlags & eImageMapAccessible; }
-  nsHTMLImageMapAccessible* AsImageMap();
+  mozilla::a11y::HTMLImageMapAccessible* AsImageMap();
 
   inline bool IsXULTree() const { return mFlags & eXULTreeAccessible; }
-  nsXULTreeAccessible* AsXULTree();
+  mozilla::a11y::XULTreeAccessible* AsXULTree();
 
   inline bool IsListControl() const { return mFlags & eListControlAccessible; }
 
@@ -825,10 +844,8 @@ protected:
   /**
    * Return the action rule based on ARIA enum constants EActionRule
    * (see nsARIAMap.h). Used by ActionCount() and GetActionName().
-   *
-   * @param aStates  [in] states of the accessible
    */
-  PRUint32 GetActionRule(PRUint64 aStates);
+  PRUint32 GetActionRule();
 
   /**
    * Return group info.
@@ -861,7 +878,7 @@ protected:
 
   nsAutoPtr<AccGroupInfo> mGroupInfo;
   friend class AccGroupInfo;
-  
+
   /**
    * Non-null indicates author-supplied role; possibly state & value as well
    */

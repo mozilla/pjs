@@ -43,6 +43,7 @@ public final class Tab {
     private String mFaviconUrl;
     private int mFaviconSize;
     private JSONObject mIdentityData;
+    private boolean mReaderEnabled;
     private Drawable mThumbnail;
     private int mHistoryIndex;
     private int mHistorySize;
@@ -80,6 +81,7 @@ public final class Tab {
         mFaviconUrl = null;
         mFaviconSize = 0;
         mIdentityData = null;
+        mReaderEnabled = false;
         mThumbnail = null;
         mHistoryIndex = -1;
         mHistorySize = 0;
@@ -199,6 +201,10 @@ public final class Tab {
         return mIdentityData;
     }
 
+    public boolean getReaderEnabled() {
+        return mReaderEnabled;
+    }
+
     public boolean isBookmark() {
         return mBookmark;
     }
@@ -315,7 +321,7 @@ public final class Tab {
 
         // Only update the favicon if it's bigger than the current favicon.
         // We use -1 to represent icons with sizes="any".
-        if (size == -1 || size > mFaviconSize) {
+        if (size == -1 || size >= mFaviconSize) {
             mFaviconUrl = faviconUrl;
             mFaviconSize = size;
             Log.i(LOGTAG, "Updated favicon URL for tab with id: " + mId);
@@ -331,6 +337,10 @@ public final class Tab {
 
     public void updateIdentityData(JSONObject identityData) {
         mIdentityData = identityData;
+    }
+
+    public void setReaderEnabled(boolean readerEnabled) {
+        mReaderEnabled = readerEnabled;
     }
 
     private void updateBookmark() {
@@ -370,6 +380,28 @@ public final class Tab {
                 BrowserDB.removeBookmarksWithURL(mContentResolver, url);
             }
         });
+    }
+
+    public void addToReadingList() {
+        if (!mReaderEnabled)
+            return;
+
+        GeckoAppShell.getHandler().post(new Runnable() {
+            public void run() {
+                String url = getURL();
+                if (url == null)
+                    return;
+
+                BrowserDB.addReadingListItem(mContentResolver, getTitle(), url);
+            }
+        });
+    }
+
+    public void readerMode() {
+        if (!mReaderEnabled)
+            return;
+
+        GeckoApp.mAppContext.loadUrl("about:reader?url=" + getURL());
     }
 
     public boolean doReload() {

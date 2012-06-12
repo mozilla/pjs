@@ -8,7 +8,6 @@
 #include "nsDOMClassInfoID.h"
 #include "nsDOMError.h"
 #include "nsIDOMNSEvent.h"
-#include "nsIPrivateDOMEvent.h"
 #include "nsDOMWindowUtils.h"
 #include "nsQueryContentEventResult.h"
 #include "nsGlobalWindow.h"
@@ -63,6 +62,8 @@
 #include "mozilla/dom/indexedDB/FileInfo.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "sampler.h"
+#include "nsDOMBlobBuilder.h"
+#include "nsIDOMFileHandle.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -258,30 +259,33 @@ static void DestroyNsRect(void* aObject, nsIAtom* aPropertyName,
 static void
 MaybeReflowForInflationScreenWidthChange(nsPresContext *aPresContext)
 {
-  if (aPresContext &&
-      nsLayoutUtils::FontSizeInflationEnabled(aPresContext) &&
-      nsLayoutUtils::FontSizeInflationMinTwips() != 0) {
-    bool changed;
-    aPresContext->ScreenWidthInchesForFontInflation(&changed);
-    if (changed) {
-      nsCOMPtr<nsISupports> container = aPresContext->GetContainer();
-      nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(container);
-      if (docShell) {
-        nsCOMPtr<nsIContentViewer> cv;
-        docShell->GetContentViewer(getter_AddRefs(cv));
-        nsCOMPtr<nsIMarkupDocumentViewer> mudv = do_QueryInterface(cv);
-        if (mudv) {
-          nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> > array;
-          mudv->AppendSubtree(array);
-          for (PRUint32 i = 0, iEnd = array.Length(); i < iEnd; ++i) {
-            nsCOMPtr<nsIPresShell> shell;
-            nsCOMPtr<nsIContentViewer> cv = do_QueryInterface(array[i]);
-            cv->GetPresShell(getter_AddRefs(shell));
-            if (shell) {
-              nsIFrame *rootFrame = shell->GetRootFrame();
-              if (rootFrame) {
-                shell->FrameNeedsReflow(rootFrame, nsIPresShell::eResize,
-                                        NS_FRAME_IS_DIRTY);
+  if (aPresContext) {
+    nsIPresShell* presShell = aPresContext->GetPresShell();
+    if (presShell && nsLayoutUtils::FontSizeInflationEnabled(aPresContext) &&
+        presShell->FontSizeInflationMinTwips() != 0) {
+      bool changed;
+      aPresContext->ScreenWidthInchesForFontInflation(&changed);
+      if (changed) {
+        nsCOMPtr<nsISupports> container = aPresContext->GetContainer();
+        nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(container);
+        if (docShell) {
+          nsCOMPtr<nsIContentViewer> cv;
+          docShell->GetContentViewer(getter_AddRefs(cv));
+          nsCOMPtr<nsIMarkupDocumentViewer> mudv = do_QueryInterface(cv);
+          if (mudv) {
+            nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> > array;
+            mudv->AppendSubtree(array);
+            for (PRUint32 i = 0, iEnd = array.Length(); i < iEnd; ++i) {
+              nsCOMPtr<nsIPresShell> shell;
+              nsCOMPtr<nsIContentViewer> cv = do_QueryInterface(array[i]);
+              cv->GetPresShell(getter_AddRefs(shell));
+              if (shell) {
+                nsIFrame *rootFrame = shell->GetRootFrame();
+                if (rootFrame) {
+                  shell->FrameNeedsReflow(rootFrame,
+                                          nsIPresShell::eStyleChange,
+                                          NS_FRAME_IS_DIRTY);
+                }
               }
             }
           }
@@ -971,8 +975,11 @@ nsDOMWindowUtils::GarbageCollect(nsICycleCollectorListener *aListener,
   }
 #endif
 
+  for (int i = 0; i < 3; i++) {
+    nsJSContext::GarbageCollectNow(js::gcreason::DOM_UTILS, nsGCNormal, true);
+    nsJSContext::CycleCollectNow(aListener, aExtraForgetSkippableCalls);
+  }
   nsJSContext::GarbageCollectNow(js::gcreason::DOM_UTILS, nsGCNormal, true);
-  nsJSContext::CycleCollectNow(aListener, aExtraForgetSkippableCalls);
 
   return NS_OK;
 }
@@ -1399,10 +1406,9 @@ nsDOMWindowUtils::DispatchDOMEventViaPresShell(nsIDOMNode* aTarget,
   NS_ENSURE_STATE(presContext);
   nsCOMPtr<nsIPresShell> shell = presContext->GetPresShell();
   NS_ENSURE_STATE(shell);
-  nsCOMPtr<nsIPrivateDOMEvent> event = do_QueryInterface(aEvent);
-  NS_ENSURE_STATE(event);
-  event->SetTrusted(aTrusted);
-  nsEvent* internalEvent = event->GetInternalNSEvent();
+  NS_ENSURE_STATE(aEvent);
+  aEvent->SetTrusted(aTrusted);
+  nsEvent* internalEvent = aEvent->GetInternalNSEvent();
   NS_ENSURE_STATE(internalEvent);
   nsCOMPtr<nsIContent> content = do_QueryInterface(aTarget);
   NS_ENSURE_STATE(content);
@@ -1786,7 +1792,6 @@ nsDOMWindowUtils::LeaveModalStateWithWindow(nsIDOMWindow *aWindow)
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  NS_ENSURE_ARG_POINTER(aWindow);
   window->LeaveModalState(aWindow);
   return NS_OK;
 }
@@ -2267,14 +2272,99 @@ nsDOMWindowUtils::CheckAndClearPaintedState(nsIDOMElement* aElement, bool* aResu
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDOMWindowUtils::GetFileId(nsIDOMBlob* aBlob, PRInt64* aResult)
+static nsresult
+GetFileOrBlob(const nsAString& aName, const jsval& aBlobParts,
+              const jsval& aParameters, JSContext* aCx,
+              PRUint8 aOptionalArgCount, nsISupports** aResult)
 {
   if (!IsUniversalXPConnectCapable()) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
-  *aResult = aBlob->GetFileId();
+  nsresult rv;
+
+  nsCOMPtr<nsISupports> file;
+
+  if (aName.IsVoid()) {
+    rv = nsDOMMultipartFile::NewBlob(getter_AddRefs(file));
+  }
+  else {
+    rv = nsDOMMultipartFile::NewFile(aName, getter_AddRefs(file));
+  }
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIJSNativeInitializer> initializer = do_QueryInterface(file);
+  NS_ASSERTION(initializer, "what?");
+
+  jsval args[2] = { aBlobParts, aParameters };
+
+  rv = initializer->Initialize(nsnull, aCx, nsnull, aOptionalArgCount, args);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  file.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetFile(const nsAString& aName, const jsval& aBlobParts,
+                          const jsval& aParameters, JSContext* aCx,
+                          PRUint8 aOptionalArgCount, nsIDOMFile** aResult)
+{
+  nsCOMPtr<nsISupports> file;
+  nsresult rv = GetFileOrBlob(aName, aBlobParts, aParameters, aCx,
+                              aOptionalArgCount, getter_AddRefs(file));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIDOMFile> result = do_QueryInterface(file);
+  result.forget(aResult);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetBlob(const jsval& aBlobParts, const jsval& aParameters,
+                          JSContext* aCx, PRUint8 aOptionalArgCount,
+                          nsIDOMBlob** aResult)
+{
+  nsAutoString name;
+  name.SetIsVoid(true);
+
+  nsCOMPtr<nsISupports> blob;
+  nsresult rv = GetFileOrBlob(name, aBlobParts, aParameters, aCx,
+                              aOptionalArgCount, getter_AddRefs(blob));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIDOMBlob> result = do_QueryInterface(blob);
+  result.forget(aResult);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetFileId(const jsval& aFile, JSContext* aCx,
+                            PRInt64* aResult)
+{
+
+  if (!JSVAL_IS_PRIMITIVE(aFile)) {
+    JSObject* obj = JSVAL_TO_OBJECT(aFile);
+
+    nsISupports* nativeObj =
+      nsContentUtils::XPConnect()->GetNativeOfWrapper(aCx, obj);
+
+    nsCOMPtr<nsIDOMBlob> blob = do_QueryInterface(nativeObj);
+    if (blob) {
+      *aResult = blob->GetFileId();
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIDOMFileHandle> fileHandle = do_QueryInterface(nativeObj);
+    if (fileHandle) {
+      *aResult = fileHandle->GetFileId();
+      return NS_OK;
+    }
+  }
+
+  *aResult = -1;
   return NS_OK;
 }
 

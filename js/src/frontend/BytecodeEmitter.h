@@ -49,7 +49,8 @@ struct CGObjectList {
 
     CGObjectList() : length(0), lastbox(NULL) {}
 
-    unsigned index(ObjectBox *objbox);
+    unsigned add(ObjectBox *objbox);
+    unsigned indexOf(JSObject *obj);
     void finish(ObjectArray *array);
 };
 
@@ -127,6 +128,8 @@ struct BytecodeEmitter
 
     bool            hasSingletons:1;    /* script contains singleton initializer JSOP_OBJECT */
 
+    bool            inForInit:1;        /* emitting init expr of for; exclude 'in' */
+
     BytecodeEmitter(Parser *parser, SharedContext *sc, unsigned lineno,
                     bool noScriptRval, bool needScriptGlobal);
     bool init();
@@ -163,7 +166,7 @@ struct BytecodeEmitter
     }
 
     bool checkSingletonContext() {
-        if (!parser->compileAndGo || sc->inFunction)
+        if (!parser->compileAndGo || sc->inFunction())
             return false;
         for (StmtInfo *stmt = sc->topStmt; stmt; stmt = stmt->down) {
             if (STMT_IS_LOOP(stmt))

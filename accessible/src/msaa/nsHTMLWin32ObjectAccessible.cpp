@@ -42,12 +42,12 @@ nsHTMLWin32ObjectOwnerAccessible::NativeRole()
   return roles::EMBEDDED_OBJECT;
 }
 
-PRUint64
-nsHTMLWin32ObjectOwnerAccessible::NativeState()
+bool
+nsHTMLWin32ObjectOwnerAccessible::NativelyUnavailable() const
 {
   // XXX: No HWND means this is windowless plugin which is not accessible in
   // the meantime.
-  return mHwnd ? AccessibleWrap::NativeState() : states::UNAVAILABLE;
+  return !mHwnd;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -65,8 +65,8 @@ nsHTMLWin32ObjectOwnerAccessible::CacheChildren()
 // nsHTMLWin32ObjectAccessible
 ////////////////////////////////////////////////////////////////////////////////
 
-nsHTMLWin32ObjectAccessible::nsHTMLWin32ObjectAccessible(void* aHwnd):
-nsLeafAccessible(nsnull, nsnull)
+nsHTMLWin32ObjectAccessible::nsHTMLWin32ObjectAccessible(void* aHwnd) :
+  LeafAccessible(nsnull, nsnull)
 {
   // XXX: Mark it as defunct to make sure no single Accessible method is
   // running on it. We need to allow accessible without DOM nodes.

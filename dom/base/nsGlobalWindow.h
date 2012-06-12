@@ -379,7 +379,17 @@ public:
     nsCOMPtr<nsIDOMWindow> top;
     GetTop(getter_AddRefs(top));
     if (top)
-      return static_cast<nsGlobalWindow *>(static_cast<nsIDOMWindow *>(top.get()));
+      return static_cast<nsGlobalWindow *>(top.get());
+    return nsnull;
+  }
+
+  inline nsGlobalWindow* GetScriptableTop()
+  {
+    nsCOMPtr<nsIDOMWindow> top;
+    GetScriptableTop(getter_AddRefs(top));
+    if (top) {
+      return static_cast<nsGlobalWindow *>(top.get());
+    }
     return nsnull;
   }
 
@@ -659,6 +669,11 @@ protected:
   // The timeout implementation functions.
   void RunTimeout(nsTimeout *aTimeout);
   void RunTimeout() { RunTimeout(nsnull); }
+  // Return true if |aTimeout| was cleared while its handler ran.
+  bool RunTimeoutHandler(nsTimeout* aTimeout, nsIScriptContext* aScx);
+  // Return true if |aTimeout| needs to be reinserted into the timeout list.
+  bool RescheduleTimeout(nsTimeout* aTimeout, const TimeStamp& now,
+                         bool aRunningPendingTimeouts);
 
   void ClearAllTimeouts();
   // Insert aTimeout into the list, before all timeouts that would

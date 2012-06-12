@@ -12,17 +12,19 @@ struct RunnableMethodTraits<mozilla::_ipdltest::TestOpensChild>
 };
 
 template<>
-struct RunnableMethodTraits<mozilla::_ipdltest::TestOpensOpenedChild>
+struct RunnableMethodTraits<mozilla::_ipdltest2::TestOpensOpenedChild>
 {
-    static void RetainCallee(mozilla::_ipdltest::TestOpensOpenedChild* obj) { }
-    static void ReleaseCallee(mozilla::_ipdltest::TestOpensOpenedChild* obj) { }
+    static void RetainCallee(mozilla::_ipdltest2::TestOpensOpenedChild* obj) { }
+    static void ReleaseCallee(mozilla::_ipdltest2::TestOpensOpenedChild* obj) { }
 };
 
 using namespace base;
 using namespace mozilla::ipc;
 
 namespace mozilla {
-namespace _ipdltest {
+// NB: this is generally bad style, but I am lazy.
+using namespace _ipdltest;
+using namespace _ipdltest2;
 
 static MessageLoop* gMainThread;
 
@@ -238,6 +240,24 @@ TestOpensOpenedChild::AnswerHiRpc()
     return true;
 }
 
+static void
+ShutdownTestOpensOpenedChild(TestOpensOpenedChild* child,
+                             Transport* transport)
+{
+    delete child;
+
+    // Now delete the transport, which has to happen after the
+    // top-level actor is deleted.
+    XRE_GetIOMessageLoop()->PostTask(
+        FROM_HERE,
+        new DeleteTask<Transport>(transport));
+
+    // Kick off main-thread shutdown.
+    gMainThread->PostTask(
+        FROM_HERE,
+        NewRunnableMethod(gOpensChild, &TestOpensChild::Close));
+}
+
 void
 TestOpensOpenedChild::ActorDestroy(ActorDestroyReason why)
 {
@@ -248,19 +268,12 @@ TestOpensOpenedChild::ActorDestroy(ActorDestroyReason why)
 
     // ActorDestroy() is just a callback from IPDL-generated code,
     // which needs the top-level actor (this) to stay alive a little
-    // longer so other things can be cleaned up.
+    // longer so other things can be cleaned up.  Defer shutdown to
+    // let cleanup finish.
     MessageLoop::current()->PostTask(
         FROM_HERE,
-        new DeleteTask<TestOpensOpenedChild>(this));
-    XRE_GetIOMessageLoop()->PostTask(
-        FROM_HERE,
-        new DeleteTask<Transport>(mTransport));
-
-    // Kick off main-thread shutdown.
-    gMainThread->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(gOpensChild, &TestOpensChild::Close));
+        NewRunnableFunction(ShutdownTestOpensOpenedChild,
+                            this, mTransport));
 }
 
-} // namespace _ipdltest
 } // namespace mozilla
