@@ -53,3 +53,6 @@ clean:
 
 test: ${BUILD}/pjs
 	./run-test test/*.js
+
+test2: ${BUILD}/pjs
+	./run-test2 test/*.js

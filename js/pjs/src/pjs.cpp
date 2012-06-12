@@ -490,6 +490,7 @@ private:
 
     JSRuntime *_rt;
     JSContext *_cx;
+    JSObject *_global;
 
     int _stats[PJS_TASK_CAT_MAX];
 
@@ -501,12 +502,13 @@ private:
     bool haveWorkStolen(TaskHandle **create);
 
     Runner(ThreadPool *aThreadPool, int anIndex,
-           JSRuntime *aRt, JSContext *aCx)
+           JSRuntime *aRt, JSContext *aCx, JSObject *global)
       : _threadPool(aThreadPool)
       , _index(anIndex)
       , _runnerLock(PR_NewLock())
       , _rt(aRt)
       , _cx(aCx)
+      , _global(global)
     {
         _stats[PJS_TASK_TAKEN] = 0;
         _stats[PJS_TASK_STOLEN] = 0;
@@ -598,7 +600,7 @@ public:
 
     void start(RootTaskHandle *rth);
 
-    static ThreadPool *create();
+    static ThreadPool *create(int threadCount);
     void terminate();
     void await();
     int terminating() { return _terminating; }
@@ -1186,7 +1188,12 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
     JS_SetOptions(cx, JSOPTION_VAROBJFIX | JSOPTION_METHODJIT);
     JS_SetVersion(cx, JSVERSION_LATEST);
     JS_SetErrorReporter(cx, reportError);
-    JS_ClearRuntimeThread(rt);
+    JSObject *global = JS_NewCompartmentAndGlobalObject(
+        /*JSContext *cx: */ cx,
+        /*JSClass *clasp: */ &Global::jsClass,
+        /*JSPrincipals*/ NULL);
+    if (!JS_InitStandardClasses(cx, global))
+        return NULL;
 
     char *pjs_zeal = getenv("PJS_ZEAL");
     if (pjs_zeal) {
@@ -1198,7 +1205,12 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
         }
         JS_SetGCZeal(cx, v1, v2);
     }
-    return new Runner(aThreadPool, anIndex, rt, cx);
+
+    CrossCompartment cc(cx, global);
+
+    JS_ClearRuntimeThread(rt);
+
+    return new Runner(aThreadPool, anIndex, rt, cx, global);
 }
 
 bool Runner::haveWorkStolen(TaskHandle **create) {
@@ -1323,17 +1335,7 @@ void Runner::start() {
 }
 
 TaskContext *Runner::createTaskContext(TaskHandle *handle) {
-    JSObject *global = JS_NewCompartmentAndGlobalObject(
-        /*JSContext *cx: */ _cx, 
-        /*JSClass *clasp: */ &Global::jsClass,
-        /*JSPrincipals*/ NULL);
-
-    CrossCompartment cc(_cx, global);
-
-    if (!JS_InitStandardClasses(_cx, global))
-        return NULL;
-
-    return TaskContext::create(_cx, handle, this, global);
+    return TaskContext::create(_cx, handle, this, _global);
 }
 
 void Runner::terminate() {
@@ -1343,11 +1345,9 @@ void Runner::terminate() {
 // ______________________________________________________________________
 // ThreadPool impl
 
-ThreadPool *ThreadPool::create() {
+ThreadPool *ThreadPool::create(int threadCount) {
     PRLock *lock = check_null(PR_NewLock());
     PRCondVar *condVar = check_null(PR_NewCondVar(lock));
-
-    const int threadCount = 2; // for now
 
     PRThread **threads = check_null(new PRThread*[threadCount]);
     memset(threads, 0, sizeof(PRThread*) * threadCount);
@@ -1478,8 +1478,8 @@ void ThreadPool::await() {
 // ______________________________________________________________________
 // Init
 
-ThreadPool *init(const char *scriptfn) {
-    ThreadPool *tp = check_null(ThreadPool::create());
+ThreadPool *init(const char *scriptfn, int threadCount) {
+    ThreadPool *tp = check_null(ThreadPool::create(threadCount));
     RootTaskHandle *rth = new RootTaskHandle(scriptfn);
     tp->start(rth);
     tp->await();

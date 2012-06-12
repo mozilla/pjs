@@ -794,19 +794,19 @@ IncrementalValueBarrier(const Value &v)
 
 extern JS_FRIEND_API(void)
 PJS_SetSuspended(JSContext *cx) {
-    JS_ASSERT(!PJS_isSuspended(cx));
+//    JS_ASSERT(!PJS_isSuspended(cx));
     cx->compartment->PJS_isSuspended = true;
 }
 
 extern JS_FRIEND_API(void)
 PJS_ClearSuspended(JSContext *cx) {
-    JS_ASSERT(PJS_isSuspended(cx));
+//    JS_ASSERT(PJS_isSuspended(cx));
     cx->compartment->PJS_isSuspended = false;
 }
 
 extern JS_FRIEND_API(bool)
 PJS_SetReadOnly(JSContext *cx, bool nv) {
-    JS_ASSERT(!PJS_isSuspended(cx));
+//    JS_ASSERT(!PJS_isSuspended(cx));
     bool v = cx->compartment->PJS_isReadOnly;
     cx->compartment->PJS_isReadOnly = nv;
     return v;

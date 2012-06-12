@@ -254,7 +254,7 @@ bool Membrane::wrap(Value *vp) {
     /* Unwrap incoming objects. */
     if (vp->isObject()) {
         JSObject *obj = &vp->toObject();
-        JS_ASSERT(obj->compartment() != _childCompartment);
+//        JS_ASSERT(obj->compartment() != _childCompartment);
 
         /* Translate StopIteration singleton. */
         //NDM if (obj->isStopIteration())
