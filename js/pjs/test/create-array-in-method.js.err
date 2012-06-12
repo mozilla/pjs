@@ -1,0 +1,2 @@
+test/create-array-in-method.js:2:ReferenceError: Array is not defined
+test/create-array-in-method.js:11:TypeError: f0.get() is null

@@ -1,0 +1,24 @@
+#!/bin/bash
+
+PJS=build/pjs
+FAILED=0
+
+for file in "$@"; do
+    echo "Testing $file...";
+    "$PJS" --threadCount 2 "$file" > $file.out 2> $file.err
+    if ! diff "$file.out" "$file.exp_out" > /dev/null; then
+       echo "Error: stdout of test $file differs"
+       FAILED=1
+    fi
+    if ! diff "$file.err" "$file.exp_err" > /dev/null; then
+       echo "Error: stderr of test $file differs"
+       FAILED=1
+    fi
+done
+
+if [ $FAILED != "0" ]; then
+   echo "Tests failed."
+else
+   echo "Tests passed."
+fi
+exit $FAILED
