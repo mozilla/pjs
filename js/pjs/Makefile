@@ -5,7 +5,8 @@ MC=../..
 OBJS =						\
 	${BUILD}/pjs.o				\
 	${BUILD}/main.o				\
-	${BUILD}/membrane.o
+	${BUILD}/membrane.o			\
+	${BUILD}/proxyrack.o
 HEADERS=${wildcard ${SRC}/*.h}
 
 .PHONY : all TAGS clean cleaner test js

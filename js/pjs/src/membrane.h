@@ -24,6 +24,7 @@
  * Contributor(s):
  *   Nicholas Matsakis <nmatsakis@mozilla.com>
  *   Donovan Preston <dpreston@mozilla.com>
+ *   Fadi Meawad <fmeawad@mozilla.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -48,108 +49,63 @@
 #include <HashTable.h>
 #include <jsproxy.h>
 #include <jscompartment.h>
+#include "proxyrack.h"
 
 namespace pjs {
 
 using namespace js;
+using namespace std;
 
-class ProxyRooter;
-
-class AutoReadOnly
-{
+class Membrane {
 private:
-    JSContext *_cx;
-    bool _v;
+	// Maps from proxies in the parent space to wrapper object in
+	// child space.
+	WrapperMap _map;
+	JSContext *_parentCx;
+	JSObject *_parentGlobal;
+	JSContext *_childCx;
+	JSObject *_childGlobal;
+	JSCompartment *_childCompartment;
+	JSNative *_safeNatives;
+	ProxyRack *_proxyRack;
+
+	Membrane(JSContext *parentCx, JSObject *parentGlobal, JSContext *childCx,
+			JSObject *childGlobal, JSNative *safeNatives, ProxyRack *proxyRack) :
+			_parentCx(parentCx), _parentGlobal(parentGlobal), _childCx(childCx),
+					_childGlobal(childGlobal),
+					_childCompartment(_childGlobal->compartment()),
+					_safeNatives(safeNatives), _proxyRack(proxyRack) {
+	}
+
+	bool isSafeNative(JSNative n);
+
+	JSBool put(Value key, Value value);
+
+	bool copyAndWrapProperties(JSObject *from, JSObject *to);
+
+	bool unwrap(Value *vp);
+	bool wrapId(jsid *idp);
+	bool unwrapId(jsid *idp);
+	bool wrap(AutoIdVector &props);
+	bool wrap(PropertyOp *propp);
+	bool wrap(StrictPropertyOp *propp);
+	bool wrap(PropertyDescriptor *desc);
+	bool wrap(JSObject **objp);
+	bool wrap(HeapPtrAtom *objp);
+
+	static char *MEMBRANE;
 
 public:
-    AutoReadOnly(JSContext *cx, bool ro = true);
-    ~AutoReadOnly();
-};
+	static Membrane *create(JSContext *parentCx, JSObject *parentGlobal,
+			JSContext* childCx, JSObject *childGlobal, JSNative *safeNatives,
+			ProxyRack *proxyRack);
+	~Membrane();
+	void releaseProxies();
 
-class Membrane : BaseProxyHandler
-{
-private:
-    // Maps from objects in the parent space to wrapper object in
-    // child space.
-    WrapperMap _map;
-    JSContext *_parentCx;
-    JSObject *_parentGlobal;
-    JSContext *_childCx;
-    JSObject *_childGlobal;
-    JSCompartment *_childCompartment;
-    ProxyRooter *_rooter;
-    JSNative *_safeNatives;
-    int _refCount;
+	bool wrap(Value *vp);
 
-    Membrane(JSContext *parentCx, JSObject *parentGlobal,
-             JSContext *childCx, JSObject *childGlobal,
-             JSNative *safeNatives)
-        : BaseProxyHandler(MEMBRANE)
-        , _parentCx(parentCx)
-        , _parentGlobal(parentGlobal)
-        , _childCx(childCx)
-        , _childGlobal(childGlobal)
-        , _childCompartment(_childGlobal->compartment())
-        , _rooter(NULL)
-        , _safeNatives(safeNatives)
-        , _refCount(0)
-    {
-    }
-
-    bool isSafeNative(JSNative n);
-
-    JSBool put(Value key, Value value);
-
-    bool copyAndWrapProperties(JSObject *from, JSObject *to);
-
-    static char *MEMBRANE;
-
-public:
-    static Membrane *create(JSContext *parentCx, JSObject *parentGlobal,
-                            JSContext* childCx, JSObject *childGlobal,
-                            JSNative *safeNatives);
-    ~Membrane();
-    void releaseProxies();
-
-    // when invoked with a parent object, modifies vp to be a proxy in
-    // child compartment that will permit read access to the parent
-    // object.  returns true if successful.
-    bool wrap(Value *vp);
-    bool unwrap(Value *vp);
-    bool wrapId(jsid *idp);
-    bool unwrapId(jsid *idp);
-    bool wrap(AutoIdVector &props);
-    bool wrap(PropertyOp *propp);
-    bool wrap(StrictPropertyOp *propp);
-    bool wrap(PropertyDescriptor *desc);
-    bool wrap(JSObject **objp);
-    bool wrap(HeapPtrAtom *objp);
-
-
-    static bool IsCrossThreadWrapper(const JSObject *wrapper);
-    
-    // decrements the refCount of the membrane.
-    virtual void finalize(JSFreeOp* fop, JSObject* proxy);
-
-    // ______________________________________________________________________
-
-    /* ES5 Harmony fundamental wrapper traps. */
-    virtual bool getPropertyDescriptor(JSContext *cx, JSObject *wrapper, jsid id, bool set,
-                                       PropertyDescriptor *desc) MOZ_OVERRIDE;
-    virtual bool getOwnPropertyDescriptor(JSContext *cx, JSObject* wrapper, 
-                                          jsid id, bool set,
-                                          PropertyDescriptor *desc) MOZ_OVERRIDE;
-    virtual bool defineProperty(JSContext *cx, JSObject *wrapper, jsid id,
-                                PropertyDescriptor *desc) MOZ_OVERRIDE;
-    virtual bool getOwnPropertyNames(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
-    virtual bool delete_(JSContext *cx, JSObject *wrapper, jsid id, bool *bp) MOZ_OVERRIDE;
-    virtual bool enumerate(JSContext *cx, JSObject *wrapper, AutoIdVector &props) MOZ_OVERRIDE;
-    virtual bool fix(JSContext *cx, JSObject *proxy, Value *vp) MOZ_OVERRIDE;
-
-    virtual void trace(JSTracer *trc, JSObject *wrapper) MOZ_OVERRIDE;
-
-    virtual bool get(JSContext *cx, JSObject *wrapper, JSObject *receiver,
-                     jsid id, Value *vp) MOZ_OVERRIDE;
+	static bool IsCrossThreadWrapper(const JSObject *wrapper);
+	// ______________________________________________________________________
 };
 
 }
