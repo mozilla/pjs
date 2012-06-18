@@ -171,7 +171,7 @@ function gaussianBlurOriginal() {
 // var a1 = gaussianBlurUpdated();
 // var a2 = gaussianBlurOriginal();
 gaussianBlurParallel();
-var a2 = updatedParallelSquidImage;
+// var a2 = updatedParallelSquidImage;
 
 // console.log("width: " + width + ", height: " + height);
 
