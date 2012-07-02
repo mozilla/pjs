@@ -11,6 +11,7 @@
 #include "nsIAppShell.h"
 #include "nsIScriptContext.h"
 
+#include "DOMError.h"
 #include "mozilla/storage.h"
 #include "nsContentUtils.h"
 #include "nsDOMClassInfoID.h"
@@ -110,6 +111,7 @@ IDBTransaction::CreateInternal(IDBDatabase* aDatabase,
   transaction->mMode = aMode;
   transaction->mDatabaseInfo = aDatabase->Info();
   transaction->mObjectStoreNames.AppendElements(aObjectStoreNames);
+  transaction->mObjectStoreNames.Sort();
 
   IndexedDBTransactionChild* actor = nsnull;
 
@@ -227,7 +229,9 @@ IDBTransaction::RemoveObjectStore(const nsAString& aName)
 
   for (PRUint32 i = 0; i < mCreatedObjectStores.Length(); i++) {
     if (mCreatedObjectStores[i]->Name() == aName) {
+      nsRefPtr<IDBObjectStore> objectStore = mCreatedObjectStores[i];
       mCreatedObjectStores.RemoveElementAt(i);
+      mDeletedObjectStores.AppendElement(objectStore);
       break;
     }
   }
@@ -250,6 +254,7 @@ IDBTransaction::CommitOrRollback()
     NS_ASSERTION(mActorChild, "Must have an actor!");
 
     mActorChild->SendAllRequestsFinished();
+
     return NS_OK;
   }
 
@@ -493,14 +498,14 @@ IDBTransaction::ClearCreatedFileInfos()
 }
 
 nsresult
-IDBTransaction::AbortWithCode(nsresult aAbortCode)
+IDBTransaction::AbortInternal(nsresult aAbortCode,
+                              already_AddRefed<nsIDOMDOMError> aError)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
-  // We can't use IsOpen here since we need it to be possible to call Abort()
-  // even from outside of transaction callbacks.
-  if (mReadyState != IDBTransaction::INITIAL &&
-      mReadyState != IDBTransaction::LOADING) {
+  nsCOMPtr<nsIDOMDOMError> error = aError;
+
+  if (IsFinished()) {
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
@@ -513,9 +518,40 @@ IDBTransaction::AbortWithCode(nsresult aAbortCode)
 
   mAbortCode = aAbortCode;
   mReadyState = IDBTransaction::DONE;
+  mError = error.forget();
 
-  if (Mode() == IDBTransaction::VERSION_CHANGE) {
-    // If a version change transaction is aborted, the db must be closed
+  if (GetMode() == IDBTransaction::VERSION_CHANGE) {
+    // If a version change transaction is aborted, we must revert the world
+    // back to its previous state.
+    mDatabase->RevertToPreviousState();
+
+    DatabaseInfo* dbInfo = mDatabase->Info();
+
+    for (PRUint32 i = 0; i < mCreatedObjectStores.Length(); i++) {
+      nsRefPtr<IDBObjectStore>& objectStore = mCreatedObjectStores[i];
+      ObjectStoreInfo* info = dbInfo->GetObjectStore(objectStore->Name());
+
+      if (!info) {
+        info = new ObjectStoreInfo(*objectStore->Info());
+        info->indexes.Clear();
+      }
+
+      objectStore->SetInfo(info);
+    }
+
+    for (PRUint32 i = 0; i < mDeletedObjectStores.Length(); i++) {
+      nsRefPtr<IDBObjectStore>& objectStore = mDeletedObjectStores[i];
+      ObjectStoreInfo* info = dbInfo->GetObjectStore(objectStore->Name());
+
+      if (!info) {
+        info = new ObjectStoreInfo(*objectStore->Info());
+        info->indexes.Clear();
+      }
+
+      objectStore->SetInfo(info);
+    }
+
+    // and then the db must be closed
     mDatabase->Close();
   }
 
@@ -528,12 +564,33 @@ IDBTransaction::AbortWithCode(nsresult aAbortCode)
   return NS_OK;
 }
 
+nsresult
+IDBTransaction::Abort(IDBRequest* aRequest)
+{
+  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+  NS_ASSERTION(aRequest, "This is undesirable.");
+
+  nsCOMPtr<nsIDOMDOMError> error;
+  aRequest->GetError(getter_AddRefs(error));
+
+  return AbortInternal(aRequest->GetErrorCode(), error.forget());
+}
+
+nsresult
+IDBTransaction::Abort(nsresult aErrorCode)
+{
+  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+
+  return AbortInternal(aErrorCode, DOMError::CreateForNSResult(aErrorCode));
+}
+
 NS_IMPL_CYCLE_COLLECTION_CLASS(IDBTransaction)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(IDBTransaction,
                                                   IDBWrapperCache)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR_AMBIGUOUS(mDatabase,
                                                        nsIDOMEventTarget)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mError);
   NS_CYCLE_COLLECTION_TRAVERSE_EVENT_HANDLER(error)
   NS_CYCLE_COLLECTION_TRAVERSE_EVENT_HANDLER(complete)
   NS_CYCLE_COLLECTION_TRAVERSE_EVENT_HANDLER(abort)
@@ -543,15 +600,22 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(IDBTransaction,
     cb.NoteXPCOMChild(static_cast<nsIIDBObjectStore*>(
                       tmp->mCreatedObjectStores[i].get()));
   }
+  for (PRUint32 i = 0; i < tmp->mDeletedObjectStores.Length(); i++) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mDeletedObjectStores[i]");
+    cb.NoteXPCOMChild(static_cast<nsIIDBObjectStore*>(
+                      tmp->mDeletedObjectStores[i].get()));
+  }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(IDBTransaction, IDBWrapperCache)
   // Don't unlink mDatabase!
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mError);
   NS_CYCLE_COLLECTION_UNLINK_EVENT_HANDLER(error)
   NS_CYCLE_COLLECTION_UNLINK_EVENT_HANDLER(complete)
   NS_CYCLE_COLLECTION_UNLINK_EVENT_HANDLER(abort)
 
   tmp->mCreatedObjectStores.Clear();
+  tmp->mDeletedObjectStores.Clear();
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -601,6 +665,19 @@ IDBTransaction::GetMode(nsAString& aMode)
       return NS_ERROR_UNEXPECTED;
   }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+IDBTransaction::GetError(nsIDOMDOMError** aError)
+{
+  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+
+  if (IsOpen()) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
+
+  NS_IF_ADDREF(*aError = mError);
   return NS_OK;
 }
 
@@ -655,7 +732,7 @@ IDBTransaction::ObjectStoreInternal(const nsAString& aName,
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
-  if (!IsOpen()) {
+  if (IsFinished()) {
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
@@ -683,7 +760,7 @@ NS_IMETHODIMP
 IDBTransaction::Abort()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-  return AbortWithCode(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR);
+  return AbortInternal(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR, nsnull);
 }
 
 nsresult
@@ -776,12 +853,24 @@ CommitHelper::Run()
 
       event = CreateGenericEvent(NS_LITERAL_STRING(ABORT_EVT_STR),
                                  eDoesBubble, eNotCancelable);
+
+      // The transaction may already have an error object (e.g. if one of the
+      // requests failed).  If it doesn't, and it wasn't aborted
+      // programmatically, create one now.
+      if (!mTransaction->mError &&
+          mAbortCode != NS_ERROR_DOM_INDEXEDDB_ABORT_ERR) {
+        mTransaction->mError = DOMError::CreateForNSResult(mAbortCode);
+      }
     }
     else {
       event = CreateGenericEvent(NS_LITERAL_STRING(COMPLETE_EVT_STR),
                                  eDoesNotBubble, eNotCancelable);
     }
     NS_ENSURE_TRUE(event, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+    if (mListener) {
+      mListener->NotifyTransactionPreComplete(mTransaction);
+    }
 
     bool dummy;
     if (NS_FAILED(mTransaction->DispatchEvent(event, &dummy))) {
@@ -792,9 +881,8 @@ CommitHelper::Run()
     mTransaction->mFiredCompleteOrAbort = true;
 #endif
 
-    // Tell the listener (if we have one) that we're done
     if (mListener) {
-      mListener->NotifyTransactionComplete(mTransaction);
+      mListener->NotifyTransactionPostComplete(mTransaction);
     }
 
     mTransaction = nsnull;
@@ -821,11 +909,17 @@ CommitHelper::Run()
 
     if (!mAbortCode) {
       NS_NAMED_LITERAL_CSTRING(release, "COMMIT TRANSACTION");
-      if (NS_SUCCEEDED(mConnection->ExecuteSimpleSQL(release))) {
+      nsresult rv = mConnection->ExecuteSimpleSQL(release);
+      if (NS_SUCCEEDED(rv)) {
         if (mUpdateFileRefcountFunction) {
           mUpdateFileRefcountFunction->UpdateFileInfos();
         }
         CommitAutoIncrementCounts();
+      }
+      else if (rv == NS_ERROR_FILE_NO_DEVICE_SPACE) {
+        // mozstorage translates SQLITE_FULL to NS_ERROR_FILE_NO_DEVICE_SPACE,
+        // which we know better as NS_ERROR_DOM_INDEXEDDB_QUOTA_ERR.
+        mAbortCode = NS_ERROR_DOM_INDEXEDDB_QUOTA_ERR;
       }
       else {
         mAbortCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;

@@ -50,6 +50,10 @@ public:
   {
     mCanvasElement = aParentCanvas;
   }
+  nsHTMLCanvasElement* GetParentObject() const
+  {
+    return mCanvasElement;
+  }
 
   // Sets the dimensions of the canvas, in pixels.  Called
   // whenever the size of the element changes.
@@ -124,6 +128,14 @@ public:
 protected:
   nsRefPtr<nsHTMLCanvasElement> mCanvasElement;
 };
+
+namespace mozilla {
+namespace dom {
+
+extern bool AzureCanvasEnabled();
+
+}
+}
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsICanvasRenderingContextInternal,
                               NS_ICANVASRENDERINGCONTEXTINTERNAL_IID)

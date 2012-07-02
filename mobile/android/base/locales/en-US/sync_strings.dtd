@@ -41,6 +41,8 @@
 <!ENTITY sync.button.tryagain.label 'Try again'>
 <!ENTITY sync.button.manual.label 'Manual Setup'>
 <!ENTITY sync.subtitle.nointernet.label 'No internet connection available.'>
+<!ENTITY sync.subtitle.failaccount.label 'Account creation on your device failed.'>
+<!ENTITY sync.subtitle.failmultiple.label 'Do you have more than one Firefox installed? Currently, &syncBrand.fullName.label; only supports one Firefox installation at a time. Please uninstall other instances to use &syncBrand.shortName.label;.'>
   
 <!-- Setup Success -->
 <!ENTITY sync.title.success.label 'Setup Complete'>
@@ -86,8 +88,7 @@
 <!-- Send tab to device. -->
 <!ENTITY sync.title.send.tab.label 'Send Tab To Devices'>
 <!ENTITY sync.button.send.label 'Send'>
-<!ENTITY sync.button.setup.label 'Setup Sync'>
-<!ENTITY sync.button.continue.browsing.label 'Continue Browsing'>
-<!ENTITY sync.title.redirect.to.setup.label 'Setup Sync to Send Tabs'>
-<!ENTITY sync.text.redirect.to.setup.label 'Setup Firefox Sync on your device to send tabs to other devices.'>
+<!ENTITY sync.button.set.up.sync.label 'Set up &syncBrand.shortName.label;'>
+<!ENTITY sync.title.redirect.to.set.up.sync.label 'Set up &syncBrand.shortName.label; to send tabs'>
+<!ENTITY sync.text.redirect.to.set.up.sync.label 'Set up &syncBrand.fullName.label; on your device to send tabs to other devices.'>
 <!ENTITY sync.text.tab.sent.label 'Your tab was sent!'>

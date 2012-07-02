@@ -8,6 +8,7 @@ import java.util.Locale;
 
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.sync.Logger;
+import org.mozilla.gecko.sync.ThreadPool;
 import org.mozilla.gecko.sync.setup.Constants;
 import org.mozilla.gecko.sync.setup.InvalidSyncKeyException;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
@@ -25,9 +26,9 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.View;
+import android.view.View.OnClickListener;
 import android.view.Window;
 import android.view.WindowManager;
-import android.view.View.OnClickListener;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
@@ -236,45 +237,46 @@ public class AccountActivity extends AccountAuthenticatorActivity {
       return;
     }
     // Successful authentication. Create and add account to AccountManager.
-    final SyncAccountParameters syncAccount = new SyncAccountParameters(
+    SyncAccountParameters syncAccount = new SyncAccountParameters(
         mContext, mAccountManager, username, key, password, server);
-    final Account account = SyncAccounts.createSyncAccount(syncAccount);
-    final boolean accountResult = (account != null);
+    createAccountOnThread(syncAccount);
+  }
 
-    final Intent intent = new Intent(); // The intent to return.
-    intent.putExtra(AccountManager.KEY_ACCOUNT_NAME, syncAccount.username);
-    intent.putExtra(AccountManager.KEY_ACCOUNT_TYPE, Constants.ACCOUNTTYPE_SYNC);
-    intent.putExtra(AccountManager.KEY_AUTHTOKEN, Constants.ACCOUNTTYPE_SYNC);
-    setAccountAuthenticatorResult(intent.getExtras());
-
-    if (!accountResult) {
-      // Failed to add account!
-      setResult(RESULT_CANCELED, intent);
-      runOnUiThread(new Runnable() {
-        @Override
-        public void run() {
-          // Use default error.
-          // TODO: Display more accurate error (Account failed to be created).
-          Logger.debug(LOG_TAG, "displayFailure()");
-          displayFailure(result);
+  private void createAccountOnThread(final SyncAccountParameters syncAccount) {
+    ThreadPool.run(new Runnable() {
+      @Override
+      public void run() {
+        Account account = SyncAccounts.createSyncAccount(syncAccount);
+        boolean isSuccess = (account != null);
+        if (!isSuccess) {
+          setResult(RESULT_CANCELED);
+          runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+              displayFailure(AuthenticationResult.FAILURE_ACCOUNT);
+            }
+          });
+          return;
         }
-      });
-      return;
-    }
 
-    clearErrors();
-    if (intent != null) {
-      setAccountAuthenticatorResult(intent.getExtras());
-      setResult(RESULT_OK, intent);
+        // Account created successfully.
+        clearErrors();
 
-      runOnUiThread(new Runnable() {
-        @Override
-        public void run() {
-          authSuccess();
-        }
-      });
-      return;
-    }
+        Bundle resultBundle = new Bundle();
+        resultBundle.putString(AccountManager.KEY_ACCOUNT_NAME, syncAccount.username);
+        resultBundle.putString(AccountManager.KEY_ACCOUNT_TYPE, Constants.ACCOUNTTYPE_SYNC);
+        resultBundle.putString(AccountManager.KEY_AUTHTOKEN, Constants.ACCOUNTTYPE_SYNC);
+        setAccountAuthenticatorResult(resultBundle);
+
+        setResult(RESULT_OK);
+        runOnUiThread(new Runnable() {
+          @Override
+          public void run() {
+            authSuccess();
+          }
+        });
+      }
+    });
   }
 
   private void displayVerifying(final boolean isVerifying) {
@@ -289,6 +291,7 @@ public class AccountActivity extends AccountAuthenticatorActivity {
     runOnUiThread(new Runnable() {
       @Override
       public void run() {
+        Intent intent;
         switch (result) {
         case FAILURE_USERNAME:
           // No such username. Don't leak whether the username exists.
@@ -300,11 +303,17 @@ public class AccountActivity extends AccountAuthenticatorActivity {
           findViewById(R.id.server_error).setVisibility(View.VISIBLE);
           serverInput.requestFocus();
           break;
+        case FAILURE_ACCOUNT:
+          intent = new Intent(mContext, SetupFailureActivity.class);
+          intent.setFlags(Constants.FLAG_ACTIVITY_REORDER_TO_FRONT_NO_ANIMATION);
+          intent.putExtra(Constants.INTENT_EXTRA_IS_ACCOUNTERROR, true);
+          startActivity(intent);
+          break;
         case FAILURE_OTHER:
         default:
           // Display default error screen.
           Logger.debug(LOG_TAG, "displaying default failure.");
-          Intent intent = new Intent(mContext, SetupFailureActivity.class);
+          intent = new Intent(mContext, SetupFailureActivity.class);
           intent.setFlags(Constants.FLAG_ACTIVITY_REORDER_TO_FRONT_NO_ANIMATION);
           startActivity(intent);
         }

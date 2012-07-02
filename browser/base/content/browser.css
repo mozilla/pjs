@@ -259,7 +259,7 @@ panel[noactions] > richlistbox > richlistitem[type~="action"] > .ac-url-box > .a
   visibility: collapse;
 }
 
-#urlbar[pageproxystate="invalid"] > #identity-box > #identity-box-inner > #identity-icon-labels {
+#urlbar[pageproxystate="invalid"] > #identity-box > #identity-icon-labels {
   visibility: collapse;
 }
 
@@ -275,7 +275,7 @@ panel[noactions] > richlistbox > richlistitem[type~="action"] > .ac-url-box > .a
   direction: ltr;
 }
 
-#identity-box.verifiedIdentity > #identity-box-inner > #identity-icon-labels > #identity-icon-label {
+#identity-box.verifiedIdentity > #identity-icon-labels > #identity-icon-label {
   -moz-margin-end: 0.25em !important;
 }
 
@@ -584,7 +584,7 @@ stack[anonid=browserStack][responsivemode] {
 }
 
 stack[anonid=browserStack][responsivemode] {
-  -moz-transition-properties: min-width, max-width, min-height, max-height;
+  -moz-transition-property: min-width, max-width, min-height, max-height;
 }
 
 stack[anonid=browserStack][responsivemode][notransition] {

@@ -9,7 +9,6 @@
 #include "RuntimeService.h"
 
 #include "nsIDOMChromeWindow.h"
-#include "nsIDocument.h"
 #include "nsIEffectiveTLDService.h"
 #include "nsIObserverService.h"
 #include "nsIPlatformCharset.h"
@@ -35,6 +34,8 @@
 #include "Events.h"
 #include "Worker.h"
 #include "WorkerPrivate.h"
+
+#include "OSFileConstants.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -371,8 +372,8 @@ ResolveWorkerClasses(JSContext* aCx, JSHandleObject aObj, JSHandleId aId, unsign
 {
   AssertIsOnMainThread();
 
-  // Don't care about assignments or declarations, bail now.
-  if (aFlags & (JSRESOLVE_ASSIGNING | JSRESOLVE_DECLARING)) {
+  // Don't care about assignments, bail now.
+  if (aFlags & JSRESOLVE_ASSIGNING) {
     *aObjp = nsnull;
     return true;
   }
@@ -781,8 +782,9 @@ RuntimeService::ScheduleWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
   }
 
   if (!thread) {
-    if (NS_FAILED(NS_NewThread(getter_AddRefs(thread), nsnull,
-                               WORKER_STACK_SIZE))) {
+    if (NS_FAILED(NS_NewNamedThread("DOM Worker",
+                                    getter_AddRefs(thread), nsnull,
+                                    WORKER_STACK_SIZE))) {
       UnregisterWorker(aCx, aWorkerPrivate);
       JS_ReportError(aCx, "Could not create new thread!");
       return false;
@@ -928,6 +930,11 @@ RuntimeService::Init()
                                      mSystemCharset);
   }
 
+  rv = InitOSFileConstants();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   return NS_OK;
 }
 
@@ -1041,6 +1048,11 @@ RuntimeService::Cleanup()
         obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_THREADS_OBSERVER_ID);
       mObserved = NS_FAILED(rv);
     }
+  }
+
+  nsresult rv = CleanupOSFileConstants();
+  if (NS_FAILED(rv)) {
+    MOZ_NOT_REACHED("Could not cleanup OSFileConstants");
   }
 }
 

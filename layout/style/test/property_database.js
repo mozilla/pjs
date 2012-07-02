@@ -65,8 +65,8 @@ var gCSSProperties = {
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "normal" ],
-		other_values: [ "alternate", "normal, alternate", "alternate, normal", "normal, normal", "normal, normal, normal" ],
-		invalid_values: [ "normal normal", "inherit, normal" ]
+		other_values: [ "alternate", "normal, alternate", "alternate, normal", "normal, normal", "normal, normal, normal", "reverse", "alternate-reverse", "normal, reverse, alternate-reverse, alternate" ],
+		invalid_values: [ "normal normal", "inherit, normal", "reverse-alternate" ]
 	},
 	"-moz-animation-duration": {
 		domProp: "MozAnimationDuration",
@@ -517,14 +517,6 @@ var gCSSProperties = {
 		// negative and zero invalid per editor's draft
 		invalid_values: [ "-1", "0", "3px" ]
 	},
-	"-moz-column-fill": {
-		domProp: "MozColumnFill",
-		inherited: false,
-		type: CSS_TYPE_LONGHAND,
-		initial_values: [ "balance" ],
-		other_values: [ "auto" ],
-		invalid_values: [ "2px", "dotted", "5em" ]
-	},
 	"-moz-column-gap": {
 		domProp: "MozColumnGap",
 		inherited: false,
@@ -967,8 +959,8 @@ var gCSSProperties = {
 		other_values: [ "none" ],
 		invalid_values: [ "-5%", "0", "100", "0%", "50%", "100%", "220.3%" ]
 	},
-	"-moz-transform": {
-		domProp: "MozTransform",
+	"transform": {
+		domProp: "transform",
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
 		prerequisites: { "width": "300px", "height": "50px" },
@@ -997,8 +989,8 @@ var gCSSProperties = {
             "perspective(0px)", "perspective(-10px)", "matrix3d(dinosaur)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15%, 16)", "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16px)", "rotatey(words)", "rotatex(7)", "translate3d(3px, 4px, 1px, 7px)"
 		] : [])
 	},
-	"-moz-transform-origin": {
-		domProp: "MozTransformOrigin",
+	"transform-origin": {
+		domProp: "transformOrigin",
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
 		/* no subproperties */
@@ -1025,8 +1017,8 @@ var gCSSProperties = {
 						 "border", "center red", "right diagonal",
 						 "#00ffff bottom"]
 	},
-    "-moz-perspective-origin": {
-        domProp: "MozPerspectiveOrigin",
+    "perspective-origin": {
+        domProp: "perspectiveOrigin",
         inherited: false,
         type: CSS_TYPE_LONGHAND,
         /* no subproperties */
@@ -1052,24 +1044,24 @@ var gCSSProperties = {
                           "border", "center red", "right diagonal",
                           "#00ffff bottom"]
     },
-    "-moz-perspective": {
-		domProp: "MozPerspective",
+    "perspective": {
+		domProp: "perspective",
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "none" ],
 		other_values: [ "1000px", "500.2px" ],
 		invalid_values: [ "pants", "200", "0", "-100px", "-27.2em" ]
 	},
-    "-moz-backface-visibility": {
-        domProp: "MozBackfaceVisibility",
+    "backface-visibility": {
+        domProp: "backfaceVisibility",
         inherited: false,
         type: CSS_TYPE_LONGHAND,
         initial_values: [ "visible" ],
         other_values: [ "hidden" ],
         invalid_values: [ "collapse" ]
     },
-	"-moz-transform-style": {
-		domProp: "MozTransformStyle",
+	"transform-style": {
+		domProp: "transformStyle",
 		inherited: false,
 		type: CSS_TYPE_LONGHAND,
 		initial_values: [ "flat" ],
@@ -1972,7 +1964,27 @@ var gCSSProperties = {
 		initial_values: [ "inline" ],
 		/* XXX none will really mess with other properties */
 		prerequisites: { "float": "none", "position": "static" },
-		other_values: [ "block", "list-item", "inline-block", "table", "inline-table", "table-row-group", "table-header-group", "table-footer-group", "table-row", "table-column-group", "table-column", "table-cell", "table-caption", "none" ],
+		other_values: [
+			"block",
+			"list-item",
+			"inline-block",
+			"table",
+			"inline-table",
+			"table-row-group",
+			"table-header-group",
+			"table-footer-group",
+			"table-row",
+			"table-column-group",
+			"table-column",
+			"table-cell",
+			"table-caption",
+/* XXXdholbert In builds with MOZ_FLEXBOX enabled, this should be uncommented.
+   (This would be #ifdef MOZ_FLEXBOX, if that worked in JS files.)
+			"-moz-flex",
+			"-moz-inline-flex",
+*/
+			"none"
+		],
 		invalid_values: []
 	},
 	"empty-cells": {

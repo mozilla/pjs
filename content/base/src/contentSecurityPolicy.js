@@ -103,6 +103,34 @@ ContentSecurityPolicy.prototype = {
     return this._reportOnlyMode || this._policy.allowsEvalInScripts;
   },
 
+  get innerWindowID() {
+    let win = null;
+    let loadContext = null;
+
+    try {
+      loadContext = this._docRequest
+                        .notificationCallbacks.getInterface(Ci.nsILoadContext);
+    } catch (ex) {
+      try {
+        loadContext = this._docRequest.loadGroup
+                          .notificationCallbacks.getInterface(Ci.nsILoadContext);
+      } catch (ex) {
+      }
+    }
+
+    if (loadContext) {
+      win = loadContext.associatedWindow;
+    }
+    if (win) {
+      try {
+         let winUtils = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+         return winUtils.currentInnerWindowID;
+      } catch (ex) {
+      }
+    }
+    return null;
+  },
+
   /**
    * Log policy violation on the Error Console and send a report if a report-uri
    * is present in the policy
@@ -256,8 +284,14 @@ ContentSecurityPolicy.prototype = {
       var reportString = JSON.stringify(report);
       CSPdebug("Constructed violation report:\n" + reportString);
 
-      CSPWarning("Directive \"" + violatedDirective + "\" violated"
-               + (blockedUri['asciiSpec'] ? " by " + blockedUri.asciiSpec : ""),
+      var violationMessage = null;
+      if(blockedUri["asciiSpec"]){
+         violationMessage = CSPLocalizer.getFormatStr("directiveViolatedWithURI", [violatedDirective, blockedUri.asciiSpec]);
+      } else {
+         violationMessage = CSPLocalizer.getFormatStr("directiveViolated", [violatedDirective]);
+      }
+      CSPWarning(violationMessage,
+                 this.innerWindowID,
                  (aSourceFile) ? aSourceFile : null,
                  (aScriptSample) ? decodeURIComponent(aScriptSample) : null,
                  (aLineNum) ? aLineNum : null);
@@ -318,8 +352,8 @@ ContentSecurityPolicy.prototype = {
         } catch(e) {
           // it's possible that the URI was invalid, just log a
           // warning and skip over that.
-          CSPWarning("Tried to send report to invalid URI: \"" + uris[i] + "\"");
-          CSPWarning("error was: \"" + e + "\"");
+          CSPWarning(CSPLocalizer.getFormatStr("triedToSendReport", [uris[i]]), this.innerWindowID);
+          CSPWarning(CSPLocalizer.getFormatStr("errorWas", [e.toString()]), this.innerWindowID);
         }
       }
     }
@@ -521,8 +555,7 @@ CSPReportRedirectSink.prototype = {
   // nsIChannelEventSink
   asyncOnChannelRedirect: function channel_redirect(oldChannel, newChannel,
                                                     flags, callback) {
-    CSPWarning("Post of violation report to " + oldChannel.URI.asciiSpec +
-               " failed, as a redirect occurred");
+    CSPWarning(CSPLocalizer.getFormatStr("reportPostRedirect", [oldChannel.URI.asciiSpec]));
 
     // cancel the old channel so XHR failure callback happens
     oldChannel.cancel(Cr.NS_ERROR_ABORT);

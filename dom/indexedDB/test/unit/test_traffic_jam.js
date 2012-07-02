@@ -11,7 +11,7 @@ function testSteps()
 
   let requests = [];
   function doOpen(version, errorCallback, upgradeNeededCallback, successCallback) {
-    let request = mozIndexedDB.open(name, version);
+    let request = indexedDB.open(name, version);
     request.onerror = errorCallback;
     request.onupgradeneeded = upgradeNeededCallback;
     request.onsuccess = successCallback;
@@ -69,7 +69,7 @@ function testSteps()
   is(event.target, requests[2], "fired at the right request");
   event.target.result.close();
 
-  requests[3].onerror = new ExpectError("VersionError");
+  requests[3].onerror = new ExpectError("VersionError", true);
 
   event = yield;
 

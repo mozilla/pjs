@@ -8,6 +8,7 @@
 #define mozilla_dom_indexeddb_idbindex_h__
 
 #include "mozilla/dom/indexedDB/IndexedDatabase.h"
+#include "mozilla/dom/indexedDB/KeyPath.h"
 
 #include "nsIIDBIndex.h"
 
@@ -35,7 +36,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIIDBINDEX
 
-  NS_DECL_CYCLE_COLLECTION_CLASS(IDBIndex)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(IDBIndex)
 
   static already_AddRefed<IDBIndex>
   Create(IDBObjectStore* aObjectStore,
@@ -67,19 +68,9 @@ public:
     return mMultiEntry;
   }
 
-  const nsString& KeyPath() const
+  const KeyPath& GetKeyPath() const
   {
     return mKeyPath;
-  }
-
-  bool UsesKeyPathArray() const
-  {
-    return !mKeyPathArray.IsEmpty();
-  }
-  
-  const nsTArray<nsString>& KeyPathArray() const
-  {
-    return mKeyPathArray;
   }
 
   void
@@ -110,20 +101,25 @@ public:
   }
 
   nsresult GetInternal(IDBKeyRange* aKeyRange,
+                       JSContext* aCx,
                        IDBRequest** _retval);
 
   nsresult GetKeyInternal(IDBKeyRange* aKeyRange,
+                          JSContext* aCx,
                           IDBRequest** _retval);
 
   nsresult GetAllInternal(IDBKeyRange* aKeyRange,
                           PRUint32 aLimit,
+                          JSContext* aCx,
                           IDBRequest** _retval);
 
   nsresult GetAllKeysInternal(IDBKeyRange* aKeyRange,
                               PRUint32 aLimit,
+                              JSContext* aCx,
                               IDBRequest** _retval);
 
   nsresult CountInternal(IDBKeyRange* aKeyRange,
+                         JSContext* aCx,
                          IDBRequest** _retval);
 
   nsresult OpenCursorFromChildProcess(
@@ -135,10 +131,12 @@ public:
 
   nsresult OpenKeyCursorInternal(IDBKeyRange* aKeyRange,
                                  size_t aDirection,
+                                 JSContext* aCx,
                                  IDBRequest** _retval);
 
   nsresult OpenCursorInternal(IDBKeyRange* aKeyRange,
                               size_t aDirection,
+                              JSContext* aCx,
                               IDBRequest** _retval);
 
   nsresult OpenCursorFromChildProcess(
@@ -157,14 +155,15 @@ private:
 
   PRInt64 mId;
   nsString mName;
-  nsString mKeyPath;
-  nsTArray<nsString> mKeyPathArray;
+  KeyPath mKeyPath;
+  JS::Value mCachedKeyPath;
 
   IndexedDBIndexChild* mActorChild;
   IndexedDBIndexParent* mActorParent;
 
   bool mUnique;
   bool mMultiEntry;
+  bool mRooted;
 };
 
 END_INDEXEDDB_NAMESPACE

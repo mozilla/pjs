@@ -15,7 +15,6 @@
 
 #include "nsContentList.h"
 #include "nsIAccessibleRelation.h"
-#include "nsIDOMDocument.h"
 #include "nsIDOMHTMLInputElement.h"
 #include "nsIDOMNSEditableElement.h"
 #include "nsIDOMHTMLFormElement.h"
@@ -324,9 +323,8 @@ HTMLTextFieldAccessible::
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED3(HTMLTextFieldAccessible,
-                             Accessible,
-                             HyperTextAccessible,
+NS_IMPL_ISUPPORTS_INHERITED2(HTMLTextFieldAccessible,
+                             Accessible,                             
                              nsIAccessibleText,
                              nsIAccessibleEditableText)
 

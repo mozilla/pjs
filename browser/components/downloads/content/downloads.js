@@ -302,10 +302,6 @@ const DownloadsPanel = {
       return;
     }
 
-    // Make sure that clicking outside the popup cannot reopen it accidentally.
-    this.panel.popupBoxObject.setConsumeRollupEvent(Ci.nsIPopupBoxObject
-                                                      .ROLLUP_CONSUME);
-
     // Ensure the anchor is visible.  If that is not possible, show the panel
     // anchored to the top area of the window, near the default anchor position.
     DownloadsButton.getAnchor(function DP_OPIDR_callback(aAnchor) {
@@ -1171,7 +1167,7 @@ DownloadsViewItemController.prototype = {
     {
       let clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"]
                       .getService(Ci.nsIClipboardHelper);
-      clipboard.copyString(this.dataItem.uri);
+      clipboard.copyString(this.dataItem.uri, document);
     },
 
     downloadsCmd_doDefault: function DVIC_downloadsCmd_doDefault()

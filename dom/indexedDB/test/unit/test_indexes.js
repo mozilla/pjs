@@ -53,7 +53,7 @@ function testSteps()
     { key: "237-23-7734", value: { name: "Ron", height: 73, weight: 180 } }
   ];
 
-  let request = mozIndexedDB.open(name, 1, description);
+  let request = indexedDB.open(name, 1, description);
   request.onerror = errorHandler;
   request.onupgradeneeded = grabEventAndContinueHandler;
   request.onsuccess = grabEventAndContinueHandler;
@@ -189,7 +189,7 @@ function testSteps()
                   .objectStore(objectStoreName);
   request = objectStore.add({ name: "Bob", height: 62, weight: 170 },
                             "237-23-7738");
-  request.onerror = new ExpectError("ConstraintError");
+  request.onerror = new ExpectError("ConstraintError", true);
   request.onsuccess = unexpectedSuccessHandler;
   event = yield;
 

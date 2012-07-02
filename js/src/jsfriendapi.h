@@ -84,6 +84,9 @@ JS_SetAccumulateTelemetryCallback(JSRuntime *rt, JSAccumulateTelemetryDataCallba
 extern JS_FRIEND_API(JSPrincipals *)
 JS_GetCompartmentPrincipals(JSCompartment *compartment);
 
+extern JS_FRIEND_API(void)
+JS_SetCompartmentPrincipals(JSCompartment *compartment, JSPrincipals *principals);
+
 /* Safe to call with input obj == NULL. Returns non-NULL iff obj != NULL. */
 extern JS_FRIEND_API(JSObject *)
 JS_ObjectToInnerObject(JSContext *cx, JSObject *obj);
@@ -190,15 +193,12 @@ GetRuntime(const JSContext *cx)
 typedef bool
 (* PreserveWrapperCallback)(JSContext *cx, JSObject *obj);
 
-#ifdef DEBUG
  /*
-  * DEBUG-only method to dump the complete object graph of heap-allocated things.
+  * Dump the complete object graph of heap-allocated things.
   * fp is the file for the dump output.
   */
 extern JS_FRIEND_API(void)
 DumpHeapComplete(JSRuntime *rt, FILE *fp);
-
-#endif
 
 class JS_FRIEND_API(AutoSwitchCompartment) {
   private:
@@ -258,6 +258,15 @@ TraceWeakMaps(WeakMapTracer *trc);
 
 extern JS_FRIEND_API(bool)
 GCThingIsMarkedGray(void *thing);
+
+extern JS_FRIEND_API(JSCompartment*)
+GetGCThingCompartment(void *thing);
+
+typedef void
+(GCThingCallback)(void *closure, void *gcthing);
+
+extern JS_FRIEND_API(void)
+VisitGrayWrapperTargets(JSCompartment *comp, GCThingCallback *callback, void *closure);
 
 /*
  * Shadow declarations of JS internal structures, for access by inline access
@@ -596,7 +605,8 @@ SizeOfJSContext();
     D(DOM_WORKER)                               \
     D(INTER_SLICE_GC)                           \
     D(REFRESH_FRAME)                            \
-    D(FULL_GC_TIMER)
+    D(FULL_GC_TIMER)                            \
+    D(SHUTDOWN_CC)
 
 namespace gcreason {
 
@@ -606,7 +616,15 @@ enum Reason {
     GCREASONS(MAKE_REASON)
 #undef MAKE_REASON
     NO_REASON,
-    NUM_REASONS
+    NUM_REASONS,
+
+    /*
+     * For telemetry, we want to keep a fixed max bucket size over time so we
+     * don't have to switch histograms. 100 is conservative; as of this writing
+     * there are 26. But the cost of extra buckets seems to be low while the
+     * cost of switching histograms is high.
+     */
+    NUM_TELEMETRY_REASONS = 100
 };
 
 } /* namespace gcreason */
@@ -616,6 +634,9 @@ PrepareCompartmentForGC(JSCompartment *comp);
 
 extern JS_FRIEND_API(void)
 PrepareForFullGC(JSRuntime *rt);
+
+extern JS_FRIEND_API(void)
+PrepareForIncrementalGC(JSRuntime *rt);
 
 extern JS_FRIEND_API(bool)
 IsGCScheduled(JSRuntime *rt);
@@ -640,7 +661,7 @@ extern JS_FRIEND_API(void)
 IncrementalGC(JSRuntime *rt, gcreason::Reason reason);
 
 extern JS_FRIEND_API(void)
-SetGCSliceTimeBudget(JSContext *cx, int64_t millis);
+FinishIncrementalGC(JSRuntime *rt, gcreason::Reason reason);
 
 enum GCProgress {
     /*

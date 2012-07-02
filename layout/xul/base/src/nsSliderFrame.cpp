@@ -23,7 +23,6 @@
 #include "nsEventListenerManager.h"
 #include "nsIDOMEventTarget.h"
 #include "nsIDOMMouseEvent.h"
-#include "nsIDocument.h"
 #include "nsScrollbarButtonFrame.h"
 #include "nsISliderListener.h"
 #include "nsIScrollbarMediator.h"
@@ -682,7 +681,7 @@ nsSliderFrame::CurrentPositionChanged(nsPresContext* aPresContext,
   thumbFrame->SetRect(newThumbRect);
 
   // Redraw the scrollbar
-  InvalidateWithFlags(clientRect, aImmediateRedraw ? INVALIDATE_IMMEDIATE : 0);
+  //InvalidateFrame();
 
   mCurPos = curPos;
 

@@ -924,10 +924,12 @@ DocAccessible::Observe(nsISupports* aSubject, const char* aTopic,
 NS_IMETHODIMP
 DocAccessible::OnPivotChanged(nsIAccessiblePivot* aPivot,
                               nsIAccessible* aOldAccessible,
-                              PRInt32 aOldStart, PRInt32 aOldEnd)
+                              PRInt32 aOldStart, PRInt32 aOldEnd,
+                              PivotMoveReason aReason)
 {
   nsRefPtr<AccEvent> event = new AccVCChangeEvent(this, aOldAccessible,
-                                                  aOldStart, aOldEnd);
+                                                  aOldStart, aOldEnd,
+                                                  aReason);
   nsEventShell::FireEvent(event);
 
   return NS_OK;
@@ -2020,6 +2022,8 @@ DocAccessible::CacheChildrenInSubtree(Accessible* aRoot)
 void
 DocAccessible::UncacheChildrenInSubtree(Accessible* aRoot)
 {
+  aRoot->mFlags |= eIsNotInDocument;
+
   if (aRoot->IsElement())
     RemoveDependentIDsFor(aRoot);
 

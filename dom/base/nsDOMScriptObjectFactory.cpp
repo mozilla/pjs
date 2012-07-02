@@ -55,7 +55,6 @@ nsDOMScriptObjectFactory::nsDOMScriptObjectFactory()
     xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_DOM);
     xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_SVG);
     xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_DOM_XPATH);
-    xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_XPCONNECT);
     xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_DOM_INDEXEDDB);
     xs->RegisterExceptionProvider(provider, NS_ERROR_MODULE_DOM_FILEHANDLE);
   }
@@ -142,8 +141,6 @@ nsDOMScriptObjectFactory::Observe(nsISupports *aSubject,
         xs->UnregisterExceptionProvider(gExceptionProvider,
                                         NS_ERROR_MODULE_DOM_XPATH);
         xs->UnregisterExceptionProvider(gExceptionProvider,
-                                        NS_ERROR_MODULE_XPCONNECT);
-        xs->UnregisterExceptionProvider(gExceptionProvider,
                                         NS_ERROR_MODULE_DOM_INDEXEDDB);
         xs->UnregisterExceptionProvider(gExceptionProvider,
                                         NS_ERROR_MODULE_DOM_FILEHANDLE);
@@ -153,27 +150,6 @@ nsDOMScriptObjectFactory::Observe(nsISupports *aSubject,
     }
   }
 
-  return NS_OK;
-}
-
-static nsresult
-CreateXPConnectException(nsresult aResult, nsIException *aDefaultException,
-                         nsIException **_retval)
-{
-  // See whether we already have a useful XPConnect exception.  If we
-  // do, let's not create one with _less_ information!
-  nsCOMPtr<nsIXPCException> exception(do_QueryInterface(aDefaultException));
-  if (!exception) {
-    nsresult rv = NS_OK;
-    exception = do_CreateInstance("@mozilla.org/js/xpc/Exception;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = exception->Initialize(nsnull, aResult, nsnull, nsnull, nsnull,
-                               nsnull);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  exception.forget(_retval);
   return NS_OK;
 }
 
@@ -247,19 +223,16 @@ nsDOMExceptionProvider::GetException(nsresult result,
 
   switch (NS_ERROR_GET_MODULE(result))
   {
+    case NS_ERROR_MODULE_DOM:
     case NS_ERROR_MODULE_SVG:
-      return NS_NewSVGException(result, aDefaultException, _retval);
     case NS_ERROR_MODULE_DOM_XPATH:
-      return NS_NewXPathException(result, aDefaultException, _retval);
-    case NS_ERROR_MODULE_XPCONNECT:
-      return CreateXPConnectException(result, aDefaultException, _retval);
-    default:
-      MOZ_ASSERT(NS_ERROR_GET_MODULE(result) == NS_ERROR_MODULE_DOM ||
-          NS_ERROR_GET_MODULE(result) == NS_ERROR_MODULE_DOM_FILE ||
-          NS_ERROR_GET_MODULE(result) == NS_ERROR_MODULE_DOM_INDEXEDDB ||
-          NS_ERROR_GET_MODULE(result) == NS_ERROR_MODULE_DOM_FILEHANDLE,
-          "Trying to create an exception for the wrong error module.");
+    case NS_ERROR_MODULE_DOM_FILE:
+    case NS_ERROR_MODULE_DOM_INDEXEDDB:
+    case NS_ERROR_MODULE_DOM_FILEHANDLE:
       return NS_NewDOMException(result, aDefaultException, _retval);
+    default:
+      NS_WARNING("Trying to create an exception for the wrong error module.");
+      return NS_ERROR_FAILURE;
   }
   NS_NOTREACHED("Not reached");
   return NS_ERROR_UNEXPECTED;

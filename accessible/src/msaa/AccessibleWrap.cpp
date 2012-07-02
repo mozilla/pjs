@@ -30,7 +30,6 @@
 #endif
 
 #include "nsIMutableArray.h"
-#include "nsIDOMDocument.h"
 #include "nsIFrame.h"
 #include "nsIScrollableFrame.h"
 #include "nsINameSpaceManager.h"
@@ -103,7 +102,7 @@ __try {
   }
 
   if (NULL == *ppv) {
-    HRESULT hr = CAccessibleHyperlink::QueryInterface(iid, ppv);
+    HRESULT hr = ia2AccessibleHyperlink::QueryInterface(iid, ppv);
     if (SUCCEEDED(hr))
       return hr;
   }

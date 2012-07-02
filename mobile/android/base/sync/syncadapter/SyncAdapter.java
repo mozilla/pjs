@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.TimeUnit;
 
 import org.json.simple.parser.ParseException;
+import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.sync.AlreadySyncingException;
 import org.mozilla.gecko.sync.GlobalConstants;
 import org.mozilla.gecko.sync.GlobalSession;
@@ -36,6 +37,7 @@ import android.accounts.AuthenticatorException;
 import android.accounts.OperationCanceledException;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.Editor;
@@ -68,25 +70,29 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
     mAccountManager = AccountManager.get(context);
   }
 
-  private SharedPreferences getGlobalPrefs() {
-    return mContext.getSharedPreferences("sync.prefs.global", SHARED_PREFERENCES_MODE);
+  public static SharedPreferences getGlobalPrefs(Context context) {
+    return context.getSharedPreferences("sync.prefs.global", SHARED_PREFERENCES_MODE);
+  }
+
+  public static void purgeGlobalPrefs(Context context) {
+    getGlobalPrefs(context).edit().clear().commit();
   }
 
   /**
    * Backoff.
    */
   public synchronized long getEarliestNextSync() {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     return sharedPreferences.getLong(PREFS_EARLIEST_NEXT_SYNC, 0);
   }
   public synchronized void setEarliestNextSync(long next) {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     Editor edit = sharedPreferences.edit();
     edit.putLong(PREFS_EARLIEST_NEXT_SYNC, next);
     edit.commit();
   }
   public synchronized void extendEarliestNextSync(long next) {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     if (sharedPreferences.getLong(PREFS_EARLIEST_NEXT_SYNC, 0) >= next) {
       return;
     }
@@ -96,17 +102,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
   }
 
   public synchronized boolean getShouldInvalidateAuthToken() {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     return sharedPreferences.getBoolean(PREFS_INVALIDATE_AUTH_TOKEN, false);
   }
   public synchronized void clearShouldInvalidateAuthToken() {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     Editor edit = sharedPreferences.edit();
     edit.remove(PREFS_INVALIDATE_AUTH_TOKEN);
     edit.commit();
   }
   public synchronized void setShouldInvalidateAuthToken() {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     Editor edit = sharedPreferences.edit();
     edit.putBoolean(PREFS_INVALIDATE_AUTH_TOKEN, true);
     edit.commit();
@@ -217,6 +223,29 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
     return delayMilliseconds() > 0;
   }
 
+  /**
+   * Asynchronously request an immediate sync, optionally syncing only the given
+   * named stages.
+   * <p>
+   * Returns immediately.
+   *
+   * @param account
+   *          the Android <code>Account</code> instance to sync.
+   * @param stageNames
+   *          stage names to sync, or <code>null</code> to sync all known stages.
+   */
+  public static void requestImmediateSync(final Account account, final String[] stageNames) {
+    if (account == null) {
+      Logger.warn(LOG_TAG, "Not requesting immediate sync because Android Account is null.");
+      return;
+    }
+
+    final Bundle extras = new Bundle();
+    Utils.putStageNamesToSync(extras, stageNames, null);
+    extras.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
+    ContentResolver.requestSync(account, BrowserContract.AUTHORITY, extras);
+  }
+
   @Override
   public void onPerformSync(final Account account,
                             final Bundle extras,
@@ -230,7 +259,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
     this.syncResult   = syncResult;
     this.localAccount = account;
 
-    thisSyncIsForced = (extras != null) && (extras.getBoolean("force", false));
+    Log.i(LOG_TAG, "Syncing client named " + getClientName() +
+                   " with client guid " + getAccountGUID() +
+                   " (sync account has " + getClientsCount() + " clients).");
+
+    thisSyncIsForced = (extras != null) && (extras.getBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, false));
     long delay = delayMilliseconds();
     if (delay > 0) {
       if (thisSyncIsForced) {
@@ -245,7 +278,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
 
     // Pick up log level changes. Do this here so that we don't do extra work
     // if we're not going to be syncing.
-    Logger.refreshLogLevels();
+    Logger.resetLogging();
 
     // TODO: don't clear the auth token unless we have a sync error.
     Log.i(LOG_TAG, "Got onPerformSync. Extras bundle is " + extras);
@@ -515,12 +548,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter implements GlobalSe
   }
 
   public synchronized boolean getClusterURLIsStale() {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     return sharedPreferences.getBoolean(PREFS_CLUSTER_URL_IS_STALE, false);
   }
 
   public synchronized void setClusterURLIsStale(boolean clusterURLIsStale) {
-    SharedPreferences sharedPreferences = getGlobalPrefs();
+    SharedPreferences sharedPreferences = getGlobalPrefs(mContext);
     Editor edit = sharedPreferences.edit();
     edit.putBoolean(PREFS_CLUSTER_URL_IS_STALE, clusterURLIsStale);
     edit.commit();

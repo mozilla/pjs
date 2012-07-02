@@ -560,6 +560,15 @@ class SetPropCompiler : public PICStubCompiler
             if (obj->numDynamicSlots() != slots)
                 return disable("insufficient slot capacity");
 
+#ifdef JSGC_INCREMENTAL_MJ
+            /*
+             * Since we're changing the object's shape, we need a write
+             * barrier. Taking the slow path is the easiest way to get one.
+             */
+            if (cx->compartment->needsBarrier())
+                return disable("ADDPROP write barrier required");
+#endif
+
             if (pic.typeMonitored && !updateMonitoredTypes())
                 return Lookup_Uncacheable;
 
@@ -1665,7 +1674,7 @@ class ScopeNameCompiler : public PICStubCompiler
     bool retrieve(Value *vp, PICInfo::Kind kind)
     {
         JSObject *obj = getprop.obj;
-        JSObject *holder = getprop.holder;
+        Rooted<JSObject*> holder(cx, getprop.holder);
         const JSProperty *prop = getprop.prop;
 
         if (!prop) {
@@ -1690,7 +1699,7 @@ class ScopeNameCompiler : public PICStubCompiler
         }
 
         const Shape *shape = getprop.shape;
-        JSObject *normalized = obj;
+        Rooted<JSObject*> normalized(cx, obj);
         if (obj->isWith() && !shape->hasDefaultGetter())
             normalized = &obj->asWith().object();
         NATIVE_GET(cx, normalized, holder, shape, 0, vp, return false);
@@ -1855,7 +1864,7 @@ ic::GetProp(VMFrame &f, ic::PICInfo *pic)
 
     PropertyName *name = pic->name;
     if (name == f.cx->runtime->atomState.lengthAtom) {
-        if (f.regs.sp[-1].isMagic(JS_OPTIMIZED_ARGUMENTS)) {
+        if (IsOptimizedArguments(f.fp(), &f.regs.sp[-1])) {
             f.regs.sp[-1].setInt32(f.regs.fp()->numActualArgs());
             return;
         }
@@ -1915,7 +1924,7 @@ ic::GetProp(VMFrame &f, ic::PICInfo *pic)
 
     Value v;
     if (cached) {
-        if (!GetPropertyOperation(f.cx, f.pc(), f.regs.sp[-1], &v))
+        if (!GetPropertyOperation(f.cx, f.script(), f.pc(), f.regs.sp[-1], &v))
             THROW();
     } else {
         if (!obj->getProperty(f.cx, name, &v))
@@ -2390,15 +2399,15 @@ GetElementIC::attachTypedArray(VMFrame &f, JSObject *obj, const Value &v, jsid i
                  : Int32Key::FromRegister(idRemat.dataReg());
 
     if (!masm.supportsFloatingPoint() &&
-        (TypedArray::getType(obj) == TypedArray::TYPE_FLOAT32 ||
-         TypedArray::getType(obj) == TypedArray::TYPE_FLOAT64 ||
-         TypedArray::getType(obj) == TypedArray::TYPE_UINT32))
+        (TypedArray::type(obj) == TypedArray::TYPE_FLOAT32 ||
+         TypedArray::type(obj) == TypedArray::TYPE_FLOAT64 ||
+         TypedArray::type(obj) == TypedArray::TYPE_UINT32))
     {
         return disable(f, "fpu not supported");
     }
 
     MaybeRegisterID tempReg;
-    masm.loadFromTypedArray(TypedArray::getType(obj), objReg, key, typeReg, objReg, tempReg);
+    masm.loadFromTypedArray(TypedArray::type(obj), objReg, key, typeReg, objReg, tempReg);
 
     Jump done = masm.jump();
 
@@ -2437,7 +2446,8 @@ GetElementIC::attachTypedArray(VMFrame &f, JSObject *obj, const Value &v, jsid i
     disable(f, "generated typed array stub");
 
     // Fetch the value as expected of Lookup_Cacheable for GetElement.
-    if (!obj->getGeneric(cx, RootedId(cx, id), vp))
+    Rooted<jsid> idRoot(cx, id);
+    if (!obj->getGeneric(cx, idRoot, vp))
         return Lookup_Error;
 
     return Lookup_Cacheable;
@@ -2504,11 +2514,11 @@ ic::GetElement(VMFrame &f, ic::GetElementIC *ic)
     }
 #endif
 
-    jsid id;
+    Rooted<jsid> id(cx);
     if (idval.isInt32() && INT_FITS_IN_JSID(idval.toInt32())) {
         id = INT_TO_JSID(idval.toInt32());
     } else {
-        if (!InternNonIntElementId(cx, obj, idval, &id))
+        if (!InternNonIntElementId(cx, obj, idval, id.address()))
             THROW();
     }
 
@@ -2527,7 +2537,7 @@ ic::GetElement(VMFrame &f, ic::GetElementIC *ic)
         }
     }
 
-    if (!obj->getGeneric(cx, RootedId(cx, id), &f.regs.sp[-2]))
+    if (!obj->getGeneric(cx, id, &f.regs.sp[-2]))
         THROW();
 
 #if JS_HAS_NO_SUCH_METHOD
@@ -2703,8 +2713,8 @@ SetElementIC::attachTypedArray(VMFrame &f, JSObject *obj, int32_t key)
     masm.loadPtr(Address(objReg, TypedArray::dataOffset()), objReg);
 
     if (!masm.supportsFloatingPoint() &&
-        (TypedArray::getType(obj) == TypedArray::TYPE_FLOAT32 ||
-         TypedArray::getType(obj) == TypedArray::TYPE_FLOAT64))
+        (TypedArray::type(obj) == TypedArray::TYPE_FLOAT32 ||
+         TypedArray::type(obj) == TypedArray::TYPE_FLOAT64))
     {
         return disable(f, "fpu not supported");
     }

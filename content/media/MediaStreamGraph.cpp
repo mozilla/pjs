@@ -17,6 +17,7 @@
 #include "nsXPCOMCIDInternal.h"
 #include "prlog.h"
 #include "VideoUtils.h"
+#include "mozilla/Attributes.h"
 
 using namespace mozilla::layers;
 
@@ -548,6 +549,7 @@ MediaStreamGraphImpl::FinishStream(MediaStream* aStream)
 {
   if (aStream->mFinished)
     return;
+  printf("MediaStreamGraphImpl::FinishStream\n");
   LOG(PR_LOG_DEBUG, ("MediaStream %p will finish", aStream));
   aStream->mFinished = true;
   // Force at least one more iteration of the control loop, since we rely
@@ -1469,7 +1471,7 @@ public:
   }
 };
 
-class MediaStreamGraphShutdownObserver : public nsIObserver
+class MediaStreamGraphShutdownObserver MOZ_FINAL : public nsIObserver
 {
 public:
   NS_DECL_ISUPPORTS

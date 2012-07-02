@@ -13,6 +13,7 @@
 #include "nsISVGGlyphFragmentNode.h"
 #include "nsSVGGlyphFrame.h"
 #include "nsSVGGraphicElement.h"
+#include "nsSVGIntegrationUtils.h"
 #include "nsSVGPathElement.h"
 #include "nsSVGTextPathFrame.h"
 #include "nsSVGUtils.h"
@@ -55,14 +56,14 @@ nsSVGTextFrame::AttributeChanged(PRInt32         aNameSpaceID,
     return NS_OK;
 
   if (aAttribute == nsGkAtoms::transform) {
-
+    nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
     NotifySVGChanged(TRANSFORM_CHANGED);
-   
   } else if (aAttribute == nsGkAtoms::x ||
              aAttribute == nsGkAtoms::y ||
              aAttribute == nsGkAtoms::dx ||
              aAttribute == nsGkAtoms::dy ||
              aAttribute == nsGkAtoms::rotate) {
+    nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
     NotifyGlyphMetricsChange();
   }
 
@@ -169,6 +170,16 @@ nsSVGTextFrame::NotifySVGChanged(PRUint32 aFlags)
     mCanvasTM = nsnull;
   }
 
+  if (updateGlyphMetrics) {
+    // Ancestor changes can't affect how we render from the perspective of
+    // any rendering observers that we may have, so we don't need to
+    // invalidate them. We also don't need to invalidate ourself, since our
+    // changed ancestor will have invalidated its entire area, which includes
+    // our area.
+    // For perf reasons we call this before calling NotifySVGChanged() below.
+    nsSVGUtils::ScheduleBoundsUpdate(this);
+  }
+
   nsSVGTextFrameBase::NotifySVGChanged(aFlags);
 
   if (updateGlyphMetrics) {
@@ -224,8 +235,13 @@ nsSVGTextFrame::UpdateBounds()
   // areas correctly:
   nsSVGTextFrameBase::UpdateBounds();
 
-  // XXXSDL once we store bounds on containers, call
-  // nsSVGUtils::InvalidateBounds(this) if not first reflow.
+  if (!(GetParent()->GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
+    // We only invalidate if our outer-<svg> has already had its
+    // initial reflow (since if it hasn't, its entire area will be
+    // invalidated when it gets that initial reflow):
+    // XXXSDL Let FinishAndStoreOverflow do this.
+    nsSVGUtils::InvalidateBounds(this, true);
+  }
 }
 
 SVGBBox
@@ -241,15 +257,23 @@ nsSVGTextFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
 // nsSVGContainerFrame methods:
 
 gfxMatrix
-nsSVGTextFrame::GetCanvasTM()
+nsSVGTextFrame::GetCanvasTM(PRUint32 aFor)
 {
+  if (!(GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD)) {
+    if ((aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) ||
+        (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled())) {
+      return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(this);
+    }
+  }
+
   if (!mCanvasTM) {
     NS_ASSERTION(mParent, "null parent");
 
     nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
     nsSVGGraphicElement *content = static_cast<nsSVGGraphicElement*>(mContent);
 
-    gfxMatrix tm = content->PrependLocalTransformsTo(parent->GetCanvasTM());
+    gfxMatrix tm =
+      content->PrependLocalTransformsTo(parent->GetCanvasTM(aFor));
 
     mCanvasTM = new gfxMatrix(tm);
   }
@@ -260,9 +284,34 @@ nsSVGTextFrame::GetCanvasTM()
 //----------------------------------------------------------------------
 //
 
+static void
+MarkDirtyBitsOnDescendants(nsIFrame *aFrame)
+{
+  // Do not skip marking of aFrame or any of its descendants if they have
+  // the NS_FRAME_IS_DIRTY set, because some of their descendants may not
+  // have it set, and we need all descendants to be dirty.
+  if (aFrame->GetStateBits() & (NS_FRAME_FIRST_REFLOW)) {
+    // Nothing to do if our outer-<svg> hasn't yet had its initial reflow.
+    return;
+  }
+  nsIFrame* kid = aFrame->GetFirstPrincipalChild();
+  while (kid) {
+    nsISVGChildFrame* svgkid = do_QueryFrame(kid);
+    if (svgkid) {
+      MarkDirtyBitsOnDescendants(kid);
+      kid->AddStateBits(NS_FRAME_IS_DIRTY);
+    }
+    kid = kid->GetNextSibling();
+  }
+}
+
 void
 nsSVGTextFrame::NotifyGlyphMetricsChange()
 {
+  // NotifySVGChanged isn't appropriate here, so we just mark our descendants
+  // as fully dirty to get UpdateBounds() called on them:
+  MarkDirtyBitsOnDescendants(this);
+
   nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
 
   mPositioningDirty = true;

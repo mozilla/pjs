@@ -119,6 +119,7 @@ XPIDLSRCS	= \
 		nsIPrintSettingsService.idl \
 		nsIPrintOptions.idl \
 		nsIIdleService.idl \
+		nsIIdleServiceInternal.idl \
 		nsIGfxInfo.idl \
                 nsIGfxInfoDebug.idl \
 		nsIIMEPicker.idl \
@@ -143,6 +144,7 @@ endif
 ifeq ($(MOZ_WIDGET_TOOLKIT),cocoa)
 XPIDLSRCS +=	nsIMacDockSupport.idl \
 		nsIStandaloneNativeMenu.idl \
+		nsIMacWebAppUtils.idl \
 		$(NULL)
 endif
 

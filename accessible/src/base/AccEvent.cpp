@@ -13,7 +13,6 @@
 #include "nsAccEvent.h"
 #include "States.h"
 
-#include "nsIDOMDocument.h"
 #include "nsEventStateManager.h"
 #include "nsIServiceManager.h"
 #ifdef MOZ_XUL
@@ -88,7 +87,7 @@ AccEvent::CreateXPCOMObject()
 ////////////////////////////////////////////////////////////////////////////////
 // AccEvent cycle collection
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(AccEvent)
+NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(AccEvent)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_NATIVE(AccEvent)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mAccessible)
@@ -368,9 +367,11 @@ AccTableChangeEvent::CreateXPCOMObject()
 AccVCChangeEvent::
   AccVCChangeEvent(Accessible* aAccessible,
                    nsIAccessible* aOldAccessible,
-                   PRInt32 aOldStart, PRInt32 aOldEnd) :
+                   PRInt32 aOldStart, PRInt32 aOldEnd,
+                   PRInt16 aReason) :
     AccEvent(::nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED, aAccessible),
-    mOldAccessible(aOldAccessible), mOldStart(aOldStart), mOldEnd(aOldEnd)
+    mOldAccessible(aOldAccessible), mOldStart(aOldStart), mOldEnd(aOldEnd),
+    mReason(aReason)
 {
 }
 

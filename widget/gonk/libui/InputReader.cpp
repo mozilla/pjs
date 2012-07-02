@@ -1206,9 +1206,7 @@ TouchButtonAccumulator::TouchButtonAccumulator() :
 }
 
 void TouchButtonAccumulator::configure(InputDevice* device) {
-    // Some input devices return erroneous information to us,
-    // which lead to have only hovering pointer ids.
-    //mHaveBtnTouch = device->hasKey(BTN_TOUCH);
+    mHaveBtnTouch = device->hasKey(BTN_TOUCH);
 }
 
 void TouchButtonAccumulator::reset(InputDevice* device) {
@@ -2330,7 +2328,8 @@ void CursorInputMapper::fadePointer() {
 TouchInputMapper::TouchInputMapper(InputDevice* device) :
         InputMapper(device),
         mSource(0), mDeviceMode(DEVICE_MODE_DISABLED),
-        mSurfaceOrientation(-1), mSurfaceWidth(-1), mSurfaceHeight(-1) {
+        mSurfaceOrientation(-1), mSurfaceWidth(-1), mSurfaceHeight(-1),
+        mPointerUsage(POINTER_USAGE_NONE) {
 }
 
 TouchInputMapper::~TouchInputMapper() {

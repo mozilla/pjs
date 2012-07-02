@@ -42,7 +42,7 @@ const PREF_APP_UPDATE_POSTUPDATE          = "app.update.postupdate";
 const PREF_APP_UPDATE_PROMPTWAITTIME      = "app.update.promptWaitTime";
 const PREF_APP_UPDATE_SHOW_INSTALLED_UI   = "app.update.showInstalledUI";
 const PREF_APP_UPDATE_SILENT              = "app.update.silent";
-const PREF_APP_UPDATE_BACKGROUND          = "app.update.stage.enabled";
+const PREF_APP_UPDATE_STAGE_ENABLED       = "app.update.stage.enabled";
 const PREF_APP_UPDATE_URL                 = "app.update.url";
 const PREF_APP_UPDATE_URL_DETAILS         = "app.update.url.details";
 const PREF_APP_UPDATE_URL_OVERRIDE        = "app.update.url.override";
@@ -111,7 +111,7 @@ const STATE_FAILED          = "failed";
 
 // From updater/errors.h:
 const WRITE_ERROR        = 7;
-const UNEXPECTED_ERROR   = 8;
+// const UNEXPECTED_ERROR   = 8; // Replaced with errors 38-42
 const ELEVATION_CANCELED = 9;
 
 // Windows service specific errors
@@ -125,6 +125,15 @@ const SERVICE_STILL_APPLYING_ON_FAILURE    = 30;
 const SERVICE_UPDATER_NOT_FIXED_DRIVE      = 31;
 const SERVICE_COULD_NOT_LOCK_UPDATER       = 32;
 const SERVICE_INSTALLDIR_ERROR             = 33;
+
+const WRITE_ERROR_ACCESS_DENIED       = 35;
+const WRITE_ERROR_SHARING_VIOLATION   = 36;
+const WRITE_ERROR_CALLBACK_APP        = 37;
+const INVALID_UPDATER_STATUS_CODE     = 38;
+const UNEXPECTED_BZIP_ERROR           = 39;
+const UNEXPECTED_MAR_ERROR            = 40;
+const UNEXPECTED_BSPATCH_ERROR        = 41;
+const UNEXPECTED_FILE_OPERATION_ERROR = 42;
 
 const CERT_ATTR_CHECK_FAILED_NO_UPDATE  = 100;
 const CERT_ATTR_CHECK_FAILED_HAS_UPDATE = 101;
@@ -329,6 +338,16 @@ function testWriteAccess(updateTestFile, createDirectory) {
 }
 
 XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpdates() {
+  function submitHasPermissionsTelemetryPing(val) {
+      try {
+        let h = Services.telemetry.getHistogramById("UPDATER_HAS_PERMISSIONS");
+        h.add(+val);
+      } catch(e) {
+        // Don't allow any exception to be propagated.
+        Components.utils.reportError(e);
+      }
+  } 
+
   try {
     var updateTestFile = getUpdateFile([FILE_PERMS_TEST]);
     LOG("gCanApplyUpdates - testing write access " + updateTestFile.path);
@@ -408,17 +427,19 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
   catch (e) {
      LOG("gCanApplyUpdates - unable to apply updates. Exception: " + e);
     // No write privileges to install directory
+    submitHasPermissionsTelemetryPing(false);
     return false;
   }
 
   LOG("gCanApplyUpdates - able to apply updates");
+  submitHasPermissionsTelemetryPing(true);
   return true;
 });
 
 XPCOMUtils.defineLazyGetter(this, "gCanStageUpdates", function aus_gCanStageUpdates() {
   // If background updates are disabled, then just bail out!
-  if (!getPref("getBoolPref", PREF_APP_UPDATE_BACKGROUND, false)) {
-    LOG("gCanStageUpdates - staging updates is disabled by preference " + PREF_APP_UPDATE_BACKGROUND);
+  if (!getPref("getBoolPref", PREF_APP_UPDATE_STAGE_ENABLED, false)) {
+    LOG("gCanStageUpdates - staging updates is disabled by preference " + PREF_APP_UPDATE_STAGE_ENABLED);
     return false;
   }
 
@@ -769,18 +790,22 @@ function cleanUpUpdatesDir(aBackgroundUpdate) {
           }
         }
         f.moveTo(dir, FILE_LAST_LOG);
-        continue;
+        if (aBackgroundUpdate) {
+          // We're not going to delete any files, so we can just
+          // bail out of the loop right now.
+          break;
+        } else {
+          continue;
+        }
       }
       catch (e) {
         LOG("cleanUpUpdatesDir - failed to move file " + f.path + " to " +
             dir.path + " and rename it to " + FILE_LAST_LOG);
       }
-    } else if (f.leafName == FILE_UPDATE_STATUS && aBackgroundUpdate) {
-      // Leave the update.status file alone when a background update
-      // has been performed.  We don't remove this file here because
-      // after the application directory gets replaced by the staged
-      // update, this will end up being the update.status file which
-      // represents the status of the update performed.
+    } else if (aBackgroundUpdate) {
+      // Don't delete any files when an update has been staged, as
+      // we need to keep them around in case we would have to fall
+      // back to applying the update on application restart.
       continue;
     }
     // Now, recursively remove this file.  The recursive removal is really
@@ -957,7 +982,10 @@ function readStringFromFile(file) {
 
 function handleUpdateFailure(update, errorCode) {
   update.errorCode = parseInt(errorCode);
-  if (update.errorCode == WRITE_ERROR) {
+  if (update.errorCode == WRITE_ERROR || 
+      update.errorCode == WRITE_ERROR_ACCESS_DENIED ||
+      update.errorCode == WRITE_ERROR_SHARING_VIOLATION ||
+      update.errorCode == WRITE_ERROR_CALLBACK_APP) {
     Cc["@mozilla.org/updates/update-prompt;1"].
       createInstance(Ci.nsIUpdatePrompt).
       showUpdateError(update);
@@ -1010,8 +1038,9 @@ function handleUpdateFailure(update, errorCode) {
  * Fall back to downloading a complete update in case an update has failed.
  *
  * @param update the update object that has failed to apply.
+ * @param postStaging true if we have just attempted to stage an update.
  */
-function handleFallbackToCompleteUpdate(update) {
+function handleFallbackToCompleteUpdate(update, postStaging) {
   cleanupActiveUpdate();
 
   update.statusText = gUpdateBundle.GetStringFromName("patchApplyFailure");
@@ -1024,7 +1053,7 @@ function handleFallbackToCompleteUpdate(update) {
         "failed, downloading complete patch");
     var status = Cc["@mozilla.org/updates/update-service;1"].
                  getService(Ci.nsIApplicationUpdateService).
-                 downloadUpdate(update, true);
+                 downloadUpdate(update, !postStaging);
     if (status == STATE_NONE)
       cleanupActiveUpdate();
   }
@@ -1587,8 +1616,29 @@ UpdateService.prototype = {
                    createInstance(Ci.nsIUpdatePrompt);
 
     update.state = status;
-    this._submitTelemetryPing(status);
+    this._sendStatusCodeTelemetryPing(status);
+
     if (status == STATE_SUCCEEDED) {
+      // Report telemetry that we want after each successful update.
+      // We do this only on successful updates so that we only get
+      // one report from each user for each version.  If a user cancels
+      // UAC for example, we don't want 2 reports from them on the same
+      // version.
+      this._sendBoolPrefTelemetryPing(PREF_APP_UPDATE_ENABLED,
+                                      "UPDATER_UPDATES_ENABLED");
+      this._sendBoolPrefTelemetryPing(PREF_APP_UPDATE_AUTO,
+                                      "UPDATER_UPDATES_AUTOMATIC");
+      this._sendBoolPrefTelemetryPing(PREF_APP_UPDATE_STAGE_ENABLED,
+                                      "UPDATER_STAGE_ENABLED");
+
+#ifdef XP_WIN
+      this._sendBoolPrefTelemetryPing(PREF_APP_UPDATE_SERVICE_ENABLED,
+                                      "UPDATER_SERVICE_ENABLED");
+      this._sendIntPrefTelemetryPing(PREF_APP_UPDATE_SERVICE_ERRORS,
+                                     "UPDATER_SERVICE_ERRORS");
+      this._sendServiceInstalledTelemetryPing();
+#endif
+
       update.statusText = gUpdateBundle.GetStringFromName("installSuccess");
 
       // Update the patch's metadata.
@@ -1617,11 +1667,92 @@ UpdateService.prototype = {
       }
 
       // Something went wrong with the patch application process.
-      handleFallbackToCompleteUpdate(update);
+      handleFallbackToCompleteUpdate(update, false);
 
       prompter.showUpdateError(update);
     }
   },
+
+  /**
+   * Submit a telemetry ping with the boolean value of a pref for a histogram
+   *
+   * @param  pref
+   *         The preference to report
+   * @param  histogram
+   *         The histogram ID to report to
+   */
+  _sendBoolPrefTelemetryPing: function AUS__boolTelemetryPing(pref, histogram) {
+    try {
+      // The getPref is already wrapped in a try/catch but we never
+      // want telemetry pings breaking app update so we just put it
+      // inside the try to be safe. 
+      let val = getPref("getBoolPref", pref, false);
+      Services.telemetry.getHistogramById(histogram).add(+val);
+    } catch(e) {
+      // Don't allow any exception to be propagated.
+      Components.utils.reportError(e);
+    }
+  },
+
+#ifdef XP_WIN
+  /**
+   * Submit a telemetry ping with a boolean value which indicates if the service
+   * is installed.
+   * Also submits a telemetry ping with a boolean value which indicates if the
+   * service was at some point installed, but is now uninstalled.
+   */
+  _sendServiceInstalledTelemetryPing: function AUS__svcInstallTelemetryPing() {
+    let installed = 0;
+    let attempted = 0;
+    try {
+      let wrk = Components.classes["@mozilla.org/windows-registry-key;1"]
+                .createInstance(Components.interfaces.nsIWindowsRegKey);
+      wrk.open(wrk.ROOT_KEY_LOCAL_MACHINE,
+               "SOFTWARE\\Mozilla\\MaintenanceService",
+               wrk.ACCESS_READ | wrk.WOW64_64);
+      attempted = wrk.readIntValue("Attempted");
+      installed = wrk.readIntValue("Installed");
+      wrk.close();
+    } catch(e) {
+    }
+    try {
+      let h = Services.telemetry.getHistogramById("UPDATER_SERVICE_INSTALLED");
+      h.add(installed);
+    } catch(e) {
+      // Don't allow any exception to be propagated.
+      Components.utils.reportError(e);
+    }
+    try {
+      let h = Services.telemetry.getHistogramById("UPDATER_SERVICE_MANUALLY_UNINSTALLED");
+      h.add(!installed && attempted ? 1 : 0);
+    } catch(e) {
+      // Don't allow any exception to be propagated.
+      Components.utils.reportError(e);
+    }
+  },
+#endif
+
+  /**
+   * Submit a telemetry ping with the int value of a pref for a histogram
+   *
+   * @param  pref
+   *         The preference to report
+   * @param histogram
+   *         The histogram ID to report to
+   */
+  _sendIntPrefTelemetryPing: function AUS__intTelemetryPing(pref, histogram) {
+    try {
+      // The getPref is already wrapped in a try/catch but we never
+      // want telemetry pings breaking app update so we just put it
+      // inside the try to be safe. 
+      let val = getPref("getIntPref", pref, 0);
+      Services.telemetry.getHistogramById(histogram).add(val);
+    } catch(e) {
+      // Don't allow any exception to be propagated.
+      Components.utils.reportError(e);
+    }
+  },
+
 
   /**
    * Submit the results of applying the update via telemetry.
@@ -1629,7 +1760,7 @@ UpdateService.prototype = {
    * @param  status
    *         The status of the update as read from the update.status file
    */
-  _submitTelemetryPing: function AUS__submitTelemetryPing(status) {
+  _sendStatusCodeTelemetryPing: function AUS__statusTelemetryPing(status) {
     try {
       let parts = status.split(":");
       if ((parts.length == 1 && status != STATE_SUCCEEDED) ||
@@ -1639,7 +1770,7 @@ UpdateService.prototype = {
       }
       let result = 0; // 0 means success
       if (parts.length > 1) {
-        result = parseInt(parts[1]) || UNEXPECTED_ERROR;
+        result = parseInt(parts[1]) || INVALID_UPDATER_STATUS_CODE;
       }
       Services.telemetry.getHistogramById("UPDATER_STATUS_CODES").add(result);
     } catch(e) {
@@ -2432,7 +2563,7 @@ UpdateManager.prototype = {
     if (update.state == STATE_FAILED && ary[1]) {
       updateSucceeded = false;
       if (!handleUpdateFailure(update, ary[1])) {
-        handleFallbackToCompleteUpdate(update);
+        handleFallbackToCompleteUpdate(update, true);
       }
     }
     if (update.state == STATE_APPLIED && shouldUseService()) {
@@ -3120,7 +3251,7 @@ Downloader.prototype = {
         // download, since otherwise some kind of UI is already visible and
         // that UI will notify.
         if (this.background)
-          shouldShowPrompt = !getPref("getBoolPref", PREF_APP_UPDATE_BACKGROUND, false);
+          shouldShowPrompt = !getPref("getBoolPref", PREF_APP_UPDATE_STAGE_ENABLED, false);
 
         // Tell the updater.exe we're ready to apply.
         writeStatusFile(getUpdatesDir(), state);
@@ -3368,7 +3499,11 @@ UpdatePrompt.prototype = {
       return;
 
     // In some cases, we want to just show a simple alert dialog:
-    if (update.state == STATE_FAILED && update.errorCode == WRITE_ERROR) {
+    if (update.state == STATE_FAILED &&
+        (update.errorCode == WRITE_ERROR ||
+         update.errorCode == WRITE_ERROR_ACCESS_DENIED ||
+         update.errorCode == WRITE_ERROR_SHARING_VIOLATION ||
+         update.errorCode == WRITE_ERROR_CALLBACK_APP)) {
       var title = gUpdateBundle.GetStringFromName("updaterIOErrorTitle");
       var text = gUpdateBundle.formatStringFromName("updaterIOErrorMsg",
                                                     [Services.appinfo.name,

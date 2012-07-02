@@ -15,6 +15,7 @@
 
 #include "nsIDOMHTMLIFrameElement.h"
 #include "nsIDOMHTMLFrameElement.h"
+#include "nsIDOMMozBrowserFrame.h"
 #include "nsIDOMWindow.h"
 #include "nsIPresShell.h"
 #include "nsIContent.h"
@@ -107,14 +108,6 @@ public:
   nsRefPtr<nsIDocShell> mDocShell;
 };
 
-static void InvalidateFrame(nsIFrame* aFrame, PRUint32 aFlags)
-{
-  if (!aFrame)
-    return;
-  nsRect rect = nsRect(nsPoint(0, 0), aFrame->GetRect().Size());
-  aFrame->InvalidateWithFlags(rect, aFlags);
-}
-
 NS_IMPL_ISUPPORTS1(nsContentView, nsIContentView)
 
 bool
@@ -149,13 +142,6 @@ nsContentView::Update(const ViewConfig& aConfig)
     rfp->ContentViewScaleChanged(this);
   }
 
-  // XXX could be clever here and compute a smaller invalidation
-  // rect
-  // NB: we pass INVALIDATE_NO_THEBES_LAYERS here to keep view
-  // semantics the same for both in-process and out-of-process
-  // <browser>.  This is just a transform of the layer subtree in
-  // both.
-  InvalidateFrame(mFrameLoader->GetPrimaryFrameOfOwningContent(), nsIFrame::INVALIDATE_NO_THEBES_LAYERS);
   return NS_OK;
 }
 
@@ -621,7 +607,7 @@ SetTreeOwnerAndChromeEventHandlerOnDocshellTree(nsIDocShellTreeItem* aItem,
 
 /**
  * Set the type of the treeitem and hook it up to the treeowner.
- * @param aItem the treeitem we're wrking working with
+ * @param aItem the treeitem we're working with
  * @param aOwningContent the content node that owns aItem
  * @param aTreeOwner the relevant treeowner; might be null
  * @param aParentType the nsIDocShellTreeItem::GetType of our parent docshell
@@ -642,6 +628,8 @@ AddTreeItemToTreeOwner(nsIDocShellTreeItem* aItem, nsIContent* aOwningContent,
 
   if (aOwningContent->IsXUL()) {
       aOwningContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, value);
+  } else {
+      aOwningContent->GetAttr(kNameSpaceID_None, nsGkAtoms::mozframetype, value);
   }
 
   // we accept "content" and "content-xxx" values.
@@ -651,6 +639,16 @@ AddTreeItemToTreeOwner(nsIDocShellTreeItem* aItem, nsIContent* aOwningContent,
   isContent = value.LowerCaseEqualsLiteral("content") ||
     StringBeginsWith(value, NS_LITERAL_STRING("content-"),
                      nsCaseInsensitiveStringComparator());
+
+  // Force mozbrowser frames to always be typeContent, even if the
+  // mozbrowser interfaces are disabled.
+  nsCOMPtr<nsIDOMMozBrowserFrame> mozbrowser =
+    do_QueryInterface(aOwningContent);
+  if (mozbrowser) {
+    bool isMozbrowser = false;
+    mozbrowser->GetMozbrowser(&isMozbrowser);
+    isContent |= isMozbrowser;
+  }
 
   if (isContent) {
     // The web shell's type is content.
@@ -1494,13 +1492,6 @@ nsFrameLoader::MaybeCreateDocShell()
     mDocShell->SetChromeEventHandler(chromeEventHandler);
   }
 
-  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-  if (OwnerIsBrowserFrame() && os) {
-    mDocShell->SetIsBrowserFrame(true);
-    os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
-                        "in-process-browser-frame-shown", NULL);
-  }
-
   // This is nasty, this code (the do_GetInterface(mDocShell) below)
   // *must* come *after* the above call to
   // mDocShell->SetChromeEventHandler() for the global window to get
@@ -1526,6 +1517,22 @@ nsFrameLoader::MaybeCreateDocShell()
   }
 
   EnsureMessageManager();
+
+  if (OwnerIsBrowserFrame()) {
+    mDocShell->SetIsBrowserFrame(true);
+
+    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
+    if (os) {
+      os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
+                          "in-process-browser-frame-shown", NULL);
+    }
+
+    if (mMessageManager) {
+      mMessageManager->LoadFrameScript(
+        NS_LITERAL_STRING("chrome://global/content/BrowserElementChild.js"),
+        /* allowDelayedLoad = */ true);
+    }
+  }
 
   return NS_OK;
 }
@@ -1723,11 +1730,6 @@ nsFrameLoader::SetRenderMode(PRUint32 aRenderMode)
   }
 
   mRenderMode = aRenderMode;
-  // NB: we pass INVALIDATE_NO_THEBES_LAYERS here to keep view
-  // semantics the same for both in-process and out-of-process
-  // <browser>.  This is just a transform of the layer subtree in
-  // both.
-  InvalidateFrame(GetPrimaryFrameOfOwningContent(), nsIFrame::INVALIDATE_NO_THEBES_LAYERS);
   return NS_OK;
 }
 
@@ -1758,7 +1760,7 @@ nsFrameLoader::SetClipSubdocument(bool aClip)
   mClipSubdocument = aClip;
   nsIFrame* frame = GetPrimaryFrameOfOwningContent();
   if (frame) {
-    InvalidateFrame(frame, 0);
+    frame->InvalidateFrame();
     frame->PresContext()->PresShell()->
       FrameNeedsReflow(frame, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
     nsSubDocumentFrame* subdocFrame = do_QueryFrame(frame);
@@ -1888,7 +1890,8 @@ nsFrameLoader::TryRemoteBrowser()
 
   ContentParent* parent = ContentParent::GetNewOrUsed();
   NS_ASSERTION(parent->IsAlive(), "Process parent should be alive; something is very wrong!");
-  mRemoteBrowser = parent->CreateTab(chromeFlags);
+  mRemoteBrowser = parent->CreateTab(chromeFlags,
+                                     /* aIsBrowserFrame = */ OwnerIsBrowserFrame());
   if (mRemoteBrowser) {
     nsCOMPtr<nsIDOMElement> element = do_QueryInterface(mOwnerContent);
     mRemoteBrowser->SetOwnerElement(element);
@@ -2210,4 +2213,12 @@ nsFrameLoader::GetOwnerElement(nsIDOMElement **aElement)
   nsCOMPtr<nsIDOMElement> ownerElement = do_QueryInterface(mOwnerContent);
   ownerElement.forget(aElement);
   return NS_OK;
+}
+
+void
+nsFrameLoader::SetRemoteBrowser(nsITabParent* aTabParent)
+{
+  MOZ_ASSERT(!mRemoteBrowser);
+  MOZ_ASSERT(!mCurrentRemoteFrame);
+  mRemoteBrowser = static_cast<TabParent*>(aTabParent);
 }

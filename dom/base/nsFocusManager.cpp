@@ -10,7 +10,6 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIServiceManager.h"
-#include "nsIEnumerator.h"
 #include "nsGkAtoms.h"
 #include "nsContentUtils.h"
 #include "nsIDocument.h"
@@ -25,7 +24,6 @@
 #include "nsIDOMDocument.h"
 #include "nsIDOMRange.h"
 #include "nsIHTMLDocument.h"
-#include "nsIFormControlFrame.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIDocShell.h"
 #include "nsIEditorDocShell.h"
@@ -927,18 +925,24 @@ nsFocusManager::WindowHidden(nsIDOMWindow* aWindow)
   // window, or an ancestor of the focused window. Either way, the focus is no
   // longer valid, so it needs to be updated.
 
-  nsIContent* oldFocusedContent = mFocusedContent;
-  mFocusedContent = nsnull;
+  nsCOMPtr<nsIContent> oldFocusedContent = mFocusedContent.forget();
+
+  nsCOMPtr<nsIDocShell> focusedDocShell = mFocusedWindow->GetDocShell();
+  nsCOMPtr<nsIPresShell> presShell;
+  focusedDocShell->GetPresShell(getter_AddRefs(presShell));
 
   if (oldFocusedContent && oldFocusedContent->IsInDoc()) {
     NotifyFocusStateChange(oldFocusedContent,
                            mFocusedWindow->ShouldShowFocusRing(),
                            false);
-  }
+    window->UpdateCommands(NS_LITERAL_STRING("focus"));
 
-  nsCOMPtr<nsIDocShell> focusedDocShell = mFocusedWindow->GetDocShell();
-  nsCOMPtr<nsIPresShell> presShell;
-  focusedDocShell->GetPresShell(getter_AddRefs(presShell));
+    if (presShell) {
+      SendFocusOrBlurEvent(NS_BLUR_CONTENT, presShell,
+                           oldFocusedContent->GetCurrentDoc(),
+                           oldFocusedContent, 1, false);
+    }
+  }
 
   nsIMEStateManager::OnTextStateBlur(nsnull, nsnull);
   if (presShell) {
@@ -1564,8 +1568,7 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
       }
 
       // if the object being blurred is a remote browser, deactivate remote content
-      TabParent* remote = GetRemoteForContent(content);
-      if (remote) {
+      if (TabParent* remote = TabParent::GetFrom(content)) {
         remote->Deactivate();
   #ifdef DEBUG_FOCUS
       printf("*Remote browser deactivated\n");
@@ -1776,8 +1779,7 @@ nsFocusManager::Focus(nsPIDOMWindow* aWindow,
           objectFrameWidget->SetFocus(false);
 
         // if the object being focused is a remote browser, activate remote content
-        TabParent* remote = GetRemoteForContent(aContent);
-        if (remote) {
+        if (TabParent* remote = TabParent::GetFrom(aContent)) {
           remote->Activate();
 #ifdef DEBUG_FOCUS
           printf("*Remote browser activated\n");
@@ -3005,29 +3007,6 @@ nsFocusManager::GetRootForFocus(nsPIDOMWindow* aWindow,
   }
 
   return rootElement;
-}
-
-TabParent*
-nsFocusManager::GetRemoteForContent(nsIContent* aContent) {
-  if (!aContent ||
-      (aContent->Tag() != nsGkAtoms::browser &&
-       aContent->Tag() != nsGkAtoms::iframe) ||
-      !aContent->IsXUL() ||
-      !aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::Remote,
-                             nsGkAtoms::_true, eIgnoreCase))
-    return nsnull;
-
-  nsCOMPtr<nsIFrameLoaderOwner> loaderOwner = do_QueryInterface(aContent);
-  if (!loaderOwner)
-    return nsnull;
-
-  nsRefPtr<nsFrameLoader> frameLoader = loaderOwner->GetFrameLoader();
-  if (!frameLoader)
-    return nsnull;
-
-  PBrowserParent* remoteBrowser = frameLoader->GetRemoteBrowser();
-  TabParent* remote = static_cast<TabParent*>(remoteBrowser);
-  return remote;
 }
 
 void

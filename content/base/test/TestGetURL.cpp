@@ -4,7 +4,6 @@
 
 #include "TestHarness.h"
 
-#include "nsIDOMDocument.h"
 #include "nsIPrincipal.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIXMLHttpRequest.h"
@@ -49,7 +48,7 @@ nsresult TestGetURL(const nsCString& aURL)
   rv = xhr->Open(getString, aURL, false, empty, empty);
   TEST_ENSURE_SUCCESS(rv, "OpenRequest failed!");
 
-  rv = xhr->Send(nsnull, nsnull);
+  rv = xhr->Send(nsnull);
   TEST_ENSURE_SUCCESS(rv, "Send failed!");
 
   nsAutoString response;

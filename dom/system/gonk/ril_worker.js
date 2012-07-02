@@ -29,10 +29,8 @@
 
 importScripts("ril_consts.js", "systemlibs.js");
 
-// We leave this as 'undefined' instead of setting it to 'false'. That
-// way an outer scope can define it to 'true' (e.g. for testing purposes)
-// without us overriding that here.
-let DEBUG;
+// set to true in ril_consts.js to see debug messages
+let DEBUG = DEBUG_WORKER;
 
 const INT32_MAX   = 2147483647;
 const UINT8_SIZE  = 1;
@@ -51,6 +49,7 @@ let RILQUIRKS_DATACALLSTATE_DOWN_IS_UP = false;
 let RILQUIRKS_V5_LEGACY = true;
 let RILQUIRKS_REQUEST_USE_DIAL_EMERGENCY_CALL = false;
 let RILQUIRKS_MODEM_DEFAULTS_TO_EMERGENCY_MODE = false;
+let RILQUIRKS_DATACALLSTATE_NO_SUGGESTEDRETRYTIME = false;
 
 /**
  * This object contains helpers buffering incoming data & deconstructing it
@@ -520,6 +519,7 @@ let Buf = {
    */
   newParcel: function newParcel(type, options) {
     if (DEBUG) debug("New outgoing parcel of type " + type);
+
     // We're going to leave room for the parcel size at the beginning.
     this.outgoingIndex = PARCEL_SIZE_SIZE;
     this.writeUint32(type);
@@ -617,11 +617,6 @@ let RIL = {
   basebandVersion: null,
 
   /**
-   * Network selection mode. 0 for automatic, 1 for manual selection.
-   */
-  networkSelectionMode: null,
-
-  /**
    * Valid calls.
    */
   currentCalls: {},
@@ -647,6 +642,17 @@ let RIL = {
    * Outgoing messages waiting for SMS-STATUS-REPORT.
    */
   _pendingSentSmsMap: {},
+
+  /**
+   * Whether or not the multiple requests in requestNetworkInfo() are currently
+   * being processed
+   */
+  _processingNetworkInfo: false,
+
+  /**
+   * Pending messages to be send in batch from requestNetworkInfo()
+   */
+  _pendingNetworkInfo: {type: "networkinfochanged"},
 
   /**
    * Mute or unmute the radio.
@@ -683,6 +689,12 @@ let RIL = {
         // call state.
         let model_id = libcutils.property_get("ril.model_id");
         if (DEBUG) debug("Detected RIL model " + model_id);
+        if (!model_id) {
+          // On some RIL models, the RIL has to be "warmed up" for us to read this property.
+          // It apparently isn't warmed up yet, going to try again later.
+          if (DEBUG) debug("Could not detect correct model_id. Going to try later.");
+          return;
+        }
         if (model_id == "I9100") {
           if (DEBUG) {
             debug("Detected I9100, enabling " +
@@ -703,6 +715,12 @@ let RIL = {
         }
         break;
       case "Qualcomm RIL 1.0":
+        let product_model = libcutils.property_get("ro.product.model");
+        if (DEBUG) debug("Detected product model " + product_model);
+        if (product_model == "otoro1") {
+          if (DEBUG) debug("Enabling RILQUIRKS_DATACALLSTATE_NO_SUGGESTEDRETRYTIME.");
+          RILQUIRKS_DATACALLSTATE_NO_SUGGESTEDRETRYTIME = true;
+        }
         if (DEBUG) {
           debug("Detected Qualcomm RIL 1.0, " +
                 "disabling RILQUIRKS_V5_LEGACY and " +
@@ -979,7 +997,14 @@ let RIL = {
   },
 
   getIMSI: function getIMSI() {
-    Buf.simpleRequest(REQUEST_GET_IMSI);
+    if (RILQUIRKS_V5_LEGACY) {
+      Buf.simpleRequest(REQUEST_GET_IMSI);
+      return;
+    }
+    let token = Buf.newParcel(REQUEST_GET_IMSI);
+    Buf.writeUint32(1);
+    Buf.writeString(null);
+    Buf.sendParcel();
   },
 
   /**
@@ -1000,11 +1025,11 @@ let RIL = {
         debug("ICC_EF_MSISDN: invalid length of BCD number/SSC contents - " + len);
         return;
       }
-      this.iccInfo.MSISDN = GsmPDUHelper.readDiallingNumber(len);
+      this.iccInfo.msisdn = GsmPDUHelper.readDiallingNumber(len);
       Buf.readStringDelimiter(length);
 
-      if (DEBUG) debug("MSISDN: " + this.iccInfo.MSISDN);
-      if (this.iccInfo.MSISDN) {
+      if (DEBUG) debug("MSISDN: " + this.iccInfo.msisdn);
+      if (this.iccInfo.msisdn) {
         this._handleICCInfoChange();
       }
     }
@@ -1024,30 +1049,30 @@ let RIL = {
   },
 
   /**
-   * Read the AD from the ICC.
+   * Read the AD (Administrative Data) from the ICC.
    */
   getAD: function getAD() {
     function callback() {
       let length = Buf.readUint32();
       // Each octet is encoded into two chars.
       let len = length / 2;
-      this.iccInfo.AD = GsmPDUHelper.readHexOctetArray(len);
+      this.iccInfo.ad = GsmPDUHelper.readHexOctetArray(len);
       Buf.readStringDelimiter(length);
 
       if (DEBUG) {
         let str = "";
-        for (let i = 0; i < this.iccInfo.AD.length; i++) {
-          str += this.iccInfo.AD[i] + ", ";
+        for (let i = 0; i < this.iccInfo.ad.length; i++) {
+          str += this.iccInfo.ad[i] + ", ";
         }
         debug("AD: " + str);
       }
 
-      if (this.iccInfo.IMSI) {
+      if (this.iccInfo.imsi) {
         // MCC is the first 3 digits of IMSI
-        this.iccInfo.MCC = this.iccInfo.IMSI.substr(0,3);
+        this.iccInfo.mcc = parseInt(this.iccInfo.imsi.substr(0,3));
         // The 4th byte of the response is the length of MNC
-        this.iccInfo.MNC = this.iccInfo.IMSI.substr(3, this.iccInfo.AD[3]);
-        if (DEBUG) debug("MCC: " + this.iccInfo.MCC + " MNC: " + this.iccInfo.MNC);
+        this.iccInfo.mnc = parseInt(this.iccInfo.imsi.substr(3, this.iccInfo.ad[3]));
+        if (DEBUG) debug("MCC: " + this.iccInfo.mcc + " MNC: " + this.iccInfo.mnc);
         this._handleICCInfoChange();
       }
     }
@@ -1079,7 +1104,9 @@ let RIL = {
     service -= 1;
     let index = service / 8;
     let bitmask = 1 << (service % 8);
-    return this.UST && (index < this.UST.length) && (this.UST[index] & bitmask);
+    return this.iccInfo.ust &&
+           (index < this.iccInfo.ust.length) &&
+           (this.iccInfo.ust[index] & bitmask);
   },
 
   /**
@@ -1090,13 +1117,13 @@ let RIL = {
       let length = Buf.readUint32();
       // Each octet is encoded into two chars.
       let len = length / 2;
-      this.iccInfo.UST = GsmPDUHelper.readHexOctetArray(len);
+      this.iccInfo.ust = GsmPDUHelper.readHexOctetArray(len);
       Buf.readStringDelimiter(length);
       
       if (DEBUG) {
         let str = "";
-        for (let i = 0; i < this.iccInfo.UST.length; i++) {
-          str += this.iccInfo.UST[i] + ", ";
+        for (let i = 0; i < this.iccInfo.ust.length; i++) {
+          str += this.iccInfo.ust[i] + ", ";
         }
         debug("UST: " + str);
       }
@@ -1182,24 +1209,24 @@ let RIL = {
   getFDN: function getFDN(options) {
     function callback(options) {
       function add(contact) {
-        this.iccInfo.FDN.push(contact);
+        this.iccInfo.fdn.push(contact);
       };
       function finish() {
         if (DEBUG) {
-          for (let i = 0; i < this.iccInfo.FDN.length; i++) {
-            debug("FDN[" + i + "] alphaId = " + this.iccInfo.FDN[i].alphaId +
-                                " number = " + this.iccInfo.FDN[i].number);
+          for (let i = 0; i < this.iccInfo.fdn.length; i++) {
+            debug("FDN[" + i + "] alphaId = " + this.iccInfo.fdn[i].alphaId +
+                                " number = " + this.iccInfo.fdn[i].number);
           }
         }
         this.sendDOMMessage({type: "icccontacts",
                              contactType: "FDN",
-                             contacts: this.iccInfo.FDN,
+                             contacts: this.iccInfo.fdn,
                              requestId: options.requestId});
       };
       this.parseDiallingNumber(options, add, finish);
     }
     
-    this.iccInfo.FDN = [];
+    this.iccInfo.fdn = [];
     this.iccIO({
       command:   ICC_COMMAND_GET_RESPONSE,
       fileId:    ICC_EF_FDN,
@@ -1227,24 +1254,24 @@ let RIL = {
   getADN: function getADN(options) {
     function callback(options) {
       function add(contact) {
-        this.iccInfo.ADN.push(contact);
+        this.iccInfo.adn.push(contact);
       };
       function finish() {
         if (DEBUG) {
-          for (let i = 0; i < this.iccInfo.ADN.length; i++) {
-            debug("ADN[" + i + "] alphaId = " + this.iccInfo.ADN[i].alphaId +
-                                " number = " + this.iccInfo.ADN[i].number);
+          for (let i = 0; i < this.iccInfo.adn.length; i++) {
+            debug("ADN[" + i + "] alphaId = " + this.iccInfo.adn[i].alphaId +
+                                " number = " + this.iccInfo.adn[i].number);
           }
         }
         this.sendDOMMessage({type: "icccontacts",
                              contactType: "ADN",
-                             contacts: this.iccInfo.ADN,
+                             contacts: this.iccInfo.adn,
                              requestId: options.requestId});
       };
       this.parseDiallingNumber(options, add, finish);
     }
 
-    this.iccInfo.ADN = [];
+    this.iccInfo.adn = [];
     this.iccIO({
       command:   ICC_COMMAND_GET_RESPONSE,
       fileId:    options.fileId,
@@ -1360,14 +1387,6 @@ let RIL = {
     Buf.simpleRequest(REQUEST_OPERATOR);
   },
 
-  getNetworkSelectionMode: function getNetworkSelectionMode() {
-    Buf.simpleRequest(REQUEST_QUERY_NETWORK_SELECTION_MODE);
-  },
-
-  setNetworkSelectionAutomatic: function setNetworkSelectionAutomatic() {
-    Buf.simpleRequest(REQUEST_SET_NETWORK_SELECTION_AUTOMATIC);
-  },
-
   /**
    * Set the preferred network type.
    *
@@ -1384,7 +1403,17 @@ let RIL = {
    * Request various states about the network.
    */
   requestNetworkInfo: function requestNetworkInfo() {
-    if (DEBUG) debug("Requesting phone state");
+    if (this._processingNetworkInfo) {
+      if (DEBUG) {
+        debug("Already requesting network info: " +
+              JSON.stringify(this._pendingNetworkInfo))
+      }
+      return;
+    }
+
+    if (DEBUG) debug("Requesting network info");
+
+    this._processingNetworkInfo = true;
     this.getVoiceRegistrationState();
     this.getDataRegistrationState(); //TODO only GSM
     this.getOperator();
@@ -1397,6 +1426,36 @@ let RIL = {
   getAvailableNetworks: function getAvailableNetworks(options) {
     if (DEBUG) debug("Getting available networks");
     Buf.newParcel(REQUEST_QUERY_AVAILABLE_NETWORKS, options);
+    Buf.sendParcel();
+  },
+
+  /**
+   * Request the radio's network selection mode
+   */
+  getNetworkSelectionMode: function getNetworkSelectionMode(options) {
+    if (DEBUG) debug("Getting network selection mode");
+    Buf.simpleRequest(REQUEST_QUERY_NETWORK_SELECTION_MODE, options);
+  },
+
+  /**
+   * Tell the radio to automatically choose a voice/data network
+   */
+  selectNetworkAuto: function selectNetworkAuto(options) {
+    if (DEBUG) debug("Setting automatic network selection");
+    Buf.simpleRequest(REQUEST_SET_NETWORK_SELECTION_AUTOMATIC, options);
+  },
+
+  /**
+   * Tell the radio to choose a specific voice/data network
+   */
+  selectNetwork: function selectNetwork(options) {
+    if (DEBUG) {
+      debug("Setting manual network selection: " + options.mcc + options.mnc);
+    }
+
+    let numeric = String(options.mcc) + options.mnc;
+    Buf.newParcel(REQUEST_SET_NETWORK_SELECTION_MANUAL, options);
+    Buf.writeString(numeric);
     Buf.sendParcel();
   },
 
@@ -1478,8 +1537,22 @@ let RIL = {
    */
   hangUp: function hangUp(options) {
     let call = this.currentCalls[options.callIndex];
-    if (call && call.state != CALL_STATE_HOLDING) {
-      Buf.simpleRequest(REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND);
+    if (!call) {
+      return;
+    }
+
+    switch (call.state) {
+      case CALL_STATE_ACTIVE:
+      case CALL_STATE_DIALING:
+      case CALL_STATE_ALERTING:
+        Buf.newParcel(REQUEST_HANGUP);
+        Buf.writeUint32(1);
+        Buf.writeUint32(options.callIndex);
+        Buf.sendParcel();
+        break;
+      case CALL_STATE_HOLDING:
+        Buf.simpleRequest(REQUEST_HANGUP_WAITING_OR_BACKGROUND);
+        break;
     }
   },
 
@@ -1579,18 +1652,6 @@ let RIL = {
    *        String containing the processId for the SmsRequestManager.
    */
   sendSMS: function sendSMS(options) {
-    // Get the SMS Center address
-    if (!this.SMSC) {
-      // We request the SMS center address again, passing it the SMS options
-      // in order to try to send it again after retrieving the SMSC number.
-      this.getSMSCAddress(options);
-      return;
-    }
-    // We explicitly save this information on the options object so that we
-    // can refer to it later, in particular on the main thread (where this
-    // object may get sent eventually.)
-    options.SMSC = this.SMSC;
-
     //TODO: verify values on 'options'
 
     if (!options.retryCount) {
@@ -1662,12 +1723,9 @@ let RIL = {
 
   /**
    * Get the Short Message Service Center address.
-   *
-   * @param pendingSMS
-   *        Object containing the parameters of an SMS waiting to be sent.
    */
-  getSMSCAddress: function getSMSCAddress(pendingSMS) {
-    Buf.simpleRequest(REQUEST_GET_SMSC_ADDRESS, pendingSMS);
+  getSMSCAddress: function getSMSCAddress() {
+    Buf.simpleRequest(REQUEST_GET_SMSC_ADDRESS);
   },
 
   /**
@@ -1705,7 +1763,7 @@ let RIL = {
    *        String containing PDP type to request. ("IP", "IPV6", ...)
    */
   setupDataCall: function setupDataCall(options) {
-    let token = Buf.newParcel(REQUEST_SETUP_DATA_CALL);
+    let token = Buf.newParcel(REQUEST_SETUP_DATA_CALL, options);
     Buf.writeUint32(7);
     Buf.writeString(options.radioTech.toString());
     Buf.writeString(DATACALL_PROFILE_DEFAULT.toString());
@@ -1846,9 +1904,6 @@ let RIL = {
         newCardState = GECKO_CARDSTATE_NETWORK_LOCKED;
         break;
       case CARD_APPSTATE_READY:
-        this.requestNetworkInfo();
-        this.getSignalStrength();
-        this.fetchICCRecords();
         newCardState = GECKO_CARDSTATE_READY;
         break;
       case CARD_APPSTATE_UNKNOWN:
@@ -1860,6 +1915,12 @@ let RIL = {
     if (this.cardState == newCardState) {
       return;
     }
+
+    // This was moved down from CARD_APPSTATE_READY
+    this.requestNetworkInfo();
+    this.getSignalStrength();
+    this.fetchICCRecords();
+
     this.cardState = newCardState;
     this.sendDOMMessage({type: "cardstatechange",
                          cardState: this.cardState});
@@ -1976,6 +2037,82 @@ let RIL = {
     } 
   },
 
+  // We combine all of the NETWORK_INFO_MESSAGE_TYPES into one "networkinfochange"
+  // message to the RadioInterfaceLayer, so we can avoid sending multiple
+  // VoiceInfoChanged events for both operator / voice_data_registration
+  //
+  // State management here is a little tricky. We need to know both:
+  // 1. Whether or not a response was received for each of the
+  //    NETWORK_INFO_MESSAGE_TYPES
+  // 2. The outbound message that corresponds with that response -- but this
+  //    only happens when internal state changes (i.e. it isn't guaranteed)
+  //
+  // To collect this state, each message response function first calls
+  // _receivedNetworkInfo, to mark the response as received. When the
+  // final response is received, a call to _sendPendingNetworkInfo is placed
+  // on the next tick of the worker thread.
+  //
+  // Since the original call to _receivedNetworkInfo happens at the top
+  // of the response handler, this gives the final handler a chance to
+  // queue up it's "changed" message by calling _sendNetworkInfoMessage if/when
+  // the internal state has actually changed.
+  _sendNetworkInfoMessage: function _sendNetworkInfoMessage(type, message) {
+    if (!this._processingNetworkInfo) {
+      // We only combine these messages in the case of the combined request
+      // in requestNetworkInfo()
+      this.sendDOMMessage(message);
+      return;
+    }
+
+    this._pendingNetworkInfo[type] = message;
+  },
+
+  _receivedNetworkInfo: function _receivedNetworkInfo(type) {
+    if (!this._processingNetworkInfo) {
+      return;
+    }
+
+    let pending = this._pendingNetworkInfo;
+
+    // We still need to track states for events that aren't fired
+    if (!(type in pending)) {
+      pending[type] = true;
+    }
+
+    // Pending network info is ready to be sent when no more messages
+    // are waiting for responses, but the combined payload hasn't been sent.
+    for (let i = 0; i < NETWORK_INFO_MESSAGE_TYPES.length; i++) {
+      let type = NETWORK_INFO_MESSAGE_TYPES[i];
+      if (!(type in pending)) {
+        return;
+      }
+    }
+
+    // Do a pass to clean up the processed messages that didn't create
+    // a response message, so we don't have unused keys in the outbound
+    // networkinfochanged message
+    let keys = Object.keys(pending);
+    for (let i = 0; i < keys.length; i++) {
+      let key = keys[i];
+      if (pending[key] === true) {
+        delete pending[key];
+      }
+    }
+
+    // Send the message on the next tick of the worker's loop, so we give the
+    // last message a chance to call _sendNetworkInfoMessage first.
+    setTimeout(this._sendPendingNetworkInfo.bind(this), 0);
+  },
+
+  _sendPendingNetworkInfo: function _sendPendingNetworkInfo() {
+    this.sendDOMMessage(this._pendingNetworkInfo);
+
+    this._processingNetworkInfo = false;
+    for (let i = 0; i < NETWORK_INFO_MESSAGE_TYPES.length; i++) {
+      delete this._pendingNetworkInfo[NETWORK_INFO_MESSAGE_TYPES[i]];
+    }
+  },
+
   _processVoiceRegistrationState: function _processVoiceRegistrationState(state) {
     this.initRILQuirks();
 
@@ -2006,13 +2143,15 @@ let RIL = {
 
     // From TS 23.003, 0000 and 0xfffe are indicated that no valid LAI exists
     // in MS. So we still need to report the '0000' as well.
-    if (cell.lac !== state[1]) {
-      cell.lac = state[1];
+    let lac = parseInt(state[1], 16);
+    if (cell.lac !== lac) {
+      cell.lac = lac;
       cellChanged = true;
     }
 
-    if (cell.cid !== state[2]) {
-      cell.cid = state[2];
+    let cid = parseInt(state[2], 16);
+    if (cell.cid !== cid) {
+      cell.cid = cid;
       cellChanged = true;
     }
 
@@ -2048,7 +2187,7 @@ let RIL = {
 
     if (stateChanged) {
       rs.type = "voiceregistrationstatechange";
-      this.sendDOMMessage(rs);
+      this._sendNetworkInfoMessage(NETWORK_INFO_VOICE_REGISTRATION_STATE, rs);
     }
   },
 
@@ -2070,7 +2209,49 @@ let RIL = {
 
     if (stateChanged) {
       rs.type = "dataregistrationstatechange";
-      this.sendDOMMessage(rs);
+      this._sendNetworkInfoMessage(NETWORK_INFO_DATA_REGISTRATION_STATE, rs);
+    }
+  },
+
+  _processOperator: function _processOperator(operatorData) {
+    if (operatorData.length < 3) {
+      if (DEBUG) {
+        debug("Expected at least 3 strings for operator.");
+      }
+    }
+
+    if (!this.operator) {
+      this.operator = {type: "operatorchange"};
+    }
+
+    let [longName, shortName, networkTuple] = operatorData;
+    let thisTuple = String(this.operator.mcc) + this.operator.mnc;
+
+    if (this.operator.longName !== longName ||
+        this.operator.shortName !== shortName ||
+        thisTuple !== networkTuple) {
+
+      this.operator.longName = longName;
+      this.operator.shortName = shortName;
+      this.operator.mcc = 0;
+      this.operator.mnc = 0;
+
+      // According to ril.h, the operator fields will be NULL when the operator
+      // is not currently registered. We can avoid trying to parse the numeric
+      // tuple in that case.
+      if (DEBUG && !longName) {
+        debug("Operator is currently unregistered");
+      }
+
+      if (longName && shortName && networkTuple) {
+        try {
+          this._processNetworkTuple(networkTuple, this.operator);
+        } catch (e) {
+          debug("Error processing operator tuple: " + e);
+        }
+      }
+
+      this._sendNetworkInfoMessage(NETWORK_INFO_OPERATOR, this.operator);
     }
   },
 
@@ -2109,7 +2290,7 @@ let RIL = {
         // Call is no longer reported by the radio. Remove from our map and
         // send disconnected state change.
         delete this.currentCalls[currentCall.callIndex];
-        this._handleDisconnectedCall(currentCall);
+        this.getFailCauseCode(currentCall);
       }
     }
 
@@ -2703,7 +2884,7 @@ RIL[REQUEST_GET_IMSI] = function REQUEST_GET_IMSI(length, options) {
     return;
   }
 
-  this.iccInfo.IMSI = Buf.readString();
+  this.iccInfo.imsi = Buf.readString();
 };
 RIL[REQUEST_HANGUP] = function REQUEST_HANGUP(length, options) {
   if (options.rilRequestError) {
@@ -2755,9 +2936,28 @@ RIL[REQUEST_LAST_CALL_FAIL_CAUSE] = function REQUEST_LAST_CALL_FAIL_CAUSE(length
   }
 
   let failCause = Buf.readUint32();
-  options.type = "callError";
-  options.error = RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[failCause];
-  this.sendDOMMessage(options);
+  switch (failCause) {
+    case CALL_FAIL_NORMAL:
+      this._handleDisconnectedCall(options);
+      break;
+    case CALL_FAIL_BUSY:
+      options.state = CALL_STATE_BUSY;
+      this._handleChangedCallState(options);
+      this._handleDisconnectedCall(options);
+      break;
+    case CALL_FAIL_UNOBTAINABLE_NUMBER:
+    case CALL_FAIL_CONGESTION:
+    case CALL_FAIL_ACM_LIMIT_EXCEEDED:
+    case CALL_FAIL_CALL_BARRED:
+    case CALL_FAIL_FDN_BLOCKED:
+    case CALL_FAIL_IMSI_UNKNOWN_IN_VLR:
+    case CALL_FAIL_IMEI_NOT_ACCEPTED:
+    case CALL_FAIL_ERROR_UNSPECIFIED:
+      options.type = "callError";
+      options.error = RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[failCause];
+      this.sendDOMMessage(options);
+      break;
+  }
 };
 RIL[REQUEST_SIGNAL_STRENGTH] = function REQUEST_SIGNAL_STRENGTH(length, options) {
   if (options.rilRequestError) {
@@ -2823,15 +3023,20 @@ RIL[REQUEST_SIGNAL_STRENGTH] = function REQUEST_SIGNAL_STRENGTH(length, options)
   this.sendDOMMessage(obj);
 };
 RIL[REQUEST_VOICE_REGISTRATION_STATE] = function REQUEST_VOICE_REGISTRATION_STATE(length, options) {
+  this._receivedNetworkInfo(NETWORK_INFO_VOICE_REGISTRATION_STATE);
+
   if (options.rilRequestError) {
     return;
   }
 
   let state = Buf.readStringList();
   if (DEBUG) debug("voice registration state: " + state);
+
   this._processVoiceRegistrationState(state);
 };
 RIL[REQUEST_DATA_REGISTRATION_STATE] = function REQUEST_DATA_REGISTRATION_STATE(length, options) {
+  this._receivedNetworkInfo(NETWORK_INFO_DATA_REGISTRATION_STATE);
+
   if (options.rilRequestError) {
     return;
   }
@@ -2840,25 +3045,18 @@ RIL[REQUEST_DATA_REGISTRATION_STATE] = function REQUEST_DATA_REGISTRATION_STATE(
   this._processDataRegistrationState(state);
 };
 RIL[REQUEST_OPERATOR] = function REQUEST_OPERATOR(length, options) {
+  this._receivedNetworkInfo(NETWORK_INFO_OPERATOR);
+
   if (options.rilRequestError) {
     return;
   }
 
-  let operator = Buf.readStringList();
-  if (DEBUG) debug("Operator data: " + operator);
-  if (operator.length < 3) {
-    if (DEBUG) debug("Expected at least 3 strings for operator.");
-  }
-  if (!this.operator ||
-      this.operator.alphaLong  != operator[0] ||
-      this.operator.alphaShort != operator[1] ||
-      this.operator.numeric    != operator[2]) {
-    this.operator = {type: "operatorchange",
-                     alphaLong:  operator[0],
-                     alphaShort: operator[1],
-                     numeric:    operator[2]};
-    this.sendDOMMessage(this.operator);
-  }
+  let operatorData = Buf.readStringList();
+  if (DEBUG) debug("operator: " + operatorData);
+
+  this._processOperator(operatorData);
+
+
 };
 RIL[REQUEST_RADIO_POWER] = null;
 RIL[REQUEST_DTMF] = null;
@@ -3032,15 +3230,53 @@ RIL[REQUEST_SET_FACILITY_LOCK] = function REQUEST_SET_FACILITY_LOCK(length, opti
 };
 RIL[REQUEST_CHANGE_BARRING_PASSWORD] = null;
 RIL[REQUEST_QUERY_NETWORK_SELECTION_MODE] = function REQUEST_QUERY_NETWORK_SELECTION_MODE(length, options) {
+  this._receivedNetworkInfo(NETWORK_INFO_NETWORK_SELECTION_MODE);
+
   if (options.rilRequestError) {
+    options.error = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+    this.sendDOMMessage(options);
     return;
   }
 
   let mode = Buf.readUint32List();
-  this.networkSelectionMode = mode[0];
+  let selectionMode;
+
+  switch (mode[0]) {
+    case NETWORK_SELECTION_MODE_AUTOMATIC:
+      selectionMode = GECKO_NETWORK_SELECTION_AUTOMATIC;
+      break;
+    case NETWORK_SELECTION_MODE_MANUAL:
+      selectionMode = GECKO_NETWORK_SELECTION_MANUAL;
+      break;
+    default:
+      selectionMode = GECKO_NETWORK_SELECTION_UNKNOWN;
+      break;
+  }
+
+  if (this.mode != selectionMode) {
+    this.mode = options.mode = selectionMode;
+    options.type = "networkselectionmodechange";
+    this._sendNetworkInfoMessage(NETWORK_INFO_NETWORK_SELECTION_MODE, options);
+  }
 };
-RIL[REQUEST_SET_NETWORK_SELECTION_AUTOMATIC] = null;
-RIL[REQUEST_SET_NETWORK_SELECTION_MANUAL] = null;
+RIL[REQUEST_SET_NETWORK_SELECTION_AUTOMATIC] = function REQUEST_SET_NETWORK_SELECTION_AUTOMATIC(length, options) {
+  if (options.rilRequestError) {
+    options.error = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+    this.sendDOMMessage(options);
+    return;
+  }
+
+  this.sendDOMMessage(options);
+};
+RIL[REQUEST_SET_NETWORK_SELECTION_MANUAL] = function REQUEST_SET_NETWORK_SELECTION_MANUAL(length, options) {
+  if (options.rilRequestError) {
+    options.error = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+    this.sendDOMMessage(options);
+    return;
+  }
+
+  this.sendDOMMessage(options);
+};
 RIL[REQUEST_QUERY_AVAILABLE_NETWORKS] = function REQUEST_QUERY_AVAILABLE_NETWORKS(length, options) {
   if (options.rilRequestError) {
     options.error = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
@@ -3068,39 +3304,43 @@ RIL[REQUEST_QUERY_CLIP] = null;
 RIL[REQUEST_LAST_DATA_CALL_FAIL_CAUSE] = null;
 
 RIL.readDataCall_v5 = function readDataCall_v5() {
-  return {
-    cid: Buf.readUint32().toString(),
-    active: Buf.readUint32(), // DATACALL_ACTIVE_*
-    type: Buf.readString(),
-    apn: Buf.readString(),
-    address: Buf.readString()
-  };
+  if (!options) {
+    options = {};
+  }
+  cid = Buf.readUint32().toString();
+  active = Buf.readUint32(); // DATACALL_ACTIVE_*
+  type = Buf.readString();
+  apn = Buf.readString();
+  address = Buf.readString();
+  return options;
 };
 
-RIL.readDataCall_v6 = function readDataCall_v6(obj) {
-  if (!obj) {
-    obj = {};
+RIL.readDataCall_v6 = function readDataCall_v6(options) {
+  if (!options) {
+    options = {};
   }
-  obj.status = Buf.readUint32();  // DATACALL_FAIL_*
-  obj.suggestedRetryTime = Buf.readUint32();
-  obj.cid = Buf.readUint32().toString();
-  obj.active = Buf.readUint32();  // DATACALL_ACTIVE_*
-  obj.type = Buf.readString();
-  obj.ifname = Buf.readString();
-  obj.ipaddr = Buf.readString();
-  obj.dns = Buf.readString();
-  obj.gw = Buf.readString();
-  if (obj.dns) {
-    obj.dns = obj.dns.split(" ");
+  options.status = Buf.readUint32();  // DATACALL_FAIL_*
+  if (!RILQUIRKS_DATACALLSTATE_NO_SUGGESTEDRETRYTIME) {
+    options.suggestedRetryTime = Buf.readUint32();
+  }
+  options.cid = Buf.readUint32().toString();
+  options.active = Buf.readUint32();  // DATACALL_ACTIVE_*
+  options.type = Buf.readString();
+  options.ifname = Buf.readString();
+  options.ipaddr = Buf.readString();
+  options.dns = Buf.readString();
+  options.gw = Buf.readString();
+  if (options.dns) {
+    options.dns = options.dns.split(" ");
   }
   //TODO for now we only support one address and gateway
-  if (obj.ipaddr) {
-    obj.ipaddr = obj.ipaddr.split(" ")[0];
+  if (options.ipaddr) {
+    options.ipaddr = options.ipaddr.split(" ")[0];
   }
-  if (obj.gw) {
-    obj.gw = obj.gw.split(" ")[0];
+  if (options.gw) {
+    options.gw = options.gw.split(" ")[0];
   }
-  return obj;
+  return options;
 };
 
 RIL[REQUEST_DATA_CALL_LIST] = function REQUEST_DATA_CALL_LIST(length, options) {
@@ -3123,9 +3363,9 @@ RIL[REQUEST_DATA_CALL_LIST] = function REQUEST_DATA_CALL_LIST(length, options) {
   for (let i = 0; i < num; i++) {
     let datacall;
     if (version < 6) {
-      datacall = this.readDataCall_v5();
+      datacall = this.readDataCall_v5(options);
     } else {
-      datacall = this.readDataCall_v6();
+      datacall = this.readDataCall_v6(options);
     }
     datacalls[datacall.cid] = datacall;
   }
@@ -3176,24 +3416,10 @@ RIL[REQUEST_DEVICE_IDENTITY] = null;
 RIL[REQUEST_EXIT_EMERGENCY_CALLBACK_MODE] = null;
 RIL[REQUEST_GET_SMSC_ADDRESS] = function REQUEST_GET_SMSC_ADDRESS(length, options) {
   if (options.rilRequestError) {
-    if (options.type == "sendSMS") {
-      this.sendDOMMessage({
-        type: "sms-send-failed",
-        envelopeId: options.envelopeId,
-        error: options.rilRequestError,
-      });
-    }
     return;
   }
 
   this.SMSC = Buf.readString();
-  // If the SMSC was not retrieved on RIL initialization, an attempt to
-  // get it is triggered from this.sendSMS followed by the 'options'
-  // parameter of the SMS, so that we can send it after successfully
-  // retrieving the SMSC.
-  if (this.SMSC && options.body) {
-    this.sendSMS(options);
-  }
 };
 RIL[REQUEST_SET_SMSC_ADDRESS] = null;
 RIL[REQUEST_REPORT_SMS_MEMORY_STATUS] = null;
@@ -3327,7 +3553,7 @@ RIL[UNSOLICITED_DATA_CALL_LIST_CHANGED] = function UNSOLICITED_DATA_CALL_LIST_CH
     this.getDataCallList();
     return;
   }
-  this[REQUEST_GET_DATA_CALL_LIST](length, {rilRequestError: ERROR_SUCCESS});
+  this[REQUEST_DATA_CALL_LIST](length, {rilRequestError: ERROR_SUCCESS});
 };
 RIL[UNSOLICITED_SUPP_SVC_NOTIFICATION] = null;
 RIL[UNSOLICITED_STK_SESSION_END] = null;

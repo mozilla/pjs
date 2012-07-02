@@ -162,49 +162,59 @@ public class GlobalSession implements CredentialsSource, PrefsSource, HttpRespon
 
     registerCommands();
     prepareStages();
+    Collection<String> knownStageNames = new HashSet<String>();
+    for (Stage stage : Stage.getNamedStages()) {
+      knownStageNames.add(stage.getRepositoryName());
+    }
+    config.stagesToSync = Utils.getStagesToSyncFromBundle(knownStageNames, extras);
 
     // TODO: data-driven plan for the sync, referring to prepareStages.
   }
 
-  protected void registerCommands() {
+  /**
+   * Register commands this global session knows how to process.
+   * <p>
+   * Re-registering a command overwrites any existing registration.
+   */
+  protected static void registerCommands() {
     final CommandProcessor processor = CommandProcessor.getProcessor();
 
     processor.registerCommand("resetEngine", new CommandRunner(1) {
       @Override
-      public void executeCommand(List<String> args) {
+      public void executeCommand(final GlobalSession session, List<String> args) {
         HashSet<String> names = new HashSet<String>();
         names.add(args.get(0));
-        resetStagesByName(names);
+        session.resetStagesByName(names);
       }
     });
 
     processor.registerCommand("resetAll", new CommandRunner(0) {
       @Override
-      public void executeCommand(List<String> args) {
-        resetAllStages();
+      public void executeCommand(final GlobalSession session, List<String> args) {
+        session.resetAllStages();
       }
     });
 
     processor.registerCommand("wipeEngine", new CommandRunner(1) {
       @Override
-      public void executeCommand(List<String> args) {
+      public void executeCommand(final GlobalSession session, List<String> args) {
         HashSet<String> names = new HashSet<String>();
         names.add(args.get(0));
-        wipeStagesByName(names);
+        session.wipeStagesByName(names);
       }
     });
 
     processor.registerCommand("wipeAll", new CommandRunner(0) {
       @Override
-      public void executeCommand(List<String> args) {
-        wipeAllStages();
+      public void executeCommand(final GlobalSession session, List<String> args) {
+        session.wipeAllStages();
       }
     });
 
     processor.registerCommand("displayURI", new CommandRunner(3) {
       @Override
-      public void executeCommand(List<String> args) {
-        CommandProcessor.displayURI(args, context);
+      public void executeCommand(final GlobalSession session, List<String> args) {
+        CommandProcessor.displayURI(args, session.getContext());
       }
     });
   }
@@ -357,8 +367,16 @@ public class GlobalSession implements CredentialsSource, PrefsSource, HttpRespon
     this.start();
   }
 
-  public void completeSync() {
+  /**
+   * We're finished (aborted or succeeded): release resources.
+   */
+  protected void cleanUp() {
     uninstallAsHttpResponseObserver();
+    this.stages = null;
+  }
+
+  public void completeSync() {
+    cleanUp();
     this.currentState = GlobalSyncStage.Stage.idle;
     this.callback.handleSuccess(this);
   }
@@ -380,7 +398,7 @@ public class GlobalSession implements CredentialsSource, PrefsSource, HttpRespon
       return false;
     }
 
-    if (Logger.logVerbose(LOG_TAG)) {
+    if (Logger.shouldLogVerbose(LOG_TAG)) {
       Logger.trace(LOG_TAG, "Uploading updated meta/global record since there are engines requesting upload: " +
           Utils.toCommaSeparatedString(enginesToUpdate.keySet()));
     }
@@ -461,7 +479,7 @@ public class GlobalSession implements CredentialsSource, PrefsSource, HttpRespon
 
   public void abort(Exception e, String reason) {
     Logger.warn(LOG_TAG, "Aborting sync: " + reason, e);
-    uninstallAsHttpResponseObserver();
+    cleanUp();
     long existingBackoff = largestBackoffObserved.get();
     if (existingBackoff > 0) {
       callback.requestBackoff(existingBackoff);
@@ -648,7 +666,7 @@ public class GlobalSession implements CredentialsSource, PrefsSource, HttpRespon
     if (config.enabledEngineNames == null) {
       Logger.warn(LOG_TAG, "meta/global reported no enabled engine names!");
     } else {
-      if (Logger.logVerbose(LOG_TAG)) {
+      if (Logger.shouldLogVerbose(LOG_TAG)) {
         Logger.trace(LOG_TAG, "Persisting enabled engine names '" +
             Utils.toCommaSeparatedString(config.enabledEngineNames) + "' from meta/global.");
       }

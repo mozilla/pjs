@@ -428,15 +428,13 @@ ThisToStringForStringProto(JSContext *cx, CallReceiver call)
 
     if (call.thisv().isObject()) {
         RootedObject obj(cx, &call.thisv().toObject());
-        if (obj->isString() &&
-            ClassMethodIsNative(cx, obj,
-                                &StringClass,
-                                RootedId(cx, NameToId(cx->runtime->atomState.toStringAtom)),
-                                js_str_toString))
-        {
-            JSString *str = obj->asString().unbox();
-            call.thisv().setString(str);
-            return str;
+        if (obj->isString()) {
+            Rooted<jsid> id(cx, NameToId(cx->runtime->atomState.toStringAtom));
+            if (ClassMethodIsNative(cx, obj, &StringClass, id, js_str_toString)) {
+                JSString *str = obj->asString().unbox();
+                call.thisv().setString(str);
+                return str;
+            }
         }
     } else if (call.thisv().isNullOrUndefined()) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_CONVERT_TO,
@@ -1984,7 +1982,7 @@ BuildFlatReplacement(JSContext *cx, HandleString textstr, HandleString repstr,
                         return false;
                 }
             } else {
-                if (!builder.append(RootedString(cx, str)))
+                if (!builder.append(str))
                     return false;
             }
             pos += str->length();
@@ -2023,7 +2021,7 @@ BuildDollarReplacement(JSContext *cx, JSString *textstrArg, JSLinearString *reps
 {
     Rooted<JSLinearString*> textstr(cx, textstrArg->ensureLinear(cx));
     if (!textstr)
-        return NULL;
+        return false;
 
     JS_ASSERT(repstr->chars() <= firstDollar && firstDollar < repstr->chars() + repstr->length());
     size_t matchStart = fm.match();
@@ -3065,8 +3063,9 @@ js_InitStringClass(JSContext *cx, JSObject *obj)
 
     Rooted<GlobalObject*> global(cx, &obj->asGlobal());
 
+    Rooted<JSString*> empty(cx, cx->runtime->emptyString);
     RootedObject proto(cx, global->createBlankPrototype(cx, &StringClass));
-    if (!proto || !proto->asString().init(cx, RootedString(cx, cx->runtime->emptyString)))
+    if (!proto || !proto->asString().init(cx, empty))
         return NULL;
 
     /* Now create the String function. */
@@ -3250,7 +3249,7 @@ js::ToStringSlow(JSContext *cx, const Value &arg)
     if (v.isString()) {
         str = v.toString();
     } else if (v.isInt32()) {
-        str = js_IntToString(cx, v.toInt32());
+        str = Int32ToString(cx, v.toInt32());
     } else if (v.isDouble()) {
         str = js_NumberToString(cx, v.toDouble());
     } else if (v.isBoolean()) {
@@ -3286,7 +3285,8 @@ js_ValueToSource(JSContext *cx, const Value &v)
     Value rval = NullValue();
     Value fval;
     RootedId id(cx, NameToId(cx->runtime->atomState.toSourceAtom));
-    if (!GetMethod(cx, RootedObject(cx, &v.toObject()), id, 0, &fval))
+    Rooted<JSObject*> obj(cx, &v.toObject());
+    if (!GetMethod(cx, obj, id, 0, &fval))
         return NULL;
     if (js_IsCallable(fval)) {
         if (!Invoke(cx, v, fval, 0, NULL, &rval))
@@ -3432,6 +3432,9 @@ InflateString(JSContext *cx, const char *bytes, size_t *lengthp, FlationCoding f
     size_t nchars;
     jschar *chars;
     size_t nbytes = *lengthp;
+
+    // Malformed UTF8 chars could trigger errors and hence GC
+    MaybeCheckStackRoots(cx);
 
     if (js_CStringsAreUTF8 || fc == CESU8Encoding) {
         if (!InflateUTF8StringToBuffer(cx, bytes, nbytes, NULL, &nchars, fc))

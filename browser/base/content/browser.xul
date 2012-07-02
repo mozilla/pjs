@@ -24,7 +24,7 @@
         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
         xmlns:svg="http://www.w3.org/2000/svg"
         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
-        onload="BrowserStartup()" onunload="BrowserShutdown()" onclose="return WindowIsClosing();"
+        onload="gBrowserInit.onLoad()" onunload="gBrowserInit.onUnload()" onclose="return WindowIsClosing();"
         title="&mainWindow.title;@PRE_RELEASE_SUFFIX@"
         title_normal="&mainWindow.title;@PRE_RELEASE_SUFFIX@"
 #ifdef XP_MACOSX
@@ -137,6 +137,7 @@
            footertype="promobox"
            orient="vertical"
            ignorekeys="true"
+           consumeoutsideclicks="true"
            hidden="true"
            onpopupshown="StarUI.panelShown(event);"
            aria-labelledby="editBookmarkPanelTitle">
@@ -259,6 +260,7 @@
            type="arrow"
            hidden="true"
            noautofocus="true"
+           consumeoutsideclicks="true"
            onpopupshown="gIdentityHandler.onPopupShown(event);"
            level="top">
       <hbox id="identity-popup-container" align="top">
@@ -462,7 +464,6 @@
                  showcommentcolumn="true"
                  showimagecolumn="true"
                  enablehistory="true"
-                 maxrows="6"
                  newlines="stripsurroundingwhitespace"
                  oninput="gBrowser.userTypedValue = this.value;"
                  ontextentered="this.handleCommand(param);"
@@ -484,19 +485,16 @@
                We only add the identity-box button to the tab order when the location bar
                has focus, otherwise pressing F6 focuses it instead of the location bar -->
           <box id="identity-box" role="button"
+               align="center"
                onclick="gIdentityHandler.handleIdentityButtonEvent(event);"
                onkeypress="gIdentityHandler.handleIdentityButtonEvent(event);"
                ondragstart="gIdentityHandler.onDragStart(event);">
-            <hbox id="identity-box-inner" align="center">
-              <hbox id="page-proxy-stack"
-                    onclick="PageProxyClickHandler(event);">
-                <image id="page-proxy-favicon"
-                       pageproxystate="invalid"/>
-              </hbox>
-              <hbox id="identity-icon-labels">
-                <label id="identity-icon-label" class="plain" flex="1"/>
-                <label id="identity-icon-country-label" class="plain"/>
-              </hbox>
+            <image id="page-proxy-favicon"
+                   onclick="PageProxyClickHandler(event);"
+                   pageproxystate="invalid"/>
+            <hbox id="identity-icon-labels">
+              <label id="identity-icon-label" class="plain" flex="1"/>
+              <label id="identity-icon-country-label" class="plain"/>
             </hbox>
           </box>
           <box id="urlbar-display-box" align="center">
@@ -1046,13 +1044,13 @@
                          class="devtools-toolbarbutton"
                          hidden="true"
                          command="Tools:Inspect"/>
-          <toolbarbutton id="developer-toolbar-responsiveui"
-                         label="&responsiveUI.label;"
+          <toolbarbutton id="developer-toolbar-styleeditor"
+                         label="&styleeditor.label;"
                          class="devtools-toolbarbutton"
                          hidden="true"
-                         command="Tools:ResponsiveUI"/>
+                         command="Tools:StyleEditor"/>
           <toolbarbutton id="developer-toolbar-debugger"
-                         label="&scriptsButton.label;"
+                         label="&debuggerMenu.label2;"
                          class="devtools-toolbarbutton"
                          hidden="true"
                          command="Tools:Debugger"/>

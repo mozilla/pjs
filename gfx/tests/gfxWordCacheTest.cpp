@@ -15,12 +15,13 @@
 #include "gfxPlatform.h"
 
 #include "gfxFontTest.h"
+#include "mozilla/Attributes.h"
 
 #if defined(XP_MACOSX)
 #include "gfxTestCocoaHelper.h"
 #endif
 
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
 #include "gtk/gtk.h"
 #endif
 
@@ -31,7 +32,7 @@ static FrameTextRunCache *gTextRuns = nsnull;
 /*
  * Cache textruns and expire them after 3*10 seconds of no use.
  */
-class FrameTextRunCache : public nsExpirationTracker<gfxTextRun,3> {
+class FrameTextRunCache MOZ_FINAL : public nsExpirationTracker<gfxTextRun,3> {
 public:
  enum { TIMEOUT_SECONDS = 10 };
  FrameTextRunCache()
@@ -93,7 +94,7 @@ MakeContext ()
 
 int
 main (int argc, char **argv) {
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
    gtk_init(&argc, &argv);
 #endif
 #ifdef XP_MACOSX

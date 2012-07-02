@@ -170,6 +170,8 @@ nsMenuPopupFrame::Init(nsIContent*      aContent,
     }
   }
 
+  AddStateBits(NS_FRAME_IN_POPUP);
+
   return rv;
 }
 
@@ -806,14 +808,6 @@ nsMenuPopupFrame::HidePopup(bool aDeselectMenu, nsPopupState aNewState)
 }
 
 void
-nsMenuPopupFrame::InvalidateInternal(const nsRect& aDamageRect,
-                                     nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                     PRUint32 aFlags)
-{
-  InvalidateRoot(aDamageRect + nsPoint(aX, aY), aFlags);
-}
-
-void
 nsMenuPopupFrame::GetLayoutFlags(PRUint32& aFlags)
 {
   aFlags = NS_FRAME_NO_SIZE_VIEW | NS_FRAME_NO_MOVE_VIEW | NS_FRAME_NO_VISIBILITY;
@@ -1381,6 +1375,13 @@ bool nsMenuPopupFrame::ConsumeOutsideClicks()
   // If the popup has explicitly set a consume mode, honor that.
   if (mConsumeRollupEvent != nsIPopupBoxObject::ROLLUP_DEFAULT)
     return (mConsumeRollupEvent == nsIPopupBoxObject::ROLLUP_CONSUME);
+
+  if (mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::consumeoutsideclicks,
+                            nsGkAtoms::_true, eCaseMatters))
+    return true;
+  if (mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::consumeoutsideclicks,
+                            nsGkAtoms::_false, eCaseMatters))
+    return false;
 
   nsCOMPtr<nsIContent> parentContent = mContent->GetParent();
   if (parentContent) {

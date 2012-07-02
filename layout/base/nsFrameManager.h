@@ -95,8 +95,7 @@ public:
                                     nsFrameList&    aFrameList);
 
   NS_HIDDEN_(nsresult) RemoveFrame(ChildListID     aListID,
-                                   nsIFrame*       aOldFrame,
-                                   bool            aInvalidate = true);
+                                   nsIFrame*       aOldFrame);
 
   /*
    * Notification that a frame is about to be destroyed. This allows any
@@ -155,7 +154,7 @@ public:
                                         nsIStatefulFrame::SpecialStateID aID =
                                                       nsIStatefulFrame::eNoID);
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   /**
    * DEBUG ONLY method to verify integrity of style tree versus frame tree
    */

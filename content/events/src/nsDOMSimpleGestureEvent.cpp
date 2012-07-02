@@ -3,10 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsDOMClassInfoID.h"
 #include "nsDOMSimpleGestureEvent.h"
-#include "nsGUIEvent.h"
-#include "nsContentUtils.h"
-
 
 nsDOMSimpleGestureEvent::nsDOMSimpleGestureEvent(nsPresContext* aPresContext, nsSimpleGestureEvent* aEvent)
   : nsDOMMouseEvent(aPresContext, aEvent ? aEvent : new nsSimpleGestureEvent(false, 0, nsnull, 0, 0.0))
@@ -59,6 +57,15 @@ nsDOMSimpleGestureEvent::GetDelta(PRFloat64 *aDelta)
   return NS_OK;
 }
 
+/* readonly attribute unsigned long clickCount; */
+NS_IMETHODIMP
+nsDOMSimpleGestureEvent::GetClickCount(PRUint32 *aClickCount)
+{
+  NS_ENSURE_ARG_POINTER(aClickCount);
+  *aClickCount = static_cast<nsSimpleGestureEvent*>(mEvent)->clickCount;
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 nsDOMSimpleGestureEvent::InitSimpleGestureEvent(const nsAString& aTypeArg,
                                                 bool aCanBubbleArg,
@@ -76,7 +83,8 @@ nsDOMSimpleGestureEvent::InitSimpleGestureEvent(const nsAString& aTypeArg,
                                                 PRUint16 aButton,
                                                 nsIDOMEventTarget* aRelatedTarget,
                                                 PRUint32 aDirectionArg,
-                                                PRFloat64 aDeltaArg)
+                                                PRFloat64 aDeltaArg,
+                                                PRUint32 aClickCountArg)
 {
   nsresult rv = nsDOMMouseEvent::InitMouseEvent(aTypeArg,
                                                 aCanBubbleArg,
@@ -98,6 +106,7 @@ nsDOMSimpleGestureEvent::InitSimpleGestureEvent(const nsAString& aTypeArg,
   nsSimpleGestureEvent* simpleGestureEvent = static_cast<nsSimpleGestureEvent*>(mEvent);
   simpleGestureEvent->direction = aDirectionArg;
   simpleGestureEvent->delta = aDeltaArg;
+  simpleGestureEvent->clickCount = aClickCountArg;
 
   return NS_OK;
 }

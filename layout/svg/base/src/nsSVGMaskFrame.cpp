@@ -53,17 +53,13 @@ nsSVGMaskFrame::ComputeMaskAlpha(nsRenderingContext *aContext,
 
   gfxContext *gfx = aContext->ThebesContext();
 
+  // Get the clip extents in device space:
   gfx->Save();
   nsSVGUtils::SetClipRect(gfx, aMatrix, maskArea);
+  gfx->IdentityMatrix();
   gfxRect clipExtents = gfx->GetClipExtents();
   clipExtents.RoundOut();
   gfx->Restore();
-
-#ifdef DEBUG_tor
-  fprintf(stderr, "clip extent: %f,%f %fx%f\n",
-          clipExtents.X(), clipExtents.Y(),
-          clipExtents.Width(), clipExtents.Height());
-#endif
 
   bool resultOverflows;
   gfxIntSize surfaceSize =
@@ -82,10 +78,19 @@ nsSVGMaskFrame::ComputeMaskAlpha(nsRenderingContext *aContext,
     new gfxImageSurface(surfaceSize, gfxASurface::ImageFormatARGB32);
   if (!image || image->CairoStatus())
     return nsnull;
-  image->SetDeviceOffset(-clipExtents.TopLeft());
+
+  // We would like to use gfxImageSurface::SetDeviceOffset() to position
+  // 'image'. However, we need to set the same matrix on the temporary context
+  // and pattern that we create below as is currently set on 'gfx'.
+  // Unfortunately, any device offset set by SetDeviceOffset() is affected by
+  // the transform passed to the SetMatrix() calls, so to avoid that we account
+  // for the device offset in the transform rather than use SetDeviceOffset().
+  gfxMatrix matrix =
+    gfx->CurrentMatrix() * gfxMatrix().Translate(-clipExtents.TopLeft());
 
   nsRenderingContext tmpCtx;
   tmpCtx.Init(this->PresContext()->DeviceContext(), image);
+  tmpCtx.ThebesContext()->SetMatrix(matrix);
 
   mMaskParent = aParent;
   if (mMaskParentMatrix) {
@@ -132,6 +137,7 @@ nsSVGMaskFrame::ComputeMaskAlpha(nsRenderingContext *aContext,
     }
 
   gfxPattern *retval = new gfxPattern(image);
+  retval->SetMatrix(matrix);
   NS_IF_ADDREF(retval);
   return retval;
 }
@@ -139,7 +145,7 @@ nsSVGMaskFrame::ComputeMaskAlpha(nsRenderingContext *aContext,
 /* virtual */ void
 nsSVGMaskFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
 {
-  nsSVGEffects::InvalidateRenderingObservers(this);
+  nsSVGEffects::InvalidateDirectRenderingObservers(this);
   nsSVGMaskFrameBase::DidSetStyleContext(aOldStyleContext);
 }
 
@@ -155,7 +161,7 @@ nsSVGMaskFrame::AttributeChanged(PRInt32  aNameSpaceID,
        aAttribute == nsGkAtoms::height||
        aAttribute == nsGkAtoms::maskUnits ||
        aAttribute == nsGkAtoms::maskContentUnits)) {
-    nsSVGEffects::InvalidateRenderingObservers(this);
+    nsSVGEffects::InvalidateDirectRenderingObservers(this);
   }
 
   return nsSVGMaskFrameBase::AttributeChanged(aNameSpaceID,
@@ -182,7 +188,7 @@ nsSVGMaskFrame::GetType() const
 }
 
 gfxMatrix
-nsSVGMaskFrame::GetCanvasTM()
+nsSVGMaskFrame::GetCanvasTM(PRUint32 aFor)
 {
   NS_ASSERTION(mMaskParentMatrix, "null parent matrix");
 

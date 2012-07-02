@@ -160,7 +160,6 @@
 #include "nsHTMLCSSStyleSheet.h"
 
 #include "mozilla/dom/Link.h"
-#include "nsIHTMLDocument.h"
 #include "nsXULAppAPI.h"
 #include "nsDOMTouchEvent.h"
 
@@ -408,6 +407,15 @@ nsIdentifierMapEntry::RemoveNameElement(Element* aElement)
   if (mNameContentList) {
     mNameContentList->RemoveElement(aElement);
   }
+}
+
+// static
+size_t
+nsIdentifierMapEntry::SizeOfExcludingThis(nsIdentifierMapEntry* aEntry,
+                                          nsMallocSizeOfFun aMallocSizeOf,
+                                          void*)
+{
+  return aEntry->GetKey().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 }
 
 // Helper structs for the content->subdoc map
@@ -1169,8 +1177,7 @@ nsExternalResourceMap::ExternalResource::~ExternalResource()
 // If we ever have an nsIDocumentObserver notification for stylesheet title
 // changes, we could make this inherit from nsDOMStringList instead of
 // reimplementing nsIDOMDOMStringList.
-class nsDOMStyleSheetSetList : public nsIDOMDOMStringList
-                          
+class nsDOMStyleSheetSetList MOZ_FINAL : public nsIDOMDOMStringList
 {
 public:
   NS_DECL_ISUPPORTS
@@ -2179,6 +2186,12 @@ nsDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
       }
     }
   }
+
+  // Refresh the principal on the compartment.
+  nsPIDOMWindow* win = GetInnerWindow();
+  if (win) {
+    win->RefreshCompartmentPrincipal();
+  }
 }
 
 nsresult
@@ -2816,7 +2829,10 @@ nsDocument::ElementFromPointHelper(float aX, float aY,
   if (elem && !elem->IsElement()) {
     elem = elem->GetParent();
   }
-  return CallQueryInterface(elem, aReturn);
+  if (elem) {
+    CallQueryInterface(elem, aReturn);
+  }
+  return NS_OK;
 }
 
 nsresult
@@ -2866,12 +2882,12 @@ nsDocument::NodesFromRectHelper(float aX, float aY,
   // Used to filter out repeated elements in sequence.
   nsIContent* lastAdded = nsnull;
 
-  for (PRInt32 i = 0; i < outFrames.Length(); i++) {
+  for (PRUint32 i = 0; i < outFrames.Length(); i++) {
     nsIContent* node = GetContentInThisDocument(outFrames[i]);
 
     if (node && !node->IsElement() && !node->IsNodeOfType(nsINode::eTEXT)) {
-      // If we have a node that isn't an element or a text node,
-      // replace it with the first parent node.
+      // We have a node that isn't an element or a text node,
+      // use its parent content instead.
       node = node->GetParent();
     }
     if (node && node != lastAdded) {
@@ -3343,18 +3359,6 @@ bool
 nsDocument::IsNodeOfType(PRUint32 aFlags) const
 {
     return !(aFlags & ~eDOCUMENT);
-}
-
-PRUint16
-nsDocument::NodeType()
-{
-    return (PRUint16)nsIDOMNode::DOCUMENT_NODE;
-}
-
-void
-nsDocument::NodeName(nsAString& aNodeName)
-{
-  aNodeName.AssignLiteral("#document");
 }
 
 Element*
@@ -4412,12 +4416,6 @@ NS_IMETHODIMP
 nsDocument::CreateComment(const nsAString& aData, nsIDOMComment** aReturn)
 {
   *aReturn = nsnull;
-
-  // Make sure the substring "--" is not present in aData.  Otherwise
-  // we'll create a document that can't be serialized.
-  if (FindInReadable(NS_LITERAL_STRING("--"), aData)) {
-    return NS_ERROR_DOM_INVALID_CHARACTER_ERR;
-  }
 
   nsCOMPtr<nsIContent> comment;
   nsresult rv = NS_NewCommentNode(getter_AddRefs(comment), mNodeInfoManager);
@@ -7173,12 +7171,12 @@ nsDocument::GetContentInThisDocument(nsIFrame* aFrame) const
 {
   for (nsIFrame* f = aFrame; f;
        f = nsLayoutUtils::GetParentOrPlaceholderForCrossDoc(f)) {
-    nsIContent* ptContent = f->GetContent();
-    if (!ptContent || ptContent->IsInAnonymousSubtree())
+    nsIContent* content = f->GetContent();
+    if (!content || content->IsInAnonymousSubtree())
       continue;
 
-    if (ptContent->OwnerDoc() == this) {
-      return ptContent;
+    if (content->OwnerDoc() == this) {
+      return content;
     }
     // We must be in a subdocument so jump directly to the root frame.
     // GetParentOrPlaceholderForCrossDoc gets called immediately to jump up to
@@ -7699,7 +7697,7 @@ namespace {
  * Stub for LoadSheet(), since all we want is to get the sheet into
  * the CSSLoader's style cache
  */
-class StubCSSLoaderObserver : public nsICSSLoaderObserver {
+class StubCSSLoaderObserver MOZ_FINAL : public nsICSSLoaderObserver {
 public:
   NS_IMETHOD
   StyleSheetLoaded(nsCSSStyleSheet*, bool, nsresult)
@@ -8416,7 +8414,8 @@ NS_IMETHODIMP
 nsDocument::CreateTouchList(nsIVariant* aPoints,
                             nsIDOMTouchList** aRetVal)
 {
-  nsRefPtr<nsDOMTouchList> retval = new nsDOMTouchList();
+  nsRefPtr<nsDOMTouchList> retval =
+    new nsDOMTouchList(static_cast<nsIDocument*>(this));
   if (aPoints) {
     PRUint16 type;
     aPoints->GetDataType(&type);
@@ -8991,6 +8990,7 @@ nsDocument::RequestFullScreen(Element* aElement, bool aWasCallerChrome)
   // to the document's principal's host, if it has one.
   if (!mIsApprovedForFullscreen) {
     mIsApprovedForFullscreen =
+      GetWindow()->IsPartOfApp() ||
       nsContentUtils::IsSitePermAllow(NodePrincipal(), "fullscreen");
   }
 
@@ -9607,6 +9607,14 @@ nsIDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
                                     &aWindowSizes->mLayoutPresContext);
   }
 
+  aWindowSizes->mPropertyTables +=
+    mPropertyTable.SizeOfExcludingThis(aWindowSizes->mMallocSizeOf);
+  for (PRUint32 i = 0, count = mExtraPropertyTables.Length();
+       i < count; ++i) {
+    aWindowSizes->mPropertyTables +=
+      mExtraPropertyTables[i]->SizeOfExcludingThis(aWindowSizes->mMallocSizeOf);
+  }
+
   // Measurement of the following members may be added later if DMD finds it
   // is worthwhile:
   // - many!
@@ -9683,7 +9691,8 @@ nsDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
     mStyledLinks.SizeOfExcludingThis(NULL, aWindowSizes->mMallocSizeOf);
 
   aWindowSizes->mDOMOther +=
-    mIdentifierMap.SizeOfExcludingThis(NULL, aWindowSizes->mMallocSizeOf);
+    mIdentifierMap.SizeOfExcludingThis(nsIdentifierMapEntry::SizeOfExcludingThis,
+                                       aWindowSizes->mMallocSizeOf);
 
   // Measurement of the following members may be added later if DMD finds it
   // is worthwhile:

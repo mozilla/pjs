@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: sw=2 ts=8 et ft=cpp : */
+/* vim: set sw=2 ts=8 et ft=cpp : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,16 +26,17 @@ namespace Framebuffer {
 //  Present();
 //
 
-// Return true if the fbdev was successfully opened, along with the
-// dimensions of the screen.  If this fails, the result of all further
-// calls is undefined.  Open() is idempotent.
-bool Open(nsIntSize* aScreenSize);
+// Return true if the fbdev was successfully opened.  If this fails, 
+// the result of all further calls is undefined.  Open() is idempotent.
+bool Open();
 
 // After Close(), the result of all further calls is undefined.
 // Close() is idempotent, and Open() can be called again after
 // Close().
 void Close();
 
+// Return true if the fbdev was successfully opened or the size was
+// already cached.
 bool GetSize(nsIntSize *aScreenSize);
 
 // Return the buffer to be drawn into, that will be the next frame.

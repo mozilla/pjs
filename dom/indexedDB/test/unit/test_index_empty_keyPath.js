@@ -15,7 +15,7 @@ function testSteps()
     { key: "3", value: "baz" }
   ];
 
-  let request = mozIndexedDB.open(name, 1);
+  let request = indexedDB.open(name, 1);
   request.onerror = errorHandler;
   request.onupgradeneeded = grabEventAndContinueHandler;
   request.onsuccess = grabEventAndContinueHandler;
@@ -70,7 +70,7 @@ function testSteps()
   is(event.target.result, "foopy", "Got correct result");
 
   let request = objectStore.add("foopy", 5);
-  request.onerror = new ExpectError("ConstraintError");
+  request.onerror = new ExpectError("ConstraintError", true);
   request.onsuccess = unexpectedSuccessHandler;
 
   trans.oncomplete = grabEventAndContinueHandler;

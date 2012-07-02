@@ -441,7 +441,9 @@ nsCSSProps::OtherNameFor(nsCSSProperty aProperty)
 
 const PRInt32 nsCSSProps::kAnimationDirectionKTable[] = {
   eCSSKeyword_normal, NS_STYLE_ANIMATION_DIRECTION_NORMAL,
+  eCSSKeyword_reverse, NS_STYLE_ANIMATION_DIRECTION_REVERSE,
   eCSSKeyword_alternate, NS_STYLE_ANIMATION_DIRECTION_ALTERNATE,
+  eCSSKeyword_alternate_reverse, NS_STYLE_ANIMATION_DIRECTION_ALTERNATE_REVERSE,
   eCSSKeyword_UNKNOWN,-1
 };
 
@@ -886,6 +888,10 @@ const PRInt32 nsCSSProps::kDisplayKTable[] = {
   eCSSKeyword__moz_popup,         NS_STYLE_DISPLAY_POPUP,
   eCSSKeyword__moz_groupbox,      NS_STYLE_DISPLAY_GROUPBOX,
 #endif
+#ifdef MOZ_FLEXBOX
+  eCSSKeyword__moz_flex,          NS_STYLE_DISPLAY_FLEX,
+  eCSSKeyword__moz_inline_flex,   NS_STYLE_DISPLAY_INLINE_FLEX,
+#endif // MOZ_FLEXBOX
   eCSSKeyword_UNKNOWN,-1
 };
 
@@ -1493,12 +1499,6 @@ const PRInt32 nsCSSProps::kColorInterpolationKTable[] = {
   eCSSKeyword_auto, NS_STYLE_COLOR_INTERPOLATION_AUTO,
   eCSSKeyword_srgb, NS_STYLE_COLOR_INTERPOLATION_SRGB,
   eCSSKeyword_linearrgb, NS_STYLE_COLOR_INTERPOLATION_LINEARRGB,
-  eCSSKeyword_UNKNOWN, -1
-};
-
-const PRInt32 nsCSSProps::kColumnFillKTable[] = {
-  eCSSKeyword_auto, NS_STYLE_COLUMN_FILL_AUTO,
-  eCSSKeyword_balance, NS_STYLE_COLUMN_FILL_BALANCE,
   eCSSKeyword_UNKNOWN, -1
 };
 

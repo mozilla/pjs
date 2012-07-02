@@ -85,6 +85,8 @@ function subsetOf(resultObj, list) {
  */
 
 function uninstall(appURL, check, next) {
+  var found = false;
+  var finished = false;
   var pending = navigator.mozApps.getInstalled(); 
   pending.onsuccess = function () {
     var m = this.result;
@@ -99,30 +101,36 @@ function uninstall(appURL, check, next) {
           try {
             var secondUninstall = app.uninstall();
             secondUninstall.onsuccess = function(r) {
+              check(false, "mozApps allowed second uninstall without error");
               next();
             };
             secondUninstall.onerror = function(r) {
-              debug(secondUninstall.error.name);
-              debug(secondUninstall.error.manifestURL);
+              debug("Got second error: " + this.error.name);
+              check(
+                this.error.name == "NOT_INSTALLED",
+                "The second mozApps uninstall should return an error with the name " +
+                "NOT_INSTALLED, not " + this.error.name);
               next();
             };
           } 
           catch(e) {
-            check(e.message == "Not enough arguments \[mozIDOMApplicationRegistry.install\]", "install returned " + e.message);
+            check(false, "Unexpected error calling uninstall: " + e);
             next();
           }
         };
         pendingUninstall.onerror = function () {
-          check(false);
+          check(false, "Got error in uninstall: " + this.error.name);
           finished = true;
-          throw('Failed');
         };
       }
     }
-  }
+    if (! found) {
+      check(false, "Found no app with manifest URL: " + appURL);
+    }
+  };
   pending.onerror = function ()  {
     check(false, "Unexpected on error called in uninstall " );
-  }
+  };
 }
 
 /**
@@ -142,7 +150,7 @@ function js_traverse(template, check, object) {
     object = SpecialPowers.wrap(object);
 
   if (type == "object") {
-    if (Object.keys(template).length == 1 && template["status"]) {
+    if (Object.keys(template).length == 0) {
       check(!object || object.length == 0,"The return object from mozApps api was null as expected");
       return;
     }
@@ -187,19 +195,18 @@ function js_traverse(template, check, object) {
  * @check An abstraction over ok / todo to allow for that determination to be made by the invoking code
  * @next  The next operation to jump to
  */
-function mozAppscb(pending, comparatorObj, check, next) {
+function mozAppscb(pending, comparatorObj, expectedStatus, check, next) {
   debug("inside mozAppscb"); 
   pending.onsuccess = function () {
     debug("success cb, called");
+    check(expectedStatus == "success", "the success callback was called");
     if(pending.result) {
       if(typeof pending.result.length !== 'undefined') {
         for(i=0;i < pending.result.length;i++) {
-          SpecialPowers.wrap(pending).result[i].status= 'success';
           js_traverse(comparatorObj[i], check, pending.result[i]);
         }
       } else {
         debug("comparatorOBj in else");
-        SpecialPowers.wrap(pending).result.status = 'success';
         js_traverse(comparatorObj[0], check, pending.result);
       }
     } else {
@@ -212,8 +219,8 @@ function mozAppscb(pending, comparatorObj, check, next) {
   };
 
   pending.onerror = function () {
-    SpecialPowers.wrap(pending).error.status = 'error';
-    check(true, "failure cb called");
+    debug("failure cb called");
+    check(expectedStatus == "error", "the error callback was called");
     js_traverse(comparatorObj[0], check, pending.error);
     if(typeof next == 'function') {
       debug("calling next");
@@ -267,8 +274,8 @@ function install(appURL, check, next) {
   mozAppscb(navigator.mozApps.install(
       appURL, null),
       [{
-        status: "== \"success\"",
         installOrigin: "== " + installOrigin.quote(),
+        installTime: "!== undefined",
         origin: "== " + origin.quote(),
         manifestURL: "== " +  appURL.quote(),
         // |manifest| is not accessible to content, so js_traverse needs to
@@ -277,7 +284,7 @@ function install(appURL, check, next) {
           name: "== " + unescape(manifest.name).quote(),
           installs_allowed_from: manifest.installs_allowed_from
         })
-      }], check, 
+      }], "success", check, 
       next);
 }
 
@@ -302,7 +309,6 @@ function getInstalled(appURLs, check, next) {
     }
     
     checkInstalled[i] = {
-        status: "== " + "success".quote(),
         installOrigin: "== " + "chrome://mochitests".quote(),
         origin: "== " + origin.quote(),
         manifestURL: "== " +  appURL.quote(),
@@ -316,7 +322,7 @@ function getInstalled(appURLs, check, next) {
      };
   }
   debug(JSON.stringify(checkInstalled));
-  mozAppscb(navigator.mozApps.getInstalled(), checkInstalled, check, next);
+  mozAppscb(navigator.mozApps.getInstalled(), checkInstalled, "success", check, next);
 }
 
 /**
@@ -328,10 +334,8 @@ function debug(msg) {
     dump(msg + "\n");
   }
 }
-
 function check_event_listener_fired (next) {
   todo(triggered, "Event Listener fired");
   triggered = false;
   next();
 }
-

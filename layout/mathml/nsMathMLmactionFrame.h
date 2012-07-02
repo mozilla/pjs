@@ -9,6 +9,7 @@
 #include "nsCOMPtr.h"
 #include "nsMathMLContainerFrame.h"
 #include "nsIDOMEventListener.h"
+#include "mozilla/Attributes.h"
 
 //
 // <maction> -- bind actions to a subexpression
@@ -60,7 +61,7 @@ private:
   void MouseOver();
   void MouseOut();
 
-  class MouseListener : public nsIDOMEventListener
+  class MouseListener MOZ_FINAL : public nsIDOMEventListener
   {
     NS_DECL_ISUPPORTS
     NS_DECL_NSIDOMEVENTLISTENER
@@ -81,7 +82,6 @@ private:
   PRInt32         mChildCount;
   PRInt32         mSelection;
   nsIFrame*       mSelectedFrame;
-  nsString        mRestyle;
   nsCOMPtr<MouseListener> mListener;
 
   // helper to return the frame for the attribute selection="number"

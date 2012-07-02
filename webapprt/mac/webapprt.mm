@@ -28,6 +28,9 @@
 #include "nsCOMPtr.h"
 #include "nsIFile.h"
 #include "nsStringGlue.h"
+#include "mozilla/AppData.h"
+
+using namespace mozilla;
 
 const char WEBAPPRT_EXECUTABLE[] = "webapprt-stub";
 const char FXAPPINI_NAME[] = "application.ini";
@@ -82,23 +85,13 @@ AttemptGRELoad(char *greDir)
   return rv;
 }
 
-// Copied from toolkit/xre/nsAppData.cpp.
-void
-SetAllocatedString(const char *&str, const char *newvalue)
-{
-  NS_Free(const_cast<char*>(str));
-  if (newvalue) {
-    str = NS_strdup(newvalue);
-  } else {
-    str = nsnull;
-  }
-}
-
-
 int
 main(int argc, char **argv)
 {
   NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+  NSDictionary *args = [[NSUserDefaults standardUserDefaults]
+                         volatileDomainForName:NSArgumentDomain];
 
   NSString *firefoxPath = nil;
   NSString *alternateBinaryID = nil;
@@ -209,11 +202,6 @@ main(int argc, char **argv)
 
       NS_LogInit();
       { // Scope for any XPCOM stuff we create
-        nsINIParser parser;
-        if (NS_FAILED(parser.Init(appEnv))) {
-          NSLog(@"%s was not found\n", appEnv);
-          @throw MakeException(@"Error", @"Unable to parse environment files for application startup");
-        }
 
         // Get the path to the runtime directory.
         char rtDir[MAXPATHLEN];
@@ -223,10 +211,6 @@ main(int argc, char **argv)
         // directory.
         snprintf(rtINIPath, MAXPATHLEN, "%s%s%s%s", [firefoxPath UTF8String], APP_CONTENTS_PATH, WEBAPPRT_PATH, WEBRTINI_NAME);
         NSLog(@"WebappRT application.ini path: %s", rtINIPath);
-        if (![[NSFileManager defaultManager] fileExistsAtPath:[NSString stringWithFormat:@"%s", rtINIPath]]) {
-          NSString* msg = [NSString stringWithFormat: @"This copy of Firefox (%@) cannot run web applications, because it is missing important files", firefoxVersion];
-          @throw MakeException(@"Missing WebRT Files", msg);
-        }
 
         // Load the runtime's INI from its path.
         nsCOMPtr<nsIFile> rtINI;
@@ -235,9 +219,11 @@ main(int argc, char **argv)
           @throw MakeException(@"Error", @"Incorrect path to base INI file.");
         }
 
-        if (!rtINI) {
-          NSLog(@"Error: missing WebappRT application.ini");
-          @throw MakeException(@"Error", @"Missing base INI file.");
+        bool exists;
+        nsresult rv = rtINI->Exists(&exists);
+        if (NS_FAILED(rv) || !exists) {
+          NSString* msg = [NSString stringWithFormat: @"This copy of Firefox (%@) cannot run web applications, because it is missing WebappRT application.ini", firefoxVersion];
+          @throw MakeException(@"Missing WebappRT application.ini", msg);
         }
 
         nsXREAppData *webShellAppData;
@@ -246,13 +232,24 @@ main(int argc, char **argv)
           @throw MakeException(@"Error", @"Unable to parse base INI file.");
         }
 
-        char profile[MAXPATHLEN];
-        if (NS_FAILED(parser.GetString("Webapp", "Profile", profile, MAXPATHLEN))) {
-          NSLog(@"Unable to retrieve profile from web app INI file");
-          @throw MakeException(@"Error", @"Unable to retrieve installation profile.");
+        NSString *profile = [args objectForKey:@"profile"];
+        if (profile) {
+          NSLog(@"Profile specified with -profile: %@", profile);
         }
-        NSLog(@"setting app profile: %s", profile);
-        SetAllocatedString(webShellAppData->profile, profile);
+        else {
+          nsINIParser parser;
+          if (NS_FAILED(parser.Init(appEnv))) {
+            NSLog(@"%s was not found\n", appEnv);
+            @throw MakeException(@"Error", @"Unable to parse environment files for application startup");
+          }
+          char profile[MAXPATHLEN];
+          if (NS_FAILED(parser.GetString("Webapp", "Profile", profile, MAXPATHLEN))) {
+            NSLog(@"Unable to retrieve profile from web app INI file");
+            @throw MakeException(@"Error", @"Unable to retrieve installation profile.");
+          }
+          NSLog(@"setting app profile: %s", profile);
+          SetAllocatedString(webShellAppData->profile, profile);
+        }
 
         nsCOMPtr<nsIFile> directory;
         if (NS_FAILED(XRE_GetFileFromPath(rtDir, getter_AddRefs(directory)))) {
@@ -320,6 +317,14 @@ NSString
 {
   //default is firefox
   NSString *binaryPath = nil;
+
+  // We're run from the Firefox bundle during WebappRT chrome and content tests.
+  NSString *myBundlePath = [[NSBundle mainBundle] bundlePath];
+  NSString *fxPath = [NSString stringWithFormat:@"%@%sfirefox-bin",
+                                 myBundlePath, APP_CONTENTS_PATH];
+  if ([[NSFileManager defaultManager] fileExistsAtPath:fxPath]) {
+    return myBundlePath;
+  }
 
   //we look for these flavors of Firefox, in this order
   NSArray* launchBinarySearchList = [NSArray arrayWithObjects: @"org.mozilla.nightly",

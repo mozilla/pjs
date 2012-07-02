@@ -486,7 +486,7 @@ ReferenceFinder::addReferrer(jsval referrer_, Path *path)
     Rooted<jsval> referrer(context, referrer_);
 
     if (!context->compartment->wrap(context, referrer.address()))
-        return NULL;
+        return false;
 
     char *pathName = path->computeName(context);
     if (!pathName)
@@ -552,7 +552,8 @@ FindReferences(JSContext *cx, unsigned argc, jsval *vp)
 
     /* Given the reversed map, find the referents of target. */
     ReferenceFinder finder(cx, reverser);
-    JSObject *references = finder.findReferences(RootedObject(cx, &target.toObject()));
+    Rooted<JSObject*> targetObj(cx, &target.toObject());
+    JSObject *references = finder.findReferences(targetObj);
     if (!references)
         return false;
 

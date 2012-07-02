@@ -12,6 +12,7 @@
 #include "nsISVGChildFrame.h"
 #include "nsRenderingContext.h"
 #include "nsSVGContainerFrame.h"
+#include "nsSVGIntegrationUtils.h"
 #include "nsSVGSVGElement.h"
 
 nsIFrame*
@@ -68,7 +69,7 @@ nsSVGInnerSVGFrame::PaintSVG(nsRenderingContext *aContext,
     }
 
     nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
-    gfxMatrix clipTransform = parent->GetCanvasTM();
+    gfxMatrix clipTransform = parent->GetCanvasTM(FOR_PAINTING);
 
     gfxContext *gfx = aContext->ThebesContext();
     autoSR.SetContext(gfx);
@@ -108,23 +109,34 @@ nsSVGInnerSVGFrame::NotifySVGChanged(PRUint32 aFlags)
 
     nsSVGSVGElement *svg = static_cast<nsSVGSVGElement*>(mContent);
 
+    bool xOrYIsPercentage =
+      svg->mLengthAttributes[nsSVGSVGElement::X].IsPercentage() ||
+      svg->mLengthAttributes[nsSVGSVGElement::Y].IsPercentage();
+    bool widthOrHeightIsPercentage =
+      svg->mLengthAttributes[nsSVGSVGElement::WIDTH].IsPercentage() ||
+      svg->mLengthAttributes[nsSVGSVGElement::HEIGHT].IsPercentage();
+
+    if (xOrYIsPercentage || widthOrHeightIsPercentage) {
+      // Ancestor changes can't affect how we render from the perspective of
+      // any rendering observers that we may have, so we don't need to
+      // invalidate them. We also don't need to invalidate ourself, since our
+      // changed ancestor will have invalidated its entire area, which includes
+      // our area.
+      // For perf reasons we call this before calling NotifySVGChanged() below.
+      nsSVGUtils::ScheduleBoundsUpdate(this);
+    }
+
     // Coordinate context changes affect mCanvasTM if we have a
     // percentage 'x' or 'y', or if we have a percentage 'width' or 'height' AND
     // a 'viewBox'.
 
     if (!(aFlags & TRANSFORM_CHANGED) &&
-        (svg->mLengthAttributes[nsSVGSVGElement::X].IsPercentage() ||
-         svg->mLengthAttributes[nsSVGSVGElement::Y].IsPercentage() ||
-         (svg->HasViewBox() &&
-          (svg->mLengthAttributes[nsSVGSVGElement::WIDTH].IsPercentage() ||
-           svg->mLengthAttributes[nsSVGSVGElement::HEIGHT].IsPercentage())))) {
-    
+        (xOrYIsPercentage ||
+         (widthOrHeightIsPercentage && svg->HasViewBox()))) {
       aFlags |= TRANSFORM_CHANGED;
     }
 
-    if (svg->HasViewBox() ||
-        (!svg->mLengthAttributes[nsSVGSVGElement::WIDTH].IsPercentage() &&
-         !svg->mLengthAttributes[nsSVGSVGElement::HEIGHT].IsPercentage())) {
+    if (svg->HasViewBox() || !widthOrHeightIsPercentage) {
       // Remove COORD_CONTEXT_CHANGED, since we establish the coordinate
       // context for our descendants and this notification won't change its
       // dimensions:
@@ -155,6 +167,7 @@ nsSVGInnerSVGFrame::AttributeChanged(PRInt32  aNameSpaceID,
 
     if (aAttribute == nsGkAtoms::width ||
         aAttribute == nsGkAtoms::height) {
+      nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
 
       if (content->HasViewBoxOrSyntheticViewBox()) {
         // make sure our cached transform matrix gets (lazily) updated
@@ -177,6 +190,8 @@ nsSVGInnerSVGFrame::AttributeChanged(PRInt32  aNameSpaceID,
                aAttribute == nsGkAtoms::y) {
       // make sure our cached transform matrix gets (lazily) updated
       mCanvasTM = nsnull;
+
+      nsSVGUtils::InvalidateAndScheduleBoundsUpdate(this);
 
       nsSVGUtils::NotifyChildrenOfSVGChange(
           this, aAttribute == nsGkAtoms::viewBox ?
@@ -203,7 +218,7 @@ nsSVGInnerSVGFrame::GetFrameForPoint(const nsPoint &aPoint)
     float clipX, clipY, clipWidth, clipHeight;
     content->GetAnimatedLengthValues(&clipX, &clipY, &clipWidth, &clipHeight, nsnull);
 
-    if (!nsSVGUtils::HitTestRect(parent->GetCanvasTM(),
+    if (!nsSVGUtils::HitTestRect(parent->GetCanvasTM(FOR_HIT_TESTING),
                                  clipX, clipY, clipWidth, clipHeight,
                                  PresContext()->AppUnitsToDevPixels(aPoint.x),
                                  PresContext()->AppUnitsToDevPixels(aPoint.y))) {
@@ -232,15 +247,21 @@ nsSVGInnerSVGFrame::NotifyViewportOrTransformChanged(PRUint32 aFlags)
 // nsSVGContainerFrame methods:
 
 gfxMatrix
-nsSVGInnerSVGFrame::GetCanvasTM()
+nsSVGInnerSVGFrame::GetCanvasTM(PRUint32 aFor)
 {
+  if (!(GetStateBits() & NS_STATE_SVG_NONDISPLAY_CHILD)) {
+    if ((aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) ||
+        (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled())) {
+      return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(this);
+    }
+  }
   if (!mCanvasTM) {
     NS_ASSERTION(mParent, "null parent");
 
     nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
     nsSVGSVGElement *content = static_cast<nsSVGSVGElement*>(mContent);
 
-    gfxMatrix tm = content->PrependLocalTransformsTo(parent->GetCanvasTM());
+    gfxMatrix tm = content->PrependLocalTransformsTo(parent->GetCanvasTM(aFor));
 
     mCanvasTM = new gfxMatrix(tm);
   }

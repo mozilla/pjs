@@ -250,8 +250,7 @@ nsWindow::Destroy(void)
     if (IsTopLevel())
         gTopLevelWindows.RemoveElement(this);
 
-    if (mParent)
-        mParent->mChildren.RemoveElement(this);
+    SetParent(nsnull);
 
     nsBaseWidget::OnDestroy();
 
@@ -689,6 +688,9 @@ nsWindow::GetLayerManager(PLayersChild*, LayersBackend, LayerManagerPersistence,
         mLayerManager = CreateBasicLayerManager();
         return mLayerManager;
     }
+
+    mUseAcceleratedRendering = GetShouldAccelerate();
+
 #ifdef MOZ_JAVA_COMPOSITOR
     bool useCompositor = UseOffMainThreadCompositing();
 
@@ -703,7 +705,6 @@ nsWindow::GetLayerManager(PLayersChild*, LayersBackend, LayerManagerPersistence,
         sFailedToCreateGLContext = true;
     }
 #endif
-    mUseAcceleratedRendering = GetShouldAccelerate();
 
     if (!mUseAcceleratedRendering ||
         sFailedToCreateGLContext)
@@ -841,10 +842,9 @@ nsWindow::OnGlobalAndroidEvent(AndroidGeckoEvent *ae)
                     if (!preventDefaultActions && ae->Count() == 2) {
                         target->OnGestureEvent(ae);
                     }
-#ifndef MOZ_ONLY_TOUCH_EVENTS
+
                     if (!preventDefaultActions && ae->Count() < 2)
-                        target->OnMotionEvent(ae);
-#endif
+                        target->OnMouseEvent(ae);
                 }
             }
             break;
@@ -1287,10 +1287,12 @@ nsWindow::GetNativeData(PRUint32 aDataType)
 }
 
 void
-nsWindow::OnMotionEvent(AndroidGeckoEvent *ae)
+nsWindow::OnMouseEvent(AndroidGeckoEvent *ae)
 {
     PRUint32 msg;
+    PRInt16 buttons = nsMouseEvent::eLeftButtonFlag;
     switch (ae->Action() & AndroidMotionEvent::ACTION_MASK) {
+#ifndef MOZ_ONLY_TOUCH_EVENTS
         case AndroidMotionEvent::ACTION_DOWN:
             msg = NS_MOUSE_BUTTON_DOWN;
             break;
@@ -1302,6 +1304,14 @@ nsWindow::OnMotionEvent(AndroidGeckoEvent *ae)
         case AndroidMotionEvent::ACTION_UP:
         case AndroidMotionEvent::ACTION_CANCEL:
             msg = NS_MOUSE_BUTTON_UP;
+            break;
+#endif
+
+        case AndroidMotionEvent::ACTION_HOVER_ENTER:
+        case AndroidMotionEvent::ACTION_HOVER_MOVE:
+        case AndroidMotionEvent::ACTION_HOVER_EXIT:
+            msg = NS_MOUSE_MOVE;
+            buttons = 0;
             break;
 
         default:
@@ -2050,7 +2060,7 @@ nsWindow::UserActivity()
   }
 
   if (mIdleService) {
-    mIdleService->ResetIdleTimeOut();
+    mIdleService->ResetIdleTimeOut(0);
   }
 }
 
@@ -2237,6 +2247,10 @@ nsWindow::DrawWindowUnderlay(LayerManager* aManager, nsIntRect aRect)
 
     AndroidGeckoLayerClient& client = AndroidBridge::Bridge()->GetLayerClient();
     if (!client.CreateFrame(&jniFrame, mLayerRendererFrame)) return;
+    
+    if (!WidgetPaintsBackground())
+        return;
+
     if (!client.ActivateProgram(&jniFrame)) return;
     if (!mLayerRendererFrame.BeginDrawing(&jniFrame)) return;
     if (!mLayerRendererFrame.DrawBackground(&jniFrame)) return;
@@ -2304,6 +2318,31 @@ nsWindow::ScheduleResumeComposition(int width, int height)
     if (sCompositorParent) {
         sCompositorParent->ScheduleResumeOnCompositorThread(width, height);
     }
+}
+
+bool
+nsWindow::WidgetPaintsBackground()
+{
+    static bool sWidgetPaintsBackground = true;
+    static bool sWidgetPaintsBackgroundPrefCached = false;
+
+    if (!sWidgetPaintsBackgroundPrefCached) {
+        sWidgetPaintsBackgroundPrefCached = true;
+        mozilla::Preferences::AddBoolVarCache(&sWidgetPaintsBackground,
+                                              "android.widget_paints_background",
+                                              true);
+    }
+
+    return sWidgetPaintsBackground;
+}
+
+bool
+nsWindow::NeedsPaint()
+{
+  if (sCompositorPaused || FindTopLevel() != nsWindow::TopWindow()) {
+    return false;
+  }
+  return nsIWidget::NeedsPaint();
 }
 
 #endif

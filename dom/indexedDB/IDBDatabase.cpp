@@ -12,7 +12,6 @@
 #include "mozilla/storage.h"
 #include "nsDOMClassInfo.h"
 #include "nsDOMLists.h"
-#include "nsEventDispatcher.h"
 #include "nsJSUtils.h"
 #include "nsProxyRelease.h"
 #include "nsThreadUtils.h"
@@ -29,6 +28,7 @@
 #include "IndexedDatabaseManager.h"
 #include "TransactionThreadPool.h"
 #include "DictionaryHelpers.h"
+#include "nsContentUtils.h"
 
 #include "ipc/IndexedDBChild.h"
 
@@ -243,6 +243,10 @@ IDBDatabase::Invalidate()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
+  if (IsInvalidated()) {
+    return;
+  }
+
   // Make sure we're closed too.
   Close();
 
@@ -307,6 +311,9 @@ void
 IDBDatabase::EnterSetVersionTransaction()
 {
   NS_ASSERTION(!mRunningVersionChange, "How did that happen?");
+
+  mPreviousDatabaseInfo = mDatabaseInfo->Clone();
+
   mRunningVersionChange = true;
 }
 
@@ -314,7 +321,17 @@ void
 IDBDatabase::ExitSetVersionTransaction()
 {
   NS_ASSERTION(mRunningVersionChange, "How did that happen?");
+
+  mPreviousDatabaseInfo = nsnull;
+
   mRunningVersionChange = false;
+}
+
+void
+IDBDatabase::RevertToPreviousState()
+{
+  mDatabaseInfo = mPreviousDatabaseInfo;
+  mPreviousDatabaseInfo = nsnull;
 }
 
 void
@@ -471,8 +488,7 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
   DatabaseInfo* databaseInfo = transaction->DBInfo();
 
   mozilla::dom::IDBObjectStoreParameters params;
-  nsString keyPath;
-  keyPath.SetIsVoid(true);
+  KeyPath keyPath(0);
   nsTArray<nsString> keyPathArray;
 
   nsresult rv;
@@ -483,58 +499,17 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
       return rv;
     }
 
-    // Get keyPath
-    jsval val = params.keyPath;
-    if (!JSVAL_IS_VOID(val) && !JSVAL_IS_NULL(val)) {
-      if (!JSVAL_IS_PRIMITIVE(val) &&
-          JS_IsArrayObject(aCx, JSVAL_TO_OBJECT(val))) {
+    // We need a default value here, which the XPIDL dictionary stuff doesn't
+    // support.  WebIDL shall save us all!
+    JSBool hasProp = false;
+    JSObject* obj = JSVAL_TO_OBJECT(aOptions);
+    if (!JS_HasProperty(aCx, obj, "keyPath", &hasProp)) {
+      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+    }
 
-        JSObject* obj = JSVAL_TO_OBJECT(val);
-
-        uint32_t length;
-        if (!JS_GetArrayLength(aCx, obj, &length)) {
-          return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-        }
-
-        if (!length) {
-          return NS_ERROR_DOM_SYNTAX_ERR;
-        }
-
-        keyPathArray.SetCapacity(length);
-
-        for (uint32_t index = 0; index < length; index++) {
-          jsval val;
-          JSString* jsstr;
-          nsDependentJSString str;
-          if (!JS_GetElement(aCx, obj, index, &val) ||
-              !(jsstr = JS_ValueToString(aCx, val)) ||
-              !str.init(aCx, jsstr)) {
-            return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-          }
-
-          if (!IDBObjectStore::IsValidKeyPath(aCx, str)) {
-            return NS_ERROR_DOM_SYNTAX_ERR;
-          }
-
-          keyPathArray.AppendElement(str);
-        }
-
-        NS_ASSERTION(!keyPathArray.IsEmpty(), "This shouldn't have happened!");
-      }
-      else {
-        JSString* jsstr;
-        nsDependentJSString str;
-        if (!(jsstr = JS_ValueToString(aCx, val)) ||
-            !str.init(aCx, jsstr)) {
-          return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-        }
-
-        if (!IDBObjectStore::IsValidKeyPath(aCx, str)) {
-          return NS_ERROR_DOM_SYNTAX_ERR;
-        }
-
-        keyPath = str;
-      }
+    if (NS_FAILED(KeyPath::Parse(aCx, hasProp ? params.keyPath : JSVAL_NULL,
+                                 &keyPath))) {
+      return NS_ERROR_DOM_SYNTAX_ERR;
     }
   }
 
@@ -542,8 +517,7 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
     return NS_ERROR_DOM_INDEXEDDB_CONSTRAINT_ERR;
   }
 
-  if (params.autoIncrement &&
-      ((!keyPath.IsVoid() && keyPath.IsEmpty()) || !keyPathArray.IsEmpty())) {
+  if (!keyPath.IsAllowedForObjectStore(params.autoIncrement)) {
     return NS_ERROR_DOM_INVALID_ACCESS_ERR;
   }
 
@@ -552,7 +526,6 @@ IDBDatabase::CreateObjectStore(const nsAString& aName,
   guts.name = aName;
   guts.id = databaseInfo->nextObjectStoreId++;
   guts.keyPath = keyPath;
-  guts.keyPathArray = keyPathArray;
   guts.autoIncrement = params.autoIncrement;
 
   nsRefPtr<IDBObjectStore> objectStore;
@@ -744,6 +717,7 @@ IDBDatabase::Transaction(const jsval& aStoreNames,
 NS_IMETHODIMP
 IDBDatabase::MozCreateFileHandle(const nsAString& aName,
                                  const nsAString& aType,
+                                 JSContext* aCx,
                                  nsIIDBRequest** _retval)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -756,7 +730,7 @@ IDBDatabase::MozCreateFileHandle(const nsAString& aName,
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
-  nsRefPtr<IDBRequest> request = IDBRequest::Create(nsnull, this, nsnull);
+  nsRefPtr<IDBRequest> request = IDBRequest::Create(nsnull, this, nsnull, aCx);
 
   nsRefPtr<CreateFileHelper> helper =
     new CreateFileHelper(this, request, aName, aType);
@@ -816,35 +790,7 @@ IDBDatabase::UnsetThreadLocals()
 nsresult
 IDBDatabase::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
 {
-  NS_ENSURE_TRUE(aVisitor.mDOMEvent, NS_ERROR_UNEXPECTED);
-
-  nsPIDOMWindow* owner = GetOwner();
-  if (!owner) {
-    return NS_OK;
-  }
-
-  if (aVisitor.mEventStatus != nsEventStatus_eConsumeNoDefault) {
-    nsString type;
-    nsresult rv = aVisitor.mDOMEvent->GetType(type);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (type.EqualsLiteral(ERROR_EVT_STR)) {
-      nsRefPtr<nsDOMEvent> duplicateEvent =
-        CreateGenericEvent(type, eDoesNotBubble, eNotCancelable);
-      NS_ENSURE_STATE(duplicateEvent);
-
-      nsCOMPtr<nsIDOMEventTarget> target(do_QueryInterface(owner));
-      NS_ASSERTION(target, "How can this happen?!");
-
-      bool dummy;
-      rv = target->DispatchEvent(duplicateEvent, &dummy);
-      if (NS_FAILED(rv)) {
-        return rv;
-      }
-    }
-  }
-
-  return NS_OK;
+  return IndexedDatabaseManager::FireWindowOnError(GetOwner(), aVisitor);
 }
 
 HelperBase::ChildProcessSendResult
@@ -873,7 +819,7 @@ void
 NoRequestDatabaseHelper::OnError()
 {
   NS_ASSERTION(IndexedDatabaseManager::IsMainProcess(), "Wrong process!");
-  mTransaction->AbortWithCode(GetResultCode());
+  mTransaction->Abort(GetResultCode());
 }
 
 nsresult
@@ -899,23 +845,12 @@ CreateObjectStoreHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
   rv = stmt->BindStringByName(NS_LITERAL_CSTRING("name"), mObjectStore->Name());
   NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
-  if (mObjectStore->UsesKeyPathArray()) {
-    // We use a comma in the beginning to indicate that it's an array of
-    // key paths. This is to be able to tell a string-keypath from an
-    // array-keypath which contains only one item.
-    // It also makes serializing easier :-)
-    nsAutoString keyPath;
-    const nsTArray<nsString>& keyPaths = mObjectStore->KeyPathArray();
-    for (PRUint32 i = 0; i < keyPaths.Length(); ++i) {
-      keyPath.Append(NS_LITERAL_STRING(",") + keyPaths[i]);
-    }
+  const KeyPath& keyPath = mObjectStore->GetKeyPath();
+  if (keyPath.IsValid()) {
+    nsAutoString keyPathSerialization;
+    keyPath.SerializeToString(keyPathSerialization);
     rv = stmt->BindStringByName(NS_LITERAL_CSTRING("key_path"),
-                                keyPath);
-    NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
-  }
-  else if (mObjectStore->HasKeyPath()) {
-    rv = stmt->BindStringByName(NS_LITERAL_CSTRING("key_path"),
-                                mObjectStore->KeyPath());
+                                keyPathSerialization);
     NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
   }
   else {

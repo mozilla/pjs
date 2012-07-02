@@ -38,9 +38,6 @@ struct Parser : private AutoGCRooter
     StrictModeGetter    strictModeGetter; /* used by tokenStream to test for strict mode */
     TokenStream         tokenStream;
     void                *tempPoolMark;  /* initial JSContext.tempLifoAlloc mark */
-    JSPrincipals        *principals;    /* principals associated with source */
-    JSPrincipals        *originPrincipals;   /* see jsapi.h 'originPrincipals' comment */
-    StackFrame          *const callerFrame;  /* scripted caller frame for eval and dbgapi */
     ParseNodeAllocator  allocator;
     ObjectBox           *traceListHead; /* list of parsed object for GC tracing */
 
@@ -52,16 +49,17 @@ struct Parser : private AutoGCRooter
     /* Perform constant-folding; must be true when interfacing with the emitter. */
     const bool          foldConstants:1;
 
+  private:
     /* Script can optimize name references based on scope chain. */
     const bool          compileAndGo:1;
 
+  public:
     Parser(JSContext *cx, JSPrincipals *prin, JSPrincipals *originPrin,
            const jschar *chars, size_t length, const char *fn, unsigned ln, JSVersion version,
-           StackFrame *cfp, bool foldConstants, bool compileAndGo);
+           bool foldConstants, bool compileAndGo);
     ~Parser();
 
     friend void AutoGCRooter::trace(JSTracer *trc);
-    friend struct TreeContext;
 
     /*
      * Initialize a parser. The compiler owns the arena pool "tops-of-stack"
@@ -71,10 +69,7 @@ struct Parser : private AutoGCRooter
      */
     bool init();
 
-    void setPrincipals(JSPrincipals *prin, JSPrincipals *originPrin);
-
     const char *getFilename() const { return tokenStream.getFilename(); }
-    JSVersion versionWithFlags() const { return tokenStream.versionWithFlags(); }
     JSVersion versionNumber() const { return tokenStream.versionNumber(); }
 
     /*
@@ -105,7 +100,12 @@ struct Parser : private AutoGCRooter
     /*
      * Report a parse (compile) error.
      */
-    inline bool reportErrorNumber(ParseNode *pn, unsigned flags, unsigned errorNumber, ...);
+    inline bool reportError(ParseNode *pn, unsigned errorNumber, ...);
+    inline bool reportUcError(ParseNode *pn, unsigned errorNumber, ...);
+    inline bool reportWarning(ParseNode *pn, unsigned errorNumber, ...);
+    inline bool reportStrictWarning(ParseNode *pn, unsigned errorNumber, ...);
+    inline bool reportStrictModeError(ParseNode *pn, unsigned errorNumber, ...);
+    typedef bool (js::Parser::*Reporter)(ParseNode *pn, unsigned errorNumber, ...);
 
   private:
     ParseNode *allocParseNode(size_t size) {
@@ -144,8 +144,6 @@ struct Parser : private AutoGCRooter
      */
     enum FunctionBodyType { StatementListBody, ExpressionBody };
     ParseNode *functionBody(FunctionBodyType type);
-
-    bool checkForArgumentsAndRest();
 
   private:
     /*
@@ -256,11 +254,53 @@ struct Parser : private AutoGCRooter
 };
 
 inline bool
-Parser::reportErrorNumber(ParseNode *pn, unsigned flags, unsigned errorNumber, ...)
+Parser::reportError(ParseNode *pn, unsigned errorNumber, ...)
 {
     va_list args;
     va_start(args, errorNumber);
-    bool result = tokenStream.reportCompileErrorNumberVA(pn, flags, errorNumber, args);
+    bool result = tokenStream.reportCompileErrorNumberVA(pn, JSREPORT_ERROR, errorNumber, args);
+    va_end(args);
+    return result;
+}
+
+inline bool
+Parser::reportUcError(ParseNode *pn, unsigned errorNumber, ...)
+{
+    va_list args;
+    va_start(args, errorNumber);
+    bool result = tokenStream.reportCompileErrorNumberVA(pn, JSREPORT_UC | JSREPORT_ERROR,
+                                                         errorNumber, args);
+    va_end(args);
+    return result;
+}
+
+inline bool
+Parser::reportWarning(ParseNode *pn, unsigned errorNumber, ...)
+{
+    va_list args;
+    va_start(args, errorNumber);
+    bool result = tokenStream.reportCompileErrorNumberVA(pn, JSREPORT_WARNING, errorNumber, args);
+    va_end(args);
+    return result;
+}
+
+inline bool
+Parser::reportStrictWarning(ParseNode *pn, unsigned errorNumber, ...)
+{
+    va_list args;
+    va_start(args, errorNumber);
+    bool result = tokenStream.reportCompileErrorNumberVA(pn, JSREPORT_STRICT | JSREPORT_WARNING,
+                                                         errorNumber, args);
+    va_end(args);
+    return result;
+}
+
+inline bool
+Parser::reportStrictModeError(ParseNode *pn, unsigned errorNumber, ...)
+{
+    va_list args;
+    va_start(args, errorNumber);
+    bool result = tokenStream.reportStrictModeErrorNumberVA(pn, errorNumber, args);
     va_end(args);
     return result;
 }

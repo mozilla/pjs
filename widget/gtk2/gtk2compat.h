@@ -48,6 +48,12 @@ gtk_dialog_get_content_area(GtkDialog *dialog)
 {
   return dialog->vbox;
 }
+
+static inline GdkWindow *
+gtk_plug_get_socket_window(GtkPlug *plug)
+{
+  return plug->socket_window;
+}
 #endif
 
 
@@ -109,6 +115,12 @@ static inline void
 gtk_widget_set_window(GtkWidget *widget, GdkWindow *window)
 {
   widget->window = window;
+}
+
+static inline gboolean
+gtk_widget_is_toplevel(GtkWidget *widget)
+{
+  return GTK_WIDGET_TOPLEVEL(widget);
 }
 #endif
 

@@ -23,7 +23,6 @@
 #include "nsLeafFrame.h"
 #include "nsIPresShell.h"
 #include "nsIDocument.h"
-#include "nsIHTMLDocument.h"
 #include "nsImageMap.h"
 #include "nsILinkHandler.h"
 #include "nsIURL.h"
@@ -35,7 +34,6 @@
 #include "nsINameSpaceManager.h"
 #include "nsTextFragment.h"
 #include "nsIDOMHTMLMapElement.h"
-#include "nsIDOMDocument.h"
 #include "nsTransform2D.h"
 #include "nsITheme.h"
 #include "nsIImageLoadingContent.h"
@@ -596,6 +594,10 @@ NS_IMETHODIMP nsImageBoxFrame::FrameChanged(imgIRequest *aRequest,
                                             imgIContainer *aContainer,
                                             const nsIntRect *aDirtyRect)
 {
+  if ((0 == mRect.width) || (0 == mRect.height)) {
+    return NS_OK;
+  }
+  
   nsBoxLayoutState state(PresContext());
   this->Redraw(state);
 

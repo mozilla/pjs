@@ -24,17 +24,23 @@ function test() {
     togglePBAndThen(function() {
       ok(pb.privateBrowsingEnabled, "private browsing is enabled");
 
-      openConsole(gBrowser.selectedTab, function() {
+      openConsole(gBrowser.selectedTab, function(hud) {
         content.location = TEST_URI;
-        gBrowser.selectedBrowser.addEventListener("load", tabLoaded, true);
+        waitForSuccess({
+          name: "network message displayed",
+          validatorFn: function()
+          {
+            return hud.outputNode.querySelector(".webconsole-msg-network");
+          },
+          successFn: performTest,
+          failureFn: finishTest,
+        });
       });
     });
   }, true);
 }
 
-function tabLoaded() {
-  gBrowser.selectedBrowser.removeEventListener("load", tabLoaded, true);
-
+function performTest() {
   let hudId = HUDService.getHudIdByWindow(content);
   let HUD = HUDService.hudReferences[hudId];
 
@@ -118,8 +124,12 @@ function tabLoaded() {
     successFn: function()
     {
       let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
-      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
-      EventUtils.synthesizeMouse(networkLink, 2, 2, {});
+      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage);
+      EventUtils.sendMouseEvent({ type: "mouseup" }, jstermMessage);
+      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage);
+      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink);
+      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink);
+      EventUtils.sendMouseEvent({ type: "click" }, networkLink);
     },
     failureFn: finishTest,
   });

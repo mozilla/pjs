@@ -24,12 +24,12 @@
 namespace js {
 
 inline
-Bindings::Bindings(JSContext *cx)
+Bindings::Bindings()
     : lastBinding(NULL), nargs(0), nvars(0), hasDup_(false)
 {}
 
 inline void
-Bindings::transfer(JSContext *cx, Bindings *bindings)
+Bindings::transfer(Bindings *bindings)
 {
     JS_ASSERT(!lastBinding);
     JS_ASSERT(!bindings->lastBinding || !bindings->lastBinding->inDictionary());
@@ -38,15 +38,6 @@ Bindings::transfer(JSContext *cx, Bindings *bindings)
 #ifdef DEBUG
     bindings->lastBinding = NULL;
 #endif
-}
-
-inline void
-Bindings::clone(JSContext *cx, Bindings *bindings)
-{
-    JS_ASSERT(!lastBinding);
-    JS_ASSERT(!bindings->lastBinding || !bindings->lastBinding->inDictionary());
-
-    *this = *bindings;
 }
 
 Shape *
@@ -83,6 +74,30 @@ bool
 Bindings::extensibleParents()
 {
     return lastBinding && lastBinding->extensibleParents();
+}
+
+uint16_t
+Bindings::formalIndexToSlot(uint16_t i)
+{
+    JS_ASSERT(i < nargs);
+    return CallObject::RESERVED_SLOTS + i;
+}
+
+uint16_t
+Bindings::varIndexToSlot(uint16_t i)
+{
+    JS_ASSERT(i < nvars);
+    return CallObject::RESERVED_SLOTS + i + nargs;
+}
+
+unsigned
+Bindings::argumentsVarIndex(JSContext *cx) const
+{
+    PropertyName *arguments = cx->runtime->atomState.argumentsAtom;
+    unsigned i;
+    DebugOnly<BindingKind> kind = lookup(cx, arguments, &i);
+    JS_ASSERT(kind == VARIABLE || kind == CONSTANT);
+    return i;
 }
 
 extern void

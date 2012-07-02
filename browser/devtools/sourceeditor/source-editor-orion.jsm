@@ -131,6 +131,15 @@ const DEFAULT_KEYBINDINGS = [
   },
 ];
 
+if (Services.appinfo.OS == "WINNT" ||
+    Services.appinfo.OS == "Linux") {
+  DEFAULT_KEYBINDINGS.push({
+    action: "redo",
+    code: Ci.nsIDOMKeyEvent.DOM_VK_Y,
+    accel: true,
+  });
+}
+
 var EXPORTED_SYMBOLS = ["SourceEditor"];
 
 /**
@@ -754,7 +763,8 @@ SourceEditor.prototype = {
     }
 
     clipboardHelper.copyStringToClipboard(text,
-                                          Ci.nsIClipboard.kSelectionClipboard);
+                                          Ci.nsIClipboard.kSelectionClipboard,
+                                          this.parentElement.ownerDocument);
   },
 
   /**

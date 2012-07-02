@@ -209,7 +209,9 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 
 // See nsStyleDisplay
 #define NS_STYLE_ANIMATION_DIRECTION_NORMAL       0
-#define NS_STYLE_ANIMATION_DIRECTION_ALTERNATE    1
+#define NS_STYLE_ANIMATION_DIRECTION_REVERSE      1
+#define NS_STYLE_ANIMATION_DIRECTION_ALTERNATE    2
+#define NS_STYLE_ANIMATION_DIRECTION_ALTERNATE_REVERSE    3
 
 // See nsStyleDisplay
 #define NS_STYLE_ANIMATION_FILL_MODE_NONE         0
@@ -390,6 +392,10 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_DISPLAY_POPUP                  27
 #define NS_STYLE_DISPLAY_GROUPBOX               28
 #endif
+#ifdef MOZ_FLEXBOX
+#define NS_STYLE_DISPLAY_FLEX                   29
+#define NS_STYLE_DISPLAY_INLINE_FLEX            30
+#endif // MOZ_FLEXBOX
 
 // See nsStyleDisplay
 #define NS_STYLE_FLOAT_NONE                     0
@@ -763,9 +769,6 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 // See nsStyleColumn
 #define NS_STYLE_COLUMN_COUNT_AUTO              0
 #define NS_STYLE_COLUMN_COUNT_UNLIMITED         (-1)
-
-#define NS_STYLE_COLUMN_FILL_AUTO               0
-#define NS_STYLE_COLUMN_FILL_BALANCE            1
 
 // See nsStyleUIReset
 #define NS_STYLE_IME_MODE_AUTO                  0

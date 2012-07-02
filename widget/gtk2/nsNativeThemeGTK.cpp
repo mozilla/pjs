@@ -11,7 +11,6 @@
 #include "nsIServiceManager.h"
 #include "nsIFrame.h"
 #include "nsIPresShell.h"
-#include "nsIDocument.h"
 #include "nsIContent.h"
 #include "nsIViewManager.h"
 #include "nsINameSpaceManager.h"
@@ -720,6 +719,12 @@ nsNativeThemeGTK::GetExtraSizeForWidget(nsIFrame* aFrame, PRUint8 aWidgetType,
       } else {
         aExtra->bottom = extra;
       }
+    }
+  case NS_THEME_TEXTFIELD:
+    {
+      aExtra->top = aExtra->bottom = 1;
+      aExtra->left = aExtra->right = 1;
+      return true;
     }
   default:
     return false;

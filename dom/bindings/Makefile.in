@@ -45,6 +45,8 @@ globalgen_targets := \
   PrototypeList.h \
   RegisterBindings.h \
   RegisterBindings.cpp \
+  UnionTypes.h \
+  UnionConversions.h \
   $(NULL)
 
 CPPSRCS = \
@@ -66,11 +68,14 @@ EXPORTS_$(binding_include_path) = \
   Nullable.h \
   TypedArray.h \
   BindingUtils.h \
+  UnionTypes.h \
+  UnionConversions.h \
   $(exported_binding_headers) \
   $(NULL)
 
 LOCAL_INCLUDES += -I$(topsrcdir)/js/xpconnect/src \
   -I$(topsrcdir)/js/xpconnect/wrappers \
+  -I$(topsrcdir)/content/canvas/src \
   -I$(topsrcdir)/content/html/content/src
 
 include $(topsrcdir)/config/rules.mk
@@ -146,3 +151,9 @@ GARBAGE += \
   webidlyacc.py \
   parser.out \
   $(NULL)
+
+# Make sure all binding header files are created during the export stage, so we
+# don't have issues with .cpp files being compiled before we've generated the
+# headers they depend on.  This is really only needed for the test files, since
+# the non-test headers are all exported above anyway.
+export:: $(binding_header_files)

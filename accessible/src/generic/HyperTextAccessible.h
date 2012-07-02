@@ -16,6 +16,15 @@
 #include "nsFrameSelection.h"
 #include "nsISelectionController.h"
 
+namespace mozilla {
+namespace a11y {
+struct DOMPoint {
+  nsINode* node;
+  PRInt32 idx;
+};
+}
+}
+
 enum EGetTextType { eGetBefore=-1, eGetAt=0, eGetAfter=1 };
 
 // This character marks where in the text returned via nsIAccessibleText(),
@@ -23,14 +32,6 @@ enum EGetTextType { eGetBefore=-1, eGetAt=0, eGetAfter=1 };
 const PRUnichar kEmbeddedObjectChar = 0xfffc;
 const PRUnichar kImaginaryEmbeddedObjectChar = ' ';
 const PRUnichar kForcedNewLineChar = '\n';
-
-#define NS_HYPERTEXTACCESSIBLE_IMPL_CID                 \
-{  /* 245f3bc9-224f-4839-a92e-95239705f30b */           \
-  0x245f3bc9,                                           \
-  0x224f,                                               \
-  0x4839,                                               \
-  { 0xa9, 0x2e, 0x95, 0x23, 0x97, 0x05, 0xf3, 0x0b }    \
-}
 
 /**
   * Special Accessible that knows how contain both text and embedded objects
@@ -48,7 +49,6 @@ public:
   NS_DECL_NSIACCESSIBLETEXT
   NS_DECL_NSIACCESSIBLEHYPERTEXT
   NS_DECL_NSIACCESSIBLEEDITABLETEXT
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_HYPERTEXTACCESSIBLE_IMPL_CID)
 
   // Accessible
   virtual PRInt32 GetLevelInternal();
@@ -140,32 +140,15 @@ public:
                                         bool aIsEndOffset = false);
 
   /**
-   * Turn a hypertext offsets into DOM point.
-   *
-   * @param  aHTOffset  [in] the given start hypertext offset
-   * @param  aNode      [out] start node
-   * @param  aOffset    [out] offset inside the start node
-   */
-  nsresult HypertextOffsetToDOMPoint(PRInt32 aHTOffset,
-                                     nsIDOMNode **aNode,
-                                     PRInt32 *aOffset);
-
-  /**
    * Turn a start and end hypertext offsets into DOM range.
    *
    * @param  aStartHTOffset  [in] the given start hypertext offset
    * @param  aEndHTOffset    [in] the given end hypertext offset
-   * @param  aStartNode      [out] start node of the range
-   * @param  aStartOffset    [out] start offset of the range
-   * @param  aEndNode        [out] end node of the range
-   * @param  aEndOffset      [out] end offset of the range
+   * @param  aRange      [out] the range whose bounds to set
    */
   nsresult HypertextOffsetsToDOMRange(PRInt32 aStartHTOffset,
                                       PRInt32 aEndHTOffset,
-                                      nsIDOMNode **aStartNode,
-                                      PRInt32 *aStartOffset,
-                                      nsIDOMNode **aEndNode,
-                                      PRInt32 *aEndOffset);
+                                      nsRange* aRange);
 
   /**
    * Return true if the used ARIA role (if any) allows the hypertext accessible
@@ -364,7 +347,7 @@ protected:
   // Helpers
   nsresult GetDOMPointByFrameOffset(nsIFrame* aFrame, PRInt32 aOffset,
                                     Accessible* aAccessible,
-                                    nsIDOMNode** aNode, PRInt32* aNodeOffset);
+                                    mozilla::a11y::DOMPoint* aPoint);
 
   
   /**
@@ -409,9 +392,6 @@ private:
    */
   nsTArray<PRUint32> mOffsets;
 };
-
-NS_DEFINE_STATIC_IID_ACCESSOR(HyperTextAccessible,
-                              NS_HYPERTEXTACCESSIBLE_IMPL_CID)
 
 
 ////////////////////////////////////////////////////////////////////////////////

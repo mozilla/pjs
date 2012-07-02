@@ -330,6 +330,9 @@ Highlighter.prototype = {
    */
   isNodeHighlightable: function Highlighter_isNodeHighlightable(aNode)
   {
+    if (!LayoutHelpers.isNodeConnected(aNode)) {
+      return false;
+    }
     if (aNode.nodeType != aNode.ELEMENT_NODE) {
       return false;
     }
@@ -884,7 +887,11 @@ Highlighter.prototype = {
    */
   handleMouseMove: function Highlighter_handleMouseMove(aEvent)
   {
-    if (aEvent.target.ownerDocument) {
+    let doc = aEvent.target.ownerDocument;
+
+    // This should never happen, but just in case, we don't let the
+    // highlighter highlight browser nodes.
+    if (doc && doc != this.chromeDoc) {
       let element = LayoutHelpers.getElementFromPoint(aEvent.target.ownerDocument,
         aEvent.clientX, aEvent.clientY);
       if (element && element != this.node) {

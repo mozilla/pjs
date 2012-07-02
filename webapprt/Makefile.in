@@ -25,8 +25,8 @@ ifeq ($(OS_ARCH),Darwin)
 DIRS += mac
 else
 ifeq ($(MOZ_WIDGET_TOOLKIT),gtk2)
-DIRS += linux
-endif # linux
+DIRS += gtk2
+endif # gtk2
 endif # mac
 endif # windows
 
@@ -40,6 +40,14 @@ EXTRA_PP_COMPONENTS = \
 
 EXTRA_JS_MODULES = \
   WebappRT.jsm \
+  WebappsHandler.jsm \
+  $(NULL)
+
+PREF_JS_EXPORTS = $(srcdir)/prefs.js \
+                  $(NULL)
+
+TEST_DIRS += \
+  test \
   $(NULL)
 
 include $(topsrcdir)/config/rules.mk
@@ -48,12 +56,12 @@ ifdef MOZ_DEBUG
 DEFINES += -DMOZ_DEBUG=1
 endif
 
+ifdef MOZILLA_OFFICIAL
+DEFINES += -DMOZILLA_OFFICIAL
+endif
+
 libs::
 	$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_TARGET)/chrome.manifest "resource webapprt ./"
-
-libs:: prefs.js
-	$(NSINSTALL) -D $(FINAL_TARGET)/defaults/preferences
-	$(INSTALL) $^ $(FINAL_TARGET)/defaults/preferences
 
 GRE_MILESTONE := $(shell tail -n 1 $(topsrcdir)/config/milestone.txt 2>/dev/null || tail -1 $(topsrcdir)/config/milestone.txt)
 GRE_BUILDID := $(shell cat $(DEPTH)/config/buildid)

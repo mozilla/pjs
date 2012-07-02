@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Util.h"
+#include "mozilla/Attributes.h"
 
 #include "necko-config.h"
 
@@ -33,7 +34,6 @@
 #include "nsDeleteDir.h"
 #include "nsNetCID.h"
 #include <math.h>  // for log()
-#include "mozilla/Util.h" // for DebugOnly
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "nsITimer.h"
@@ -184,7 +184,7 @@ private:
 
 NS_IMPL_THREADSAFE_ISUPPORTS1(nsCacheProfilePrefObserver, nsIObserver)
 
-class nsSetDiskSmartSizeCallback : public nsITimerCallback
+class nsSetDiskSmartSizeCallback MOZ_FINAL : public nsITimerCallback
 {
 public:
     NS_DECL_ISUPPORTS
@@ -1106,6 +1106,13 @@ nsCacheService::Init()
 {
     NS_TIME_FUNCTION;
 
+    // Thie method must be called on the main thread because mCacheIOThread must
+    // only be modified on the main thread.
+    if (!NS_IsMainThread()) {
+        NS_ERROR("nsCacheService::Init called off the main thread");
+        return NS_ERROR_NOT_SAME_THREAD;
+    }
+
     NS_ASSERTION(!mInitialized, "nsCacheService already initialized.");
     if (mInitialized)
         return NS_ERROR_ALREADY_INITIALIZED;
@@ -1116,7 +1123,8 @@ nsCacheService::Init()
 
     CACHE_LOG_INIT();
 
-    nsresult rv = NS_NewThread(getter_AddRefs(mCacheIOThread));
+    nsresult rv = NS_NewNamedThread("Cache I/O",
+                                    getter_AddRefs(mCacheIOThread));
     if (NS_FAILED(rv)) {
         NS_RUNTIMEABORT("Can't create cache IO thread");
     }
@@ -1157,6 +1165,12 @@ nsCacheService::ShutdownCustomCacheDeviceEnum(const nsAString& aProfileDir,
 void
 nsCacheService::Shutdown()
 {
+    // Thie method must be called on the main thread because mCacheIOThread must
+    // only be modified on the main thread.
+    if (!NS_IsMainThread()) {
+        NS_RUNTIMEABORT("nsCacheService::Shutdown called off the main thread");
+    }
+
     nsCOMPtr<nsIThread> cacheIOThread;
     Telemetry::AutoTimer<Telemetry::NETWORK_DISK_CACHE_SHUTDOWN> totalTimer;
 
@@ -1468,13 +1482,29 @@ NS_IMETHODIMP nsCacheService::EvictEntries(nsCacheStoragePolicy storagePolicy)
 
 NS_IMETHODIMP nsCacheService::GetCacheIOTarget(nsIEventTarget * *aCacheIOTarget)
 {
-    nsCacheServiceAutoLock lock;
+    NS_ENSURE_ARG_POINTER(aCacheIOTarget);
 
-    if (!mCacheIOThread)
-        return NS_ERROR_NOT_AVAILABLE;
+    // Because mCacheIOThread can only be changed on the main thread, it can be
+    // read from the main thread without the lock. This is useful to prevent
+    // blocking the main thread on other cache operations.
+    if (!NS_IsMainThread()) {
+        Lock();
+    }
 
-    NS_ADDREF(*aCacheIOTarget = mCacheIOThread);
-    return NS_OK;
+    nsresult rv;
+    if (mCacheIOThread) {
+        NS_ADDREF(*aCacheIOTarget = mCacheIOThread);
+        rv = NS_OK;
+    } else {
+        *aCacheIOTarget = nsnull;
+        rv = NS_ERROR_NOT_AVAILABLE;
+    }
+
+    if (!NS_IsMainThread()) {
+        Unlock();
+    }
+
+    return rv;
 }
 
 /**

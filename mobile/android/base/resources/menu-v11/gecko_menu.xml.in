@@ -22,12 +22,20 @@
           gecko:icon="@drawable/ic_menu_share"
           gecko:title="@string/share" /> 
     
+    <item gecko:id="@+id/reading_list"
+          gecko:icon="@drawable/ic_menu_reading_list_add"
+          gecko:title="@string/reading_list" />
+
     <item gecko:id="@+id/save_as_pdf"
           gecko:icon="@drawable/ic_menu_save_as_pdf"
           gecko:title="@string/save_as_pdf" />
 
     <item gecko:id="@+id/find_in_page"
           gecko:title="@string/find_in_page" />
+
+    <item gecko:id="@+id/desktop_mode"
+          gecko:title="@string/desktop_mode"
+          gecko:checkable="true" />
 
     <item gecko:id="@+id/site_settings"
           gecko:icon="@drawable/ic_menu_clear_site_settings"
@@ -38,6 +46,9 @@
 
     <item gecko:id="@+id/downloads"
           gecko:title="@string/downloads"/>
+
+    <item gecko:id="@+id/apps"
+          gecko:title="@string/apps"/>
 
     <item gecko:id="@+id/char_encoding"
           gecko:visible="false"

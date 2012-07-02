@@ -142,6 +142,9 @@ public:
   virtual LayersBackend GetBackendType() { return LAYERS_OPENGL; }
   virtual void GetBackendName(nsAString& name) { name.AssignLiteral("OpenGL"); }
 
+  virtual already_AddRefed<gfxASurface>
+    CreateOptimalMaskSurface(const gfxIntSize &aSize);
+
   /**
    * Helper methods.
    */
@@ -314,9 +317,6 @@ public:
                                       GLenum aWrapMode = LOCAL_GL_REPEAT,
                                       bool aFlipped = false);
 
-  virtual gfxASurface::gfxImageFormat MaskImageFormat() 
-  { return gfxASurface::ImageFormatARGB32; }
-
 #ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const { return "OGL"; }
 #endif // MOZ_LAYERS_HAVE_LOG
@@ -349,6 +349,9 @@ public:
    * Set the size of the surface we're rendering to.
    */
   void SetSurfaceSize(int width, int height);
+
+  bool CompositingDisabled() { return mCompositingDisabled; }
+  void SetCompositingDisabled(bool aCompositingDisabled) { mCompositingDisabled = aCompositingDisabled; }
 
 private:
   /** Widget associated with this layer manager */
@@ -391,6 +394,7 @@ private:
 
   /** Misc */
   bool mHasBGRA;
+  bool mCompositingDisabled;
 
   /**
    * When rendering to an EGL surface (e.g. on Android), we rely on being told

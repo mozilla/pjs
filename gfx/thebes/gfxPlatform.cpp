@@ -15,7 +15,7 @@
 #include "gfxD2DSurface.h"
 #elif defined(XP_MACOSX)
 #include "gfxPlatformMac.h"
-#elif defined(MOZ_WIDGET_GTK2)
+#elif defined(MOZ_WIDGET_GTK)
 #include "gfxPlatformGtk.h"
 #elif defined(MOZ_WIDGET_QT)
 #include "gfxQtPlatform.h"
@@ -55,6 +55,7 @@
 #include "mozilla/FunctionTimer.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Attributes.h"
 
 #include "nsIGfxInfo.h"
 
@@ -92,8 +93,8 @@ static PRLogModuleInfo *sCmapDataLog = nsnull;
 
 /* Class to listen for pref changes so that chrome code can dynamically
    force sRGB as an output profile. See Bug #452125. */
-class SRGBOverrideObserver : public nsIObserver,
-                             public nsSupportsWeakReference
+class SRGBOverrideObserver MOZ_FINAL : public nsIObserver,
+                                       public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS
@@ -134,7 +135,7 @@ static const char* kObservedPrefs[] = {
     nsnull
 };
 
-class FontPrefsObserver : public nsIObserver
+class FontPrefsObserver MOZ_FINAL : public nsIObserver
 {
 public:
     NS_DECL_ISUPPORTS
@@ -258,7 +259,7 @@ gfxPlatform::Init()
     gPlatform = new gfxWindowsPlatform;
 #elif defined(XP_MACOSX)
     gPlatform = new gfxPlatformMac;
-#elif defined(MOZ_WIDGET_GTK2)
+#elif defined(MOZ_WIDGET_GTK)
     gPlatform = new gfxPlatformGtk;
 #elif defined(MOZ_WIDGET_QT)
     gPlatform = new gfxQtPlatform;
@@ -384,6 +385,16 @@ gfxPlatform::~gfxPlatform()
     // leaked, and we hit them.
     FcFini();
 #endif
+}
+
+already_AddRefed<gfxASurface>
+gfxPlatform::CreateOffscreenImageSurface(const gfxIntSize& aSize,
+                                         gfxASurface::gfxContentType aContentType)
+{ 
+  nsRefPtr<gfxASurface> newSurface;
+  newSurface = new gfxImageSurface(aSize, OptimalFormatForContent(aContentType));
+
+  return newSurface.forget();
 }
 
 already_AddRefed<gfxASurface>
@@ -558,13 +569,6 @@ gfxPlatform::GetScaledFontForFont(gfxFont *aFont)
   return scaledFont;
 }
 
-cairo_user_data_key_t kDrawSourceSurface;
-static void
-DataSourceSurfaceDestroy(void *dataSourceSurface)
-{
-  static_cast<DataSourceSurface*>(dataSourceSurface)->Release();
-}
-
 UserDataKey kThebesSurfaceKey;
 void
 DestroyThebesSurface(void *data)
@@ -604,11 +608,12 @@ gfxPlatform::GetThebesSurfaceForDrawTarget(DrawTarget *aTarget)
     IntSize size = data->GetSize();
     gfxASurface::gfxImageFormat format = OptimalFormatForContent(ContentForFormat(data->GetFormat()));
 
-    surf =
-      new gfxImageSurface(data->GetData(), gfxIntSize(size.width, size.height),
-                          data->Stride(), format);
-
-    surf->SetData(&kDrawSourceSurface, data.forget().drop(), DataSourceSurfaceDestroy);
+    // We need to make a copy here because data might change its data under us
+    nsRefPtr<gfxImageSurface> imageSurf = new gfxImageSurface(gfxIntSize(size.width, size.height), format, false);
+ 
+    bool resultOfCopy = imageSurf->CopyFrom(source);
+    NS_ASSERTION(resultOfCopy, "Failed to copy surface.");
+    surf = imageSurf;
   }
 
   // add a reference to be held by the drawTarget
@@ -1446,7 +1451,17 @@ gfxPlatform::Optimal2DFormatForContent(gfxASurface::gfxContentType aContent)
 {
   switch (aContent) {
   case gfxASurface::CONTENT_COLOR:
-    return mozilla::gfx::FORMAT_B8G8R8X8;
+    switch (GetOffscreenFormat()) {
+    case gfxASurface::ImageFormatARGB32:
+      return mozilla::gfx::FORMAT_B8G8R8A8;
+    case gfxASurface::ImageFormatRGB24:
+      return mozilla::gfx::FORMAT_B8G8R8X8;
+    case gfxASurface::ImageFormatRGB16_565:
+      return mozilla::gfx::FORMAT_R5G6B5;
+    default:
+      NS_NOTREACHED("unknown gfxImageFormat for CONTENT_COLOR");
+      return mozilla::gfx::FORMAT_B8G8R8A8;
+    }
   case gfxASurface::CONTENT_ALPHA:
     return mozilla::gfx::FORMAT_A8;
   case gfxASurface::CONTENT_COLOR_ALPHA:

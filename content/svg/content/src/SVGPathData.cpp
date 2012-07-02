@@ -4,11 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SVGPathData.h"
-#include "SVGAnimatedPathSegList.h"
 #include "SVGPathSegUtils.h"
 #include "nsSVGElement.h"
 #include "nsDOMError.h"
-#include "nsContentUtils.h"
 #include "nsString.h"
 #include "nsSVGUtils.h"
 #include "string.h"
@@ -494,14 +492,14 @@ SVGPathData::ConstructPath(gfxContext *aCtx) const
 already_AddRefed<gfxFlattenedPath>
 SVGPathData::ToFlattenedPath(const gfxMatrix& aMatrix) const
 {
-  nsRefPtr<gfxContext> ctx =
+  nsRefPtr<gfxContext> tmpCtx =
     new gfxContext(gfxPlatform::GetPlatform()->ScreenReferenceSurface());
 
-  ctx->SetMatrix(aMatrix);
-  ConstructPath(ctx);
-  ctx->IdentityMatrix();
+  tmpCtx->SetMatrix(aMatrix);
+  ConstructPath(tmpCtx);
+  tmpCtx->IdentityMatrix();
 
-  return ctx->GetFlattenedPath();
+  return tmpCtx->GetFlattenedPath();
 }
 
 static double

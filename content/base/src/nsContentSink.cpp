@@ -14,9 +14,7 @@
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "mozilla/css/Loader.h"
-#include "nsStyleConsts.h"
 #include "nsStyleLinkElement.h"
-#include "nsINodeInfo.h"
 #include "nsIDocShell.h"
 #include "nsILoadContext.h"
 #include "nsIDocShellTreeItem.h"
@@ -25,49 +23,30 @@
 #include "nsNetUtil.h"
 #include "nsIHttpChannel.h"
 #include "nsIContent.h"
-#include "nsIScriptElement.h"
-#include "nsContentErrors.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
 #include "nsIViewManager.h"
-#include "nsIContentViewer.h"
 #include "nsIAtom.h"
 #include "nsGkAtoms.h"
 #include "nsIDOMWindow.h"
-#include "nsIPrincipal.h"
-#include "nsIScriptGlobalObject.h"
 #include "nsNetCID.h"
 #include "nsIOfflineCacheUpdate.h"
 #include "nsIApplicationCache.h"
 #include "nsIApplicationCacheContainer.h"
 #include "nsIApplicationCacheChannel.h"
 #include "nsIScriptSecurityManager.h"
-#include "nsIDOMLoadStatus.h"
 #include "nsICookieService.h"
 #include "nsIPrompt.h"
-#include "nsServiceManagerUtils.h"
 #include "nsContentUtils.h"
-#include "nsCRT.h"
-#include "nsEscape.h"
-#include "nsWeakReference.h"
-#include "nsUnicharUtils.h"
 #include "nsNodeInfoManager.h"
 #include "nsIAppShell.h"
 #include "nsIWidget.h"
 #include "nsWidgetsCID.h"
-#include "nsIRequest.h"
-#include "nsNodeUtils.h"
 #include "nsIDOMNode.h"
-#include "nsThreadUtils.h"
-#include "nsPIDOMWindow.h"
 #include "mozAutoDocUpdate.h"
 #include "nsIWebNavigation.h"
-#include "nsIDocumentLoader.h"
-#include "nsICachingChannel.h"
-#include "nsICacheEntryDescriptor.h"
 #include "nsGenericHTMLElement.h"
 #include "nsHTMLDNSPrefetch.h"
-#include "nsISupportsPrimitives.h"
 #include "nsIObserverService.h"
 #include "mozilla/Preferences.h"
 #include "nsParserConstants.h"
@@ -101,8 +80,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsContentSink)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mParser)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NATIVE_MEMBER(mNodeInfoManager,
-                                                  nsNodeInfoManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -120,7 +98,7 @@ nsContentSink::nsContentSink()
   NS_ASSERTION(mInNotification == 0, "What?");
   NS_ASSERTION(!mDeferredLayoutStart, "What?");
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   if (!gContentSinkLogModuleInfo) {
     gContentSinkLogModuleInfo = PR_NewLogModule("nscontentsink");
   }
@@ -925,7 +903,7 @@ nsContentSink::SelectDocAppCache(nsIApplicationCache *aLoadApplicationCache,
       // The http manifest attribute URI is equal to the manifest URI of
       // the cache the document was loaded from - associate the document with
       // that cache and invoke the cache update process.
-#ifdef NS_DEBUG
+#ifdef DEBUG
       nsCAutoString docURISpec, clientID;
       mDocumentURI->GetAsciiSpec(docURISpec);
       aLoadApplicationCache->GetClientID(clientID);
@@ -979,7 +957,7 @@ nsContentSink::SelectDocAppCacheNoManifest(nsIApplicationCache *aLoadApplication
     NS_ASSERTION(applicationCacheDocument,
                  "mDocument must implement nsIApplicationCacheContainer.");
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
     nsCAutoString docURISpec, clientID;
     mDocumentURI->GetAsciiSpec(docURISpec);
     aLoadApplicationCache->GetClientID(clientID);
@@ -1556,8 +1534,9 @@ nsContentSink::WillParseImpl(void)
     vm->GetLastUserEventTime(lastEventTime);
 
     bool newDynLower =
-      (currentTime - mBeginLoadTime) > PRUint32(sInitialPerfTime) &&
-      (currentTime - lastEventTime) < PRUint32(sInteractiveTime);
+      mDocument->IsInBackgroundWindow() ||
+      ((currentTime - mBeginLoadTime) > PRUint32(sInitialPerfTime) &&
+       (currentTime - lastEventTime) < PRUint32(sInteractiveTime));
     
     if (mDynamicLowerValue != newDynLower) {
       FavorPerformanceHint(!newDynLower, 0);

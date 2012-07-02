@@ -26,10 +26,7 @@ pref("toolkit.browser.contentViewExpire", 3000);
 pref("toolkit.defaultChromeURI", "chrome://browser/content/browser.xul");
 pref("browser.chromeURL", "chrome://browser/content/");
 
-pref("browser.tabs.warnOnClose", true);
 pref("browser.tabs.remote", false);
-
-pref("toolkit.screen.lock", false);
 
 // From libpref/src/init/all.js, extended to allow a slightly wider zoom range.
 pref("zoom.minPercent", 20);
@@ -716,9 +713,20 @@ pref("ui.zooming.animation_frames", "");
 
 // Enable accessibility mode if platform accessibility is enabled.
 pref("accessibility.accessfu.activate", 2);
+// Enable explore by touch if it is enabled in the platform
+pref("accessibility.accessfu.explorebytouch", 2);
 
 // Mobile manages state by autodetection
 pref("network.manage-offline-status", true);
 
 // increase the timeout clamp for background tabs to 15 minutes
 pref("dom.min_background_timeout_value", 900000);
+
+// The default of font size in reader (1-7)
+pref("reader.font_size", 4);
+
+// The default of margin size in reader (5%-25%)
+pref("reader.margin_size", 5);
+
+// The default color scheme in reader (light, dark, sepia)
+pref("reader.color_scheme", "light");

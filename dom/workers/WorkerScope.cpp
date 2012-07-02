@@ -542,7 +542,7 @@ private:
       }
 
 #ifdef ANDROID
-      __android_log_print(ANDROID_LOG_INFO, "Gecko", buffer.ptr());
+      __android_log_print(ANDROID_LOG_INFO, "Gecko", "%s", buffer.ptr());
 #endif
       fputs(buffer.ptr(), stdout);
       fflush(stdout);
@@ -909,8 +909,8 @@ CreateDedicatedWorkerGlobalScope(JSContext* aCx)
   JS_ASSERT(worker);
 
   JSObject* global =
-    JS_NewCompartmentAndGlobalObject(aCx, DedicatedWorkerGlobalScope::Class(),
-                                     GetWorkerPrincipal());
+    JS_NewGlobalObject(aCx, DedicatedWorkerGlobalScope::Class(),
+                       GetWorkerPrincipal());
   if (!global) {
     return NULL;
   }

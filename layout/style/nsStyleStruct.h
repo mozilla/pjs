@@ -1596,6 +1596,9 @@ struct nsStyleDisplay {
 
   bool IsBlockOutside() const {
     return NS_STYLE_DISPLAY_BLOCK == mDisplay ||
+#ifdef MOZ_FLEXBOX
+           NS_STYLE_DISPLAY_FLEX == mDisplay ||
+#endif // MOZ_FLEXBOX
            NS_STYLE_DISPLAY_LIST_ITEM == mDisplay ||
            NS_STYLE_DISPLAY_TABLE == mDisplay;
   }
@@ -1605,6 +1608,9 @@ struct nsStyleDisplay {
            NS_STYLE_DISPLAY_INLINE_BLOCK == aDisplay ||
            NS_STYLE_DISPLAY_INLINE_TABLE == aDisplay ||
            NS_STYLE_DISPLAY_INLINE_BOX == aDisplay ||
+#ifdef MOZ_FLEXBOX
+           NS_STYLE_DISPLAY_INLINE_FLEX == aDisplay ||
+#endif // MOZ_FLEXBOX
            NS_STYLE_DISPLAY_INLINE_GRID == aDisplay ||
            NS_STYLE_DISPLAY_INLINE_STACK == aDisplay;
   }
@@ -2077,8 +2083,6 @@ struct nsStyleColumn {
 
   nscolor      mColumnRuleColor;  // [reset]
   PRUint8      mColumnRuleStyle;  // [reset]
-  PRUint8      mColumnFill;  // [reset] see nsStyleConsts.h
-
   // See https://bugzilla.mozilla.org/show_bug.cgi?id=271586#c43 for why
   // this is hard to replace with 'currentColor'.
   bool mColumnRuleColorIsForeground;

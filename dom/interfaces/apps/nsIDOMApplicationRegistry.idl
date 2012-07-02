@@ -3,31 +3,60 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "domstubs.idl"
-#include "nsIArray.idl"
 #include "nsIDOMEvent.idl"
 #include "nsIDOMEventTarget.idl"
 
 interface nsIDOMDOMRequest;
+interface nsIArray;
 
-[scriptable, uuid(b70b84f1-7ac9-4a92-bc32-8b6a7eb7879e)]
+[scriptable, uuid(9583b825-46b1-4e8f-bb48-9fed660a95e6)]
 interface mozIDOMApplication  : nsISupports
 {
   readonly attribute jsval manifest;
   readonly attribute DOMString manifestURL;
-  readonly attribute nsIArray receipts; /* an array of strings */
+  readonly attribute jsval receipts; /* an array of strings */
   readonly attribute DOMString origin;
   readonly attribute DOMString installOrigin;
-  readonly attribute unsigned long installTime;
-  
+  readonly attribute unsigned long long installTime;
+
+  /* 
+   * The current progress when downloading an offline cache.
+   */
+  readonly attribute double progress;
+
+  /*
+   * The application status :
+   * "installed"   : The app is in the registry, but we have no offline cache.
+   * "downlading"  : We are downloading the offline cache.
+   * "cached"      : We are done with the offline cache download.
+   * "cache-error" : An error occured while downloading the offline-cache.
+   */
+  readonly attribute DOMString status;
+
+  /*
+   * fires a nsIDOMApplicationEvent when a change in appcache download or status happens
+   */
+  attribute nsIDOMEventListener onprogress;
+
   /* startPoint will be used when several launch_path exists for an app */
   nsIDOMDOMRequest launch([optional] in DOMString startPoint);
-  nsIDOMDOMRequest uninstall(); 
+  nsIDOMDOMRequest uninstall();
 };
 
-[scriptable, uuid(f1dd58d8-5211-46ce-8470-d54dde596725)]
-interface mozIDOMApplicationEvent : nsISupports
+[scriptable, builtinclass, uuid(8f2bfba8-f10e-4f63-a5e0-7a7056e1dbe6)]
+interface nsIDOMMozApplicationEvent : nsIDOMEvent
 {
   readonly attribute mozIDOMApplication application;
+
+  [noscript] void initMozApplicationEvent(in DOMString aType,
+                                          in boolean aCanBubble,
+                                          in boolean aCancelable,
+                                          in mozIDOMApplication aApplication);
+};
+
+dictionary MozApplicationEventInit : EventInit
+{
+  mozIDOMApplication application;
 };
 
 [scriptable, uuid(bd304874-d532-4e13-8034-544211445583)]
@@ -54,7 +83,7 @@ interface mozIDOMApplicationMgmt : nsISupports
   attribute nsIDOMEventListener onuninstall;
 };
 
-[scriptable, uuid(f6929871-288b-4613-9a37-9a150760ac50)]
+[scriptable, uuid(d7b0ff50-e667-4ed2-b996-0eb937763952)]
 interface mozIDOMApplicationRegistry : nsISupports
 {
   /**
@@ -76,6 +105,12 @@ interface mozIDOMApplicationRegistry : nsISupports
    * the request will return the applications installed from this origin, or null.
    */
   nsIDOMDOMRequest getInstalled();
+
+  /**
+   * the request will return the applications acquired from this origin but which
+   * are not launchable (e.g. by not being natively installed), or null.
+   */
+  nsIDOMDOMRequest getNotInstalled();
 
   readonly attribute mozIDOMApplicationMgmt mgmt;
 };

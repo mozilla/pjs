@@ -5,9 +5,15 @@
 #include "fcntl.h"
 #include "errno.h"
 
+#include "prsystem.h"
+
 #if defined(XP_UNIX)
 #include "unistd.h"
 #endif // defined(XP_UNIX)
+
+#if defined(XP_MACOSX)
+#include "copyfile.h"
+#endif // defined(XP_MACOSX)
 
 #if defined(XP_WIN)
 #include <windows.h>
@@ -16,6 +22,16 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "BindingUtils.h"
+
+// Used to provide information on the OS
+
+#include "nsThreadUtils.h"
+#include "nsDirectoryServiceUtils.h"
+#include "nsIXULRuntime.h"
+#include "nsXPCOMCIDInternal.h"
+#include "nsServiceManagerUtils.h"
+#include "nsString.h"
+
 #include "OSFileConstants.h"
 
 /**
@@ -23,7 +39,64 @@
  * etc.) used by OS.File and possibly other OS-bound JavaScript libraries.
  */
 
+
 namespace mozilla {
+
+// Use an anonymous namespace to hide the symbols and avoid any collision
+// with, for instance, |extern bool gInitialized;|
+namespace {
+/**
+ * |true| if this module has been initialized, |false| otherwise
+ */
+bool gInitialized = false;
+
+/**
+ * The name of the directory holding all the libraries (libxpcom, libnss, etc.)
+ */
+nsString* gLibDirectory;
+}
+
+/**
+ * Perform the part of initialization that can only be
+ * executed on the main thread.
+ */
+nsresult InitOSFileConstants()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (gInitialized) {
+    return NS_ERROR_ALREADY_INITIALIZED;
+  }
+
+  gInitialized = true;
+
+  // Initialize gLibDirectory
+  nsCOMPtr<nsIFile> xpcomLib;
+  nsresult rv = NS_GetSpecialDirectory("XpcomLib", getter_AddRefs(xpcomLib));
+  if (NS_FAILED(rv) || !xpcomLib) {
+    return rv;
+  }
+
+  nsCOMPtr<nsIFile> libDir;
+  rv = xpcomLib->GetParent(getter_AddRefs(libDir));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  gLibDirectory = new nsString();
+  return libDir->GetPath(*gLibDirectory);
+}
+
+nsresult CleanupOSFileConstants()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (!gInitialized) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  delete gLibDirectory;
+  return NS_OK;
+}
+
 
 /**
  * Define a simple read-only property holding an integer.
@@ -144,6 +217,15 @@ static dom::ConstantSpec gLibcProperties[] =
   INT_CONSTANT(SEEK_END),
   INT_CONSTANT(SEEK_SET),
 
+  // copyfile
+#if defined(COPYFILE_DATA)
+  INT_CONSTANT(COPYFILE_DATA),
+  INT_CONSTANT(COPYFILE_EXCL),
+  INT_CONSTANT(COPYFILE_XATTR),
+  INT_CONSTANT(COPYFILE_STAT),
+  INT_CONSTANT(COPYFILE_ACL),
+#endif // defined(COPYFILE_DATA)
+
   // error values
   INT_CONSTANT(EACCES),
   INT_CONSTANT(EAGAIN),
@@ -180,6 +262,19 @@ static dom::ConstantSpec gLibcProperties[] =
   INT_CONSTANT(EWOULDBLOCK),
 #endif // defined(EWOULDBLOCK)
   INT_CONSTANT(EXDEV),
+
+  // Constants used to define data structures
+  //
+  // Many data structures have different fields/sizes/etc. on
+  // various OSes / versions of the same OS / platforms. For these
+  // data structures, we need to compute and export from C the size
+  // and, if necessary, the offset of fields, so as to be able to
+  // define the structure in JS.
+
+#if defined(XP_UNIX)
+  // The size of |mode_t|.
+  {"OSFILE_SIZEOF_MODE_T", INT_TO_JSVAL(sizeof (mode_t)) },
+#endif // defined(XP_UNIX)
 
   PROP_END
 };
@@ -225,7 +320,7 @@ static dom::ConstantSpec gWinProperties[] =
   INT_CONSTANT(FILE_ATTRIBUTE_READONLY),
   INT_CONSTANT(FILE_ATTRIBUTE_TEMPORARY),
 
-  // SetFilePointer error constant
+  // CreateFile error constant
   { "INVALID_HANDLE_VALUE", INT_TO_JSVAL(INT_PTR(INVALID_HANDLE_VALUE)) },
 
 
@@ -240,7 +335,12 @@ static dom::ConstantSpec gWinProperties[] =
   // SetFilePointer error constant
   INT_CONSTANT(INVALID_SET_FILE_POINTER),
 
+  // MoveFile flags
+  INT_CONSTANT(MOVEFILE_COPY_ALLOWED),
+  INT_CONSTANT(MOVEFILE_REPLACE_EXISTING),
+
   // Errors
+  INT_CONSTANT(ERROR_FILE_EXISTS),
   INT_CONSTANT(ERROR_FILE_NOT_FOUND),
   INT_CONSTANT(ERROR_ACCESS_DENIED),
 
@@ -282,6 +382,8 @@ JSObject *GetOrCreateObjectProperty(JSContext *cx, JSObject *aObject,
  */
 bool DefineOSFileConstants(JSContext *cx, JSObject *global)
 {
+  MOZ_ASSERT(gInitialized);
+
   JSObject *objOS;
   if (!(objOS = GetOrCreateObjectProperty(cx, global, "OS"))) {
     return false;
@@ -290,6 +392,9 @@ bool DefineOSFileConstants(JSContext *cx, JSObject *global)
   if (!(objConstants = GetOrCreateObjectProperty(cx, objOS, "Constants"))) {
     return false;
   }
+
+  // Build OS.Constants.libc
+
   JSObject *objLibc;
   if (!(objLibc = GetOrCreateObjectProperty(cx, objConstants, "libc"))) {
     return false;
@@ -297,7 +402,10 @@ bool DefineOSFileConstants(JSContext *cx, JSObject *global)
   if (!dom::DefineConstants(cx, objLibc, gLibcProperties)) {
     return false;
   }
+
 #if defined(XP_WIN)
+  // Build OS.Constants.Win
+
   JSObject *objWin;
   if (!(objWin = GetOrCreateObjectProperty(cx, objConstants, "Win"))) {
     return false;
@@ -306,6 +414,55 @@ bool DefineOSFileConstants(JSContext *cx, JSObject *global)
     return false;
   }
 #endif // defined(XP_WIN)
+
+  // Build OS.Constants.Sys
+
+  JSObject *objSys;
+  if (!(objSys = GetOrCreateObjectProperty(cx, objConstants, "Sys"))) {
+    return false;
+  }
+
+  nsCOMPtr<nsIXULRuntime> runtime = do_GetService(XULRUNTIME_SERVICE_CONTRACTID);
+  if (runtime) {
+    nsCAutoString os;
+    DebugOnly<nsresult> rv = runtime->GetOS(os);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+    JSString* strVersion = JS_NewStringCopyZ(cx, os.get());
+    if (!strVersion) {
+      return false;
+    }
+
+    jsval valVersion = STRING_TO_JSVAL(strVersion);
+    if (!JS_SetProperty(cx, objSys, "Name", &valVersion)) {
+      return false;
+    }
+  }
+
+  // Locate libxul
+  {
+    nsAutoString xulPath(*gLibDirectory);
+
+    xulPath.Append(PR_GetDirectorySeparator());
+
+#if defined(XP_MACOSX)
+    // Under MacOS X, for some reason, libxul is called simply "XUL"
+    xulPath.Append(NS_LITERAL_STRING("XUL"));
+#else
+    // On other platforms, libxul is a library "xul" with regular
+    // library prefix/suffix
+    xulPath.Append(NS_LITERAL_STRING(DLL_PREFIX));
+    xulPath.Append(NS_LITERAL_STRING("xul"));
+    xulPath.Append(NS_LITERAL_STRING(DLL_SUFFIX));
+#endif // defined(XP_MACOSX)
+
+    JSString* strPathToLibXUL = JS_NewUCStringCopyZ(cx, xulPath.get());
+    jsval valXul = STRING_TO_JSVAL(strPathToLibXUL);
+    if (!JS_SetProperty(cx, objSys, "libxulpath", &valXul)) {
+      return false;
+    }
+  }
+
   return true;
 }
 

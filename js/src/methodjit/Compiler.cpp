@@ -54,7 +54,7 @@ static const size_t USES_BEFORE_INLINING = 10000;
 mjit::Compiler::Compiler(JSContext *cx, JSScript *outerScript,
                          unsigned chunkIndex, bool isConstructing)
   : BaseCompiler(cx),
-    outerScript(outerScript),
+    outerScript(cx, outerScript),
     chunkIndex(chunkIndex),
     isConstructing(isConstructing),
     outerChunk(outerJIT()->chunkDescriptor(chunkIndex)),
@@ -128,7 +128,7 @@ mjit::Compiler::compile()
 }
 
 CompileStatus
-mjit::Compiler::checkAnalysis(JSScript *script)
+mjit::Compiler::checkAnalysis(HandleScript script)
 {
     if (script->hasClearedGlobal()) {
         JaegerSpew(JSpew_Abort, "script has a cleared global\n");
@@ -157,7 +157,7 @@ mjit::Compiler::checkAnalysis(JSScript *script)
 }
 
 CompileStatus
-mjit::Compiler::addInlineFrame(JSScript *script, uint32_t depth,
+mjit::Compiler::addInlineFrame(HandleScript script, uint32_t depth,
                                uint32_t parent, jsbytecode *parentpc)
 {
     JS_ASSERT(inlining());
@@ -269,7 +269,7 @@ mjit::Compiler::scanInlineCalls(uint32_t index, uint32_t depth)
                 okay = false;
                 break;
             }
-            JSScript *script = fun->script();
+            RootedScript script(cx, fun->script());
 
             /*
              * Don't inline calls to scripts which haven't been analyzed.
@@ -357,7 +357,7 @@ mjit::Compiler::scanInlineCalls(uint32_t index, uint32_t depth)
                 continue;
 
             JSFunction *fun = obj->toFunction();
-            JSScript *script = fun->script();
+            RootedScript script(cx, fun->script());
 
             CompileStatus status = addInlineFrame(script, nextDepth, index, pc);
             if (status != Compile_Okay)
@@ -1106,7 +1106,7 @@ mjit::Compiler::generatePrologue()
          * fp->u.nactual. fp->u.nactual is only set when numActual != numFormal,
          * so store 'fp->u.nactual = numFormal' when there is no over/underflow.
          */
-        if (script->argumentsHasLocalBinding()) {
+        if (script->argumentsHasVarBinding()) {
             Jump hasArgs = masm.branchTest32(Assembler::NonZero, FrameFlagsAddress(),
                                              Imm32(StackFrame::UNDERFLOW_ARGS |
                                                    StackFrame::OVERFLOW_ARGS));
@@ -1210,6 +1210,10 @@ mjit::Compiler::markUndefinedLocal(uint32_t offset, uint32_t i)
         Lifetime *lifetime = analysis->liveness(slot).live(offset);
         if (lifetime)
             masm.storeValue(UndefinedValue(), local);
+#ifdef DEBUG
+        else
+            masm.storeValue(ObjectValueCrashOnTouch(), local);
+#endif
     }
 }
 
@@ -1222,6 +1226,14 @@ mjit::Compiler::markUndefinedLocals()
      */
     for (uint32_t i = 0; i < script->nfixed; i++)
         markUndefinedLocal(0, i);
+
+#ifdef DEBUG
+    uint32_t depth = ssa.getFrame(a->inlineIndex).depth;
+    for (uint32_t i = script->nfixed; i < script->nslots; i++) {
+        Address local(JSFrameReg, sizeof(StackFrame) + (depth + i) * sizeof(Value));
+        masm.storeValue(ObjectValueCrashOnTouch(), local);
+    }
+#endif
 }
 
 CompileStatus
@@ -4403,7 +4415,7 @@ mjit::Compiler::inlineScriptedFunction(uint32_t argc, bool callingNew)
     for (unsigned i = 0; i < inlineCallees.length(); i++) {
         if (entrySnapshot)
             frame.restoreFromSnapshot(entrySnapshot);
-
+        
         JSScript *script = inlineCallees[i];
         CompileStatus status;
 
@@ -4772,6 +4784,13 @@ mjit::Compiler::jsop_getprop(PropertyName *name, JSValueType knownType,
          * The typed array length always fits in an int32.
          */
         if (!types->hasObjectFlags(cx, types::OBJECT_FLAG_NON_TYPED_ARRAY)) {
+            if (top->isConstant()) {
+                JSObject *obj = &top->getValue().toObject();
+                uint32_t length = TypedArray::length(obj);
+                frame.pop();
+                frame.push(Int32Value(length));
+                return true;
+            }
             bool isObject = top->isTypeKnown();
             if (!isObject) {
                 Jump notObject = frame.testObject(Assembler::NotEqual, top);
@@ -4810,27 +4829,29 @@ mjit::Compiler::jsop_getprop(PropertyName *name, JSValueType knownType,
     bool testObject;
     JSObject *singleton =
         (*PC == JSOP_GETPROP || *PC == JSOP_CALLPROP) ? pushedSingleton(0) : NULL;
-    if (singleton && singleton->isFunction() && !hasTypeBarriers(PC) &&
-        testSingletonPropertyTypes(top, RootedId(cx, NameToId(name)), &testObject)) {
-        if (testObject) {
-            Jump notObject = frame.testObject(Assembler::NotEqual, top);
-            stubcc.linkExit(notObject, Uses(1));
-            stubcc.leave();
-            stubcc.masm.move(ImmPtr(name), Registers::ArgReg1);
-            OOL_STUBCALL(stubs::GetProp, REJOIN_FALLTHROUGH);
-            testPushedType(REJOIN_FALLTHROUGH, -1);
+    if (singleton && singleton->isFunction() && !hasTypeBarriers(PC)) {
+        Rooted<jsid> id(cx, NameToId(name));
+        if (testSingletonPropertyTypes(top, id, &testObject)) {
+            if (testObject) {
+                Jump notObject = frame.testObject(Assembler::NotEqual, top);
+                stubcc.linkExit(notObject, Uses(1));
+                stubcc.leave();
+                stubcc.masm.move(ImmPtr(name), Registers::ArgReg1);
+                OOL_STUBCALL(stubs::GetProp, REJOIN_FALLTHROUGH);
+                testPushedType(REJOIN_FALLTHROUGH, -1);
+            }
+
+            frame.pop();
+            frame.push(ObjectValue(*singleton));
+
+            if (script->hasScriptCounts && cx->typeInferenceEnabled())
+                bumpPropCount(PC, PCCounts::PROP_STATIC);
+
+            if (testObject)
+                stubcc.rejoin(Changes(1));
+
+            return true;
         }
-
-        frame.pop();
-        frame.push(ObjectValue(*singleton));
-
-        if (script->hasScriptCounts && cx->typeInferenceEnabled())
-            bumpPropCount(PC, PCCounts::PROP_STATIC);
-
-        if (testObject)
-            stubcc.rejoin(Changes(1));
-
-        return true;
     }
 
     /* Check if this is a property access we can make a loop invariant entry for. */
@@ -5107,7 +5128,8 @@ mjit::Compiler::testSingletonPropertyTypes(FrameEntry *top, HandleId id, bool *t
             JS_ASSERT_IF(top->isTypeKnown(), top->isType(JSVAL_TYPE_OBJECT));
             types::TypeObject *object = types->getTypeObject(0);
             if (object && object->proto) {
-                if (!testSingletonProperty(RootedObject(cx, object->proto), id))
+                Rooted<JSObject*> proto(cx, object->proto);
+                if (!testSingletonProperty(proto, id))
                     return false;
                 types->addFreeze(cx);
 
@@ -5124,7 +5146,7 @@ mjit::Compiler::testSingletonPropertyTypes(FrameEntry *top, HandleId id, bool *t
 
     RootedObject proto(cx);
     if (!js_GetClassPrototype(cx, globalObj, key, proto.address(), NULL))
-        return NULL;
+        return false;
 
     return testSingletonProperty(proto, id);
 }
@@ -5184,12 +5206,13 @@ mjit::Compiler::jsop_getprop_dispatch(PropertyName *name)
         if (ownTypes->isOwnProperty(cx, object, false))
             return false;
 
-        if (!testSingletonProperty(RootedObject(cx, object->proto), id))
+        Rooted<JSObject*> proto(cx, object->proto);
+        if (!testSingletonProperty(proto, id))
             return false;
 
-        if (object->proto->getType(cx)->unknownProperties())
+        if (proto->getType(cx)->unknownProperties())
             return false;
-        types::TypeSet *protoTypes = object->proto->type()->getProperty(cx, id, false);
+        types::TypeSet *protoTypes = proto->type()->getProperty(cx, id, false);
         if (!protoTypes)
             return false;
         JSObject *singleton = protoTypes->getSingleton(cx);
@@ -5823,26 +5846,25 @@ mjit::Compiler::jsop_aliasedVar(ScopeCoordinate sc, bool get, bool poppedAfter)
     for (unsigned i = 0; i < sc.hops; i++)
         masm.loadPayload(Address(reg, ScopeObject::offsetOfEnclosingScope()), reg);
 
-    unsigned slot = ScopeObject::CALL_BLOCK_RESERVED_SLOTS + sc.slot;
-
     /*
      * TODO bug 753158: Call and Block objects should use the same layout
      * strategy: up to the maximum numFixedSlots and overflow (if any) in
      * dynamic slots. For now, we special case for different layouts:
      */
     Address addr;
-    if (ScopeCoordinateBlockChain(script, PC)) {
+    StaticBlockObject *block = ScopeCoordinateBlockChain(script, PC);
+    if (block) {
         /*
          * Block objects use a fixed AllocKind which means an invariant number
          * of fixed slots. Any slot below the fixed slot count is inline, any
          * slot over is in the dynamic slots.
          */
         uint32_t nfixed = gc::GetGCKindSlots(BlockObject::FINALIZE_KIND);
-        if (nfixed <= slot) {
+        if (nfixed <= sc.slot) {
             masm.loadPtr(Address(reg, JSObject::offsetOfSlots()), reg);
-            addr = Address(reg, (slot - nfixed) * sizeof(Value));
+            addr = Address(reg, (sc.slot - nfixed) * sizeof(Value));
         } else {
-            addr = Address(reg, JSObject::getFixedSlotOffset(slot));
+            addr = Address(reg, JSObject::getFixedSlotOffset(sc.slot));
         }
     } else {
         /*
@@ -5850,18 +5872,19 @@ mjit::Compiler::jsop_aliasedVar(ScopeCoordinate sc, bool get, bool poppedAfter)
          * slots are either altogether in fixed slots or altogether in dynamic
          * slots (by having numFixed == RESERVED_SLOTS).
          */
-        if (script->bindings.lastShape()->numFixedSlots() <= slot) {
+        if (script->bindings.lastShape()->numFixedSlots() <= sc.slot) {
             masm.loadPtr(Address(reg, JSObject::offsetOfSlots()), reg);
-            addr = Address(reg, sc.slot * sizeof(Value));
+            addr = Address(reg, (sc.slot - CallObject::RESERVED_SLOTS) * sizeof(Value));
         } else {
-            addr = Address(reg, JSObject::getFixedSlotOffset(slot));
+            addr = Address(reg, JSObject::getFixedSlotOffset(sc.slot));
         }
     }
 
     if (get) {
-        FrameEntry *fe = script->bindings.slotIsLocal(sc.slot)
-                         ? frame.getLocal(script->bindings.slotToLocal(sc.slot))
-                         : frame.getArg(script->bindings.slotToArg(sc.slot));
+        unsigned index;
+        FrameEntry *fe = ScopeCoordinateToFrameIndex(script, PC, &index) == FrameIndex_Local
+                         ? frame.getLocal(index)
+                         : frame.getArg(index);
         JSValueType type = fe->isTypeKnown() ? fe->getKnownType() : JSVAL_TYPE_UNKNOWN;
         frame.push(addr, type, true /* = reuseBase */);
     } else {
@@ -6241,9 +6264,12 @@ mjit::Compiler::jsop_getgname(uint32_t index)
 
     /* Optimize singletons like Math for JSOP_CALLPROP. */
     JSObject *obj = pushedSingleton(0);
-    if (obj && !hasTypeBarriers(PC) && testSingletonProperty(globalObj, RootedId(cx, NameToId(name)))) {
-        frame.push(ObjectValue(*obj));
-        return true;
+    if (obj && !hasTypeBarriers(PC)) {
+        Rooted<jsid> id(cx, NameToId(name));
+        if (testSingletonProperty(globalObj, id)) {
+            frame.push(ObjectValue(*obj));
+            return true;
+        }
     }
 
     jsid id = NameToId(name);
@@ -6663,14 +6689,15 @@ mjit::Compiler::jsop_newinit()
         stubArg = (void *) baseobj;
     }
 
+    JSProtoKey key = isArray ? JSProto_Array : JSProto_Object;
+
     /*
      * Don't bake in types for non-compileAndGo scripts, or at initializers
      * producing objects with singleton types.
      */
     RootedTypeObject type(cx);
-    if (globalObj && !types::UseNewTypeForInitializer(cx, script, PC)) {
-        type = types::TypeScript::InitObject(cx, script, PC,
-                                             isArray ? JSProto_Array : JSProto_Object);
+    if (globalObj && !types::UseNewTypeForInitializer(cx, script, PC, key)) {
+        type = types::TypeScript::InitObject(cx, script, PC, key);
         if (!type)
             return false;
     }

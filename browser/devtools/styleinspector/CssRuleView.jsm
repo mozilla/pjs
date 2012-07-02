@@ -1164,7 +1164,7 @@ CssRuleView.prototype = {
     rx = new RegExp("(\r?\n)" + inheritedFrom + ".*", "g");
     text = text.replace(rx, "$1");
 
-    clipboardHelper.copyString(text);
+    clipboardHelper.copyString(text, this.doc);
 
     if (aEvent) {
       aEvent.preventDefault();
@@ -1221,7 +1221,7 @@ CssRuleView.prototype = {
     }
     out += "}" + terminator;
 
-    clipboardHelper.copyString(out);
+    clipboardHelper.copyString(out, this.doc);
   },
 
   /**
@@ -1260,7 +1260,7 @@ CssRuleView.prototype = {
     let propertyValue = node.querySelector(".ruleview-propertyvalue").textContent;
     let out = propertyName + ": " + propertyValue + ";";
 
-    clipboardHelper.copyString(out);
+    clipboardHelper.copyString(out, this.doc);
   },
 
   /**
@@ -1280,7 +1280,7 @@ CssRuleView.prototype = {
     }
 
     if (node) {
-      clipboardHelper.copyString(node.textContent);
+      clipboardHelper.copyString(node.textContent, this.doc);
     }
   },
 
@@ -1301,7 +1301,7 @@ CssRuleView.prototype = {
     }
 
     if (node) {
-      clipboardHelper.copyString(node.textContent);
+      clipboardHelper.copyString(node.textContent, this.doc);
     }
   }
 };
@@ -1551,8 +1551,11 @@ TextPropertyEditor.prototype = {
       class: "ruleview-namecontainer"
     });
     this.nameContainer.addEventListener("click", function(aEvent) {
-      this.nameSpan.click();
+      // Clicks within the name shouldn't propagate any further.
       aEvent.stopPropagation();
+      if (aEvent.target === propertyContainer) {
+        this.nameSpan.click();
+      }
     }.bind(this), false);
 
     // Property name, editable when focused.  Property name
@@ -1578,8 +1581,11 @@ TextPropertyEditor.prototype = {
       class: "ruleview-propertycontainer"
     });
     propertyContainer.addEventListener("click", function(aEvent) {
-      this.valueSpan.click();
+      // Clicks within the value shouldn't propagate any further.
       aEvent.stopPropagation();
+      if (aEvent.target === propertyContainer) {
+        this.valueSpan.click();
+      }
     }.bind(this), false);
 
     // Property value, editable when focused.  Changes to the
@@ -1746,6 +1752,10 @@ TextPropertyEditor.prototype = {
   _onNameDone: function TextPropertyEditor_onNameDone(aValue, aCommit)
   {
     if (!aCommit) {
+      if (this.prop.overridden) {
+        this.element.classList.add("ruleview-overridden");
+      }
+
       return;
     }
     if (!aValue) {
@@ -2305,4 +2315,3 @@ XPCOMUtils.defineLazyGetter(this, "_strings", function() {
 XPCOMUtils.defineLazyGetter(this, "osString", function() {
   return Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
 });
-

@@ -538,8 +538,8 @@
                   <menuitem id="menu_responsiveUI"
                             type="checkbox"
                             hidden="true"
-                            label="&responsiveUI.label;"
-                            accesskey="&responsiveUI.accesskey;"
+                            label="&responsiveDesignTool.label;"
+                            accesskey="&responsiveDesignTool.accesskey;"
                             key="key_responsiveUI"
                             command="Tools:ResponsiveUI"/>
                   <menuitem id="menu_debugger"
@@ -563,6 +563,7 @@
                             key="key_scratchpad"
                             command="Tools:Scratchpad"/>
                   <menuitem id="menu_styleeditor"
+                            type="checkbox"
                             hidden="true"
                             label="&styleeditor.label;"
                             accesskey="&styleeditor.accesskey;"

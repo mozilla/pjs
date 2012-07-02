@@ -28,6 +28,7 @@
 #include "XMLHttpRequestUpload.h"
 
 #include "DOMBindingInlines.h"
+#include "mozilla/Attributes.h"
 
 USING_WORKERS_NAMESPACE
 
@@ -82,7 +83,7 @@ using mozilla::ErrorResult;
 
 BEGIN_WORKERS_NAMESPACE
 
-class Proxy : public nsIDOMEventListener
+class Proxy MOZ_FINAL : public nsIDOMEventListener
 {
 public:
   // Read on multiple threads.
@@ -376,8 +377,8 @@ public:
   }
 };
 
-class LoadStartDetectionRunnable : public nsIRunnable,
-                                   public nsIDOMEventListener
+class LoadStartDetectionRunnable MOZ_FINAL : public nsIRunnable,
+                                             public nsIDOMEventListener
 {
   WorkerPrivate* mWorkerPrivate;
   nsRefPtr<Proxy> mProxy;
@@ -1146,9 +1147,9 @@ public:
   MainThreadRun()
   {
     nsCOMPtr<nsIVariant> variant;
-    RuntimeService::AutoSafeJSContext cx;
 
     if (mBody.data()) {
+      RuntimeService::AutoSafeJSContext cx;
       nsIXPConnect* xpc = nsContentUtils::XPConnect();
       NS_ASSERTION(xpc, "This should never be null!");
 
@@ -1202,7 +1203,7 @@ public:
 
     mProxy->mInnerChannelId++;
 
-    nsresult rv = mProxy->mXHR->Send(variant, cx);
+    nsresult rv = mProxy->mXHR->Send(variant);
 
     if (NS_SUCCEEDED(rv)) {
       mProxy->mOutstandingSendCount++;
@@ -1431,7 +1432,7 @@ Proxy::HandleEvent(nsIDOMEvent* aEvent)
 XMLHttpRequest::XMLHttpRequest(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 : XMLHttpRequestEventTarget(aCx), mJSObject(NULL), mUpload(NULL),
   mWorkerPrivate(aWorkerPrivate),
-  mResponseType(XMLHttpRequestResponseTypeValues::text), mTimeout(0),
+  mResponseType(XMLHttpRequestResponseTypeValues::Text), mTimeout(0),
   mJSObjectRooted(false), mMultipart(false), mBackgroundRequest(false),
   mWithCredentials(false), mCanceled(false)
 {
@@ -1465,7 +1466,7 @@ XMLHttpRequest::_finalize(JSFreeOp* aFop)
 XMLHttpRequest*
 XMLHttpRequest::Constructor(JSContext* aCx,
                             JSObject* aGlobal,
-                            const Optional<jsval>& aParams,
+                            const Nullable<MozXMLHttpRequestParametersWorkers>& aParams,
                             ErrorResult& aRv)
 {
   WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
@@ -2142,7 +2143,7 @@ XMLHttpRequest::SetResponseType(XMLHttpRequestResponseType aResponseType,
 
   // "document" is fine for the main thread but not for a worker. Short-circuit
   // that here.
-  if (aResponseType == XMLHttpRequestResponseTypeValues::document) {
+  if (aResponseType == XMLHttpRequestResponseTypeValues::Document) {
     return;
   }
 

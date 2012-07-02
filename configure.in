@@ -54,7 +54,7 @@ dnl Set the version number of the libs included with mozilla
 dnl ========================================================
 MOZJPEG=62
 MOZPNG=10509
-MOZZLIB=0x1230
+MOZZLIB=1.2.3
 NSPR_VERSION=4
 NSS_VERSION=3
 
@@ -74,7 +74,7 @@ GCONF_VERSION=1.2.1
 GIO_VERSION=2.18
 STARTUP_NOTIFICATION_VERSION=0.8
 DBUS_VERSION=0.60
-SQLITE_VERSION=3.7.12.1
+SQLITE_VERSION=3.7.13
 LIBNOTIFY_VERSION=0.4
 
 MSMANIFEST_TOOL=
@@ -171,6 +171,7 @@ if test -n "$gonkdir" ; then
     ANDROID_NDK="${ANDROID_SOURCE}/ndk"
 
     dnl set up compilers
+    TOOLCHAIN_PREFIX="$gonk_toolchain_prefix"
     AS="$gonk_toolchain_prefix"as
     CC="$gonk_toolchain_prefix"gcc
     CXX="$gonk_toolchain_prefix"g++
@@ -219,7 +220,6 @@ if test -n "$gonkdir" ; then
     AC_DEFINE(HAVE_PTHREADS)
     CROSS_COMPILE=1
     MOZ_CHROME_FILE_FORMAT=omni
-    ZLIB_DIR=yes
     direct_nspr_config=1
 else
     MOZ_ANDROID_NDK
@@ -496,7 +496,7 @@ case "$target" in
         AC_LANG_RESTORE
 
         changequote(,)
-        _MSVC_VER_FILTER='s|.* ([0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?).*|\1|p'
+        _MSVC_VER_FILTER='s|.*[^!-~]([0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?).*|\1|p'
         changequote([,])
 
         # Determine compiler version
@@ -523,18 +523,22 @@ case "$target" in
             fi
 
             _CC_SUITE=8
+            _MSVS_VERSION=2005
             AC_DEFINE(_CRT_SECURE_NO_DEPRECATE)
             AC_DEFINE(_CRT_NONSTDC_NO_DEPRECATE)
         elif test "$_CC_MAJOR_VERSION" = "15"; then
             _CC_SUITE=9
+            _MSVS_VERSION=2008
             AC_DEFINE(_CRT_SECURE_NO_WARNINGS)
             AC_DEFINE(_CRT_NONSTDC_NO_WARNINGS)
         elif test "$_CC_MAJOR_VERSION" = "16"; then
             _CC_SUITE=10
+            _MSVS_VERSION=2010
             AC_DEFINE(_CRT_SECURE_NO_WARNINGS)
             AC_DEFINE(_CRT_NONSTDC_NO_WARNINGS)
         elif test "$_CC_MAJOR_VERSION" = "17"; then
             _CC_SUITE=11
+            _MSVS_VERSION=2011
             AC_DEFINE(_CRT_SECURE_NO_WARNINGS)
             AC_DEFINE(_CRT_NONSTDC_NO_WARNINGS)
         else
@@ -568,7 +572,7 @@ case "$target" in
         fi
 
         changequote(,)
-        _MSMT_VER_FILTER='s|.* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*|\1|p'
+        _MSMT_VER_FILTER='s|.*[^!-~]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*|\1|p'
         changequote([,])
         MSMANIFEST_TOOL_VERSION=`echo ${MSMT_TOOL}|sed -ne "$_MSMT_VER_FILTER"`
         if test -z "$MSMANIFEST_TOOL_VERSION"; then
@@ -809,8 +813,6 @@ AC_SUBST(GNU_CC)
 AC_SUBST(GNU_CXX)
 AC_SUBST(INTEL_CC)
 AC_SUBST(INTEL_CXX)
-AC_SUBST(CLANG_CC)
-AC_SUBST(CLANG_CXX)
 
 AC_SUBST(STL_FLAGS)
 AC_SUBST(WRAP_STL_INCLUDES)
@@ -874,7 +876,7 @@ MOZ_PATH_PROGS(ZIP, zip)
 if test -z "$ZIP" -o "$ZIP" = ":"; then
     AC_MSG_ERROR([zip not found in \$PATH])
 fi
-MOZ_PATH_PROG(SYSTEM_MAKEDEPEND, makedepend)
+MOZ_PATH_PROG(MOZ_NATIVE_MAKEDEPEND, makedepend)
 MOZ_PATH_PROG(XARGS, xargs)
 if test -z "$XARGS" -o "$XARGS" = ":"; then
     AC_MSG_ERROR([xargs not found in \$PATH .])
@@ -915,7 +917,7 @@ from building Mozilla. Upgrade to Xcode 2.1 or later.])
     dnl xcodebuild needs GCC_VERSION defined in the environment, since it
     dnl doesn't respect the CC/CXX setting.  With GCC_VERSION set, it will use
     dnl /usr/bin/g(cc|++)-$GCC_VERSION.
-    MOZ_PATH_PROGS(PBBUILD, pbbuild xcodebuild pbxbuild)
+    MOZ_PATH_PROGS(PBBUILD_BIN, pbbuild xcodebuild pbxbuild)
 
     dnl sdp was formerly in /Developer/Tools.  As of Mac OS X 10.4 (Darwin 8),
     dnl it has moved into /usr/bin.
@@ -1728,7 +1730,6 @@ if test -n "$MOZ_DMD"; then
             [--enable-dmd specified but Valgrind is not installed]))
     AC_DEFINE(MOZ_DMD)
 fi
-AC_SUBST(MOZ_DMD)
 
 dnl ========================================================
 dnl jprof
@@ -1895,7 +1896,6 @@ dnl ========================================================
 AC_MSG_CHECKING(for custom <stdint.h> implementation)
 if test "$MOZ_CUSTOM_STDINT_H"; then
   AC_DEFINE_UNQUOTED(MOZ_CUSTOM_STDINT_H, "$MOZ_CUSTOM_STDINT_H")
-  AC_SUBST(MOZ_CUSTOM_STDINT_H)
   AC_MSG_RESULT(using $MOZ_CUSTOM_STDINT_H)
 else
   AC_MSG_RESULT(none specified)
@@ -2100,7 +2100,7 @@ ia64*-hpux*)
        MKCSHLIB='$(LD) $(DSO_LDOPTS) -o $@'
     fi
     MOZ_FIX_LINK_PATHS=
-    SYSTEM_MAKEDEPEND=
+    MOZ_NATIVE_MAKEDEPEND=
     AC_DEFINE(NSCAP_DISABLE_DEBUG_PTR_TYPES)
     AC_DEFINE(_LARGEFILE64_SOURCE)
     ;;
@@ -2189,7 +2189,7 @@ ia64*-hpux*)
     MC=mc.exe
     # certain versions of cygwin's makedepend barf on the
     # #include <string> vs -I./dist/include/string issue so don't use it
-    SYSTEM_MAKEDEPEND=
+    MOZ_NATIVE_MAKEDEPEND=
     if test -n "$GNU_CC"; then
         CC="$CC -mwindows"
         CXX="$CXX -mwindows"
@@ -2470,7 +2470,7 @@ ia64*-hpux*)
 *-solaris*)
     AC_DEFINE(SOLARIS)
     TARGET_NSPR_MDCPUCFG='\"md/_solaris.cfg\"'
-    SYSTEM_MAKEDEPEND=
+    MOZ_NATIVE_MAKEDEPEND=
     MOZ_FIX_LINK_PATHS=
     # $ORIGIN/.. is for shared libraries under components/ to locate shared
     # libraries one level up (e.g. libnspr4.so)
@@ -3161,42 +3161,6 @@ else
              AC_DEFINE(HAVE_LIBXSS)],, $XEXT_LIBS $XLIBS))
 
 	LDFLAGS="$_SAVE_LDFLAGS"
-
-    dnl ========================================================
-    dnl = Check for freetype2 and its functionality
-    dnl ========================================================
-    PKG_CHECK_MODULES(FT2, freetype2 >= 6.1.0, _HAVE_FREETYPE2=1, _HAVE_FREETYPE2=)
-
-    if test "$_HAVE_FREETYPE2"; then
-    	_SAVE_LIBS="$LIBS"
-    	_SAVE_CFLAGS="$CFLAGS"
-    	LIBS="$LIBS $FT2_LIBS"
-    	CFLAGS="$CFLAGS $FT2_CFLAGS"
-
-        AC_CACHE_CHECK(for FT_Bitmap_Size.y_ppem,
-            ac_cv_member_FT_Bitmap_Size_y_ppem,
-            [AC_TRY_COMPILE([#include <ft2build.h>
-                             #include FT_FREETYPE_H],
-                            [FT_Bitmap_Size s;
-                             if (sizeof s.y_ppem) return 0;
-                             return 1],
-                            ac_cv_member_FT_Bitmap_Size_y_ppem=yes,
-                            ac_cv_member_FT_Bitmap_Size_y_ppem=no)])
-        if test "$ac_cv_member_FT_Bitmap_Size_y_ppem" = yes; then
-            HAVE_FT_BITMAP_SIZE_Y_PPEM=1
-        else
-            HAVE_FT_BITMAP_SIZE_Y_PPEM=0
-        fi
-        AC_DEFINE_UNQUOTED(HAVE_FT_BITMAP_SIZE_Y_PPEM,
-                           $HAVE_FT_BITMAP_SIZE_Y_PPEM,
-                           [FT_Bitmap_Size structure includes y_ppem field])
-
-        AC_CHECK_FUNCS(FT_GlyphSlot_Embolden FT_Load_Sfnt_Table FT_Select_Size)
-
-    	LIBS="$_SAVE_LIBS"
-    	CFLAGS="$_SAVE_CFLAGS"
-    fi
-
 fi # $no_x
 
 AC_SUBST(XCFLAGS)
@@ -4079,29 +4043,28 @@ if test -n "${JPEG_DIR}" -a "${JPEG_DIR}" != "yes"; then
     LDFLAGS="-L${JPEG_DIR}/lib $LDFLAGS"
 fi
 if test -z "$JPEG_DIR" -o "$JPEG_DIR" = no; then
-    SYSTEM_JPEG=
+    MOZ_NATIVE_JPEG=
 else
-    AC_CHECK_LIB(jpeg, jpeg_destroy_compress, [SYSTEM_JPEG=1 JPEG_LIBS="-ljpeg $JPEG_LIBS"], SYSTEM_JPEG=, $JPEG_LIBS)
+    AC_CHECK_LIB(jpeg, jpeg_destroy_compress, [MOZ_NATIVE_JPEG=1 MOZ_JPEG_LIBS="-ljpeg"], MOZ_NATIVE_JPEG=)
 fi
 
-if test "$SYSTEM_JPEG" = 1; then
-    LIBS="$JPEG_LIBS $LIBS"
+if test "$MOZ_NATIVE_JPEG" = 1; then
     AC_TRY_COMPILE([ #include <stdio.h>
                      #include <sys/types.h>
                      #include <jpeglib.h> ],
                    [ #if JPEG_LIB_VERSION < $MOZJPEG
                      #error "Insufficient JPEG library version ($MOZJPEG required)."
                      #endif ],
-                   SYSTEM_JPEG=1,
-                   [SYSTEM_JPEG= JPEG_CFLAGS= JPEG_LIBS=])
+                   MOZ_NATIVE_JPEG=1,
+                   AC_MSG_ERROR([Insufficient JPEG library version for --with-system-jpeg]))
 fi
 CFLAGS=$_SAVE_CFLAGS
 LDFLAGS=$_SAVE_LDFLAGS
 LIBS=$_SAVE_LIBS
 
-if test -n "${JPEG_DIR}" -a -d "${JPEG_DIR}" -a "$SYSTEM_JPEG" = 1; then
-    JPEG_CFLAGS="-I${JPEG_DIR}/include"
-    JPEG_LIBS="-L${JPEG_DIR}/lib ${JPEG_LIBS}"
+if test -n "${JPEG_DIR}" -a -d "${JPEG_DIR}" -a "$MOZ_NATIVE_JPEG" = 1; then
+    MOZ_JPEG_CFLAGS="-I${JPEG_DIR}/include"
+    MOZ_JPEG_LIBS="-L${JPEG_DIR}/lib ${MOZ_JPEG_LIBS}"
 fi
 
 dnl system ZLIB support
@@ -4119,32 +4082,32 @@ if test -n "${ZLIB_DIR}" -a "${ZLIB_DIR}" != "yes"; then
     LDFLAGS="-L${ZLIB_DIR}/lib $LDFLAGS"
 fi
 if test -z "$ZLIB_DIR" -o "$ZLIB_DIR" = no; then
-    SYSTEM_ZLIB=
+    MOZ_NATIVE_ZLIB=
 else
-    AC_CHECK_LIB(z, gzread, [SYSTEM_ZLIB=1 ZLIB_LIBS="-lz $ZLIB_LIBS"],
-	[SYSTEM_ZLIB= ZLIB_CFLAGS= ZLIB_LIBS=], $ZLIB_LIBS)
+    AC_CHECK_LIB(z, gzread, [MOZ_NATIVE_ZLIB=1 MOZ_ZLIB_LIBS="-lz"],
+	[MOZ_NATIVE_ZLIB=])
 fi
-if test "$SYSTEM_ZLIB" = 1; then
-    LIBS="$ZLIB_LIBS $LIBS"
+if test "$MOZ_NATIVE_ZLIB" = 1; then
+    MOZZLIBNUM=`echo $MOZZLIB | awk -F. '{printf "0x%x\n", ((($1 * 16 + $2) * 16) + $3) * 16 + $4}'`
     AC_TRY_COMPILE([ #include <stdio.h>
                      #include <string.h>
                      #include <zlib.h> ],
-                   [ #if ZLIB_VERNUM < $MOZZLIB
-                     #error "Insufficient zlib version ($MOZZLIB required)."
+                   [ #if ZLIB_VERNUM < $MOZZLIBNUM
+                     #error "Insufficient zlib version ($MOZZLIBNUM required)."
                      #endif ],
-                   SYSTEM_ZLIB=1,
-                   [SYSTEM_ZLIB= ZLIB_CFLAGS= ZLIB_LIBS=])
+                   MOZ_NATIVE_ZLIB=1,
+                   AC_MSG_ERROR([Insufficient zlib version for --with-system-zlib ($MOZZLIB required)]))
 fi
 CFLAGS=$_SAVE_CFLAGS
 LDFLAGS=$_SAVE_LDFLAGS
 LIBS=$_SAVE_LIBS
 
-if test "${ZLIB_DIR}" -a -d "${ZLIB_DIR}" -a "$SYSTEM_ZLIB" = 1; then
-    ZLIB_CFLAGS="-I${ZLIB_DIR}/include"
-    ZLIB_LIBS="-L${ZLIB_DIR}/lib ${ZLIB_LIBS}"
+if test "${ZLIB_DIR}" -a -d "${ZLIB_DIR}" -a "$MOZ_NATIVE_ZLIB" = 1; then
+    MOZ_ZLIB_CFLAGS="-I${ZLIB_DIR}/include"
+    MOZ_ZLIB_LIBS="-L${ZLIB_DIR}/lib ${ZLIB_LIBS}"
 fi
 
-if test "$MOZ_LINKER" = 1 -a "$SYSTEM_ZLIB" != 1; then
+if test "$MOZ_LINKER" = 1 -a "$MOZ_NATIVE_ZLIB" != 1; then
     AC_MSG_ERROR([Custom dynamic linker requires --with-system-zlib])
 fi
 
@@ -4163,18 +4126,18 @@ if test -n "${BZ2_DIR}" -a "${BZ2_DIR}" != "yes"; then
     LDFLAGS="-L${BZ2_DIR}/lib $LDFLAGS"
 fi
 if test -z "$BZ2_DIR" -o "$BZ2_DIR" = no; then
-    SYSTEM_BZ2=
+    MOZ_NATIVE_BZ2=
 else
-    AC_CHECK_LIB(bz2, BZ2_bzread, [SYSTEM_BZ2=1 BZ2_LIBS="-lbz2"],
-	[SYSTEM_BZ2= BZ2_CFLAGS= BZ2_LIBS=])
+    AC_CHECK_LIB(bz2, BZ2_bzread, [MOZ_NATIVE_BZ2=1 MOZ_BZ2_LIBS="-lbz2"],
+	[MOZ_NATIVE_BZ2= MOZ_BZ2_CFLAGS= MOZ_BZ2_LIBS=])
 fi
 CFLAGS=$_SAVE_CFLAGS
 LDFLAGS=$_SAVE_LDFLAGS
 LIBS=$_SAVE_LIBS
 
-if test "${BZ2_DIR}" -a -d "${BZ2_DIR}" -a "$SYSTEM_BZ2" = 1; then
-    BZ2_CFLAGS="-I${BZ2_DIR}/include"
-    BZ2_LIBS="-L${BZ2_DIR}/lib ${BZ2_LIBS}"
+if test "${BZ2_DIR}" -a -d "${BZ2_DIR}" -a "$MOZ_NATIVE_BZ2" = 1; then
+    MOZ_BZ2_CFLAGS="-I${BZ2_DIR}/include"
+    MOZ_BZ2_LIBS="-L${BZ2_DIR}/lib ${MOZ_BZ2_LIBS}"
 fi
 
 dnl system PNG Support
@@ -4187,25 +4150,19 @@ MOZ_ARG_WITH_STRING(system-png,
 _SAVE_CFLAGS=$CFLAGS
 _SAVE_LDFLAGS=$LDFLAGS
 _SAVE_LIBS=$LIBS
-CFLAGS="$ZLIB_CFLAGS $CFLAGS"
-LDFLAGS="$ZLIB_LIBS -lz $LDFLAGS"
 if test -n "${PNG_DIR}" -a "${PNG_DIR}" != "yes"; then
     CFLAGS="-I${PNG_DIR}/include $CFLAGS"
     LDFLAGS="-L${PNG_DIR}/lib $LDFLAGS"
 fi
 if test -z "$PNG_DIR" -o "$PNG_DIR" = no; then
-    SYSTEM_PNG=
+    MOZ_NATIVE_PNG=
 else
-    _SAVE_PNG_LIBS=$PNG_LIBS
-    AC_CHECK_LIB(png, png_get_valid, [SYSTEM_PNG=1 PNG_LIBS="-lpng $PNG_LIBS"],
-                 AC_MSG_ERROR([--with-system-png requested but no working libpng found]),
-                 $PNG_LIBS)
+    AC_CHECK_LIB(png, png_get_valid, [MOZ_NATIVE_PNG=1 MOZ_PNG_LIBS="-lpng"],
+                 AC_MSG_ERROR([--with-system-png requested but no working libpng found]))
     AC_CHECK_LIB(png, png_get_acTL, ,
-                 AC_MSG_ERROR([--with-system-png won't work because the system's libpng doesn't have APNG support]),
-                 $_SAVE_PNG_LIBS)
+                 AC_MSG_ERROR([--with-system-png won't work because the system's libpng doesn't have APNG support]))
 fi
-if test "$SYSTEM_PNG" = 1; then
-    LIBS="$PNG_LIBS $LIBS"
+if test "$MOZ_NATIVE_PNG" = 1; then
     AC_TRY_COMPILE([ #include <stdio.h>
                      #include <sys/types.h>
                      #include <png.h> ],
@@ -4215,16 +4172,16 @@ if test "$SYSTEM_PNG" = 1; then
                      #ifndef PNG_UINT_31_MAX
                      #error "Insufficient libpng version."
                      #endif ],
-                   SYSTEM_PNG=1,
+                   MOZ_NATIVE_PNG=1,
                    AC_MSG_ERROR([--with-system-png requested but no working libpng found]))
 fi
 CFLAGS=$_SAVE_CFLAGS
 LDFLAGS=$_SAVE_LDFLAGS
 LIBS=$_SAVE_LIBS
 
-if test "${PNG_DIR}" -a -d "${PNG_DIR}" -a "$SYSTEM_PNG" = 1; then
-    PNG_CFLAGS="-I${PNG_DIR}/include"
-    PNG_LIBS="-L${PNG_DIR}/lib ${PNG_LIBS}"
+if test "${PNG_DIR}" -a -d "${PNG_DIR}" -a "$MOZ_NATIVE_PNG" = 1; then
+    MOZ_PNG_CFLAGS="-I${PNG_DIR}/include"
+    MOZ_PNG_LIBS="-L${PNG_DIR}/lib ${MOZ_PNG_LIBS}"
 fi
 
 fi # SKIP_LIBRARY_CHECKS
@@ -4234,13 +4191,13 @@ dnl ========================================================
 MOZ_ARG_ENABLE_BOOL(system-hunspell,
 [  --enable-system-hunspell
                           Use system hunspell (located with pkgconfig)],
-    SYSTEM_HUNSPELL=1 )
+    MOZ_NATIVE_HUNSPELL=1 )
 
-if test -n "$SYSTEM_HUNSPELL"; then
+if test -n "$MOZ_NATIVE_HUNSPELL"; then
     PKG_CHECK_MODULES(MOZ_HUNSPELL, hunspell)
 fi
 
-AC_SUBST(SYSTEM_HUNSPELL)
+AC_SUBST(MOZ_NATIVE_HUNSPELL)
 
 dnl ========================================================
 dnl system libffi Support
@@ -4298,9 +4255,12 @@ MOZ_WAVE=1
 MOZ_MEDIA=
 MOZ_OPUS=1
 MOZ_WEBM=1
+MOZ_WEBRTC=
+MOZ_WEBRTC_SIGNALING=
 MOZ_MEDIA_PLUGINS=
 MOZ_MEDIA_NAVIGATOR=
 MOZ_OMX_PLUGIN=
+MOZ_VP8=
 MOZ_VP8_ERROR_CONCEALMENT=
 MOZ_VP8_ENCODER=
 VPX_AS=
@@ -4348,15 +4308,7 @@ MOZ_USE_NATIVE_POPUP_WINDOWS=
 MOZ_ANDROID_HISTORY=
 MOZ_WEBSMS_BACKEND=
 MOZ_GRAPHITE=1
-
-case "${target}" in
-*darwin*)
-    ACCESSIBILITY=
-    ;;
-*)
-    ACCESSIBILITY=1
-    ;;
-esac
+ACCESSIBILITY=1
 
 case "$target_os" in
     mingw*)
@@ -4567,6 +4519,7 @@ cairo-gtk2|cairo-gtk2-x11)
     TK_CFLAGS='$(MOZ_GTK2_CFLAGS)'
     TK_LIBS='$(MOZ_GTK2_LIBS)'
     AC_DEFINE(MOZ_WIDGET_GTK2)
+    AC_DEFINE(MOZ_WIDGET_GTK,2)
     MOZ_PDF_PRINTING=1
     MOZ_INSTRUMENT_EVENT_LOOP=1
     ;;
@@ -4739,7 +4692,7 @@ then
 
     if test -z "$QTDIR"; then
         PKG_CHECK_MODULES(MOZ_QT, QtGui QtNetwork QtCore QtOpenGL)
-        PKG_CHECK_MODULES(MOZ_QT5, QtWidgets QtMultimedia QtPrintSupport QtQuick1,
+        PKG_CHECK_MODULES(MOZ_QT5, QtWidgets QtMultimedia QtPrintSupport,
                       MOZ_ENABLE_QT5=1,
                       MOZ_ENABLE_QT5=)
         if test "$MOZ_ENABLE_QT5"; then
@@ -4766,12 +4719,9 @@ then
 
         # QtWidgets was introduced only in Qt5
         if test -d $QTDIR/include/QtWidgets; then
-            echo "Using qt5"
             MOZ_QT_CFLAGS="$MOZ_QT_CFLAGS -I$QTDIR/include/QtWidgets"
-            MOZ_QT_CFLAGS="$MOZ_QT_CFLAGS -I$QTDIR/include/QtMultimedia"
             MOZ_QT_CFLAGS="$MOZ_QT_CFLAGS -I$QTDIR/include/QtPrintSupport"
-            MOZ_QT_CFLAGS="$MOZ_QT_CFLAGS -I$QTDIR/include/QtQuick1"
-            MOZ_QT_LIBS="$MOZ_QT_LIBS -lQtWidgets -lQtMultimedia -lQtPrintSupport -lQtQuick1"
+            MOZ_QT_LIBS="$MOZ_QT_LIBS -lQtWidgets -lQtPrintSupport"
         fi
     fi
     if test -z "$HOST_MOC"; then
@@ -5307,10 +5257,9 @@ AC_DEFINE(IBMBIDI)
 
 dnl ========================================================
 dnl accessibility support on by default on all platforms
-dnl except OS X.
 dnl ========================================================
 MOZ_ARG_DISABLE_BOOL(accessibility,
-[  --disable-accessibility Disable accessibility support (off by default on OS X)],
+[  --disable-accessibility Disable accessibility support],
     ACCESSIBILITY=,
     ACCESSIBILITY=1 )
 if test "$ACCESSIBILITY"; then
@@ -5329,6 +5278,25 @@ if test "$NS_PRINTING"; then
     AC_DEFINE(NS_PRINTING)
     AC_DEFINE(NS_PRINT_PREVIEW)
 fi
+
+dnl ========================================================
+dnl = Enable WebRTC code
+dnl ========================================================
+MOZ_ARG_ENABLE_BOOL(webrtc,
+[  --enable-webrtc        Enable support for WebRTC],
+    MOZ_WEBRTC=1,
+    MOZ_WEBRTC=)
+
+if test -n "$MOZ_WEBRTC"; then
+    AC_DEFINE(MOZ_WEBRTC)
+    MOZ_MEDIA=1
+    MOZ_RAW=1
+    MOZ_VP8=1
+    MOZ_VP8_ENCODER=1
+    MOZ_VP8_ERROR_CONCEALMENT=1
+fi
+
+AC_SUBST(MOZ_WEBRTC)
 
 dnl ========================================================
 dnl = Enable Raw Codecs
@@ -5405,6 +5373,11 @@ MOZ_ARG_DISABLE_BOOL(webm,
     MOZ_WEBM=,
     MOZ_WEBM=1)
 
+if test -n "$MOZ_WEBM"; then
+    AC_DEFINE(MOZ_WEBM)
+    MOZ_VP8=1
+fi;
+
 dnl ========================================================
 dnl = Disable media plugin support
 dnl ========================================================
@@ -5456,8 +5429,8 @@ MOZ_ARG_WITH_BOOL(system-libvpx,
 MOZ_LIBVPX_INCLUDES=
 MOZ_LIBVPX_LIBS=
 
-if test -n "$MOZ_WEBM"; then
-    AC_DEFINE(MOZ_WEBM)
+if test -n "$MOZ_VP8"; then
+    AC_DEFINE(MOZ_VP8)
     if test -n "$MOZ_VP8_ERROR_CONCEALMENT" ; then
         AC_DEFINE(MOZ_VP8_ERROR_CONCEALMENT)
     fi
@@ -5484,7 +5457,7 @@ AC_SUBST(MOZ_NATIVE_LIBVPX)
 AC_SUBST(MOZ_LIBVPX_INCLUDES)
 AC_SUBST(MOZ_LIBVPX_LIBS)
 
-if test -n "$MOZ_WEBM" -a -z "$MOZ_NATIVE_LIBVPX"; then
+if test "$MOZ_WEBM"; then
     MOZ_SYDNEYAUDIO=1
     MOZ_CUBEB=1
     MOZ_MEDIA=1
@@ -5496,7 +5469,9 @@ if test -n "$MOZ_WEBM" -a -z "$MOZ_NATIVE_LIBVPX"; then
         MOZ_VORBIS=1
     ;;
     esac
+fi
 
+if test -n "$MOZ_VP8" -a -z "$MOZ_NATIVE_LIBVPX"; then
 
     dnl Detect if we can use an assembler to compile optimized assembly for libvpx.
     dnl We currently require yasm on all x86 platforms and require yasm 1.1.0 on Win32.
@@ -5619,6 +5594,9 @@ if test -n "$MOZ_CUBEB"; then
         AC_DEFINE(MOZ_CUBEB)
         ;;
     *-mingw*)
+        AC_DEFINE(MOZ_CUBEB)
+        ;;
+    *-darwin*)
         AC_DEFINE(MOZ_CUBEB)
         ;;
     *-openbsd*)
@@ -5929,7 +5907,7 @@ dnl ========================================================
 dnl = libjpeg-turbo configuration
 dnl ========================================================
 MOZ_LIBJPEG_TURBO=
-if test -z "$SYSTEM_JPEG"; then
+if test -z "$MOZ_NATIVE_JPEG"; then
     MOZ_LIBJPEG_TURBO=1
 fi
 
@@ -5938,7 +5916,7 @@ MOZ_ARG_DISABLE_BOOL(libjpeg_turbo,
     MOZ_LIBJPEG_TURBO=,
     MOZ_LIBJPEG_TURBO=1)
 
-if test "$SYSTEM_JPEG" = 1 -a "$MOZ_LIBJPEG_TURBO" = 1; then
+if test "$MOZ_NATIVE_JPEG" = 1 -a "$MOZ_LIBJPEG_TURBO" = 1; then
     AC_MSG_ERROR([cannot use --with-system-jpeg with --enable-libjpeg-turbo.])
 fi
 
@@ -7013,7 +6991,7 @@ else
   MOZ_GLUE_PROGRAM_LDFLAGS='$(MKSHLIB_FORCE_ALL) $(call EXPAND_LIBNAME_PATH,mozglue,$(LIBXUL_DIST)/lib)'
   dnl On other Unix systems, where mozglue is a static library, jemalloc is
   dnl separated for the SDK, so we need to add it here.
-  if test "$MOZ_MEMORY" = 1; then
+  if test "$MOZ_MEMORY" = 1 -o \( "$LIBXUL_SDK" -a -f "$LIBXUL_SDK/lib/${LIB_PREFIX}memory.${LIB_SUFFIX}" \); then
     MOZ_GLUE_PROGRAM_LDFLAGS="$MOZ_GLUE_PROGRAM_LDFLAGS "'$(call EXPAND_LIBNAME_PATH,memory,$(LIBXUL_DIST)/lib)'
   fi
   MOZ_GLUE_PROGRAM_LDFLAGS="$MOZ_GLUE_PROGRAM_LDFLAGS "'$(MKSHLIB_UNFORCE_ALL)'
@@ -7399,6 +7377,17 @@ if test -n "$NS_FUNCTION_TIMER"; then
 fi
 
 dnl ========================================================
+dnl = Enable runtime visual profiling logger
+dnl ========================================================
+MOZ_ARG_ENABLE_BOOL(visual-event-tracer,
+[  --enable-visual-event-tracer   Enable visual event tracer instrumentation],
+    MOZ_VISUAL_EVENT_TRACER=1,
+    MOZ_VISUAL_EVENT_TRACER=)
+if test -n "$MOZ_VISUAL_EVENT_TRACER"; then
+    AC_DEFINE(MOZ_VISUAL_EVENT_TRACER)
+fi
+
+dnl ========================================================
 dnl Turn on reflow counting
 dnl ========================================================
 MOZ_ARG_ENABLE_BOOL(reflow-perf,
@@ -7777,7 +7766,7 @@ MOZ_ARG_DISABLE_BOOL(md,
    fi])
 if test "$_cpp_md_flag"; then
   COMPILER_DEPEND=1
-  _DEPEND_CFLAGS='$(filter-out %/.pp,-MD -MF $(MDDEPDIR)/$(basename $(@F)).pp)'
+  _DEPEND_CFLAGS='$(filter-out %/.pp,-MD -MF $(MDDEPDIR)/$(@F).pp)'
   dnl Sun Studio on Solaris use -xM instead of -MD, see config/rules.mk
   if test "$SOLARIS_SUNPRO_CC"; then
     _DEPEND_CFLAGS=
@@ -7877,7 +7866,7 @@ dnl ========================================================
 dnl Graphics checks.
 dnl ========================================================
 
-if test "${OS_ARCH}" = "Darwin" -o "${MOZ_WIDGET_TOOLKIT}" = "android" -o "${MOZ_WIDGET_TOOLKIT}" = "gtk2"; then
+if test "${OS_TARGET}" = "WINNT" -o "${OS_ARCH}" = "Darwin" -o "${MOZ_WIDGET_TOOLKIT}" = "android" -o "${MOZ_WIDGET_TOOLKIT}" = "gtk2"; then
 MOZ_ENABLE_SKIA=1
 else
 MOZ_ENABLE_SKIA=
@@ -7887,6 +7876,53 @@ MOZ_ARG_ENABLE_BOOL(skia,
 [  --enable-skia   Enable use of Skia],
 MOZ_ENABLE_SKIA=1,
 MOZ_ENABLE_SKIA=)
+
+if test "$USE_FC_FREETYPE"; then
+    if test "$COMPILE_ENVIRONMENT"; then
+        dnl ========================================================
+        dnl = Check for freetype2 and its functionality
+        dnl ========================================================
+        PKG_CHECK_MODULES(FT2, freetype2 >= 6.1.0, _HAVE_FREETYPE2=1, _HAVE_FREETYPE2=)
+
+        if test "$_HAVE_FREETYPE2"; then
+            _SAVE_LIBS="$LIBS"
+            _SAVE_CFLAGS="$CFLAGS"
+            LIBS="$LIBS $FT2_LIBS"
+            CFLAGS="$CFLAGS $FT2_CFLAGS"
+
+            AC_CACHE_CHECK(for FT_Bitmap_Size.y_ppem,
+                ac_cv_member_FT_Bitmap_Size_y_ppem,
+                [AC_TRY_COMPILE([#include <ft2build.h>
+                                 #include FT_FREETYPE_H],
+                                [FT_Bitmap_Size s;
+                                 if (sizeof s.y_ppem) return 0;
+                                 return 1],
+                                ac_cv_member_FT_Bitmap_Size_y_ppem=yes,
+                                ac_cv_member_FT_Bitmap_Size_y_ppem=no)])
+            if test "$ac_cv_member_FT_Bitmap_Size_y_ppem" = yes; then
+                HAVE_FT_BITMAP_SIZE_Y_PPEM=1
+            else
+                HAVE_FT_BITMAP_SIZE_Y_PPEM=0
+            fi
+            AC_DEFINE_UNQUOTED(HAVE_FT_BITMAP_SIZE_Y_PPEM,
+                               $HAVE_FT_BITMAP_SIZE_Y_PPEM,
+                               [FT_Bitmap_Size structure includes y_ppem field])
+
+            AC_CHECK_FUNCS(FT_GlyphSlot_Embolden FT_Load_Sfnt_Table FT_Select_Size)
+
+            LIBS="$_SAVE_LIBS"
+            CFLAGS="$_SAVE_CFLAGS"
+        fi
+
+        _SAVE_CPPFLAGS="$CPPFLAGS"
+        CPPFLAGS="$CPPFLAGS $FT2_CFLAGS $XCFLAGS"
+        MOZ_CHECK_HEADERS([fontconfig/fcfreetype.h], ,
+            [AC_MSG_ERROR(Can't find header fontconfig/fcfreetype.h.)], [#include <fontconfig/fontconfig.h>])
+        CPPFLAGS="$_SAVE_CPPFLAGS"
+    else
+        AC_DEFINE(HAVE_FONTCONFIG_FCFREETYPE_H)
+    fi
+fi
 
 dnl ========================================================
 dnl Check for pixman and cairo
@@ -8215,6 +8251,18 @@ if test "$MOZ_PLACES"; then
   AC_DEFINE(MOZ_PLACES)
 fi
 
+dnl Build Apps in the Cloud (AITC) if required
+AC_SUBST(MOZ_SERVICES_AITC)
+if test -n "$MOZ_SERVICES_AITC"; then
+  AC_DEFINE(MOZ_SERVICES_AITC)
+fi
+
+dnl Build Notifications if required
+AC_SUBST(MOZ_SERVICES_NOTIFICATIONS)
+if test -n "$MOZ_SERVICES_NOTIFICATIONS"; then
+  AC_DEFINE(MOZ_SERVICES_NOTIFICATIONS)
+fi
+
 dnl Build Sync Services if required
 AC_SUBST(MOZ_SERVICES_SYNC)
 if test -n "$MOZ_SERVICES_SYNC"; then
@@ -8274,7 +8322,6 @@ AC_SUBST(MOZ_DEBUG_LDFLAGS)
 AC_SUBST(WARNINGS_AS_ERRORS)
 AC_SUBST(MOZ_EXTENSIONS)
 AC_SUBST(MOZ_JSDEBUGGER)
-AC_SUBST(MOZ_LOG_REFCNT)
 AC_SUBST(MOZ_ENABLE_PROFILER_SPS)
 AC_SUBST(MOZ_JPROF)
 AC_SUBST(MOZ_SHARK)
@@ -8282,7 +8329,6 @@ AC_SUBST(MOZ_CALLGRIND)
 AC_SUBST(MOZ_VTUNE)
 AC_SUBST(MOZ_ETW)
 AC_SUBST(MOZ_PROFILING)
-AC_SUBST(MOZ_QUANTIFY)
 AC_SUBST(LIBICONV)
 AC_SUBST(MOZ_PLACES)
 AC_SUBST(MOZ_TOOLKIT_SEARCH)
@@ -8290,6 +8336,7 @@ AC_SUBST(MOZ_FEEDS)
 AC_SUBST(NS_PRINTING)
 AC_SUBST(MOZ_WEBGL)
 AC_SUBST(MOZ_HELP_VIEWER)
+AC_SUBST(TOOLCHAIN_PREFIX)
 
 AC_SUBST(JAVA)
 AC_SUBST(JAVAC)
@@ -8305,7 +8352,6 @@ AC_SUBST(ACCESSIBILITY)
 AC_SUBST(MOZ_SPELLCHECK)
 AC_SUBST(MOZ_JAVA_COMPOSITOR)
 AC_SUBST(MOZ_ONLY_TOUCH_EVENTS)
-AC_SUBST(MOZ_USER_DIR)
 AC_SUBST(MOZ_CRASHREPORTER)
 AC_SUBST(MOZ_MAINTENANCE_SERVICE)
 AC_SUBST(MOZ_VERIFY_MAR_SIGNATURE)
@@ -8435,7 +8481,6 @@ AC_SUBST(MOZ_APP_UA_NAME)
 AC_DEFINE_UNQUOTED(MOZ_APP_UA_VERSION, "$MOZ_APP_VERSION")
 AC_SUBST(MOZ_APP_VERSION)
 AC_SUBST(MOZ_APP_MAXVERSION)
-AC_DEFINE_UNQUOTED(MOZ_UA_FIREFOX_VERSION, "$FIREFOX_VERSION")
 AC_DEFINE_UNQUOTED(FIREFOX_VERSION,$FIREFOX_VERSION)
 AC_SUBST(FIREFOX_VERSION)
 
@@ -8480,21 +8525,12 @@ COMPILE_CXXFLAGS=`echo \
 	$_DEPEND_CFLAGS \
     $COMPILE_CXXFLAGS`
 
-AC_SUBST(SYSTEM_MAKEDEPEND)
+AC_SUBST(MOZ_NATIVE_MAKEDEPEND)
 AC_SUBST(SYSTEM_LIBXUL)
-AC_SUBST(SYSTEM_JPEG)
-AC_SUBST(SYSTEM_PNG)
-AC_SUBST(SYSTEM_ZLIB)
-AC_SUBST(SYSTEM_BZ2)
-
-AC_SUBST(JPEG_CFLAGS)
-AC_SUBST(JPEG_LIBS)
-AC_SUBST(ZLIB_CFLAGS)
-AC_SUBST(ZLIB_LIBS)
-AC_SUBST(BZ2_CFLAGS)
-AC_SUBST(BZ2_LIBS)
-AC_SUBST(PNG_CFLAGS)
-AC_SUBST(PNG_LIBS)
+AC_SUBST(MOZ_NATIVE_JPEG)
+AC_SUBST(MOZ_NATIVE_PNG)
+AC_SUBST(MOZ_NATIVE_ZLIB)
+AC_SUBST(MOZ_NATIVE_BZ2)
 
 AC_SUBST(MOZ_FLEXBOX)
 AC_SUBST(MOZ_JPEG_CFLAGS)
@@ -8516,13 +8552,20 @@ AC_SUBST(NSS_DEP_LIBS)
 AC_SUBST(MOZ_NATIVE_NSS)
 AC_SUBST(NSS_DISABLE_DBM)
 
-AC_SUBST(CFLAGS)
-AC_SUBST(CXXFLAGS)
-AC_SUBST(CPPFLAGS)
-AC_SUBST(COMPILE_CFLAGS)
-AC_SUBST(COMPILE_CXXFLAGS)
-AC_SUBST(LDFLAGS)
-AC_SUBST(LIBS)
+OS_CFLAGS="$CFLAGS"
+OS_CXXFLAGS="$CXXFLAGS"
+OS_CPPFLAGS="$CPPFLAGS"
+OS_COMPILE_CFLAGS="$COMPILE_CFLAGS"
+OS_COMPILE_CXXFLAGS="$COMPILE_CXXFLAGS"
+OS_LDFLAGS="$LDFLAGS"
+OS_LIBS="$LIBS"
+AC_SUBST(OS_CFLAGS)
+AC_SUBST(OS_CXXFLAGS)
+AC_SUBST(OS_CPPFLAGS)
+AC_SUBST(OS_COMPILE_CFLAGS)
+AC_SUBST(OS_COMPILE_CXXFLAGS)
+AC_SUBST(OS_LDFLAGS)
+AC_SUBST(OS_LIBS)
 AC_SUBST(CROSS_COMPILE)
 AC_SUBST(WCHAR_CFLAGS)
 
@@ -8553,7 +8596,6 @@ AC_SUBST(OS_TEST)
 AC_SUBST(CPU_ARCH)
 AC_SUBST(INTEL_ARCHITECTURE)
 
-AC_SUBST(MOZ_DISABLE_JAR_PACKAGING)
 AC_SUBST(MOZ_CHROME_FILE_FORMAT)
 
 AC_SUBST(WRAP_LDFLAGS)
@@ -8595,6 +8637,7 @@ AC_SUBST(MOZ_MEDIA_PLUGINS)
 AC_SUBST(MOZ_OMX_PLUGIN)
 AC_SUBST(MOZ_VP8_ERROR_CONCEALMENT)
 AC_SUBST(MOZ_VP8_ENCODER)
+AC_SUBST(MOZ_VP8)
 AC_SUBST(MOZ_OGG)
 AC_SUBST(MOZ_ALSA_LIBS)
 AC_SUBST(MOZ_ALSA_CFLAGS)
@@ -8671,18 +8714,6 @@ if test "$MOZ_GL_DEFAULT_PROVIDER" = "GLX"; then
     fi
 fi # MOZ_GL_DEFAULT_PROVIDER=GLX
 fi # COMPILE_ENVIRONMENT
-
-if test "$USE_FC_FREETYPE"; then
-    if test "$COMPILE_ENVIRONMENT"; then
-    	_SAVE_CPPFLAGS="$CPPFLAGS"
-    	CPPFLAGS="$CPPFLAGS $FT2_CFLAGS $XCFLAGS"
-        MOZ_CHECK_HEADERS([fontconfig/fcfreetype.h], ,
-            [AC_MSG_ERROR(Can't find header fontconfig/fcfreetype.h.)], [#include <fontconfig/fontconfig.h>])
-    	CPPFLAGS="$_SAVE_CPPFLAGS"
-    else
-        AC_DEFINE(HAVE_FONTCONFIG_FCFREETYPE_H)
-    fi
-fi
 
 dnl Set various defines and substitutions
 dnl ========================================================
@@ -8836,8 +8867,8 @@ if test "$?" != 0; then
   AC_MSG_ERROR([Error outputting confdefs.h])
 fi
 AC_OUTPUT_MAKE_DEFS()
-MOZ_DEFINES=$DEFS
-AC_SUBST(MOZ_DEFINES)
+ACDEFINES=$DEFS
+AC_SUBST(ACDEFINES)
 rm -f confdefs.h
 mv confdefs.h.save confdefs.h
 
@@ -8871,6 +8902,10 @@ dnl
 dnl This does not change the $MAKEFILES variable.
 dnl
 echo $MAKEFILES | ${PERL} $srcdir/build/autoconf/acoutput-fast.pl > conftest.sh
+res="$?"
+if test "$res" != 0; then
+    exit $res
+fi
 . ./conftest.sh
 rm conftest.sh
 
@@ -8879,6 +8914,52 @@ echo $MAKEFILES > unallmakefiles
 mv -f config/autoconf.mk config/autoconf.mk.orig 2> /dev/null
 
 AC_OUTPUT($MAKEFILES)
+
+# Generate Makefiles for WebRTC directly from .gyp files
+if test "${OS_TARGET}" = "WINNT"; then
+   if test "$HAVE_64BIT_OS"; then
+      OS_BITS=64
+   else
+      OS_BITS=32
+   fi
+   EXTRA_GYP_DEFINES="-D MSVS_VERSION=${_MSVS_VERSION} -D MSVS_OS_BITS=${OS_BITS}"
+fi
+
+if test -n "$MOZ_WEBRTC"; then
+   AC_MSG_RESULT("generating WebRTC Makefiles...")
+
+   GYP_WEBRTC_OPTIONS="--format=mozmake -D build_with_mozilla=1 -D enable_protobuf=0 -D include_internal_video_render=0 ${EXTRA_GYP_DEFINES} --depth=${srcdir}/media/webrtc/trunk --toplevel-dir=${srcdir} -G OBJDIR=${_objdir}"
+
+   $PYTHON ${srcdir}/media/webrtc/trunk/build/gyp_chromium \
+     $GYP_WEBRTC_OPTIONS \
+     --generator-output=${_objdir}/media/webrtc/trunk \
+     ${srcdir}/media/webrtc/trunk/peerconnection.gyp
+   if test "$?" != 0; then
+      AC_MSG_ERROR([failed to generate WebRTC Makefiles])
+   fi
+
+   # XXX disable until we land the tranche with signaling
+   if test -n "$MOZ_WEBRTC_SIGNALING"; then
+     AC_MSG_RESULT("generating WebRTC/Signaling Makefiles...")
+     $PYTHON ${srcdir}/media/webrtc/trunk/build/gyp_chromium \
+       $GYP_WEBRTC_OPTIONS \
+       --generator-output=${_objdir}/media/webrtc/signaling \
+       ${srcdir}/media/webrtc/signaling/signaling.gyp
+     if test "$?" != 0; then
+        AC_MSG_ERROR([failed to generate WebRTC/Signaling Makefiles])
+     fi
+   fi
+
+   AC_MSG_RESULT("generating gtest Makefiles...")
+   # Ok to pass some extra -D's that are ignored here
+   $PYTHON ${srcdir}/media/webrtc/trunk/build/gyp_chromium \
+     $GYP_WEBRTC_OPTIONS \
+     --generator-output=${_objdir}/media/webrtc/trunk/testing/ \
+     ${srcdir}/media/webrtc/trunk/testing/gtest.gyp
+   if test "$?" != 0; then
+      AC_MSG_ERROR([failed to generate gtest Makefiles])
+   fi
+fi
 
 # Populate the virtualenv
 AC_MSG_RESULT([Populating Python virtualenv])
@@ -8933,7 +9014,9 @@ if test "$MOZ_JEMALLOC" -a "$MOZ_MEMORY"; then
   for var in AS CC CXX CPP LD AR RANLIB STRIP CPPFLAGS EXTRA_CFLAGS LDFLAGS; do
     ac_configure_args="$ac_configure_args $var='`eval echo \\${${var}}`'"
   done
-  ac_configure_args="$ac_configure_args je_cv_static_page_shift=12"
+  if test "$CROSS_COMPILE"; then
+    ac_configure_args="$ac_configure_args je_cv_static_page_shift=12"
+  fi
   _save_cache_file="$cache_file"
   cache_file=$_objdir/memory/jemalloc/src/config.cache
   AC_OUTPUT_SUBDIRS(memory/jemalloc/src)

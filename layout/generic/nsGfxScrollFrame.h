@@ -412,10 +412,6 @@ public:
     return mInner.GetScrolledFrame()->GetContentInsertionFrame();
   }
 
-  virtual void InvalidateInternal(const nsRect& aDamageRect,
-                                  nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                  PRUint32 aFlags);
-
   virtual bool DoesClipChildren() { return true; }
   virtual nsSplittableType GetSplittableType() const;
 
@@ -525,7 +521,7 @@ public:
    */
   virtual nsIAtom* GetType() const;
   
-#ifdef NS_DEBUG
+#ifdef DEBUG
   NS_IMETHOD GetFrameName(nsAString& aResult) const;
 #endif
 
@@ -620,10 +616,6 @@ public:
   virtual nsIFrame* GetContentInsertionFrame() {
     return mInner.GetScrolledFrame()->GetContentInsertionFrame();
   }
-
-  virtual void InvalidateInternal(const nsRect& aDamageRect,
-                                  nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                  PRUint32 aFlags);
 
   virtual bool DoesClipChildren() { return true; }
   virtual nsSplittableType GetSplittableType() const;
@@ -778,7 +770,7 @@ public:
     return nsBoxFrame::IsFrameOfType(aFlags);
   }
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   NS_IMETHOD GetFrameName(nsAString& aResult) const;
 #endif
 

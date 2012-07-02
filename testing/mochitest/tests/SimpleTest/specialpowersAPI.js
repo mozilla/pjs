@@ -81,7 +81,28 @@ function unwrapIfWrapped(x) {
 };
 
 function isXrayWrapper(x) {
-  return /XrayWrapper/.exec(x.toString());
+  try {
+    return /XrayWrapper/.exec(x.toString());
+  } catch(e) {
+    // The toString() implementation could theoretically throw. But it never
+    // throws for Xray, so we can just assume non-xray in that case.
+    return false;
+  }
+}
+
+function callGetOwnPropertyDescriptor(obj, name) {
+  // Quickstubbed getters and setters are propertyOps, and don't get reified
+  // until someone calls __lookupGetter__ or __lookupSetter__ on them (note
+  // that there are special version of those functions for quickstubs, so
+  // apply()ing Object.prototype.__lookupGetter__ isn't good enough). Try to
+  // trigger reification before calling Object.getOwnPropertyDescriptor.
+  //
+  // See bug 764315.
+  try {
+    obj.__lookupGetter__(name);
+    obj.__lookupSetter__(name);
+  } catch(e) { }
+  return Object.getOwnPropertyDescriptor(obj, name);
 }
 
 // We can't call apply() directy on Xray-wrapped functions, so we have to be
@@ -220,7 +241,7 @@ SpecialPowersHandler.prototype.doGetPropertyDescriptor = function(name, own) {
   //
   // This one is easy, thanks to Object.getOwnPropertyDescriptor().
   if (own)
-    desc = Object.getOwnPropertyDescriptor(obj, name);
+    desc = callGetOwnPropertyDescriptor(obj, name);
 
   // Case 2: Not own, not Xray-wrapped.
   //
@@ -230,7 +251,7 @@ SpecialPowersHandler.prototype.doGetPropertyDescriptor = function(name, own) {
   // NB: Make sure to check this.wrappedObject here, rather than obj, because
   // we may have waived Xray on obj above.
   else if (!isXrayWrapper(this.wrappedObject))
-    desc = crawlProtoChain(obj, function(o) {return Object.getOwnPropertyDescriptor(o, name);});
+    desc = crawlProtoChain(obj, function(o) {return callGetOwnPropertyDescriptor(o, name);});
 
   // Case 3: Not own, Xray-wrapped.
   //
@@ -917,10 +938,10 @@ SpecialPowersAPI.prototype = {
       return aDocument.documentURIObject;
   },
 
-  copyString: function(str) {
+  copyString: function(str, doc) {
     Components.classes["@mozilla.org/widget/clipboardhelper;1"].
       getService(Components.interfaces.nsIClipboardHelper).
-      copyString(str);
+      copyString(str, doc);
   },
 
   openDialog: function(win, args) {
@@ -975,6 +996,8 @@ SpecialPowersAPI.prototype = {
 
     var xferable = Components.classes["@mozilla.org/widget/transferable;1"].
                    createInstance(Components.interfaces.nsITransferable);
+    xferable.init(this._getDocShell(content.window)
+                      .QueryInterface(Components.interfaces.nsILoadContext));
     xferable.addDataFlavor(flavor);
     this._cb.getData(xferable, this._cb.kGlobalClipboard);
     var data = {};
@@ -988,10 +1011,10 @@ SpecialPowersAPI.prototype = {
     return data.QueryInterface(Components.interfaces.nsISupportsString).data;
   },
 
-  clipboardCopyString: function(preExpectedVal) {  
+  clipboardCopyString: function(preExpectedVal, doc) {
     var cbHelperSvc = Components.classes["@mozilla.org/widget/clipboardhelper;1"].
                       getService(Components.interfaces.nsIClipboardHelper);
-    cbHelperSvc.copyString(preExpectedVal);
+    cbHelperSvc.copyString(preExpectedVal, doc);
   },
 
   supportsSelectionClipboard: function() {
@@ -1122,5 +1145,9 @@ SpecialPowersAPI.prototype = {
     };
 
     this._sendSyncMessage('SPPermissionManager', msg);
+  },
+
+  getMozFullPath: function(file) {
+    return file.mozFullPath;
   }
 };

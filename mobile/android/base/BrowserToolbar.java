@@ -19,10 +19,12 @@ import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.animation.TranslateAnimation;
+import android.view.inputmethod.InputMethodManager;
 import android.view.ContextMenu;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -46,6 +48,7 @@ import android.widget.Toast;
 import android.widget.ViewSwitcher;
 
 public class BrowserToolbar implements ViewSwitcher.ViewFactory,
+                                       Tabs.OnTabsChangedListener,
                                        GeckoMenu.ActionItemBarPresenter {
     private static final String LOGTAG = "GeckoToolbar";
     private LinearLayout mLayout;
@@ -73,8 +76,6 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
     private boolean mShowSiteSecurity;
     private boolean mShowReader;
 
-    private ReaderPopup mReaderPopup;
-
     private static List<View> sActionItems;
 
     private int mDuration;
@@ -93,6 +94,7 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
         mInflater = LayoutInflater.from(context);
 
         sActionItems = new ArrayList<View>();
+        Tabs.registerOnTabsChangedListener(this);
     }
 
     public void from(LinearLayout layout) {
@@ -100,12 +102,11 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
 
         mShowSiteSecurity = false;
         mShowReader = false;
-        mReaderPopup = null;
 
         mAwesomeBar = (Button) mLayout.findViewById(R.id.awesome_bar);
         mAwesomeBar.setOnClickListener(new Button.OnClickListener() {
             public void onClick(View v) {
-                GeckoApp.mAppContext.hideTabs();
+                GeckoApp.mAppContext.autoHideTabs();
                 onAwesomeBarSearch();
             }
         });
@@ -115,7 +116,7 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
                 inflater.inflate(R.menu.titlebar_contextmenu, menu);
 
                 String clipboard = GeckoAppShell.getClipboardText();
-                if (clipboard == null || clipboard.isEmpty()) {
+                if (clipboard == null || TextUtils.isEmpty(clipboard)) {
                     menu.findItem(R.id.pasteandgo).setVisible(false);
                     menu.findItem(R.id.paste).setVisible(false);
                 }
@@ -180,7 +181,7 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
 
                 // Calculate the left margin for the arrow based on the position of the lock icon.
                 int leftMargin = lockLocation[0] - lockLayoutParams.rightMargin;
-                SiteIdentityPopup.getInstance().show(leftMargin);
+                SiteIdentityPopup.getInstance().show(mSiteSecurity, leftMargin);
             }
         });
 
@@ -198,10 +199,9 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
         mReader = (ImageButton) mLayout.findViewById(R.id.reader);
         mReader.setOnClickListener(new Button.OnClickListener() {
             public void onClick(View view) {
-                if (mReaderPopup == null)
-                    mReaderPopup = new ReaderPopup(GeckoApp.mAppContext);
-
-                mReaderPopup.show();
+                Tab tab = Tabs.getInstance().getSelectedTab();
+                if (tab != null)
+                    tab.readerMode();
             }
         });
 
@@ -262,8 +262,55 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
         }
     }
 
+    public View getLayout() {
+        return mLayout;
+    }
+
     public void requestLayout() {
         mLayout.invalidate();
+    }
+
+    public void onTabChanged(Tab tab, Tabs.TabEvents msg, Object data) {
+        switch(msg) {
+            case TITLE:
+                // if (sameDocument)
+                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    setTitle(tab.getDisplayTitle());
+                }
+                break;
+            case START:
+                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    setSecurityMode(tab.getSecurityMode());
+                    setReaderVisibility(tab.getReaderEnabled());
+                    updateBackButton(tab.canDoBack());
+                    updateForwardButton(tab.canDoForward());
+                    Boolean showProgress = (Boolean)data;
+                    if (showProgress && tab.getState() == Tab.STATE_LOADING)
+                        setProgressVisibility(true);
+                }
+                break;
+            case STOP:
+                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    updateBackButton(tab.canDoBack());
+                    updateForwardButton(tab.canDoForward());
+                    setProgressVisibility(false);
+                }
+                break;
+            case RESTORED:
+            case SELECTED:
+            case LOCATION_CHANGE:
+            case LOAD_ERROR:
+                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    refresh();
+                }
+                break;
+            case CLOSED:
+            case ADDED:
+                updateTabCountAndAnimate(Tabs.getInstance().getCount());
+                updateBackButton(false);
+                updateForwardButton(false);
+                break;
+        }
     }
 
     @Override
@@ -281,10 +328,15 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
     }
 
     private void toggleTabs() {
-        if (GeckoApp.mAppContext.areTabsShown())
+        if (GeckoApp.mAppContext.areTabsShown()) {
             GeckoApp.mAppContext.hideTabs();
-        else
+        } else {
+            // hide the virtual keyboard
+            InputMethodManager imm =
+                    (InputMethodManager) mContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+            imm.hideSoftInputFromWindow(mTabs.getWindowToken(), 0);
             GeckoApp.mAppContext.showLocalTabs();
+        }
     }
 
     public void updateTabCountAndAnimate(int count) {
@@ -323,10 +375,13 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
     }
 
     public void updateTabs(boolean areTabsShown) {
-        if (areTabsShown)
+        if (areTabsShown) {
             mTabs.setImageLevel(TABS_EXPANDED);
-        else
+            mTabs.getBackground().setLevel(TABS_EXPANDED);
+        } else {
             mTabs.setImageLevel(TABS_CONTRACTED);
+            mTabs.getBackground().setLevel(TABS_CONTRACTED);
+        }
     }
 
     public void setProgressVisibility(boolean visible) {
@@ -543,56 +598,6 @@ public class BrowserToolbar implements ViewSwitcher.ViewFactory,
 
             // From the left of popup, the arrow should move half of (menuButtonWidth - arrowWidth)
             mArrow.setLayoutParams(newParams);
-        }
-    }
-
-    public class ReaderPopup extends PopupWindow {
-        private int mWidth;
-
-        private ReaderPopup(Context context) {
-            super(context);
-
-            setBackgroundDrawable(new BitmapDrawable());
-            setOutsideTouchable(true);
-            setWindowLayoutMode(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
-
-            LayoutInflater inflater = LayoutInflater.from(context);
-            FrameLayout layout = (FrameLayout) inflater.inflate(R.layout.reader_popup, null);
-            setContentView(layout);
-
-            layout.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-            mWidth = layout.getMeasuredWidth();
-
-            Button readingListButton = (Button) layout.findViewById(R.id.reading_list);
-            readingListButton.setOnClickListener(new Button.OnClickListener() {
-                public void onClick(View v) {
-                    Tab selectedTab = Tabs.getInstance().getSelectedTab();
-                    if (selectedTab != null) {
-                        selectedTab.addToReadingList();
-                    }
-
-                    Toast.makeText(GeckoApp.mAppContext,
-                                   R.string.reading_list_added, Toast.LENGTH_SHORT).show();
-
-                    dismiss();
-                }
-            });
-
-            Button readerModeButton = (Button) layout.findViewById(R.id.reader_mode);
-            readerModeButton.setOnClickListener(new Button.OnClickListener() {
-                public void onClick(View v) {
-                    Tab selectedTab = Tabs.getInstance().getSelectedTab();
-                    if (selectedTab != null) {
-                        selectedTab.readerMode();
-                    }
-
-                    dismiss();
-                }
-            });
-        }
-
-        public void show() {
-            showAsDropDown(mReader, (mReader.getWidth() - mWidth) / 2, 0);
         }
     }
 }

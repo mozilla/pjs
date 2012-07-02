@@ -263,7 +263,7 @@ class DeviceManagerSUT(DeviceManager):
       if cwd:
         self.sendCmds(['execcwd %s %s' % (cwd, cmdline)], outputfile)
       else:
-        self.sendCmds(['exec %s' % cmdline], outputfile)
+        self.sendCmds(['exec su -c "%s"' % cmdline], outputfile)
     except AgentError:
       return None
 
@@ -1180,6 +1180,17 @@ class DeviceManagerSUT(DeviceManager):
     except AgentError:
       return False
 
+    return True
+
+  # external function
+  # returns:
+  #  success: True
+  #  failure: False
+  def chmodDir(self, remoteDir):
+    try:
+      self.runCmds(["chmod "+remoteDir])
+    except AgentError:
+      return False
     return True
 
 gCallbackData = ''

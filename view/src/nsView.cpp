@@ -11,6 +11,7 @@
 #include "nsIComponentManager.h"
 #include "nsGfxCIID.h"
 #include "nsIInterfaceRequestor.h"
+#include "mozilla/Attributes.h"
 
 //mmptemp
 
@@ -26,7 +27,7 @@ static nsEventStatus HandleEvent(nsGUIEvent *aEvent);
 /**
  * nsISupports-derived helper class that allows to store and get a view
  */
-class ViewWrapper : public nsIInterfaceRequestor
+class ViewWrapper MOZ_FINAL : public nsIInterfaceRequestor
 {
   public:
     NS_DECLARE_STATIC_IID_ACCESSOR(VIEW_WRAPPER_IID)
@@ -175,6 +176,8 @@ nsView::nsView(nsViewManager* aViewManager, nsViewVisibility aVisibility)
   mDirtyRegion = nsnull;
   mDeletionObserver = nsnull;
   mWidgetIsTopLevel = false;
+  mPendingRefresh = false;
+  mSkippedPaints = 0;
 }
 
 void nsView::DropMouseGrabbing()
@@ -529,7 +532,7 @@ void nsView::InsertChild(nsView *aChild, nsView *aSibling)
   {
     if (nsnull != aSibling)
     {
-#ifdef NS_DEBUG
+#ifdef DEBUG
       NS_ASSERTION(aSibling->GetParent() == this, "tried to insert view with invalid sibling");
 #endif
       //insert after sibling

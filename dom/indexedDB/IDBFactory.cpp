@@ -184,9 +184,15 @@ IDBFactory::GetConnection(const nsAString& aDatabaseFilePath)
                                getter_AddRefs(connection));
   NS_ENSURE_SUCCESS(rv, nsnull);
 
-  // Turn on foreign key constraints!
+  // Turn on foreign key constraints and recursive triggers.
+  // The "INSERT OR REPLACE" statement doesn't fire the update trigger,
+  // instead it fires only the insert trigger. This confuses the update
+  // refcount function. This behavior changes with enabled recursive triggers,
+  // so the statement fires the delete trigger first and then the insert
+  // trigger.
   rv = connection->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-    "PRAGMA foreign_keys = ON;"
+    "PRAGMA foreign_keys = ON; "
+    "PRAGMA recursive_triggers = ON;"
   ));
   NS_ENSURE_SUCCESS(rv, nsnull);
 
@@ -237,33 +243,17 @@ IDBFactory::LoadDatabaseInformation(mozIStorageConnection* aConnection,
     PRInt32 columnType;
     nsresult rv = stmt->GetTypeOfIndex(2, &columnType);
     NS_ENSURE_SUCCESS(rv, rv);
-    if (columnType == mozIStorageStatement::VALUE_TYPE_NULL) {
-      info->keyPath.SetIsVoid(true);
-    }
-    else {
+
+    // NB: We don't have to handle the NULL case, since that is the default
+    // for a new KeyPath.
+    if (columnType != mozIStorageStatement::VALUE_TYPE_NULL) {
       NS_ASSERTION(columnType == mozIStorageStatement::VALUE_TYPE_TEXT,
                    "Should be a string");
-      nsString keyPath;
-      rv = stmt->GetString(2, keyPath);
+      nsString keyPathSerialization;
+      rv = stmt->GetString(2, keyPathSerialization);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      if (!keyPath.IsEmpty() && keyPath.First() == ',') {
-        // We use a comma in the beginning to indicate that it's an array of
-        // key paths. This is to be able to tell a string-keypath from an
-        // array-keypath which contains only one item.
-        nsCharSeparatedTokenizerTemplate<IgnoreWhitespace>
-          tokenizer(keyPath, ',');
-        tokenizer.nextToken();
-        while (tokenizer.hasMoreTokens()) {
-          info->keyPathArray.AppendElement(tokenizer.nextToken());
-        }
-        NS_ASSERTION(!info->keyPathArray.IsEmpty(),
-                     "Should have at least one keypath");
-      }
-      else {
-        info->keyPath = keyPath;
-      }
-
+      info->keyPath = KeyPath::DeserializeFromString(keyPathSerialization);
     }
 
     info->nextAutoIncrementId = stmt->AsInt64(3);
@@ -310,26 +300,12 @@ IDBFactory::LoadDatabaseInformation(mozIStorageConnection* aConnection,
     rv = stmt->GetString(2, indexInfo->name);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsString keyPath;
-    rv = stmt->GetString(3, keyPath);
+    nsString keyPathSerialization;
+    rv = stmt->GetString(3, keyPathSerialization);
     NS_ENSURE_SUCCESS(rv, rv);
-    if (!keyPath.IsEmpty() && keyPath.First() == ',') {
-      // We use a comma in the beginning to indicate that it's an array of
-      // key paths. This is to be able to tell a string-keypath from an
-      // array-keypath which contains only one item.
-      nsCharSeparatedTokenizerTemplate<IgnoreWhitespace>
-        tokenizer(keyPath, ',');
-      tokenizer.nextToken();
-      while (tokenizer.hasMoreTokens()) {
-        indexInfo->keyPathArray.AppendElement(tokenizer.nextToken());
-      }
-      NS_ASSERTION(!indexInfo->keyPathArray.IsEmpty(),
-                   "Should have at least one keypath");
-    }
-    else {
-      indexInfo->keyPath = keyPath;
-    }
 
+    // XXX bent wants to assert here
+    indexInfo->keyPath = KeyPath::DeserializeFromString(keyPathSerialization);
     indexInfo->unique = !!stmt->AsInt32(4);
     indexInfo->multiEntry = !!stmt->AsInt32(5);
   }
@@ -425,6 +401,7 @@ nsresult
 IDBFactory::OpenCommon(const nsAString& aName,
                        PRInt64 aVersion,
                        bool aDeleting,
+                       JSContext* aCallingCx,
                        IDBOpenDBRequest** _retval)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -442,7 +419,7 @@ IDBFactory::OpenCommon(const nsAString& aName,
   }
 
   nsRefPtr<IDBOpenDBRequest> request =
-    IDBOpenDBRequest::Create(window, scriptOwner);
+    IDBOpenDBRequest::Create(window, scriptOwner, aCallingCx);
   NS_ENSURE_TRUE(request, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   nsresult rv;
@@ -492,6 +469,7 @@ IDBFactory::OpenCommon(const nsAString& aName,
 NS_IMETHODIMP
 IDBFactory::Open(const nsAString& aName,
                  PRInt64 aVersion,
+                 JSContext* aCx,
                  PRUint8 aArgc,
                  nsIIDBOpenDBRequest** _retval)
 {
@@ -500,7 +478,8 @@ IDBFactory::Open(const nsAString& aName,
   }
 
   nsRefPtr<IDBOpenDBRequest> request;
-  nsresult rv = OpenCommon(aName, aVersion, false, getter_AddRefs(request));
+  nsresult rv = OpenCommon(aName, aVersion, false, aCx,
+                           getter_AddRefs(request));
   NS_ENSURE_SUCCESS(rv, rv);
 
   request.forget(_retval);
@@ -509,10 +488,11 @@ IDBFactory::Open(const nsAString& aName,
 
 NS_IMETHODIMP
 IDBFactory::DeleteDatabase(const nsAString& aName,
+                           JSContext* aCx,
                            nsIIDBOpenDBRequest** _retval)
 {
   nsRefPtr<IDBOpenDBRequest> request;
-  nsresult rv = OpenCommon(aName, 0, true, getter_AddRefs(request));
+  nsresult rv = OpenCommon(aName, 0, true, aCx, getter_AddRefs(request));
   NS_ENSURE_SUCCESS(rv, rv);
 
   request.forget(_retval);
