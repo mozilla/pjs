@@ -52,6 +52,9 @@
 #include "membrane.h"
 #include "util.h"
 #include "proxyrack.h"
+#include "jstypedarray.h"
+#include "jsobj.h"
+#include "jsnum.h"
 
 extern size_t gMaxStackSize;
 
@@ -261,17 +264,20 @@ private:
 	auto_arr<jsval> _toProxy; // [0] == fn, [1..argc] == args
 	unsigned _argc;
 	unsigned _rooted;
+	int _taskindex;
 
-	Closure(JSContext *cx, auto_arr<jsval>& toProxy, unsigned argc) :
-			_cx(cx), _toProxy(toProxy), _argc(argc), _rooted(0) {
+	Closure(JSContext *cx, auto_arr<jsval>& toProxy, unsigned argc,
+			unsigned taskIndex = -1) :
+			_cx(cx), _toProxy(toProxy), _argc(argc), _rooted(0),
+					_taskindex(taskIndex) {
 	}
 
 	bool addRoots();
 	void delRoots();
 
 public:
-	static Closure *create(JSContext *cx, jsval fn, const jsval *argv,
-			int argc);
+	static Closure *create(JSContext *cx, jsval fn, const jsval *argv, int argc,
+			int taskIndex = -1);
 	~Closure();
 
 	JSBool execute(Membrane *m, JSContext *cx, JSObject *global, jsval *rval);
@@ -296,6 +302,10 @@ public:
 	virtual JSBool execute(JSContext *cx, JSObject *global,
 			auto_ptr<Membrane> &rmembrane, jsval *rval) = 0;
 	virtual void onCompleted(Runner *runner, jsval result) = 0;
+
+	virtual bool isRootTaskHandle() {
+		return false;
+	}
 };
 
 class RootTaskHandle: public TaskHandle {
@@ -309,6 +319,9 @@ public:
 	virtual JSBool execute(JSContext *cx, JSObject *global,
 			auto_ptr<Membrane> &rmembrane, jsval *rval);
 	virtual void onCompleted(Runner *runner, jsval result);
+	virtual bool isRootTaskHandle() {
+		return true;
+	}
 };
 
 class ChildTaskHandle: public TaskHandle {
@@ -533,7 +546,9 @@ public:
 	void enqueueRootTask(RootTaskHandle *p);
 	void enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end);
 	TaskContext *createTaskContext(TaskHandle *handle);
+	TaskContext *createRootTaskContext(TaskHandle *handle);
 	void terminate();
+
 };
 
 typedef unsigned long long workCounter_t;
@@ -545,6 +560,7 @@ private:
 	int _threadCount;
 	PRThread **_threads;
 	Runner **_runners;
+	JSObject* _global;
 
 	PRLock *_tpLock;
 	PRCondVar *_tpCondVar;
@@ -597,6 +613,13 @@ public:
 	int terminating() {
 		return _terminating;
 	}
+
+	void setGlobal(JSObject* global) {
+		_global = global;
+	}
+	JSObject* getGlobal() {
+		return _global;
+	}
 };
 
 // ______________________________________________________________________
@@ -640,7 +663,7 @@ JSBool dumpObjects(JSContext *cx, unsigned argc, jsval *vp) {
 	argv = JS_ARGV(cx, vp);
 	for (i = 0; i < argc; i++) {
 		if (argv[i].isObject())
-			js_DumpObject(argv[i].toObjectOrNull());
+			argv[i].toObjectOrNull()->dump();
 	}
 	printf("\n");
 	JS_SET_RVAL(cx, vp, JSVAL_VOID);
@@ -689,6 +712,104 @@ JSBool fork(JSContext *cx, unsigned argc, jsval *vp) {
 	return JS_TRUE;
 }
 
+JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+
+	jsval *argv = JS_ARGV(cx, vp);
+
+	uint32_t count = argv[0].payloadAsRawUint32();
+
+	jsval typedArray = argv[2];
+	if (typedArray.isObject()) {
+		JSObject * arrObj = typedArray.toObjectOrNull();
+		if (arrObj->isTypedArray()) {
+			int length = TypedArray::getLength(arrObj);
+			ArrayBufferObject * arrayBufferObject = TypedArray::getBuffer(
+					arrObj);
+			uint32_t type = TypedArray::getType(arrObj);
+			JSObject *(*JS_NewArrayWithBufferFn)(JSContext*, JSObject*,
+					uint32_t, int32_t);
+			switch (type) {
+			case TypedArray::TYPE_FLOAT32:
+				JS_NewArrayWithBufferFn = &JS_NewFloat32ArrayWithBuffer;
+				break;
+			case TypedArray::TYPE_FLOAT64:
+				JS_NewArrayWithBufferFn = &JS_NewFloat64ArrayWithBuffer;
+				break;
+			case TypedArray::TYPE_INT16:
+				JS_NewArrayWithBufferFn = &JS_NewInt16ArrayWithBuffer;
+				break;
+
+			case TypedArray::TYPE_INT32:
+				JS_NewArrayWithBufferFn = &JS_NewInt32ArrayWithBuffer;
+				break;
+			case TypedArray::TYPE_INT8:
+				JS_NewArrayWithBufferFn = &JS_NewInt8ArrayWithBuffer;
+				break;
+			case TypedArray::TYPE_UINT16:
+				JS_NewArrayWithBufferFn = &JS_NewUint16ArrayWithBuffer;
+				break;
+
+			case TypedArray::TYPE_UINT32:
+				JS_NewArrayWithBufferFn = &JS_NewUint32ArrayWithBuffer;
+				break;
+			case TypedArray::TYPE_UINT8:
+				JS_NewArrayWithBufferFn = &JS_NewUint8ArrayWithBuffer;
+				break;
+			default:
+				JS_ReportError(cx, "unknown type for TypedArray\n");
+				break;
+			}
+			int step = length / count;
+			int rem = length % count;
+			int start = 0;
+			int slotWidth = TypedArray::slotWidth(type);
+			JSObject **views = check_null(new JSObject*[count]);
+			memset(views, 0, sizeof(JSObject*) * count);
+			int viewindex = 0;
+			if (rem > 0) {
+				views[viewindex++] = JS_NewArrayWithBufferFn(cx,
+						arrayBufferObject, 0, rem + step);
+				start = rem + step;
+			}
+			for (int i = start; i < length; i += step) {
+				views[viewindex++] = JS_NewArrayWithBufferFn(cx,
+						arrayBufferObject, i * slotWidth, step);
+
+			}
+			RootedObject resarr(cx, JS_NewArrayObject(cx, count, NULL));
+			for (int i = 0; i < count; i++) {
+				*(argv + 2) = OBJECT_TO_JSVAL(views[i]);
+				auto_ptr<Closure> closure(
+						Closure::create(cx, argv[1], argv + 2, argc - 2, i));
+				if (!closure.get()) {
+					return JS_FALSE;
+				}
+				ChildTaskHandle *th = ChildTaskHandle::create(cx, taskContext,
+						closure);
+				if (th == NULL) {
+					return JS_FALSE;
+				}
+//				views[i]->setSlot(DataViewObject::PJS_TASK_ID,
+//						OBJECT_TO_JSVAL(th->object()));
+				resarr->setElement(cx, i, &OBJECT_TO_JSVAL(th->object()),
+						false);
+//				if(i == 0)
+				JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(th->object()));
+				DEBUG("forked TaskHandle %p with parent context %p/g %p/c %p\n",
+						th, taskContext, taskContext->global(),
+						taskContext->global()->compartment());
+
+				taskContext->addTaskToFork(th);
+			}
+			JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(resarr));
+			//TODO: rebuild the arg list and create a closure and a task handle for each view.
+		}
+		return JS_TRUE;
+	}
+	return JS_FALSE;
+}
+
 JSBool oncompletion(JSContext *cx, unsigned argc, jsval *vp) {
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 	JSObject *func;
@@ -705,6 +826,7 @@ JSBool oncompletion(JSContext *cx, unsigned argc, jsval *vp) {
 static JSFunctionSpec pjsGlobalFunctions[] = { JS_FN("print", print, 0, 0),
 		JS_FN("dumpObjects", dumpObjects, 0, 0),
 		JS_FN("assert", assert, 2, 0), JS_FN("fork", fork, 1, 0),
+				JS_FN("forkN", forkN, 1, 0),
 				JS_FN("oncompletion", oncompletion, 1, 0), JS_FS_END };
 
 // ______________________________________________________________________
@@ -782,7 +904,8 @@ JSBool ClonedObj::unpack(JSContext *cx, jsval *rval) {
 // ______________________________________________________________________
 // Closure impl
 
-Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc) {
+Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc,
+		int taskIndex) {
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
 	// Create an array containing
@@ -800,7 +923,7 @@ Closure *Closure::create(JSContext *cx, jsval fn, const jsval *argv, int argc) {
 		toProxy[p++] = argv[i];
 	}
 
-	auto_ptr<Closure> c(new Closure(cx, toProxy, argc));
+	auto_ptr<Closure> c(new Closure(cx, toProxy, argc, taskIndex));
 	if (!c.get()) {
 		JS_ReportOutOfMemory(cx);
 		return NULL;
@@ -828,10 +951,10 @@ void Closure::delRoots() {
 Closure::~Closure() {
 	delRoots();
 }
+static PRLock *debugLock = PR_NewLock();
 
 JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 		jsval *rval) {
-
 	// Wrap the function:
 	int p = 0;
 	AutoValueRooter fn(cx, _toProxy[p++]);
@@ -846,7 +969,7 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
 	for (int i = 0; i < _argc; i++) {
 		argv[i] = _toProxy[p++];
-		if (!m->wrap(&argv[i]))
+		if (!m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
 			return JS_FALSE;
 	}
 
@@ -866,12 +989,6 @@ JSBool RootTaskHandle::execute(JSContext *cx, JSObject *global,
 	if (scr == NULL)
 		return 0;
 
-	if (!JS_DefineFunctions(cx, global, pjsGlobalFunctions))
-		return NULL;
-
-	if (!ChildTaskHandle::initClass(cx, global))
-		return NULL;
-
 	return JS_ExecuteScript(cx, global, scr, rval);
 }
 
@@ -883,7 +1000,8 @@ void ChildTaskHandle::onCompleted(Runner *runner, jsval result) {
 JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 		auto_ptr<Membrane> &rmembrane, jsval *rval) {
 
-	static JSNative safeNatives[] = { ChildTaskHandle::jsGet, NULL };
+	static JSNative safeNatives[] = { ChildTaskHandle::jsGet, /*fork, forkN,
+	 print, oncompletion, dumpObjects, eval, num_parseInt,*/NULL };
 
 	auto_ptr<Membrane> m(
 			Membrane::create(_parent->cx(), _parent->global(), cx, global,
@@ -892,18 +1010,13 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 		return false;
 	}
 
-	if (!JS_DefineFunctions(cx, global, pjsGlobalFunctions))
-		return NULL; // XXX
-
-	if (!ChildTaskHandle::initClass(cx, global))
-		return NULL; // XXX
-
 	// add (proxied) globals
 	{
 		AutoReadOnly ro(cx);
 		JSObject *parentGlobal = _parent->global();
 		AutoIdVector props(cx);
-		if (!GetPropertyNames(cx, parentGlobal, JSITER_OWNONLY, &props))
+		if (!GetPropertyNames(cx, parentGlobal,
+				JSITER_OWNONLY /*| JSITER_HIDDEN*/, &props))
 			return false;
 		for (jsid *v = props.begin(), *v_end = props.end(); v < v_end; v++) {
 			jsid pid = *v, cid = *v;
@@ -976,7 +1089,7 @@ JSBool ChildTaskHandle::addRoot(JSContext *cx) {
 }
 
 void ChildTaskHandle::delRoot(JSContext *cx) {
-	PJS_ASSERT_CX(cx, _checkCx);
+//	PJS_ASSERT_CX(cx, _checkCx);
 	JS_RemoveObjectRoot(cx, &_object);
 }
 
@@ -1006,25 +1119,26 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, unsigned argc, jsval *vp) {
 	// Is this a proxied task handle?
 	if (Membrane::IsCrossThreadWrapper(self)) {
 		JS_ReportError(cx, "all child tasks not yet completed");
-		return false;
+		return JS_FALSE;
 	}
 
 	// Sanity check
-	if (!JS_InstanceOf(cx, self, &jsClass, NULL)) {
-		JS_ReportError(cx, "expected TaskHandle as this");
-		return JS_FALSE;
-	}
+// TODO: pjs disabled: sanity check no longer valid?
+//	if (!JS_InstanceOf(cx, self, &jsClass, NULL)) {
+//		JS_ReportError(cx, "expected TaskHandle as this");
+//		return JS_FALSE;
+//	}
 
 	// Check if the generation has completed:
 	jsval ready = JS_GetReservedSlot(self, ReadySlot);
 	if (ready != JSVAL_TRUE) {
 		JS_ReportError(cx, "all child tasks not yet completed");
-		return false;
+		return JS_FALSE;
 	}
 
 	// If it has, there should be a value waiting for us:
 	*vp = JS_GetReservedSlot(self, ResultSlot);
-	return true;
+	return JS_TRUE;
 }
 
 // ______________________________________________________________________
@@ -1171,8 +1285,16 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
 	JSObject *global = JS_NewCompartmentAndGlobalObject(
 	/*JSContext *cx: */cx,
 	/*JSClass *clasp: */&Global::jsClass, /*JSPrincipals*/NULL);
+//	global->dump();
+//	fprintf(stderr,"\nbefore\n");
 	if (!JS_InitStandardClasses(cx, global))
 		return NULL;
+//	global->dump();
+	if (!ChildTaskHandle::initClass(cx, global))
+		return NULL;
+
+	if (!JS_DefineFunctions(cx, global, pjsGlobalFunctions))
+		return NULL; // XXX
 
 	char *pjs_zeal = getenv("PJS_ZEAL");
 	if (pjs_zeal) {
@@ -1304,7 +1426,10 @@ void Runner::start() {
 		}
 
 		if (create) {
-			TaskContext *ctx = createTaskContext(create);
+			TaskContext *ctx =
+					create->isRootTaskHandle() ?
+							createRootTaskContext(create) :
+							createTaskContext(create);
 			if (ctx) {
 				ctx->resume(this);
 			}
@@ -1315,6 +1440,25 @@ void Runner::start() {
 
 TaskContext *Runner::createTaskContext(TaskHandle *handle) {
 	return TaskContext::create(_cx, handle, this, _global);
+}
+
+TaskContext *Runner::createRootTaskContext(TaskHandle *handle) {
+	JSObject *global = JS_NewCompartmentAndGlobalObject(
+	/*JSContext *cx: */_cx,
+	/*JSClass *clasp: */&Global::jsClass, /*JSPrincipals*/NULL);
+	CrossCompartment cc(_cx, global);
+	if (!JS_InitStandardClasses(_cx, global))
+		return NULL;
+
+	if (!JS_DefineFunctions(_cx, global, pjsGlobalFunctions))
+		return NULL; // XXX
+
+	if (!ChildTaskHandle::initClass(_cx, global))
+		return NULL;
+
+	this->_threadPool->setGlobal(global);
+
+	return TaskContext::create(_cx, handle, this, global);
 }
 
 void Runner::terminate() {

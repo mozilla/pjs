@@ -1290,6 +1290,7 @@ namespace JS {
 AutoCheckRequestDepth::AutoCheckRequestDepth(JSContext *cx)
     : cx(cx)
 {
+	// TODO: pjs disabled. (2 asserstions)
 //    JS_ASSERT(cx->runtime->requestDepth || cx->runtime->gcRunning);
 //    JS_ASSERT(cx->runtime->onOwnerThread());
     cx->runtime->checkRequestDepth++;

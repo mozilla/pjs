@@ -350,7 +350,8 @@ Shape::insertIntoDictionary(HeapPtrShape *dictp)
 
     JS_ASSERT_IF(*dictp, (*dictp)->inDictionary());
     JS_ASSERT_IF(*dictp, (*dictp)->listp == dictp);
-    JS_ASSERT_IF(*dictp, compartment() == (*dictp)->compartment());
+    //TODO: pjs disabled.
+    //JS_ASSERT_IF(*dictp, compartment() == (*dictp)->compartment());
 
     setParent(*dictp);
     if (parent)

@@ -67,12 +67,14 @@ static JSObject *wrappedObject(JSObject *obj) {
 
 ProxyRack::ProxyRack(JSContext* cx, JSObject* global) :
 		BaseProxyHandler(PROXYRACK), _cx(cx), _global(global),
-				_proxyRackLock(PR_NewLock()) {
+				_proxyRackLock(PR_NewLock()), _getCount(0) {
 
 }
 
 ProxyRack::~ProxyRack() {
-
+	if (getenv("PJS_STATS") != NULL) {
+		fprintf(stderr, "Proxy Read Count: %d\n", _getCount);
+	}
 }
 
 bool ProxyRack::getPropertyDescriptor(JSContext* cx, JSObject* wrapper, jsid id,
@@ -106,6 +108,7 @@ bool ProxyRack::getOwnPropertyDescriptor(JSContext* cx, JSObject* wrapper,
 }
 bool ProxyRack::defineProperty(JSContext* cx, JSObject* wrapper, jsid id,
 		PropertyDescriptor* desc) {
+	JSObject* wrappee = wrappedObject(wrapper);
 	JS_ReportError(cx, "Cannot define a property on a parent object");
 	return false;
 }
@@ -147,15 +150,21 @@ void ProxyRack::trace(JSTracer* trc, JSObject* wrapper) {
 
 bool ProxyRack::get(JSContext* cx, JSObject* wrapper, JSObject* receiver,
 		jsid id, Value* vp) {
+	_getCount++;
 	JSObject* wrappee = wrappedObject(wrapper);
 	if (wrappee->isArray()) {
 		vp->setUndefined(); // default result if we refuse to perform this action
 		RootedObject rreceiver(cx, receiver);
 		RootedId rid(cx, id);
 		return wrappee->getGeneric(cx, rreceiver, rid, vp);
-	} else {
-		return BaseProxyHandler::get(cx, wrapper, receiver, id, vp);
 	}
+	if (wrappee->isTypedArray()) {
+		vp->setUndefined();
+		RootedObject rreceiver(cx, receiver);
+		RootedId rid(cx, id);
+		return wrappee->getGeneric(cx, rreceiver, rid, vp);
+	}
+	return BaseProxyHandler::get(cx, wrapper, receiver, id, vp);
 }
 
 ProxyRack* ProxyRack::create(JSContext* cx, JSObject* global) {

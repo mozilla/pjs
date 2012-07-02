@@ -91,7 +91,7 @@ private:
 	ProxyRack(JSContext* cx, JSObject* global);
 
 	PRLock *_proxyRackLock;
-
+	int _getCount;
 public:
 	virtual ~ProxyRack();
 	static ProxyRack *create(JSContext *parentCx, JSObject *parentGlobal);

@@ -832,7 +832,7 @@ DoIncDec(JSContext *cx, JSScript *script, jsbytecode *pc, const Value &v, Value 
     return true;
 }
 
-#define PUSH_COPY(v)             do { *regs.sp++ = v; assertSameCompartment(cx, regs.sp[-1]); } while (0)
+#define PUSH_COPY(v)             do { *regs.sp++ = v; /*TODO:pjs disabled. assertSameCompartment(cx, regs.sp[-1]);*/ } while (0)
 #define PUSH_COPY_SKIP_CHECK(v)  *regs.sp++ = v
 #define PUSH_NULL()              regs.sp++->setNull()
 #define PUSH_UNDEFINED()         regs.sp++->setUndefined()

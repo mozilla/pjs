@@ -84,7 +84,7 @@ private:
 	bool copyAndWrapProperties(JSObject *from, JSObject *to);
 
 	bool unwrap(Value *vp);
-	bool wrapId(jsid *idp);
+
 	bool unwrapId(jsid *idp);
 	bool wrap(AutoIdVector &props);
 	bool wrap(PropertyOp *propp);
@@ -102,9 +102,13 @@ public:
 	~Membrane();
 	void releaseProxies();
 
-	bool wrap(Value *vp);
+	bool wrap(Value *vp, bool isArg=false);
+	bool wraptemp(Value *vp, bool isArg=false);
+	bool wrapId(jsid *idp);
 
 	static bool IsCrossThreadWrapper(const JSObject *wrapper);
+
+//	const static int TYPED_ARRAY_NOWRAP_SLOT = 5;
 	// ______________________________________________________________________
 };
 

@@ -5251,8 +5251,8 @@ JS_DecompileScript(JSContext *cx, JSScript *script, const char *name, unsigned i
     AssertNoGC(cx);
     CHECK_REQUEST(cx);
 #ifdef DEBUG
-    if (cx->compartment != script->compartment())
-        CompartmentChecker::fail(cx->compartment, script->compartment());
+//    if (cx->compartment != script->compartment())
+//        CompartmentChecker::fail(cx->compartment, script->compartment());
 #endif
     jp = js_NewPrinter(cx, name, NULL,
                        indent & ~JS_DONT_PRETTY_PRINT,
@@ -5482,9 +5482,9 @@ JS_CallFunctionValue(JSContext *cx, JSObject *obj, jsval fval, unsigned argc, js
     JS_THREADSAFE_ASSERT(cx->compartment != cx->runtime->atomsCompartment);
     AssertNoGC(cx);
     CHECK_REQUEST(cx);
-    assertSameCompartment(cx, obj, fval, JSValueArray(argv, argc));
+    //TODO: pjs disabled.
+//    assertSameCompartment(cx, obj, fval, JSValueArray(argv, argc));
     AutoLastFrameCheck lfc(cx);
-
     return Invoke(cx, ObjectOrNullValue(obj), fval, argc, argv, rval);
 }
 

@@ -800,18 +800,21 @@ IncrementalValueBarrier(const Value &v)
 
 extern JS_FRIEND_API(void)
 PJS_SetSuspended(JSContext *cx) {
+	//TODO: pjs disabled
 //    JS_ASSERT(!PJS_isSuspended(cx));
     cx->compartment->PJS_isSuspended = true;
 }
 
 extern JS_FRIEND_API(void)
 PJS_ClearSuspended(JSContext *cx) {
+	//TODO: pjs disabled
 //    JS_ASSERT(PJS_isSuspended(cx));
     cx->compartment->PJS_isSuspended = false;
 }
 
 extern JS_FRIEND_API(bool)
 PJS_SetReadOnly(JSContext *cx, bool nv) {
+	//TODO: pjs disabled
 //    JS_ASSERT(!PJS_isSuspended(cx));
     bool v = cx->compartment->PJS_isReadOnly;
     cx->compartment->PJS_isReadOnly = nv;

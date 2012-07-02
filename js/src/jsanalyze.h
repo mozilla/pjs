@@ -1099,7 +1099,7 @@ class ScriptAnalysis
      * containing script (which does not imply the variable is closed).
      */
     bool slotEscapes(uint32_t slot) {
-//        JS_ASSERT(script->compartment()->activeAnalysis);
+        JS_ASSERT(script->compartment()->activeAnalysis);
         if (slot >= numSlots)
             return true;
         return escapedSlots[slot];
