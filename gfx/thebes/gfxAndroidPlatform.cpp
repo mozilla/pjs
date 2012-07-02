@@ -56,17 +56,6 @@ gfxAndroidPlatform::CreateOffscreenSurface(const gfxIntSize& size,
     return newSurface.forget();
 }
 
-mozilla::gfx::SurfaceFormat
-gfxAndroidPlatform::Optimal2DFormatForContent(gfxASurface::gfxContentType aContent)
-{
-    // On Android we always use RGB565 for now.
-    if (aContent == gfxASurface::CONTENT_COLOR) {
-        return mozilla::gfx::FORMAT_R5G6B5;
-    } else {
-        return gfxPlatform::Optimal2DFormatForContent(aContent);
-    }
-}
-
 nsresult
 gfxAndroidPlatform::GetFontList(nsIAtom *aLangGroup,
                                 const nsACString& aGenericFamily,
@@ -169,6 +158,14 @@ gfxAndroidPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
     return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aProxyEntry,
                                                                      aFontData,
                                                                      aLength);
+}
+
+gfxFontEntry*
+gfxAndroidPlatform::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
+                                    const nsAString& aFontName)
+{
+    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aProxyEntry,
+                                                                    aFontName);
 }
 
 RefPtr<ScaledFont>

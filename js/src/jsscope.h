@@ -701,7 +701,7 @@ struct Shape : public js::gc::Cell
                                      int ashortid) const;
 
     bool get(JSContext* cx, HandleObject receiver, JSObject *obj, JSObject *pobj, js::Value* vp) const;
-    bool set(JSContext* cx, HandleObject obj, bool strict, js::Value* vp) const;
+    bool set(JSContext* cx, HandleObject obj, HandleObject receiver, bool strict, js::Value* vp) const;
 
     BaseShape *base() const { return base_; }
 
@@ -778,6 +778,16 @@ struct Shape : public js::gc::Cell
     }
     bool isAccessorDescriptor() const {
         return (attrs & (JSPROP_SETTER | JSPROP_GETTER)) != 0;
+    }
+
+    PropDesc::Writability writability() const {
+        return (attrs & JSPROP_READONLY) ? PropDesc::NonWritable : PropDesc::Writable;
+    }
+    PropDesc::Enumerability enumerability() const {
+        return (attrs & JSPROP_ENUMERATE) ? PropDesc::Enumerable : PropDesc::NonEnumerable;
+    }
+    PropDesc::Configurability configurability() const {
+        return (attrs & JSPROP_PERMANENT) ? PropDesc::NonConfigurable : PropDesc::Configurable;
     }
 
     /*

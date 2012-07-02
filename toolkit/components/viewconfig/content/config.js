@@ -1,7 +1,8 @@
-# -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/Services.jsm");
 
@@ -542,17 +543,17 @@ function updateContextMenu()
 function copyPref()
 {
   var pref = gPrefView[view.selection.currentIndex];
-  gClipboardHelper.copyString(pref.prefCol + ';' + pref.valueCol);
+  gClipboardHelper.copyString(pref.prefCol + ';' + pref.valueCol, document);
 }
 
 function copyName()
 {
-  gClipboardHelper.copyString(gPrefView[view.selection.currentIndex].prefCol);
+  gClipboardHelper.copyString(gPrefView[view.selection.currentIndex].prefCol, document);
 }
 
 function copyValue()
 {
-  gClipboardHelper.copyString(gPrefView[view.selection.currentIndex].valueCol);
+  gClipboardHelper.copyString(gPrefView[view.selection.currentIndex].valueCol, document);
 }
 
 function ModifySelected()

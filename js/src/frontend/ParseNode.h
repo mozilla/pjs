@@ -923,6 +923,12 @@ struct ParseNode {
         pn_count++;
     }
 
+    void checkListConsistency()
+#ifndef DEBUG
+    {}
+#endif
+    ;
+
     bool getConstantValue(JSContext *cx, bool strictChecks, Value *vp);
     inline bool isConstant();
 
@@ -1031,9 +1037,9 @@ struct FunctionNode : public ParseNode {
 };
 
 struct NameNode : public ParseNode {
-    static NameNode *create(ParseNodeKind kind, JSAtom *atom, Parser *parser, SharedContext *sc);
+    static NameNode *create(ParseNodeKind kind, JSAtom *atom, Parser *parser, TreeContext *tc);
 
-    inline void initCommon(SharedContext *sc);
+    inline void initCommon(TreeContext *tc);
 
 #ifdef DEBUG
     inline void dump(int indent);

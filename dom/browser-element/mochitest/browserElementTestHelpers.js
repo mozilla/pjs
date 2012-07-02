@@ -101,11 +101,14 @@ const browserElementTestHelpers = {
   'origOOPByDefaultPref': null,
   'origPageThumbsEnabledPref': null,
 
-  // Two basically-empty pages from two different domains you can load.
+  // Some basically-empty pages from different domains you can load.
   'emptyPage1': 'http://example.com' +
                 window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) +
                 '/file_empty.html',
   'emptyPage2': 'http://example.org' +
+                window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) +
+                '/file_empty.html',
+  'emptyPage3': 'http://test1.example.org' +
                 window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) +
                 '/file_empty.html',
   'focusPage': 'http://example.org' +
@@ -122,11 +125,10 @@ browserElementTestHelpers.origPageThumbsEnabledPref = browserElementTestHelpers.
 // Disable tab view; it seriously messes us up.
 browserElementTestHelpers.setPageThumbsEnabledPref(false);
 
-// Enable or disable OOP depending on the test's filename.
-// Always disable OOP on Windows (bug 763081).
-var oop = navigator.platform.indexOf('Win') == -1 &&
-          location.pathname.indexOf('_inproc_') == -1;
-
+// Enable or disable OOP-by-default depending on the test's filename.  You can
+// still force OOP on or off with <iframe mozbrowser remote=true/false>, at
+// least until bug 756376 lands.
+var oop = location.pathname.indexOf('_inproc_') == -1;
 browserElementTestHelpers.setOOPByDefaultPref(oop);
 browserElementTestHelpers.setOOPDisabledPref(false);
 

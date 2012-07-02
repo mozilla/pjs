@@ -15,6 +15,7 @@
 #include "nsCycleCollectionParticipant.h"
 
 #include "mozilla/dom/indexedDB/IDBTransaction.h"
+#include "mozilla/dom/indexedDB/KeyPath.h"
 
 class nsIScriptContext;
 class nsPIDOMWindow;
@@ -24,6 +25,7 @@ BEGIN_INDEXEDDB_NAMESPACE
 class AsyncConnectionHelper;
 class IDBCursor;
 class IDBKeyRange;
+class IDBRequest;
 class IndexedDBObjectStoreChild;
 class IndexedDBObjectStoreParent;
 class Key;
@@ -40,7 +42,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIIDBOBJECTSTORE
 
-  NS_DECL_CYCLE_COLLECTION_CLASS(IDBObjectStore)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(IDBObjectStore)
 
   static already_AddRefed<IDBObjectStore>
   Create(IDBTransaction* aTransaction,
@@ -48,13 +50,9 @@ public:
          nsIAtom* aDatabaseId,
          bool aCreating);
 
-  static bool
-  IsValidKeyPath(JSContext* aCx, const nsAString& aKeyPath);
-
   static nsresult
   AppendIndexUpdateInfo(PRInt64 aIndexID,
-                        const nsAString& aKeyPath,
-                        const nsTArray<nsString>& aKeyPathArray,
+                        const KeyPath& aKeyPath,
                         bool aUnique,
                         bool aMultiEntry,
                         JSContext* aCx,
@@ -126,24 +124,14 @@ public:
     return mId;
   }
 
-  const nsString& KeyPath() const
+  const KeyPath& GetKeyPath() const
   {
     return mKeyPath;
   }
 
-  const bool HasKeyPath() const
+  const bool HasValidKeyPath() const
   {
-    return !mKeyPath.IsVoid() || !mKeyPathArray.IsEmpty();
-  }
-
-  bool UsesKeyPathArray() const
-  {
-    return !mKeyPathArray.IsEmpty();
-  }
-  
-  const nsTArray<nsString>& KeyPathArray() const
-  {
-    return mKeyPathArray;
+    return mKeyPath.IsValid();
   }
 
   IDBTransaction* Transaction()
@@ -185,7 +173,6 @@ public:
 
   nsresult
   CreateIndexInternal(const IndexInfo& aInfo,
-                      nsTArray<nsString>& aKeyPathArray,
                       IDBIndex** _retval);
 
   nsresult
@@ -200,22 +187,28 @@ public:
                       IDBRequest** _retval);
 
   nsresult GetInternal(IDBKeyRange* aKeyRange,
+                       JSContext* aCx,
                        IDBRequest** _retval);
 
   nsresult GetAllInternal(IDBKeyRange* aKeyRange,
                           PRUint32 aLimit,
+                          JSContext* aCx,
                           IDBRequest** _retval);
 
   nsresult DeleteInternal(IDBKeyRange* aKeyRange,
+                          JSContext* aCx,
                           IDBRequest** _retval);
 
-  nsresult ClearInternal(IDBRequest** _retval);
+  nsresult ClearInternal(JSContext* aCx,
+                         IDBRequest** _retval);
 
   nsresult CountInternal(IDBKeyRange* aKeyRange,
+                         JSContext* aCx,
                          IDBRequest** _retval);
 
   nsresult OpenCursorInternal(IDBKeyRange* aKeyRange,
                               size_t aDirection,
+                              JSContext* aCx,
                               IDBRequest** _retval);
 
   nsresult OpenCursorFromChildProcess(
@@ -224,6 +217,11 @@ public:
                             const Key& aKey,
                             const SerializedStructuredCloneReadInfo& aCloneInfo,
                             IDBCursor** _retval);
+
+  void
+  SetInfo(ObjectStoreInfo* aInfo);
+
+  static JSClass sDummyPropJSClass;
 
 protected:
   IDBObjectStore();
@@ -248,8 +246,9 @@ private:
 
   PRInt64 mId;
   nsString mName;
-  nsString mKeyPath;
-  nsTArray<nsString> mKeyPathArray;
+  KeyPath mKeyPath;
+  JS::Value mCachedKeyPath;
+  bool mRooted;
   bool mAutoIncrement;
   nsCOMPtr<nsIAtom> mDatabaseId;
   nsRefPtr<ObjectStoreInfo> mInfo;

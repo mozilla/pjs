@@ -10,19 +10,16 @@
 
 #include "nsISupports.h"
 
-#include "CAccessibleText.h"
+#include "ia2AccessibleText.h"
 #include "AccessibleHypertext.h"
 
-class ia2AccessibleHypertext : public CAccessibleText,
+class ia2AccessibleHypertext : public ia2AccessibleText,
                                public IAccessibleHypertext
 {
 public:
 
-  // IUnknown
-  STDMETHODIMP QueryInterface(REFIID, void**);
-
   // IAccessibleText
-  FORWARD_IACCESSIBLETEXT(CAccessibleText)
+  FORWARD_IACCESSIBLETEXT(ia2AccessibleText)
 
   // IAccessibleHypertext
   virtual /* [propget] */ HRESULT STDMETHODCALLTYPE get_nHyperlinks(

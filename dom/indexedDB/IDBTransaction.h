@@ -13,6 +13,7 @@
 #include "mozIStorageStatement.h"
 #include "mozIStorageFunction.h"
 #include "nsIIDBTransaction.h"
+#include "nsIDOMDOMError.h"
 #include "nsIRunnable.h"
 
 #include "nsAutoPtr.h"
@@ -30,6 +31,7 @@ BEGIN_INDEXEDDB_NAMESPACE
 
 class AsyncConnectionHelper;
 class CommitHelper;
+class IDBRequest;
 class IndexedDBDatabaseChild;
 class IndexedDBTransactionChild;
 class IndexedDBTransactionParent;
@@ -43,7 +45,10 @@ public:
   NS_IMETHOD_(nsrefcnt) AddRef() = 0;
   NS_IMETHOD_(nsrefcnt) Release() = 0;
 
-  virtual nsresult NotifyTransactionComplete(IDBTransaction* aTransaction) = 0;
+  // Called just before dispatching the final events on the transaction.
+  virtual nsresult NotifyTransactionPreComplete(IDBTransaction* aTransaction) = 0;
+  // Called just after dispatching the final events on the transaction.
+  virtual nsresult NotifyTransactionPostComplete(IDBTransaction* aTransaction) = 0;
 };
 
 class IDBTransaction : public IDBWrapperCache,
@@ -120,6 +125,11 @@ public:
 
   bool IsOpen() const;
 
+  bool IsFinished() const
+  {
+    return mReadyState > LOADING;
+  }
+
   bool IsWriteAllowed() const
   {
     return mMode == READ_WRITE || mMode == VERSION_CHANGE;
@@ -183,7 +193,10 @@ public:
                       IDBObjectStore** _retval);
 
   nsresult
-  AbortWithCode(nsresult aAbortCode);
+  Abort(IDBRequest* aRequest);
+
+  nsresult
+  Abort(nsresult aAbortCode);
 
   nsresult
   GetAbortCode() const
@@ -192,6 +205,9 @@ public:
   }
 
 private:
+  nsresult
+  AbortInternal(nsresult aAbortCode, already_AddRefed<nsIDOMDOMError> aError);
+
   // Should only be called directly through IndexedDBDatabaseChild.
   static already_AddRefed<IDBTransaction>
   CreateInternal(IDBDatabase* aDatabase,
@@ -207,6 +223,7 @@ private:
 
   nsRefPtr<IDBDatabase> mDatabase;
   nsRefPtr<DatabaseInfo> mDatabaseInfo;
+  nsCOMPtr<nsIDOMDOMError> mError;
   nsTArray<nsString> mObjectStoreNames;
   ReadyState mReadyState;
   Mode mMode;
@@ -229,6 +246,7 @@ private:
   PRUint32 mSavepointCount;
 
   nsTArray<nsRefPtr<IDBObjectStore> > mCreatedObjectStores;
+  nsTArray<nsRefPtr<IDBObjectStore> > mDeletedObjectStores;
 
   nsRefPtr<UpdateRefcountFunction> mUpdateFileRefcountFunction;
   nsRefPtrHashtable<nsISupportsHashKey, FileInfo> mCreatedFileInfos;

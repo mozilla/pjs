@@ -44,7 +44,6 @@
 #include "nsINameSpaceManager.h"
 #include "nsWeakReference.h"
 #include "nsIDOMWindow.h"
-#include "nsIDOMDocument.h"
 #include "nsDisplayList.h"
 #include "nsUnicharUtils.h"
 #include "nsIScrollableFrame.h"
@@ -54,7 +53,7 @@
 #include "nsObjectFrame.h"
 #include "nsIServiceManager.h"
 #include "nsContentUtils.h"
-#include "nsIHTMLDocument.h"
+#include "LayerTreeInvalidation.h"
 
 #ifdef MOZ_XUL
 #include "nsXULPopupManager.h"
@@ -299,10 +298,17 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   nsRect dirty;
   if (subdocRootFrame) {
-    // get the dirty rect relative to the root frame of the subdoc
-    dirty = aDirtyRect + GetOffsetToCrossDoc(subdocRootFrame);
-    // and convert into the appunits of the subdoc
-    dirty = dirty.ConvertAppUnitsRoundOut(parentAPD, subdocAPD);
+    nsIDocument* doc = subdocRootFrame->PresContext()->Document();
+    nsIContent* root = doc ? doc->GetRootElement() : nsnull;
+    nsRect displayPort;
+    if (root && nsLayoutUtils::GetDisplayPort(root, &displayPort)) {
+      dirty = displayPort;
+    } else {
+      // get the dirty rect relative to the root frame of the subdoc
+      dirty = aDirtyRect + GetOffsetToCrossDoc(subdocRootFrame);
+      // and convert into the appunits of the subdoc
+      dirty = dirty.ConvertAppUnitsRoundOut(parentAPD, subdocAPD);
+    }
 
     aBuilder->EnterPresShell(subdocRootFrame, dirty);
   }
@@ -345,27 +351,6 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
   }
 
-  if (subdocRootFrame && !aBuilder->IsForEventDelivery()) {
-    bool framesetUsingDisplayPort = false;
-    nsIDocument* doc = presContext->Document();
-    if (doc) {
-      nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(doc);
-      if (htmlDoc && htmlDoc->GetIsFrameset()) {
-        nsIContent* root = doc->GetRootElement();
-        if (root) {
-          framesetUsingDisplayPort = nsLayoutUtils::GetDisplayPort(root, nsnull);
-        }
-      }
-    }
-    // Frameset document's don't have a scroll frame but we still need to
-    // communicate the basic metrics of the document.
-    if (framesetUsingDisplayPort) {
-      nsDisplaySimpleScrollLayer* item =
-        new (aBuilder) nsDisplaySimpleScrollLayer(aBuilder, subdocRootFrame, &childItems);
-      childItems.AppendToTop(item);
-    }
-  }
-
   bool addedLayer = false;
 
   if (subdocRootFrame && parentAPD != subdocAPD) {
@@ -376,14 +361,16 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
     nsDisplayZoom* zoomItem =
       new (aBuilder) nsDisplayZoom(aBuilder, subdocRootFrame, &childItems,
-                                   subdocAPD, parentAPD);
+                                   subdocAPD, parentAPD, 
+                                   nsDisplayOwnLayer::GENERATE_SUBDOC_INVALIDATIONS);
     childItems.AppendToTop(zoomItem);
   }
 
   if (!addedLayer && presContext->IsRootContentDocument()) {
     // We always want top level content documents to be in their own layer.
     nsDisplayOwnLayer* layerItem = new (aBuilder) nsDisplayOwnLayer(
-      aBuilder, subdocRootFrame ? subdocRootFrame : this, &childItems);
+      aBuilder, subdocRootFrame ? subdocRootFrame : this, 
+      &childItems, nsDisplayOwnLayer::GENERATE_SUBDOC_INVALIDATIONS);
     childItems.AppendToTop(layerItem);
   }
 
@@ -602,9 +589,6 @@ nsSubDocumentFrame::Reflow(nsPresContext*           aPresContext,
       aDesiredSize.mOverflowAreas.UnionWith(subdocRootFrame->GetOverflowAreas() + offset);
     }
   }
-
-  // Determine if we need to repaint our border, background or outline
-  CheckInvalidateSizeChange(aDesiredSize);
 
   FinishAndStoreOverflow(&aDesiredSize);
 
@@ -917,6 +901,9 @@ nsSubDocumentFrame::BeginSwapDocShells(nsIFrame* aOther)
       !other->mFrameLoader || !other->mDidCreateDoc) {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
+
+  NS_ASSERTION(HasAnyStateBits(NS_FRAME_IN_POPUP) == other->HasAnyStateBits(NS_FRAME_IN_POPUP),
+               "Can't swap doc shells when only one is within a popup!");
 
   if (mInnerView && other->mInnerView) {
     nsIView* ourSubdocViews = mInnerView->GetFirstChild();

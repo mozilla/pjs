@@ -26,6 +26,8 @@
 #include "plstr.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Attributes.h"
+#include "nsIDOMNode.h"
 
 using namespace mozilla;
 
@@ -66,7 +68,7 @@ PRTimeToSeconds(PRTime t_usec)
 //-----------------------------------------------------------------------------
 // nsPrefetchQueueEnumerator
 //-----------------------------------------------------------------------------
-class nsPrefetchQueueEnumerator : public nsISimpleEnumerator
+class nsPrefetchQueueEnumerator MOZ_FINAL : public nsISimpleEnumerator
 {
 public:
     NS_DECL_ISUPPORTS

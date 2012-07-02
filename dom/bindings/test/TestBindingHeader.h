@@ -14,6 +14,7 @@
 #include "nsCOMPtr.h"
 // We don't export TestCodeGenBinding.h, but it's right in our parent dir.
 #include "../TestCodeGenBinding.h"
+#include "mozilla/dom/UnionTypes.h"
 
 namespace mozilla {
 namespace dom {
@@ -43,6 +44,14 @@ class TestExternalInterface : public nsISupports
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TEST_EXTERNAL_INTERFACE_IID)
   NS_DECL_ISUPPORTS
+};
+
+class TestNonWrapperCacheInterface : public nsISupports
+{
+public:
+  NS_DECL_ISUPPORTS
+
+  virtual JSObject* WrapObject(JSContext* cx, JSObject* scope);
 };
 
 class TestInterface : public nsISupports,
@@ -156,6 +165,13 @@ public:
   void PassOptionalNonNullSelf(const Optional<NonNull<TestInterface> >&, ErrorResult&);
   void PassOptionalSelfWithDefault(TestInterface*, ErrorResult&);
 
+  already_AddRefed<TestNonWrapperCacheInterface> ReceiveNonWrapperCacheInterface(ErrorResult&);
+  already_AddRefed<TestNonWrapperCacheInterface> ReceiveNullableNonWrapperCacheInterface(ErrorResult&);
+  void ReceiveNonWrapperCacheInterfaceSequence(nsTArray<nsRefPtr<TestNonWrapperCacheInterface> >&, ErrorResult&);
+  void ReceiveNullableNonWrapperCacheInterfaceSequence(nsTArray<nsRefPtr<TestNonWrapperCacheInterface> >&, ErrorResult&);
+  void ReceiveNonWrapperCacheInterfaceNullableSequence(Nullable<nsTArray<nsRefPtr<TestNonWrapperCacheInterface> > >&, ErrorResult&);
+  void ReceiveNullableNonWrapperCacheInterfaceNullableSequence(Nullable<nsTArray<nsRefPtr<TestNonWrapperCacheInterface> > >&, ErrorResult&);
+
   already_AddRefed<TestNonCastableInterface> ReceiveOther(ErrorResult&);
   already_AddRefed<TestNonCastableInterface> ReceiveNullableOther(ErrorResult&);
   TestNonCastableInterface* ReceiveWeakOther(ErrorResult&);
@@ -233,6 +249,9 @@ public:
   void PassOptionalObjectSequence(const Optional<Sequence<OwningNonNull<TestInterface> > >&,
                                   ErrorResult&);
 
+  void ReceiveStringSequence(nsTArray<nsString>&, ErrorResult&);
+  void PassStringSequence(const Sequence<nsString>&, ErrorResult&);
+
   // Typed array types
   void PassArrayBuffer(ArrayBuffer&, ErrorResult&);
   void PassNullableArrayBuffer(ArrayBuffer*, ErrorResult&);
@@ -261,6 +280,9 @@ public:
   void PassEnum(TestEnum, ErrorResult&);
   void PassOptionalEnum(const Optional<TestEnum>&, ErrorResult&);
   TestEnum ReceiveEnum(ErrorResult&);
+  TestEnum GetEnumAttribute(ErrorResult&);
+  TestEnum GetReadonlyEnumAttribute(ErrorResult&);
+  void SetEnumAttribute(TestEnum, ErrorResult&);
 
   // Callback types
   void PassCallback(JSContext*, JSObject*, ErrorResult&);
@@ -279,6 +301,7 @@ public:
   void PassOptionalAny(JSContext*, const Optional<JS::Value>&, ErrorResult&);
   JS::Value ReceiveAny(JSContext*, ErrorResult&);
 
+  // object types
   void PassObject(JSContext*, JSObject&, ErrorResult&);
   void PassNullableObject(JSContext*, JSObject*, ErrorResult&);
   void PassOptionalObject(JSContext*, const Optional<NonNull<JSObject> >&, ErrorResult&);
@@ -287,12 +310,47 @@ public:
   JSObject* ReceiveObject(JSContext*, ErrorResult&);
   JSObject* ReceiveNullableObject(JSContext*, ErrorResult&);
 
+  // Union types
+  void PassUnion(JSContext*, const ObjectOrLong& arg, ErrorResult&);
+  void PassUnionWithNullable(JSContext*, const ObjectOrNullOrLong& arg, ErrorResult&)
+  {
+    ObjectOrLong returnValue;
+    if (arg.IsNull()) {
+    } else if (arg.IsObject()) {
+      JSObject& obj = (JSObject&)arg.GetAsObject();
+      JS_GetClass(&obj);
+      //returnValue.SetAsObject(&obj);
+    } else {
+      int32_t i = arg.GetAsLong();
+      i += 1;
+    }
+  }
+  void PassNullableUnion(JSContext*, const Nullable<ObjectOrLong>&, ErrorResult&);
+  void PassOptionalUnion(JSContext*, const Optional<ObjectOrLong>&, ErrorResult&);
+  void PassOptionalNullableUnion(JSContext*, const Optional<Nullable<ObjectOrLong> >&, ErrorResult&);
+  void PassOptionalNullableUnionWithDefaultValue(JSContext*, const Nullable<ObjectOrLong>&, ErrorResult&);
+  //void PassUnionWithInterfaces(const TestInterfaceOrTestExternalInterface& arg, ErrorResult&);
+  //void PassUnionWithInterfacesAndNullable(const TestInterfaceOrNullOrTestExternalInterface& arg, ErrorResult&);
+  void PassUnionWithArrayBuffer(const ArrayBufferOrLong&, ErrorResult&);
+  void PassUnionWithString(JSContext*, const StringOrObject&, ErrorResult&);
+  //void PassUnionWithEnum(JSContext*, const TestEnumOrObject&, ErrorResult&);
+  void PassUnionWithCallback(JSContext*, const TestCallbackOrLong&, ErrorResult&);
+  void PassUnionWithObject(JSContext*, const ObjectOrLong&, ErrorResult&);
+
   // binaryNames tests
   void MethodRenamedTo(ErrorResult&);
   void MethodRenamedTo(int8_t, ErrorResult&);
   int8_t GetAttributeGetterRenamedTo(ErrorResult&);
   int8_t GetAttributeRenamedTo(ErrorResult&);
   void SetAttributeRenamedTo(int8_t, ErrorResult&);
+
+  // Dictionary tests
+  void PassDictionary(const Dict&, ErrorResult&);
+  void PassOptionalDictionary(const Optional<Dict>&, ErrorResult&);
+  void PassNullableDictionary(const Nullable<Dict>&, ErrorResult&);
+  void PassOptionalNullableDictionary(const Optional<Nullable<Dict> >&, ErrorResult&);
+  void PassOtherDictionary(const GrandparentDict&, ErrorResult&);
+  void PassSequenceOfDictionaries(const Sequence<Dict>&, ErrorResult&);
 
   // Methods and properties imported via "implements"
   bool GetImplementedProperty(ErrorResult&);

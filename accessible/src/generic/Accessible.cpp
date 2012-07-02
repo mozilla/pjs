@@ -67,7 +67,7 @@
 #include "nsNetUtil.h"
 #include "nsEventStates.h"
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 #include "nsIDOMCharacterData.h"
 #endif
 
@@ -111,7 +111,7 @@ Accessible::QueryInterface(REFNSIID aIID, void** aInstancePtr)
   *aInstancePtr = nsnull;
 
   if (aIID.Equals(NS_GET_IID(nsXPCOMCycleCollectionParticipant))) {
-    *aInstancePtr = &NS_CYCLE_COLLECTION_NAME(Accessible);
+    *aInstancePtr = NS_CYCLE_COLLECTION_PARTICIPANT(Accessible);
     return NS_OK;
   }
 
@@ -649,8 +649,7 @@ Accessible::NativeState()
 {
   PRUint64 state = 0;
 
-  DocAccessible* document = Document();
-  if (!document || !document->IsInDocument(this))
+  if (!IsInDocument())
     state |= states::STALE;
 
   if (mContent->IsElement()) {
@@ -800,38 +799,11 @@ Accessible::ChildAtPoint(PRInt32 aX, PRInt32 aY,
   if (!accessible)
     return fallbackAnswer;
 
-  if (accessible == this) {
-    // Manually walk through accessible children and see if the are within this
-    // point. Skip offscreen or invisible accessibles. This takes care of cases
-    // where layout won't walk into things for us, such as image map areas and
-    // sub documents (XXX: subdocuments should be handled by methods of
-    // OuterDocAccessibles).
-    PRUint32 childCount = ChildCount();
-    for (PRUint32 childIdx = 0; childIdx < childCount; childIdx++) {
-      Accessible* child = GetChildAt(childIdx);
-
-      PRInt32 childX, childY, childWidth, childHeight;
-      child->GetBounds(&childX, &childY, &childWidth, &childHeight);
-      if (aX >= childX && aX < childX + childWidth &&
-          aY >= childY && aY < childY + childHeight &&
-          (child->State() & states::INVISIBLE) == 0) {
-
-        if (aWhichChild == eDeepestChild)
-          return child->ChildAtPoint(aX, aY, eDeepestChild);
-
-        return child;
-      }
-    }
-
-    // The point is in this accessible but not in a child. We are allowed to
-    // return |this| as the answer.
-    return accessible;
-  }
-
+  // Hurray! We have an accessible for the frame that layout gave us.
   // Since DOM node of obtained accessible may be out of flow then we should
   // ensure obtained accessible is a child of this accessible.
   Accessible* child = accessible;
-  while (true) {
+  while (child != this) {
     Accessible* parent = child->Parent();
     if (!parent) {
       // Reached the top of the hierarchy. These bounds were inside an
@@ -839,13 +811,37 @@ Accessible::ChildAtPoint(PRInt32 aX, PRInt32 aY,
       return fallbackAnswer;
     }
 
-    if (parent == this)
-      return aWhichChild == eDeepestChild ? accessible : child;
+    // If we landed on a legitimate child of |this|, and we want the direct
+    // child, return it here.
+    if (parent == this && aWhichChild == eDirectChild)
+        return child;
 
     child = parent;
   }
 
-  return nsnull;
+  // Manually walk through accessible children and see if the are within this
+  // point. Skip offscreen or invisible accessibles. This takes care of cases
+  // where layout won't walk into things for us, such as image map areas and
+  // sub documents (XXX: subdocuments should be handled by methods of
+  // OuterDocAccessibles).
+  PRUint32 childCount = accessible->ChildCount();
+  for (PRUint32 childIdx = 0; childIdx < childCount; childIdx++) {
+    Accessible* child = accessible->GetChildAt(childIdx);
+
+    PRInt32 childX, childY, childWidth, childHeight;
+    child->GetBounds(&childX, &childY, &childWidth, &childHeight);
+    if (aX >= childX && aX < childX + childWidth &&
+        aY >= childY && aY < childY + childHeight &&
+        (child->State() & states::INVISIBLE) == 0) {
+
+      if (aWhichChild == eDeepestChild)
+        return child->ChildAtPoint(aX, aY, eDeepestChild);
+
+      return child;
+    }
+  }
+
+  return accessible;
 }
 
 // nsIAccessible getChildAtPoint(in long x, in long y)

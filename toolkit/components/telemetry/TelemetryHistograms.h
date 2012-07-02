@@ -48,7 +48,7 @@ HISTOGRAM(FORGET_SKIPPABLE_MAX, 1, 10000, 50, EXPONENTIAL, "Max time spent on on
 /**
  * GC telemetry
  */
-HISTOGRAM(GC_REASON, 1, 20, 20, LINEAR, "Reason (enum value) for initiating a GC")
+HISTOGRAM_ENUMERATED_VALUES(GC_REASON_2, js::gcreason::NUM_TELEMETRY_REASONS, "Reason (enum value) for initiating a GC")
 HISTOGRAM_BOOLEAN(GC_IS_COMPARTMENTAL, "Is it a compartmental GC?")
 HISTOGRAM(GC_MS, 1, 10000, 50, EXPONENTIAL, "Time spent running JS GC (ms)")
 HISTOGRAM(GC_MARK_MS, 1, 10000, 50, EXPONENTIAL, "Time spent running JS GC mark phase (ms)")
@@ -85,7 +85,7 @@ HISTOGRAM(EARLY_GLUESTARTUP_READ_OPS, 1, 100, 12, LINEAR, "ProcessIoCounters.Rea
 HISTOGRAM(EARLY_GLUESTARTUP_READ_TRANSFER, 1, 50 * 1024, 12, EXPONENTIAL, "ProcessIoCounters.ReadTransferCount before glue startup (KB)")
 HISTOGRAM(GLUESTARTUP_READ_OPS, 1, 100, 12, LINEAR, "ProcessIoCounters.ReadOperationCount after glue startup")
 HISTOGRAM(GLUESTARTUP_READ_TRANSFER, 1, 50 * 1024, 12, EXPONENTIAL, "ProcessIoCounters.ReadTransferCount after glue startup (KB)")
-HISTOGRAM(STARTUP_USING_PRELOAD, 1, 2, 3, LINEAR, "Preload heuristic. 0: none, 1: preload from service, 2: preload from ioCounters.ReadOperationCount")
+HISTOGRAM(STARTUP_USING_PRELOAD_TRIAL, 1, 3, 4, LINEAR, "Preload heuristic. 0: prefetch, preload, 1: prefetch, no preload, 2: no prefetch, preload, 3: no prefetch, no preload")
 #elif defined(XP_UNIX)
 HISTOGRAM(EARLY_GLUESTARTUP_HARD_FAULTS, 1, 100, 12, LINEAR, "Hard faults count before glue startup")
 HISTOGRAM(GLUESTARTUP_HARD_FAULTS, 1, 500, 12, EXPONENTIAL, "Hard faults count after glue startup")
@@ -114,13 +114,11 @@ HISTOGRAM(SYSTEM_FONT_FALLBACK_SCRIPT, 1, 110, 111, LINEAR, "System font fallbac
 HISTOGRAM(STARTUP_CACHE_AGE_HOURS, 1, 3000, 20, EXPONENTIAL, "Startup cache age (hours)")
 
 /**
- * Word cache - one count for overall lookups, the other for the number of times a word is found
+ * Word cache - one count cache hits, another for misses
  * Note: range and number of buckets must match
  */
-HISTOGRAM(WORD_CACHE_LOOKUP_LEN, 1, 256, 30, EXPONENTIAL, "Word cache lookup (chars)")
-HISTOGRAM(WORD_CACHE_HIT_LEN, 1, 256, 30, EXPONENTIAL, "Word cache hit (chars)")
-HISTOGRAM(WORD_CACHE_LOOKUP_SCRIPT, 1, 110, 111, LINEAR, "Word cache lookup (script)")
-HISTOGRAM(WORD_CACHE_HIT_SCRIPT, 1, 110, 111, LINEAR, "Word cache hit (script)")
+HISTOGRAM(WORD_CACHE_HITS, 1, 256, 30, EXPONENTIAL, "Word cache hits (chars)")
+HISTOGRAM(WORD_CACHE_MISSES, 1, 256, 30, EXPONENTIAL, "Word cache misses (chars)")
 
 HISTOGRAM_BOOLEAN(FONT_CACHE_HIT, "font cache hit")
 HISTOGRAM_BOOLEAN(BAD_FALLBACK_FONT, "system fallback font can't be used")
@@ -170,7 +168,8 @@ HISTOGRAM(HTTP_KBREAD_PER_CONN, 1, 3000, 50, EXPONENTIAL, "HTTP: KB read per con
 HTTP_HISTOGRAMS(PAGE, "page: ")
 HTTP_HISTOGRAMS(SUB, "subitem: ")
 
-HISTOGRAM(SPDY_VERSION, 1, 16, 16, LINEAR, "SPDY: Protocol Version Used")
+// SPDY_VERSION was renamed to SPDY_VERSION2 as the old version did not use enumerated values
+HISTOGRAM_ENUMERATED_VALUES(SPDY_VERSION2, 48, "SPDY: Protocol Version Used")
 HISTOGRAM(SPDY_PARALLEL_STREAMS, 1, 1000, 50, EXPONENTIAL, "SPDY: Streams concurrent active per connection")
 HISTOGRAM(SPDY_REQUEST_PER_CONN, 1, 1000, 50, EXPONENTIAL,  "SPDY: Streams created per connection")
 HISTOGRAM(SPDY_SERVER_INITIATED_STREAMS, 1, 100000, 250, EXPONENTIAL,  "SPDY: Streams recevied per connection")
@@ -196,11 +195,11 @@ HISTOGRAM(SPDY_SETTINGS_IW, 1, 1000, 50, EXPONENTIAL,  "SPDY: Settings IW (round
 #undef _HTTP_HIST
 #undef HTTP_HISTOGRAMS
 
-HISTOGRAM(HTTP_CACHE_DISPOSITION, 1, 5, 5, LINEAR, "HTTP Cache Hit, Reval, Failed-Reval, Miss")
 HISTOGRAM(DISK_CACHE_CORRUPT, 0, 1, 2, BOOLEAN, "Was the HTTP disk cache corrupt at startup?")
-HISTOGRAM(HTTP_DISK_CACHE_DISPOSITION, 1, 5, 5, LINEAR, "HTTP Disk Cache Hit, Reval, Failed-Reval, Miss")
-HISTOGRAM(HTTP_MEMORY_CACHE_DISPOSITION, 1, 5, 5, LINEAR, "HTTP Memory Cache Hit, Reval, Failed-Reval, Miss")
-HISTOGRAM(HTTP_OFFLINE_CACHE_DISPOSITION, 1, 5, 5, LINEAR, "HTTP Offline Cache Hit, Reval, Failed-Reval, Miss")
+HISTOGRAM_ENUMERATED_VALUES(HTTP_CACHE_DISPOSITION_2,         5, "HTTP Cache Hit, Reval, Failed-Reval, Miss")
+HISTOGRAM_ENUMERATED_VALUES(HTTP_DISK_CACHE_DISPOSITION_2,    5, "HTTP Disk Cache Hit, Reval, Failed-Reval, Miss")
+HISTOGRAM_ENUMERATED_VALUES(HTTP_MEMORY_CACHE_DISPOSITION_2,  5, "HTTP Memory Cache Hit, Reval, Failed-Reval, Miss")
+HISTOGRAM_ENUMERATED_VALUES(HTTP_OFFLINE_CACHE_DISPOSITION_2, 5, "HTTP Offline Cache Hit, Reval, Failed-Reval, Miss")
 HISTOGRAM(CACHE_DEVICE_SEARCH, 1, 100, 100, LINEAR, "Time to search cache (ms)")
 HISTOGRAM(CACHE_MEMORY_SEARCH, 1, 100, 100, LINEAR, "Time to search memory cache (ms)")
 HISTOGRAM(CACHE_DISK_SEARCH, 1, 100, 100, LINEAR, "Time to search disk cache (ms)")
@@ -210,7 +209,8 @@ HISTOGRAM(CACHE_LM_INCONSISTENT, 0, 1, 2, BOOLEAN,  "Cache discovered inconsiste
 HISTOGRAM(CACHE_SERVICE_LOCK_WAIT, 1, 10000, 10000, LINEAR, "Time spent waiting on the cache service lock (ms)")
 HISTOGRAM(CACHE_SERVICE_LOCK_WAIT_MAINTHREAD, 1, 10000, 10000, LINEAR, "Time spent waiting on the cache service lock on the main thread (ms)")
 
-HISTOGRAM(DNS_LOOKUP_METHOD, 1, 7, 7, LINEAR, "DNS Lookup Type (hit, renewal, negative-hit, literal, overflow, network-first, network-shared)")
+// DNS_LOOKUP_METHOD was renamed to DNS_LOOKUP_METHOD2 as the old version did not use enumerated values
+HISTOGRAM_ENUMERATED_VALUES(DNS_LOOKUP_METHOD2, 16, "DNS Lookup Type (hit, renewal, negative-hit, literal, overflow, network-first, network-shared)")
 HISTOGRAM(DNS_CLEANUP_AGE, 1, 1440, 50, EXPONENTIAL, "DNS Cache Entry Age at Removal Time (minutes)")
 HISTOGRAM(DNS_LOOKUP_TIME, 1, 60000, 50, EXPONENTIAL, "Time for a successful DNS OS resolution (msec)")
 HISTOGRAM(DNS_RENEWAL_TIME, 1, 60000, 50, EXPONENTIAL, "Time for a renewed DNS OS resolution (msec)")
@@ -314,6 +314,14 @@ HISTOGRAM(PLACES_FRECENCY_CALC_TIME_MS, 1, 100, 10, EXPONENTIAL, "PLACES: Time t
  * Updater telemetry.
  */
 HISTOGRAM(UPDATER_STATUS_CODES, 1, 50, 51, LINEAR, "Updater: the status of the latest update performed")
+HISTOGRAM_BOOLEAN(UPDATER_UPDATES_ENABLED, "Updater: Whether or not updates are enabled")
+HISTOGRAM_BOOLEAN(UPDATER_UPDATES_AUTOMATIC, "Updater: Whether or not updates are automatic")
+HISTOGRAM_BOOLEAN(UPDATER_SERVICE_ENABLED, "Updater: Whether or not the MozillaMaintenance service is enabled")
+HISTOGRAM(UPDATER_SERVICE_ERRORS, 1, 30, 31, LINEAR, "Updater: The number of MozillaMaintenance service errors that have occurred")
+HISTOGRAM_BOOLEAN(UPDATER_SERVICE_INSTALLED, "Updater: Whether or not the MozillaMaintenance service is installed")
+HISTOGRAM_BOOLEAN(UPDATER_SERVICE_MANUALLY_UNINSTALLED, "Updater: Whether or not someone manually uninstalled the service.")
+HISTOGRAM_BOOLEAN(UPDATER_STAGE_ENABLED, "Updater: Whether or not staging updates are enabled")
+HISTOGRAM_BOOLEAN(UPDATER_HAS_PERMISSIONS, "Updater: Whether or not the updater has permissions")
 
 /**
  * Thunderbird-specific telemetry.

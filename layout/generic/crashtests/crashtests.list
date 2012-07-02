@@ -14,7 +14,7 @@ load 310556-1.xhtml
 load 322780-1.xul
 load 323381-1.html
 load 323381-2.html
-asserts(2) asserts-if(gtk2Widget,17) load 323386-1.html # Bug 575011
+asserts-if(gtk2Widget,13-14) load 323386-1.html # Bug 575011
 load 323389-1.html
 load 323389-2.html
 load 323493-1.html
@@ -259,8 +259,8 @@ load 465651-1.html
 load 467137-1.html
 load 467213-1.html
 load 467487-1.html
-asserts(5-7) load 467493-1.html
-asserts(4-6) load 467493-2.html
+asserts(6-9) load 467493-1.html
+asserts(4-8) load 467493-2.html
 load 467875-1.xhtml
 load 467914-1.html
 load 468207-1.html
@@ -322,7 +322,7 @@ load 536692-1.xhtml
 load 541277-1.html
 load 541277-2.html
 asserts(3) load 541714-1.html
-asserts(3-7) load 541714-2.html
+asserts(3-8) load 541714-2.html
 load 542136-1.html
 load 545571-1.html
 load 547338.xul
@@ -375,7 +375,7 @@ load text-overflow-bug666751-2.html
 asserts(0-1) load text-overflow-bug670564.xhtml
 load text-overflow-bug671796.xhtml
 load 667025.html
-asserts-if(Android,8) load 673770.html
+asserts(14) asserts-if(Android,8) load 673770.html # bug 569193 and bug 459597
 load 679933-1.html
 load 682649-1.html
 load 683702-1.xhtml
@@ -390,3 +390,4 @@ load first-letter-638937-2.html
 load 737313-1.html
 load 737313-2.html
 load 737313-3.html
+load 762764-1.html

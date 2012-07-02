@@ -32,7 +32,7 @@
 #include "nsGkAtoms.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSPseudoElements.h"
-#ifdef NS_DEBUG
+#ifdef DEBUG
 #include "nsIStyleRule.h"
 #endif
 #include "nsILayoutHistoryState.h"
@@ -42,8 +42,6 @@
 #include "nsIDocument.h"
 #include "nsIScrollableFrame.h"
 
-#include "nsIHTMLDocument.h"
-#include "nsIDOMHTMLDocument.h"
 #include "nsIDOMNodeList.h"
 #include "nsIDOMHTMLCollection.h"
 #include "nsIFormControl.h"
@@ -468,21 +466,10 @@ nsFrameManager::InsertFrames(nsIFrame*       aParentFrame,
 
 nsresult
 nsFrameManager::RemoveFrame(ChildListID     aListID,
-                            nsIFrame*       aOldFrame,
-                            bool            aInvalidate /* = true */)
+                            nsIFrame*       aOldFrame)
 {
   bool wasDestroyingFrames = mIsDestroyingFrames;
   mIsDestroyingFrames = true;
-
-  // In case the reflow doesn't invalidate anything since it just leaves
-  // a gap where the old frame was, we invalidate it here.  (This is
-  // reasonably likely to happen when removing a last child in a way
-  // that doesn't change the size of the parent.)
-  // This has to sure to invalidate the entire overflow rect; this
-  // is important in the presence of absolute positioning
-  if (aInvalidate) {
-    aOldFrame->InvalidateFrameSubtree();
-  }
 
   NS_ASSERTION(!aOldFrame->GetPrevContinuation() ||
                // exception for nsCSSFrameConstructor::RemoveFloatingFirstLetterFrames
@@ -517,7 +504,7 @@ nsFrameManager::NotifyDestroyingFrame(nsIFrame* aFrame)
   }
 }
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 static void
 DumpContext(nsIFrame* aFrame, nsStyleContext* aContext)
 {

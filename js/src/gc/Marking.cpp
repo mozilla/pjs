@@ -170,8 +170,10 @@ MarkRootRange(JSTracer *trc, size_t len, T **vec, const char *name)
 {
     JS_ROOT_MARKING_ASSERT(trc);
     for (size_t i = 0; i < len; ++i) {
-        JS_SET_TRACING_INDEX(trc, name, i);
-        MarkInternal(trc, &vec[i]);
+        if (vec[i]) {
+            JS_SET_TRACING_INDEX(trc, name, i);
+            MarkInternal(trc, &vec[i]);
+        }
     }
 }
 
@@ -232,6 +234,7 @@ DeclMarkerImpl(Object, DebugScopeObject)
 DeclMarkerImpl(Object, GlobalObject)
 DeclMarkerImpl(Object, JSObject)
 DeclMarkerImpl(Object, JSFunction)
+DeclMarkerImpl(Object, ScopeObject)
 DeclMarkerImpl(Script, JSScript)
 DeclMarkerImpl(Shape, Shape)
 DeclMarkerImpl(String, JSAtom)
@@ -379,6 +382,22 @@ MarkValueRoot(JSTracer *trc, Value *v, const char *name)
     JS_ROOT_MARKING_ASSERT(trc);
     JS_SET_TRACING_NAME(trc, name);
     MarkValueInternal(trc, v);
+}
+
+void
+MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name)
+{
+    JS_ROOT_MARKING_ASSERT(trc);
+    JS_SET_TRACING_NAME(trc, name);
+    if (v->isSingleObject()) {
+        JSObject *obj = v->singleObject();
+        MarkInternal(trc, &obj);
+        *v = types::Type::ObjectType(obj);
+    } else if (v->isTypeObject()) {
+        types::TypeObject *typeObj = v->typeObject();
+        MarkInternal(trc, &typeObj);
+        *v = types::Type::ObjectType(typeObj);
+    }
 }
 
 void
@@ -641,8 +660,8 @@ ScanLinearString(GCMarker *gcmarker, JSLinearString *str)
      * mutations.
      */
     JS_ASSERT(str->JSString::isLinear());
-    while (str->isDependent()) {
-        str = str->asDependent().base();
+    while (str->hasBase()) {
+        str = str->base();
         JS_ASSERT(str->JSString::isLinear());
         JS_COMPARTMENT_ASSERT_STR(gcmarker->runtime, str);
         if (!str->markIfUnmarked())
@@ -736,8 +755,8 @@ MarkChildren(JSTracer *trc, JSObject *obj)
 static void
 MarkChildren(JSTracer *trc, JSString *str)
 {
-    if (str->isDependent())
-        str->asDependent().markChildren(trc);
+    if (str->hasBase())
+        str->markBase(trc);
     else if (str->isRope())
         str->asRope().markChildren(trc);
 }
@@ -1174,7 +1193,8 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
                 end = vp + obj->getDenseArrayInitializedLength();
                 goto scan_value_array;
             } else {
-                JS_ASSERT_IF(runtime->gcIncrementalState != NO_INCREMENTAL,
+                JS_ASSERT_IF(runtime->gcMode == JSGC_MODE_INCREMENTAL &&
+                             runtime->gcIncrementalEnabled,
                              clasp->flags & JSCLASS_IMPLEMENTS_BARRIERS);
             }
             clasp->trace(this, obj);

@@ -1378,16 +1378,6 @@ CSS_PROP_COLUMN(
     offsetof(nsStyleColumn, mColumnCount),
     eStyleAnimType_Custom)
 CSS_PROP_COLUMN(
-    -moz-column-fill,
-    _moz_column_fill,
-    CSS_PROP_DOMPROP_PREFIXED(ColumnFill),
-    CSS_PROPERTY_PARSE_VALUE,
-    "",
-    VARIANT_HK,
-    kColumnFillKTable,
-    CSS_PROP_NO_OFFSET,
-    eStyleAnimType_None)
-CSS_PROP_COLUMN(
     -moz-column-width,
     _moz_column_width,
     CSS_PROP_DOMPROP_PREFIXED(ColumnWidth),
@@ -2502,9 +2492,9 @@ CSS_PROP_TEXT(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_DISPLAY(
-    -moz-transform,
     transform,
-    CSS_PROP_DOMPROP_PREFIXED(Transform),
+    transform,
+    Transform,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
     0,
@@ -2512,9 +2502,9 @@ CSS_PROP_DISPLAY(
     offsetof(nsStyleDisplay, mSpecifiedTransform),
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
-    -moz-transform-origin,
+    transform-origin,
     transform_origin,
-    CSS_PROP_DOMPROP_PREFIXED(TransformOrigin),
+    TransformOrigin,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC,
     "",
@@ -2523,9 +2513,9 @@ CSS_PROP_DISPLAY(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
-    -moz-perspective-origin,
+    perspective-origin,
     perspective_origin,
-    CSS_PROP_DOMPROP_PREFIXED(PerspectiveOrigin),
+    PerspectiveOrigin,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC,
     "",
@@ -2534,9 +2524,9 @@ CSS_PROP_DISPLAY(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
-    -moz-perspective,
     perspective,
-    CSS_PROP_DOMPROP_PREFIXED(Perspective),
+    perspective,
+    Perspective,
     CSS_PROPERTY_PARSE_VALUE,
     "",
     VARIANT_NONE | VARIANT_INHERIT | VARIANT_LENGTH | VARIANT_POSITIVE_LENGTH,
@@ -2544,9 +2534,9 @@ CSS_PROP_DISPLAY(
     offsetof(nsStyleDisplay, mChildPerspective),
     eStyleAnimType_Coord)
 CSS_PROP_DISPLAY(
-    -moz-transform-style,
+    transform-style,
     transform_style,
-    CSS_PROP_DOMPROP_PREFIXED(TransformStyle),
+    TransformStyle,
     CSS_PROPERTY_PARSE_VALUE,
     "",
     VARIANT_HK,
@@ -2554,9 +2544,9 @@ CSS_PROP_DISPLAY(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_DISPLAY(
-    -moz-backface-visibility,
+    backface-visibility,
     backface_visibility,
-    CSS_PROP_DOMPROP_PREFIXED(BackfaceVisibility),
+    BackfaceVisibility,
     CSS_PROPERTY_PARSE_VALUE,
     "",
     VARIANT_HK,

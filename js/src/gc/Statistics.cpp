@@ -236,6 +236,13 @@ class StatisticsSerializer
     }
 };
 
+/*
+ * If this fails, then you can either delete this assertion and allow all
+ * larger-numbered reasons to pile up in the last telemetry bucket, or switch
+ * to GC_REASON_3 and bump the max value.
+ */
+JS_STATIC_ASSERT(gcreason::NUM_TELEMETRY_REASONS >= gcreason::NUM_REASONS);
+
 static const char *
 ExplainReason(gcreason::Reason reason)
 {
@@ -358,7 +365,7 @@ Statistics::formatData(StatisticsSerializer &ss, uint64_t timestamp)
             ss.appendNumber("Slice", "%d", "", i);
             ss.appendDecimal("Pause", "", t(width));
             ss.extra(" (");
-            ss.appendDecimal("When", "ms", t(slices[i].end - slices[0].start));
+            ss.appendDecimal("When", "ms", t(slices[i].start - slices[0].start));
             ss.appendString("Reason", ExplainReason(slices[i].reason));
             if (slices[i].resetReason)
                 ss.appendString("Reset", slices[i].resetReason);

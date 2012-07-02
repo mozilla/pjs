@@ -11,7 +11,6 @@
 
 #include "nsTArray.h"
 #include "nsDataHashtable.h"
-#include "nsRefPtrHashtable.h"
 #include "nsHashKeys.h"
 
 #include "nsIDocShell.h"
@@ -19,18 +18,14 @@
 #include "nsIDOMWebGLRenderingContext.h"
 #include "nsICanvasRenderingContextInternal.h"
 #include "nsHTMLCanvasElement.h"
-#include "nsWeakReference.h"
 #include "nsIDOMHTMLElement.h"
 #include "nsIMemoryReporter.h"
 #include "nsIJSNativeInitializer.h"
-#include "nsContentUtils.h"
 #include "nsWrapperCache.h"
 #include "nsIObserver.h"
 
 #include "GLContextProvider.h"
 #include "Layers.h"
-
-#include "nsDataHashtable.h"
 
 #include "mozilla/LinkedList.h"
 #include "mozilla/CheckedInt.h"
@@ -65,7 +60,6 @@
 #define MINVALUE_GL_MAX_RENDERBUFFER_SIZE             1024  // Different from the spec, which sets it to 1 on page 164
 #define MINVALUE_GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS  8     // Page 164
 
-class nsIDocShell;
 class nsIPropertyBag;
 
 namespace mozilla {
@@ -481,10 +475,6 @@ public:
 
     NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(WebGLContext,
                                                            nsIDOMWebGLRenderingContext)
-
-    nsINode* GetParentObject() {
-        return mCanvasElement;
-    }
 
     virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
                                  bool *triedToWrap);
@@ -1156,19 +1146,23 @@ protected:
 
     // extensions
     enum WebGLExtensionID {
-        WebGL_OES_texture_float,
-        WebGL_OES_standard_derivatives,
-        WebGL_EXT_texture_filter_anisotropic,
-        WebGL_WEBGL_lose_context,
-        WebGL_WEBGL_compressed_texture_s3tc,
-        WebGLExtensionID_Max
+        OES_texture_float,
+        OES_standard_derivatives,
+        EXT_texture_filter_anisotropic,
+        WEBGL_lose_context,
+        WEBGL_compressed_texture_s3tc,
+        WebGLExtensionID_number_of_extensions,
+        WebGLExtensionID_unknown_extension
     };
-    nsAutoTArray<nsRefPtr<WebGLExtension>, WebGLExtensionID_Max> mEnabledExtensions;
-    bool IsExtensionEnabled(WebGLExtensionID ext) const {
-        NS_ABORT_IF_FALSE(ext >= 0 && ext < WebGLExtensionID_Max, "bogus index!");
-        return mEnabledExtensions[ext] != nsnull;
+    nsAutoTArray<nsRefPtr<WebGLExtension>, WebGLExtensionID_number_of_extensions> mExtensions;
+
+    // returns true if the extension has been enabled by calling getExtension.
+    bool IsExtensionEnabled(WebGLExtensionID ext) {
+        return mExtensions[ext];
     }
-    bool IsExtensionSupported(WebGLExtensionID ei);
+
+    // returns true if the extension is supported (as returned by getSupportedExtensions)
+    bool IsExtensionSupported(WebGLExtensionID ext);
 
     nsTArray<WebGLenum> mCompressedTextureFormats;
 
@@ -2200,7 +2194,11 @@ protected:
   */
 static bool SplitLastSquareBracket(nsACString& string, nsCString& bracketPart)
 {
-    NS_ABORT_IF_FALSE(bracketPart.Length() == 0, "SplitLastSquareBracket must be called with empty bracketPart string");
+    MOZ_ASSERT(bracketPart.IsEmpty(), "SplitLastSquareBracket must be called with empty bracketPart string");
+
+    if (string.IsEmpty())
+        return false;
+
     char *string_start = string.BeginWriting();
     char *s = string_start + string.Length() - 1;
 
@@ -2995,6 +2993,8 @@ public:
     GLint Location() const { return mLocation; }
     uint32_t ProgramGeneration() const { return mProgramGeneration; }
     int ElementSize() const { return mElementSize; }
+
+    virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSIWEBGLUNIFORMLOCATION

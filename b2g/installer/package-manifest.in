@@ -177,6 +177,7 @@
 #ifdef MOZ_B2G_RIL
 @BINPATH@/components/dom_mms.xpt
 #endif
+@BINPATH@/components/dom_browserelement.xpt
 @BINPATH@/components/dom_power.xpt
 @BINPATH@/components/dom_range.xpt
 @BINPATH@/components/dom_settings.xpt
@@ -215,6 +216,7 @@
 @BINPATH@/components/jetpack.xpt
 @BINPATH@/components/jsdebugger.xpt
 @BINPATH@/components/jsdservice.xpt
+@BINPATH@/components/jsinspector.xpt
 @BINPATH@/components/layout_base.xpt
 @BINPATH@/components/layout_forms.xpt
 #ifdef NS_PRINTING

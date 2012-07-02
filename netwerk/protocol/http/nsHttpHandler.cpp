@@ -245,6 +245,8 @@ nsHttpHandler::Init()
 
     mMisc.AssignLiteral("rv:" MOZILLA_UAVERSION);
 
+    mCompatFirefox.AssignLiteral("Firefox/" MOZILLA_UAVERSION);
+
     nsCOMPtr<nsIXULAppInfo> appInfo =
         do_GetService("@mozilla.org/xre/app-info;1");
 
@@ -261,6 +263,16 @@ nsHttpHandler::Init()
         mAppVersion.AssignLiteral(MOZ_APP_UA_VERSION);
     }
 
+    mSessionStartTime = NowInSeconds();
+
+    rv = mAuthCache.Init();
+    if (NS_FAILED(rv)) return rv;
+
+    rv = InitConnectionMgr();
+    if (NS_FAILED(rv)) return rv;
+
+    mProductSub.AssignLiteral(MOZILLA_UAVERSION);
+
 #if DEBUG
     // dump user agent prefs
     LOG(("> legacy-app-name = %s\n", mLegacyAppName.get()));
@@ -275,16 +287,6 @@ nsHttpHandler::Init()
     LOG(("> compat-firefox = %s\n", mCompatFirefox.get()));
     LOG(("> user-agent = %s\n", UserAgent().get()));
 #endif
-
-    mSessionStartTime = NowInSeconds();
-
-    rv = mAuthCache.Init();
-    if (NS_FAILED(rv)) return rv;
-
-    rv = InitConnectionMgr();
-    if (NS_FAILED(rv)) return rv;
-
-    mProductSub.AssignLiteral(MOZILLA_UAVERSION);
 
     // Startup the http category
     // Bring alive the objects in the http-protocol-startup category
@@ -568,17 +570,19 @@ nsHttpHandler::BuildUserAgent()
     mUserAgent += '/';
     mUserAgent += mProductSub;
 
-    // "Firefox/x.y.z" compatibility token
-    if (!mCompatFirefox.IsEmpty()) {
+    bool isFirefox = mAppName.EqualsLiteral("Firefox");
+    if (isFirefox || mCompatFirefoxEnabled) {
+        // "Firefox/x.y" (compatibility) app token
         mUserAgent += ' ';
         mUserAgent += mCompatFirefox;
     }
-
-    // App portion
-    mUserAgent += ' ';
-    mUserAgent += mAppName;
-    mUserAgent += '/';
-    mUserAgent += mAppVersion;
+    if (!isFirefox) {
+        // App portion
+        mUserAgent += ' ';
+        mUserAgent += mAppName;
+        mUserAgent += '/';
+        mUserAgent += mAppVersion;
+    }
 }
 
 #ifdef XP_WIN
@@ -747,11 +751,7 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
 
     if (PREF_CHANGED(UA_PREF("compatMode.firefox"))) {
         rv = prefs->GetBoolPref(UA_PREF("compatMode.firefox"), &cVar);
-        if (NS_SUCCEEDED(rv) && cVar) {
-            mCompatFirefox.AssignLiteral("Firefox/" MOZ_UA_FIREFOX_VERSION);
-        } else {
-            mCompatFirefox.Truncate();
-        }
+        mCompatFirefoxEnabled = (NS_SUCCEEDED(rv) && cVar);
         mUserAgentIsDirty = true;
     }
 

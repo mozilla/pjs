@@ -1013,7 +1013,9 @@ JSObject::shadowingShapeChange(JSContext *cx, const Shape &shape)
 bool
 JSObject::clearParent(JSContext *cx)
 {
-    return setParent(cx, RootedObject(cx, this), RootedObject(cx));
+    Rooted<JSObject*> obj(cx, this);
+    Rooted<JSObject*> newParent(cx, NULL);
+    return setParent(cx, obj, newParent);
 }
 
 /* static */ bool
@@ -1380,9 +1382,11 @@ JSCompartment::sweepInitialShapeTable()
             if (!IsShapeMarked(&shape) || (proto && !IsObjectMarked(&proto))) {
                 e.removeFront();
             } else {
+#ifdef DEBUG
                 JSObject *parent = shape->getObjectParent();
                 JS_ASSERT(!parent || IsObjectMarked(&parent));
                 JS_ASSERT(parent == shape->getObjectParent());
+#endif
                 InitialShapeEntry newKey(shape, proto);
                 e.rekeyFront(newKey.getLookup(), newKey);
             }

@@ -8,7 +8,6 @@
 #include "prlink.h"
 #include "plstr.h"
 #include "nsIPluginInstanceOwner.h"
-#include "nsIDocument.h"
 #include "nsServiceManagerUtils.h"
 #include "nsPluginsDir.h"
 #include "nsPluginHost.h"
@@ -431,25 +430,6 @@ PRUint32 nsPluginTag::Flags()
 bool nsPluginTag::IsEnabled()
 {
   return HasFlag(NS_PLUGIN_FLAG_ENABLED) && !HasFlag(NS_PLUGIN_FLAG_BLOCKLISTED);
-}
-
-bool nsPluginTag::Equals(nsPluginTag *aPluginTag)
-{
-  NS_ENSURE_TRUE(aPluginTag, false);
-  
-  if ((!mName.Equals(aPluginTag->mName)) ||
-      (!mDescription.Equals(aPluginTag->mDescription)) ||
-      (mMimeTypes.Length() != aPluginTag->mMimeTypes.Length())) {
-    return false;
-  }
-
-  for (PRUint32 i = 0; i < mMimeTypes.Length(); i++) {
-    if (!mMimeTypes[i].Equals(aPluginTag->mMimeTypes[i])) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 void nsPluginTag::TryUnloadPlugin(bool inShutdown)

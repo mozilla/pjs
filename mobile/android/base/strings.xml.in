@@ -58,6 +58,7 @@
   <string name="share_title">&share_title;</string>
   <string name="save_as_pdf">&save_as_pdf;</string>
   <string name="find_in_page">&find_in_page;</string>
+  <string name="desktop_mode">&desktop_mode;</string>
 
   <string name="find_text">&find_text;</string>
   <string name="find_prev">&find_prev;</string>
@@ -69,6 +70,7 @@
   <string name="pref_category_general">&pref_category_general;</string>
   <string name="pref_category_privacy">&pref_category_privacy;</string>
   <string name="pref_category_content">&pref_category_content;</string>
+  <string name="pref_category_importexport">&pref_category_importexport;</string>
   <string name="pref_about_firefox">&pref_about_firefox;</string>
   <string name="pref_do_not_track">&pref_do_not_track;</string>
   <string name="pref_telemetry">&pref_telemetry;</string>
@@ -77,10 +79,7 @@
   <string name="pref_char_encoding">&pref_char_encoding;</string>
   <string name="pref_char_encoding_on">&pref_char_encoding_on;</string>
   <string name="pref_char_encoding_off">&pref_char_encoding_off;</string>
-  <string name="pref_clear_history">&pref_clear_history;</string>
-  <string name="pref_clear_history_confirm">&pref_clear_history_confirm;</string>
   <string name="pref_clear_private_data">&pref_clear_private_data;</string>
-  <string name="pref_clear_private_data_confirm">&pref_clear_private_data_confirm;</string>
   <string name="pref_plugins">&pref_plugins;</string>
   <string name="pref_plugins_enabled">&pref_plugins_enabled;</string>
   <string name="pref_plugins_tap_to_play">&pref_plugins_tap_to_play;</string>
@@ -93,15 +92,28 @@
   <string name="pref_font_size_xlarge">&pref_font_size_xlarge;</string>
   <string name="pref_sync">&pref_sync;</string>
   <string name="pref_search_suggestions">&pref_search_suggestions;</string>
+  <string name="pref_private_data_history">&pref_private_data_history;</string>
+  <string name="pref_private_data_formdata">&pref_private_data_formdata;</string>
+  <string name="pref_private_data_cookies">&pref_private_data_cookies;</string>
+  <string name="pref_private_data_cache">&pref_private_data_cache;</string>
+  <string name="pref_private_data_sessions">&pref_private_data_sessions;</string>
+  <string name="pref_private_data_offlineApps">&pref_private_data_offlineApps;</string>
+  <string name="pref_private_data_siteSettings">&pref_private_data_siteSettings;</string>
+  <string name="pref_import_android">&pref_import_android;</string>
 
   <string name="reload">&reload;</string>
   <string name="forward">&forward;</string>
+  <string name="menu">&menu;</string>
+  <string name="back">&back;</string>
+  <string name="stop">&stop;</string>
+  <string name="site_security">&site_security;</string>
   <string name="close_tab">&close_tab;</string>
   <string name="new_tab">&new_tab;</string>
   <string name="new_tab_opened">&new_tab_opened;</string>
   <string name="num_tabs">&num_tabs;</string>
   <string name="addons">&addons;</string>
   <string name="downloads">&downloads;</string>
+  <string name="apps">&apps;</string>
   <string name="char_encoding">&char_encoding;</string>
   <!-- This string only appears in developer builds, which
        is why it is not localizable. -->
@@ -112,9 +124,10 @@
   <string name="site_settings_clear">&site_settings_clear;</string>
   <string name="site_settings_no_settings">&site_settings_no_settings;</string>
 
-  <string name="add_to_reading_list">&add_to_reading_list;</string>
+  <string name="reading_list">&reading_list;</string>
   <string name="reading_list_added">&reading_list_added;</string>
   <string name="reading_list_removed">&reading_list_removed;</string>
+  <string name="reading_list_failed">&reading_list_failed;</string>
   <string name="reader_mode">&reader_mode;</string>
 
   <string name="contextmenu_open_new_tab">&contextmenu_open_new_tab;</string>
@@ -142,6 +155,7 @@
 
   <string name="button_ok">&button_ok;</string>
   <string name="button_cancel">&button_cancel;</string>
+  <string name="button_clear_data">&button_clear_data;</string>
 
   <string name="abouthome_addons_title">&abouthome_addons_title;</string>
   <string name="abouthome_addons_browse">&abouthome_addons_browse;</string>
@@ -175,4 +189,16 @@
   <!-- Site identity popup -->
   <string name="identity_connected_to">&identity_connected_to;</string>
   <string name="identity_run_by">&identity_run_by;</string>
+
+  <!-- Clear private data -->
+  <string name="private_data_success">&private_data_success;</string>
+  <string name="private_data_fail">&private_data_fail;</string>
+
+  <!-- Bookmark import/export -->
+  <string name="bookmarkhistory_button_import">&bookmarkhistory_button_import;</string>
+  <string name="bookmarkhistory_import_both">&bookmarkhistory_import_both;</string>
+  <string name="bookmarkhistory_import_bookmarks">&bookmarkhistory_import_bookmarks;</string>
+  <string name="bookmarkhistory_import_history">&bookmarkhistory_import_history;</string>
+  <string name="bookmarkhistory_import_wait">&bookmarkhistory_import_wait;</string>
+
 </resources>

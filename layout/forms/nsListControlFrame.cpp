@@ -48,11 +48,12 @@
 #include "nsDisplayList.h"
 #include "nsContentUtils.h"
 #include "mozilla/LookAndFeel.h"
+#include "mozilla/Attributes.h"
 
 using namespace mozilla;
 
 // Constants
-const nscoord kMaxDropDownRows          = 20; // This matches the setting for 4.x browsers
+const PRInt32 kMaxDropDownRows          = 20; // This matches the setting for 4.x browsers
 const PRInt32 kNothingSelected          = -1;
 
 // Static members
@@ -74,7 +75,7 @@ DOMTimeStamp nsListControlFrame::gLastKeyTime = 0;
  * Frames are not refcounted so they can't be used as event listeners.
  *****************************************************************************/
 
-class nsListEventListener : public nsIDOMEventListener
+class nsListEventListener MOZ_FINAL : public nsIDOMEventListener
 {
 public:
   nsListEventListener(nsListControlFrame *aFrame)
@@ -111,6 +112,7 @@ nsListControlFrame::nsListControlFrame(
   : nsHTMLScrollFrame(aShell, aContext, false),
     mMightNeedSecondPass(false),
     mHasPendingInterruptAtStartOfReflow(false),
+    mDropdownCanGrow(false),
     mLastDropdownComputedHeight(NS_UNCONSTRAINEDSIZE)
 {
   mComboboxFrame      = nsnull;
@@ -255,15 +257,7 @@ nsListControlFrame::InvalidateFocus()
 
   nsIFrame* containerFrame = GetOptionsContainer();
   if (containerFrame) {
-    // Invalidating from the containerFrame because that's where our focus
-    // is drawn.
-    // The origin of the scrollport is the origin of containerFrame.
-    float inflation = nsLayoutUtils::FontSizeInflationFor(this);
-    nsRect invalidateArea = containerFrame->GetVisualOverflowRect();
-    nsRect emptyFallbackArea(0, 0, GetScrollPortRect().width,
-                             CalcFallbackRowHeight(inflation));
-    invalidateArea.UnionRect(invalidateArea, emptyFallbackArea);
-    containerFrame->Invalidate(invalidateArea);
+    containerFrame->InvalidateFrame();
   }
 }
 
@@ -508,11 +502,12 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
 
 #ifdef DEBUG
   nscoord oldHeightOfARow = HeightOfARow();
+  nscoord oldVisibleHeight = (GetStateBits() & NS_FRAME_FIRST_REFLOW) ?
+    NS_UNCONSTRAINEDSIZE : GetScrolledFrame()->GetSize().height;
 #endif
 
   nsHTMLReflowState state(aReflowState);
 
-  nscoord oldVisibleHeight;
   if (!(GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
     // When not doing an initial reflow, and when the height is auto, start off
     // with our computed height set to what we'd expect our height to be.
@@ -520,11 +515,6 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
     // NS_UNCONSTRAINEDSIZE in cases when last time we didn't have to constrain
     // the height.  That's fine; just do the same thing as last time.
     state.SetComputedHeight(mLastDropdownComputedHeight);
-    oldVisibleHeight = GetScrolledFrame()->GetSize().height;
-  } else {
-    // Set oldVisibleHeight to something that will never test true against a
-    // real height.
-    oldVisibleHeight = NS_UNCONSTRAINEDSIZE;
   }
 
   nsresult rv = nsHTMLScrollFrame::Reflow(aPresContext, aDesiredSize,
@@ -566,53 +556,48 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
   // implementation detail of nsHTMLScrollFrame that we're depending on?
   nsHTMLScrollFrame::DidReflow(aPresContext, &state, aStatus);
 
-  // Now compute the height we want to have
-  mNumDisplayRows = kMaxDropDownRows;
-  if (visibleHeight > nscoord(mNumDisplayRows * heightOfARow)) {
-    visibleHeight = mNumDisplayRows * heightOfARow;
-    // This is an adaptive algorithm for figuring out how many rows 
-    // should be displayed in the drop down. The standard size is 20 rows, 
-    // but on 640x480 it is typically too big.
-    // This takes the height of the screen divides it by two and then subtracts off 
-    // an estimated height of the combobox. I estimate it by taking the max element size
-    // of the drop down and multiplying it by 2 (this is arbitrary) then subtract off
-    // the border and padding of the drop down (again rather arbitrary)
-    // This all breaks down if the font of the combobox is a lot larger then the option items
-    // or CSS style has set the height of the combobox to be rather large.
-    // We can fix these cases later if they actually happen.
-    nsRect screen = nsFormControlFrame::GetUsableScreenRect(aPresContext);
-    nscoord screenHeight = screen.height;
+  // Now compute the height we want to have.
+  // Note: no need to apply min/max constraints, since we have no such
+  // rules applied to the combobox dropdown.
 
-    nscoord availDropHgt = (screenHeight / 2) - (heightOfARow*2); // approx half screen minus combo size
-    availDropHgt -= aReflowState.mComputedBorderPadding.top + aReflowState.mComputedBorderPadding.bottom;
-
-    nscoord hgt = visibleHeight + aReflowState.mComputedBorderPadding.top + aReflowState.mComputedBorderPadding.bottom;
-    if (heightOfARow > 0) {
-      if (hgt > availDropHgt) {
-        visibleHeight = (availDropHgt / heightOfARow) * heightOfARow;
-      }
-      mNumDisplayRows = visibleHeight / heightOfARow;
-    } else {
-      // Hmmm, not sure what to do here. Punt, and make both of them one
-      visibleHeight   = 1;
-      mNumDisplayRows = 1;
-    }
-
-    state.SetComputedHeight(mNumDisplayRows * heightOfARow);
-    // Note: no need to apply min/max constraints, since we have no such
-    // rules applied to the combobox dropdown.
-    // XXXbz this is ending up too big!!  Figure out why.
-  } else if (visibleHeight == 0) {
+  mDropdownCanGrow = false;
+  if (visibleHeight <= 0 || heightOfARow <= 0) {
     // Looks like we have no options.  Just size us to a single row height.
     state.SetComputedHeight(heightOfARow);
+    mNumDisplayRows = 1;
   } else {
-    // Not too big, not too small.  Just use it!
-    state.SetComputedHeight(NS_UNCONSTRAINEDSIZE);
+    nsComboboxControlFrame* combobox = static_cast<nsComboboxControlFrame*>(mComboboxFrame);
+    nsPoint translation;
+    nscoord above, below;
+    combobox->GetAvailableDropdownSpace(&above, &below, &translation);
+    if (above <= 0 && below <= 0) {
+      state.SetComputedHeight(heightOfARow);
+      mNumDisplayRows = 1;
+    } else {
+      nscoord bp = aReflowState.mComputedBorderPadding.TopBottom();
+      nscoord availableHeight = NS_MAX(above, below) - bp;
+      nscoord newHeight;
+      PRInt32 rows;
+      if (visibleHeight <= availableHeight) {
+        // The dropdown fits in the available height.
+        rows = GetNumberOfOptions();
+        mNumDisplayRows = clamped(rows, 1, kMaxDropDownRows);
+        if (mNumDisplayRows == rows) {
+          newHeight = visibleHeight;  // use the exact height
+        } else {
+          newHeight = mNumDisplayRows * heightOfARow; // approximate
+        }
+      } else {
+        rows = availableHeight / heightOfARow;
+        mNumDisplayRows = clamped(rows, 1, kMaxDropDownRows);
+        newHeight = mNumDisplayRows * heightOfARow; // approximate
+      }
+      state.SetComputedHeight(newHeight);
+      mDropdownCanGrow = visibleHeight - newHeight >= heightOfARow &&
+                         mNumDisplayRows != kMaxDropDownRows;
+    }
   }
 
-  // Note: At this point, state.mComputedHeight can be NS_UNCONSTRAINEDSIZE in
-  // cases when there were some options, but not too many (so no scrollbar was
-  // needed).  That's fine; just store that.
   mLastDropdownComputedHeight = state.ComputedHeight();
 
   nsHTMLScrollFrame::WillReflow(aPresContext);
@@ -1006,6 +991,8 @@ nsListControlFrame::Init(nsIContent*     aContent,
   mEndSelectionIndex = kNothingSelected;
 
   mLastDropdownBackstopColor = PresContext()->DefaultBackgroundColor();
+
+  AddStateBits(NS_FRAME_IN_POPUP);
 
   return result;
 }
@@ -1597,18 +1584,6 @@ nsListControlFrame::GetFormProperty(nsIAtom* aName, nsAString& aValue) const
 }
 
 void
-nsListControlFrame::SyncViewWithFrame()
-{
-    // Resync the view's position with the frame.
-    // The problem is the dropdown's view is attached directly under
-    // the root view. This means its view needs to have its coordinates calculated
-    // as if it were in it's normal position in the view hierarchy.
-  mComboboxFrame->AbsolutelyPositionDropDown();
-
-  nsContainerFrame::PositionFrameView(this);
-}
-
-void
 nsListControlFrame::AboutToDropDown()
 {
   NS_ASSERTION(IsInDropDownMode(),
@@ -1672,14 +1647,7 @@ nsListControlFrame::DidReflow(nsPresContext*           aPresContext,
   bool wasInterrupted = !mHasPendingInterruptAtStartOfReflow &&
                           aPresContext->HasPendingInterrupt();
 
-  if (IsInDropDownMode()) 
-  {
-    //SyncViewWithFrame();
-    rv = nsHTMLScrollFrame::DidReflow(aPresContext, aReflowState, aStatus);
-    SyncViewWithFrame();
-  } else {
-    rv = nsHTMLScrollFrame::DidReflow(aPresContext, aReflowState, aStatus);
-  }
+  rv = nsHTMLScrollFrame::DidReflow(aPresContext, aReflowState, aStatus);
 
   if (mNeedToReset && !wasInterrupted) {
     mNeedToReset = false;
@@ -1703,18 +1671,6 @@ nsIAtom*
 nsListControlFrame::GetType() const
 {
   return nsGkAtoms::listControlFrame; 
-}
-
-void
-nsListControlFrame::InvalidateInternal(const nsRect& aDamageRect,
-                                       nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                       PRUint32 aFlags)
-{
-  if (!IsInDropDownMode()) {
-    nsHTMLScrollFrame::InvalidateInternal(aDamageRect, aX, aY, this, aFlags);
-    return;
-  }
-  InvalidateRoot(aDamageRect + nsPoint(aX, aY), aFlags);
 }
 
 #ifdef DEBUG

@@ -12,6 +12,7 @@
 #include "nsIScriptContext.h"
 #include "nsCOMPtr.h"
 #include "nsDOMEventTargetHelper.h"
+#include "mozilla/Attributes.h"
 
 class nsIDocShell;
 class nsDeviceContext;
@@ -25,7 +26,7 @@ class nsScreen : public nsDOMEventTargetHelper
 public:
   static already_AddRefed<nsScreen> Create(nsPIDOMWindow* aWindow);
 
-  void Invalidate();
+  void Reset();
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMSCREEN
@@ -44,7 +45,7 @@ protected:
   mozilla::dom::ScreenOrientation mOrientation;
 
 private:
-  class FullScreenEventListener : public nsIDOMEventListener
+  class FullScreenEventListener MOZ_FINAL : public nsIDOMEventListener
   {
   public:
     FullScreenEventListener() {};

@@ -11,6 +11,7 @@
 #include "DOMError.h"
 #include "nsEventDispatcher.h"
 #include "nsDOMEvent.h"
+#include "nsContentUtils.h"
 
 using mozilla::dom::DOMRequest;
 using mozilla::dom::DOMRequestService;
@@ -181,6 +182,7 @@ NS_IMETHODIMP
 DOMRequestService::CreateRequest(nsIDOMWindow* aWindow,
                                  nsIDOMDOMRequest** aRequest)
 {
+  NS_ENSURE_STATE(aWindow);
   NS_ADDREF(*aRequest = new DOMRequest(aWindow));
   
   return NS_OK;
@@ -190,6 +192,7 @@ NS_IMETHODIMP
 DOMRequestService::FireSuccess(nsIDOMDOMRequest* aRequest,
                                const jsval& aResult)
 {
+  NS_ENSURE_STATE(aRequest);
   static_cast<DOMRequest*>(aRequest)->FireSuccess(aResult);
 
   return NS_OK;
@@ -199,6 +202,7 @@ NS_IMETHODIMP
 DOMRequestService::FireError(nsIDOMDOMRequest* aRequest,
                              const nsAString& aError)
 {
+  NS_ENSURE_STATE(aRequest);
   static_cast<DOMRequest*>(aRequest)->FireError(aError);
 
   return NS_OK;

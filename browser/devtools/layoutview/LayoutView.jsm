@@ -286,7 +286,11 @@ LayoutView.prototype = {
    */
   update: function LV_update() {
     let node = this.inspector.selection;
-    if (!node || !this.documentReady) return;
+    if (!node ||
+        !LayoutHelpers.isNodeConnected(node) ||
+        !this.documentReady) {
+      return;
+    }
 
     // First, we update the first part of the layout view, with
     // the size of the element.
@@ -294,7 +298,12 @@ LayoutView.prototype = {
     let clientRect = node.getBoundingClientRect();
     let width = Math.round(clientRect.width);
     let height = Math.round(clientRect.height);
-    this.doc.querySelector("#element-size").textContent =  width + "x" + height;
+
+    let elt = this.doc.querySelector("#element-size");
+    let newLabel = width + "x" + height;
+    if (elt.textContent != newLabel) {
+      elt.textContent = newLabel;
+    }
 
     // If the view is closed, no need to do anything more.
     if (!this.isOpen) return;

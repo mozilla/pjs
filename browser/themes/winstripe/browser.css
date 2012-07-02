@@ -708,7 +708,8 @@ toolbar[mode=full] .toolbarbutton-1 > .toolbarbutton-menubutton-button {
   padding: 3px 7px;
 }
 
-@navbarLargeIcons@ .toolbarbutton-1[type=menu]:not(#back-button):not(#forward-button):not(#feed-button) > .toolbarbutton-icon {
+@navbarLargeIcons@ .toolbarbutton-1[type=menu]:not(#back-button):not(#forward-button):not(#feed-button) > .toolbarbutton-icon,
+@navbarLargeIcons@ .toolbarbutton-1[type=menu] > .toolbarbutton-text /* hack for add-ons that forcefully display the label */ {
   -moz-padding-end: 17px;
 }
 
@@ -1433,28 +1434,24 @@ html|*.urlbar-input:-moz-lwtheme:-moz-placeholder,
   -moz-image-region: rect(0, 16px, 16px, 0);
 }
 
-@conditionalForwardWithUrlbar@ + #urlbar-container > #urlbar > #identity-box > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon {
+@conditionalForwardWithUrlbar@ + #urlbar-container > #urlbar > #identity-box > #page-proxy-favicon {
   -moz-margin-end: 1px;
 }
 
-.verifiedDomain > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon[pageproxystate="valid"] {
+.verifiedDomain > #page-proxy-favicon[pageproxystate="valid"] {
   list-style-image: url(chrome://browser/skin/identity-icons-https.png);
 }
 
-.verifiedIdentity > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon[pageproxystate="valid"] {
+.verifiedIdentity > #page-proxy-favicon[pageproxystate="valid"] {
   list-style-image: url(chrome://browser/skin/identity-icons-https-ev.png);
 }
 
-.mixedContent > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon[pageproxystate="valid"] {
-  list-style-image: url(chrome://browser/skin/identity-icons-https-mixed.png);
-}
-
-#identity-box:hover > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon {
+#identity-box:hover > #page-proxy-favicon {
   -moz-image-region: rect(0, 32px, 16px, 16px);
 }
 
-#identity-box:hover:active > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon,
-#identity-box[open=true] > #identity-box-inner > #page-proxy-stack > #page-proxy-favicon {
+#identity-box:hover:active > #page-proxy-favicon,
+#identity-box[open=true] > #page-proxy-favicon {
   -moz-image-region: rect(0, 48px, 16px, 32px);
 }
 
@@ -1676,18 +1673,18 @@ richlistitem[type~="action"][actiontype="switchtab"][selected="true"] > .ac-url-
 }
 
 .panel-promo-box {
-  margin: 16px 0 -2px;
+  margin: 10px -10px -10px;
+  padding: 8px 10px;
+  border-top: 1px solid ThreeDShadow;
+  background-image: -moz-linear-gradient(hsla(0,0%,0%,.15), hsla(0,0%,0%,.08) 6px);
+  border-bottom-left-radius: 3px;
+  border-bottom-right-radius: 3px;
 }
 
 @media (-moz-windows-default-theme) {
   .panel-promo-box {
-    margin: 8px -16px -16px;
-    padding: 8px 16px;
-%ifndef WINSTRIPE_AERO
-    border-bottom-left-radius: 6px;
-    border-bottom-right-radius: 6px;
-%endif
-    background-color: #f1f5fb;
+    border-top-style: none;
+    background: #f1f5fb;
     color: GrayText;
     box-shadow: 0px 1px 2px rgb(204,214,234) inset;
   }

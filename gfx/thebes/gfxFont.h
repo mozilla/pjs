@@ -27,6 +27,7 @@
 #include "nsIMemoryReporter.h"
 #include "gfxFontFeatures.h"
 #include "mozilla/gfx/Types.h"
+#include "mozilla/Attributes.h"
 
 typedef struct _cairo_scaled_font cairo_scaled_font_t;
 
@@ -806,7 +807,7 @@ public:
                              FontCacheSizes*   aSizes) const;
 
 protected:
-    class MemoryReporter
+    class MemoryReporter MOZ_FINAL
         : public nsIMemoryMultiReporter
     {
     public:
@@ -2973,7 +2974,8 @@ public:
 
         return static_cast<gfxFont*>(mFonts[i]);
     }
-    virtual PRUint32 FontListLength() const {
+
+    PRUint32 FontListLength() const {
         return mFonts.Length();
     }
 

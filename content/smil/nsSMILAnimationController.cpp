@@ -7,9 +7,7 @@
 #include "nsSMILCompositor.h"
 #include "nsSMILCSSProperty.h"
 #include "nsCSSProps.h"
-#include "nsComponentManagerUtils.h"
 #include "nsITimer.h"
-#include "nsIContent.h"
 #include "mozilla/dom/Element.h"
 #include "nsIDocument.h"
 #include "nsISMILAnimationElement.h"
@@ -765,9 +763,16 @@ nsSMILAnimationController::GetTargetIdentifierForAnimation(
   bool isCSS = false;
   if (attributeType == eSMILTargetAttrType_auto) {
     if (attributeNamespaceID == kNameSpaceID_None) {
-      nsCSSProperty prop =
-        nsCSSProps::LookupProperty(nsDependentAtomString(attributeName));
-      isCSS = nsSMILCSSProperty::IsPropertyAnimatable(prop);
+      // width/height are special as they may be attributes or for
+      // outer-<svg> elements, mapped into style.
+      if (attributeName == nsGkAtoms::width ||
+          attributeName == nsGkAtoms::height) {
+        isCSS = targetElem->GetNameSpaceID() != kNameSpaceID_SVG;
+      } else {
+        nsCSSProperty prop =
+          nsCSSProps::LookupProperty(nsDependentAtomString(attributeName));
+        isCSS = nsSMILCSSProperty::IsPropertyAnimatable(prop);
+      }
     }
   } else {
     isCSS = (attributeType == eSMILTargetAttrType_CSS);

@@ -514,24 +514,6 @@ function testDefunctAccessible(aAcc, aNodeOrId)
 }
 
 /**
- * Ensure that image map accessible tree is created.
- */
-function ensureImageMapTree(aID)
-{
-  // XXX: We send a useless mouse move to the image to force it to setup its
-  // image map, because flushing layout won't do it. Hopefully bug 135040
-  // will make this not suck.
-  var image = getNode(aID);
-  synthesizeMouse(image, 10, 10, { type: "mousemove" },
-                  image.ownerDocument.defaultView);
-
-  // XXX This may affect a11y more than other code because imagemaps may not
-  // get drawn or have an mouse event over them. Bug 570322 tracks a11y
-  // dealing with this.
-  todo(false, "Need to remove this image map workaround.");
-}
-
-/**
  * Convert role to human readable string.
  */
 function roleToString(aRole)
@@ -572,6 +554,13 @@ function relationTypeToString(aRelationType)
   return gAccRetrieval.getStringRelationType(aRelationType);
 }
 
+function getLoadContext() {
+  const Ci = Components.interfaces;
+  return window.QueryInterface(Ci.nsIInterfaceRequestor)
+               .getInterface(Ci.nsIWebNavigation)
+               .QueryInterface(Ci.nsILoadContext);
+}
+
 /**
  * Return text from clipboard.
  */
@@ -584,6 +573,7 @@ function getTextFromClipboard()
 
   var trans = Components.classes["@mozilla.org/widget/transferable;1"].
     createInstance(Components.interfaces.nsITransferable);
+  trans.init(getLoadContext());
   if (!trans)
     return;
 

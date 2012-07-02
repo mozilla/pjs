@@ -48,7 +48,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsDeviceContextSpecX)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintOptionsX, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintDialogServiceX, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintSession, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsIdleServiceX)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIdleServiceX, nsIdleServiceX::GetInstance)
 
 #include "nsMenuBarX.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsNativeMenuServiceX)
@@ -61,6 +61,9 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsNativeThemeCocoa)
 
 #include "nsMacDockSupport.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacDockSupport)
+
+#include "nsMacWebAppUtils.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacWebAppUtils)
 
 #include "nsStandaloneNativeMenu.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsStandaloneNativeMenu)
@@ -95,6 +98,7 @@ NS_DEFINE_NAMED_CID(NS_PRINTDIALOGSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_IDLE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_NATIVEMENUSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_MACDOCKSUPPORT_CID);
+NS_DEFINE_NAMED_CID(NS_MACWEBAPPUTILS_CID);
 NS_DEFINE_NAMED_CID(NS_STANDALONENATIVEMENU_CID);
 NS_DEFINE_NAMED_CID(NS_GFXINFO_CID);
 
@@ -121,6 +125,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
   { &kNS_IDLE_SERVICE_CID, false, NULL, nsIdleServiceXConstructor },
   { &kNS_NATIVEMENUSERVICE_CID, false, NULL, nsNativeMenuServiceXConstructor },
   { &kNS_MACDOCKSUPPORT_CID, false, NULL, nsMacDockSupportConstructor },
+  { &kNS_MACWEBAPPUTILS_CID, false, NULL, nsMacWebAppUtilsConstructor },
   { &kNS_STANDALONENATIVEMENU_CID, false, NULL, nsStandaloneNativeMenuConstructor },
   { &kNS_GFXINFO_CID, false, NULL, mozilla::widget::GfxInfoConstructor },
   { NULL }
@@ -148,6 +153,7 @@ static const mozilla::Module::ContractIDEntry kWidgetContracts[] = {
   { "@mozilla.org/widget/idleservice;1", &kNS_IDLE_SERVICE_CID },
   { "@mozilla.org/widget/nativemenuservice;1", &kNS_NATIVEMENUSERVICE_CID },
   { "@mozilla.org/widget/macdocksupport;1", &kNS_MACDOCKSUPPORT_CID },
+  { "@mozilla.org/widget/mac-web-app-utils;1", &kNS_MACWEBAPPUTILS_CID },
   { "@mozilla.org/widget/standalonenativemenu;1", &kNS_STANDALONENATIVEMENU_CID },
   { "@mozilla.org/gfx/info;1", &kNS_GFXINFO_CID },
   { NULL }

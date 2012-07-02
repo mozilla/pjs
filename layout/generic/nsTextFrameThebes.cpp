@@ -71,10 +71,11 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/Util.h" // for DebugOnly
 #include "mozilla/LookAndFeel.h"
+#include "mozilla/Attributes.h"
 
 #include "sampler.h"
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 #undef NOISY_BLINK
 #undef NOISY_REFLOW
 #undef NOISY_TRIM
@@ -187,11 +188,17 @@ NS_DECLARE_FRAME_PROPERTY(FontSizeInflationProperty, nsnull)
 // This bit is set while the frame is registered as a blinking frame.
 #define TEXT_BLINK_ON              NS_FRAME_STATE_BIT(29)
 
-// Set when this text frame is mentioned in the userdata for a textrun
+// Set when this text frame is mentioned in the userdata for mTextRun
 #define TEXT_IN_TEXTRUN_USER_DATA  NS_FRAME_STATE_BIT(30)
 
 // nsTextFrame.h has
 // #define TEXT_HAS_NONCOLLAPSED_CHARACTERS NS_FRAME_STATE_BIT(31)
+
+// Set when this text frame is mentioned in the userdata for the
+// uninflated textrun property
+#define TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA NS_FRAME_STATE_BIT(60)
+
+// nsTextFrame.h has
 // #define TEXT_HAS_FONT_INFLATION          NS_FRAME_STATE_BIT(61)
 
 // If true, then this frame is being removed due to a SetLength() on a
@@ -385,7 +392,8 @@ DestroyUserData(void* aUserData)
  */
 static bool
 ClearAllTextRunReferences(nsTextFrame* aFrame, gfxTextRun* aTextRun,
-                          nsTextFrame* aStartContinuation)
+                          nsTextFrame* aStartContinuation,
+                          nsFrameState aWhichTextRunState)
 {
   NS_PRECONDITION(aFrame, "");
   NS_PRECONDITION(!aStartContinuation ||
@@ -396,7 +404,7 @@ ClearAllTextRunReferences(nsTextFrame* aFrame, gfxTextRun* aTextRun,
                   "wrong aStartContinuation for this text run");
 
   if (!aStartContinuation || aStartContinuation == aFrame) {
-    aFrame->RemoveStateBits(TEXT_IN_TEXTRUN_USER_DATA);
+    aFrame->RemoveStateBits(aWhichTextRunState);
   } else {
     do {
       NS_ASSERTION(aFrame->GetType() == nsGkAtoms::textFrame, "Bad frame");
@@ -432,13 +440,18 @@ UnhookTextRunFromFrames(gfxTextRun* aTextRun, nsTextFrame* aStartContinuation)
     return;
 
   if (aTextRun->GetFlags() & nsTextFrameUtils::TEXT_IS_SIMPLE_FLOW) {
-    nsIFrame* userDataFrame = static_cast<nsIFrame*>(aTextRun->GetUserData());
+    nsTextFrame* userDataFrame = static_cast<nsTextFrame*>(
+      static_cast<nsIFrame*>(aTextRun->GetUserData()));
+    nsFrameState whichTextRunState =
+      userDataFrame->GetTextRun(nsTextFrame::eInflated) == aTextRun
+        ? TEXT_IN_TEXTRUN_USER_DATA
+        : TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA;
     DebugOnly<bool> found =
-      ClearAllTextRunReferences(static_cast<nsTextFrame*>(userDataFrame),
-                                aTextRun, aStartContinuation);
+      ClearAllTextRunReferences(userDataFrame, aTextRun,
+                                aStartContinuation, whichTextRunState);
     NS_ASSERTION(!aStartContinuation || found,
                  "aStartContinuation wasn't found in simple flow text run");
-    if (!(userDataFrame->GetStateBits() & TEXT_IN_TEXTRUN_USER_DATA)) {
+    if (!(userDataFrame->GetStateBits() & whichTextRunState)) {
       aTextRun->SetUserData(nsnull);
     }
   } else {
@@ -447,11 +460,15 @@ UnhookTextRunFromFrames(gfxTextRun* aTextRun, nsTextFrame* aStartContinuation)
     PRInt32 destroyFromIndex = aStartContinuation ? -1 : 0;
     for (PRUint32 i = 0; i < userData->mMappedFlowCount; ++i) {
       nsTextFrame* userDataFrame = userData->mMappedFlows[i].mStartFrame;
+      nsFrameState whichTextRunState =
+        userDataFrame->GetTextRun(nsTextFrame::eInflated) == aTextRun
+          ? TEXT_IN_TEXTRUN_USER_DATA
+          : TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA;
       bool found =
         ClearAllTextRunReferences(userDataFrame, aTextRun,
-                                  aStartContinuation);
+                                  aStartContinuation, whichTextRunState);
       if (found) {
-        if (userDataFrame->GetStateBits() & TEXT_IN_TEXTRUN_USER_DATA) {
+        if (userDataFrame->GetStateBits() & whichTextRunState) {
           destroyFromIndex = i + 1;
         }
         else {
@@ -841,7 +858,7 @@ public:
     }
   };
 
-  class BreakSink : public nsILineBreakSink {
+  class BreakSink MOZ_FINAL : public nsILineBreakSink {
   public:
     BreakSink(gfxTextRun* aTextRun, gfxContext* aContext, PRUint32 aOffsetIntoTextRun,
               bool aExistingTextRun) :
@@ -2343,7 +2360,11 @@ BuildTextRunsScanner::AssignTextRun(gfxTextRun* aTextRun, float aInflation)
     }
     // Set this bit now; we can't set it any earlier because
     // f->ClearTextRun() might clear it out.
-    startFrame->AddStateBits(TEXT_IN_TEXTRUN_USER_DATA);
+    nsFrameState whichTextRunState =
+      startFrame->GetTextRun(nsTextFrame::eInflated) == aTextRun
+        ? TEXT_IN_TEXTRUN_USER_DATA
+        : TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA;
+    startFrame->AddStateBits(whichTextRunState);
   }
 }
 
@@ -3286,8 +3307,7 @@ NS_IMETHODIMP nsBlinkTimer::Notify(nsITimer *timer)
 
     // Determine damaged area and tell view manager to redraw it
     // blink doesn't blink outline ... I hope
-    nsRect bounds(nsPoint(0, 0), frameData.mFrame->GetSize());
-    frameData.mFrame->Invalidate(bounds);
+    frameData.mFrame->InvalidateFrame();
   }
   return NS_OK;
 }
@@ -3962,6 +3982,7 @@ nsContinuingTextFrame::DestroyFrom(nsIFrame* aDestructRoot)
   // we have to clear the textrun because we're going away and the
   // textrun had better not keep a dangling reference to us.
   if ((GetStateBits() & TEXT_IN_TEXTRUN_USER_DATA) ||
+      (GetStateBits() & TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA) ||
       (!mPrevContinuation &&
        !(GetStateBits() & TEXT_STYLE_MATCHES_PREV_CONTINUATION)) ||
       (mPrevContinuation &&
@@ -4281,6 +4302,7 @@ nsTextFrame::CharacterDataChanged(CharacterDataChangeInfo* aInfo)
       // will do that when it gets called during reflow.
       textFrame->AddStateBits(NS_FRAME_IS_DIRTY);
     }
+    textFrame->InvalidateFrame();
 
     // Below, frames that start after the deleted text will be adjusted so that
     // their offsets move with the trailing unchanged text. If this change
@@ -4321,7 +4343,23 @@ nsTextFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
 {
   nsFrame::DidSetStyleContext(aOldStyleContext);
   ClearTextRuns();
-} 
+}
+
+class nsDisplayTextGeometry : public nsDisplayItemGenericGeometry
+{
+public:
+  nsDisplayTextGeometry(nsTextFrame* aFrame)
+  {
+    aFrame->GetTextDecorations(aFrame->PresContext(), mDecorations);
+  }
+ 
+  /**
+   * We store the computed text decorations here since they are
+   * computed using style data from parent frames. Any changes to these
+   * styles will only invalidate the parent frame and not this frame.
+   */
+  nsTextFrame::TextDecorations mDecorations;
+};
 
 class nsDisplayText : public nsCharClipDisplayItem {
 public:
@@ -4338,7 +4376,10 @@ public:
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
     *aSnap = false;
-    return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
+    nsRect temp = mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
+    // Bug 748228
+    temp.Inflate(mFrame->PresContext()->AppUnitsPerDevPixel());
+    return temp;
   }
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames) {
@@ -4356,6 +4397,37 @@ public:
     return GetBounds(aBuilder, &snap);
   }
 
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder)
+  {
+    nsTextFrame* f = static_cast<nsTextFrame*>(mFrame);
+    nsDisplayTextGeometry* geometry = new nsDisplayTextGeometry(f);
+    bool snap;
+    geometry->mBounds = GetBounds(aBuilder, &snap);
+    geometry->mBorderRect = GetBorderRect();
+    
+    return geometry;
+  }
+
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion *aInvalidRegion)
+  {
+    const nsDisplayTextGeometry* geometry = static_cast<const nsDisplayTextGeometry*>(aGeometry);
+    nsTextFrame* f = static_cast<nsTextFrame*>(mFrame);
+
+    nsTextFrame::TextDecorations decorations;
+    f->GetTextDecorations(f->PresContext(), decorations);
+
+    bool snap;
+    nsRect newRect = geometry->mBounds;
+    nsRect oldRect = GetBounds(aBuilder, &snap);
+    if (decorations != geometry->mDecorations ||
+        !oldRect.IsEqualInterior(newRect) ||
+        !geometry->mBorderRect.IsEqualInterior(GetBorderRect())) {
+      aInvalidRegion->Or(oldRect, newRect);
+    }
+  }
+  
   virtual void DisableComponentAlpha() { mDisableSubpixelAA = true; }
 
   bool mDisableSubpixelAA;
@@ -5949,7 +6021,7 @@ nsTextFrame::SetSelectedRange(PRUint32 aStart, PRUint32 aEnd, bool aSelected,
       }
     }
     // Selection might change anything. Invalidate the overflow area.
-    f->InvalidateOverflowRect();
+    f->InvalidateFrame();
 
     f = static_cast<nsTextFrame*>(f->GetNextContinuation());
   }
@@ -7710,7 +7782,7 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
 
   SetLength(contentLength, &aLineLayout, ALLOW_FRAME_CREATION_AND_DESTRUCTION);
 
-  Invalidate(aMetrics.VisualOverflow());
+  InvalidateFrame();
 
 #ifdef NOISY_REFLOW
   ListTag(stdout);

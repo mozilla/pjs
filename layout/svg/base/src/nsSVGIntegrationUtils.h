@@ -10,6 +10,7 @@
 #include "gfxPattern.h"
 #include "gfxRect.h"
 #include "nsRect.h"
+#include "Layers.h"
 
 class nsDisplayList;
 class nsDisplayListBuilder;
@@ -19,9 +20,11 @@ class nsRenderingContext;
 struct nsPoint;
 struct nsSize;
 
-/***** Integration of SVG effects with regular frame painting *****/
-
-class nsSVGIntegrationUtils
+/**
+ * Integration of SVG effects (clipPath clipping, masking and filters) into
+ * regular display list based painting and hit-testing.
+ */
+class nsSVGIntegrationUtils MOZ_FINAL
 {
 public:
   /**
@@ -31,31 +34,93 @@ public:
   UsingEffectsForFrame(const nsIFrame* aFrame);
 
   /**
-   * Get the union the frame border-box rects over all continuations,
-   * relative to aFirst. This defines "user space" for non-SVG frames.
+   * In SVG, an element's "user space" is simply the coordinate system in place
+   * at the time that it is drawn. For non-SVG frames, we want any SVG effects
+   * to be applied to the union of the border-box rects of all of a given
+   * frame's continuations. This means that, when we paint a non-SVG frame with
+   * effects, we want to offset the effects by the distance from the frame's
+   * origin (the top left of its border box) to the top left of the union of
+   * the border-box rects of all its continuations. In other words, we need to
+   * apply this offset as a suplimental translation to the current coordinate
+   * system in order to establish the correct user space before calling into
+   * the SVG effects code. For the purposes of the nsSVGIntegrationUtils code
+   * we somewhat misappropriate the term "user space" by using it to refer
+   * specifically to this adjusted coordinate system.
+   *
+   * For consistency with nsIFrame::GetOffsetTo, the offset this method returns
+   * is the offset you need to add to a point that's relative to aFrame's
+   * origin (the top left of its border box) to convert it to aFrame's user
+   * space. In other words the value returned is actually the offset from the
+   * origin of aFrame's user space to aFrame.
+   *
+   * Note: This method currently only accepts a frame's first continuation
+   * since none of our current callers need to be able to pass in other
+   * continuations.
    */
-  static nsRect
-  GetNonSVGUserSpace(nsIFrame* aFirst);
+  static nsPoint
+  GetOffsetToUserSpace(nsIFrame* aFrame);
+
   /**
-   * Adjust overflow rect for effects.
-   * XXX this is a problem. We really need to compute the effects rect for
-   * a whole chain of frames for a given element at once. but we have no
-   * way to do this effectively with Gecko's current reflow architecture.
-   * See http://groups.google.com/group/mozilla.dev.tech.layout/msg/6b179066f3051f65
+   * Returns the size of the union of the border-box rects of all of
+   * aNonSVGFrame's continuations.
    */
-  static nsRect
-  ComputeFrameEffectsRect(nsIFrame* aFrame, const nsRect& aOverflowRect);
+  static nsSize
+  GetContinuationUnionSize(nsIFrame* aNonSVGFrame);
+
   /**
-   * Adjust the frame's invalidation area to cover effects
+   * When SVG effects need to resolve percentage, userSpaceOnUse lengths, they
+   * need a coordinate context to resolve them against. This method provides
+   * that coordinate context for non-SVG frames with SVG effects applied to
+   * them. The gfxSize returned is the size of the union of all of the given
+   * frame's continuations' border boxes, converted to SVG user units (equal to
+   * CSS px units), as required by the SVG code.
+   */
+  static gfxSize
+  GetSVGCoordContextForNonSVGFrame(nsIFrame* aNonSVGFrame);
+
+  /**
+   * SVG effects such as SVG filters, masking and clipPath may require an SVG
+   * "bbox" for the element they're being applied to in order to make decisions
+   * about positioning, and to resolve various lengths against. This method
+   * provides the "bbox" for non-SVG frames. The bbox returned is in CSS px
+   * units, and is the union of all aNonSVGFrame's continuations' overflow
+   * areas, relative to the top-left of the union of all aNonSVGFrame's
+   * continuations' border box rects.
+   */
+  static gfxRect
+  GetSVGBBoxForNonSVGFrame(nsIFrame* aNonSVGFrame);
+
+  /**
+   * Used to adjust a frame's pre-effects visual overflow rect to take account
+   * of SVG effects.
+   *
+   * XXX This method will not do the right thing for frames with continuations.
+   * It really needs all the continuations to have been reflowed before being
+   * called, but we currently call it on each continuation as its overflow
+   * rects are set during the reflow of each particular continuation. Gecko's
+   * current reflow architecture does not allow us to set the overflow rects
+   * for a whole chain of continuations for a given element at the point when
+   * the last continuation is reflowed. See:
+   * http://groups.google.com/group/mozilla.dev.tech.layout/msg/6b179066f3051f65
    */
   static nsRect
-  GetInvalidAreaForChangedSource(nsIFrame* aFrame, const nsRect& aInvalidRect);
+  ComputePostEffectsVisualOverflowRect(nsIFrame* aFrame,
+                                       const nsRect& aPreEffectsOverflowRect);
+
+  /**
+   * Used to adjust the area of a frame that needs to be invalidated to take
+   * account of SVG effects.
+   */
+  static nsIntRect
+  AdjustInvalidAreaForSVGEffects(nsIFrame* aFrame, const nsIntRect& aInvalidRect);
+
   /**
    * Figure out which area of the source is needed given an area to
    * repaint
    */
   static nsRect
   GetRequiredSourceForInvalidArea(nsIFrame* aFrame, const nsRect& aDamageRect);
+
   /**
    * Returns true if the given point is not clipped out by effects.
    * @param aPt in appunits relative to aFrame
@@ -65,32 +130,21 @@ public:
 
   /**
    * Paint non-SVG frame with SVG effects.
-   * @param aOffset the offset in appunits where aFrame should be positioned
-   * in aCtx's coordinate system
    */
   static void
   PaintFramesWithEffects(nsRenderingContext* aCtx,
-                         nsIFrame* aEffectsFrame, const nsRect& aDirtyRect,
+                         nsIFrame* aFrame, const nsRect& aDirtyRect,
                          nsDisplayListBuilder* aBuilder,
-                         nsDisplayList* aInnerList);
+                         mozilla::layers::LayerManager* aManager);
 
+  /**
+   * SVG frames expect to paint in SVG user units, which are equal to CSS px
+   * units. This method provides a transform matrix to multiply onto a
+   * gfxContext's current transform to convert the context's current units from
+   * its usual dev pixels to SVG user units/CSS px to keep the SVG code happy.
+   */
   static gfxMatrix
-  GetInitialMatrix(nsIFrame* aNonSVGFrame);
-  /**
-   * Returns aNonSVGFrame's rect in CSS pixel units. This is the union
-   * of all its continuations' rectangles. The top-left is always 0,0
-   * since "user space" origin for non-SVG frames is the top-left of the
-   * union of all the continuations' rectangles.
-   */
-  static gfxRect
-  GetSVGRectForNonSVGFrame(nsIFrame* aNonSVGFrame);
-  /**
-   * Returns aNonSVGFrame's bounding box in CSS units. This is the union
-   * of all its continuations' overflow areas, relative to the top-left
-   * of all the continuations' rectangles.
-   */
-  static gfxRect
-  GetSVGBBoxForNonSVGFrame(nsIFrame* aNonSVGFrame);
+  GetCSSPxToDevPxMatrix(nsIFrame* aNonSVGFrame);
 
   /**
    * @param aRenderingContext the target rendering context in which the paint

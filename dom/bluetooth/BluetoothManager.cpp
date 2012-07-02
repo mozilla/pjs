@@ -10,7 +10,6 @@
 #include "BluetoothAdapter.h"
 #include "BluetoothUtils.h"
 
-#include "nsIDocument.h"
 #include "nsIURI.h"
 #include "nsIURL.h"
 #include "nsPIDOMWindow.h"
@@ -210,7 +209,7 @@ BluetoothManager::SetEnabled(bool aEnabled, nsIDOMDOMRequest** aDomRequest)
   NS_ENSURE_SUCCESS(rv, rv);
   
   if (!mToggleBtThread) {
-    mToggleBtThread = new LazyIdleThread(15000);
+    mToggleBtThread = new LazyIdleThread(15000, NS_LITERAL_CSTRING("Bluetooth"));
   }
 
   nsCOMPtr<nsIRunnable> r = new ToggleBtTask(aEnabled, request, this);

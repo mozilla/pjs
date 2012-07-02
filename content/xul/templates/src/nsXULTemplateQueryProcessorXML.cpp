@@ -6,27 +6,22 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMXMLDocument.h"
 #include "nsIDOMNode.h"
-#include "nsIDOMNodeList.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMEvent.h"
 #include "nsIDOMEventTarget.h"
 #include "nsIDOMXPathNSResolver.h"
 #include "nsIDocument.h"
 #include "nsIContent.h"
-#include "nsINameSpaceManager.h"
+#include "nsComponentManagerUtils.h"
 #include "nsGkAtoms.h"
-#include "nsIServiceManager.h"
-#include "nsUnicharUtils.h"
 #include "nsIURI.h"
 #include "nsIArray.h"
-#include "nsContentUtils.h"
+#include "nsIScriptContext.h"
 #include "nsArrayUtils.h"
 #include "nsPIDOMWindow.h"
 #include "nsXULContentUtils.h"
 
-#include "nsXULTemplateBuilder.h"
 #include "nsXULTemplateQueryProcessorXML.h"
 #include "nsXULTemplateResultXML.h"
 #include "nsXULSortService.h"
@@ -85,7 +80,7 @@ TraverseRuleToBindingsMap(nsISupports* aKey, nsXMLBindingSet* aMatch, void* aCon
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mRuleToBindingsMap key");
     cb->NoteXPCOMChild(aKey);
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mRuleToBindingsMap value");
-    cb->NoteNativeChild(aMatch, &NS_CYCLE_COLLECTION_NAME(nsXMLBindingSet));
+    cb->NoteNativeChild(aMatch, NS_CYCLE_COLLECTION_PARTICIPANT(nsXMLBindingSet));
     return PL_DHASH_NEXT;
 }
   
@@ -194,7 +189,7 @@ nsXULTemplateQueryProcessorXML::GetDatasource(nsIArray* aDataSources,
     rv = target->AddEventListener(NS_LITERAL_STRING("error"), this, false);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = req->Send(nsnull, context->GetNativeContext());
+    rv = req->Send(nsnull);
     NS_ENSURE_SUCCESS(rv, rv);
 
     mTemplateBuilder = aBuilder;

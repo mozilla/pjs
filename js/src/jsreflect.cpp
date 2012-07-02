@@ -537,6 +537,8 @@ class NodeBuilder
 
     bool arrayExpression(NodeVector &elts, TokenPos *pos, Value *dst);
 
+    bool spreadExpression(Value expr, TokenPos *pos, Value *dst);
+
     bool objectExpression(NodeVector &elts, TokenPos *pos, Value *dst);
 
     bool thisExpression(TokenPos *pos, Value *dst);
@@ -639,7 +641,7 @@ NodeBuilder::newArray(NodeVector &elts, Value *dst)
         js_ReportAllocationOverflow(cx);
         return false;
     }
-    JSObject *array = NewDenseAllocatedArray(cx, uint32_t(len));
+    Rooted<JSObject*> array(cx, NewDenseAllocatedArray(cx, uint32_t(len)));
     if (!array)
         return false;
 
@@ -652,7 +654,7 @@ NodeBuilder::newArray(NodeVector &elts, Value *dst)
         if (val.isMagic(JS_SERIALIZE_NO_NODE))
             continue;
 
-        if (!array->setElement(cx, i, &val, false))
+        if (!array->setElement(cx, array, i, &val, false))
             return false;
     }
 
@@ -1095,6 +1097,14 @@ bool
 NodeBuilder::arrayExpression(NodeVector &elts, TokenPos *pos, Value *dst)
 {
     return listNode(AST_ARRAY_EXPR, "elements", elts, pos, dst);
+}
+
+bool
+NodeBuilder::spreadExpression(Value expr, TokenPos *pos, Value *dst)
+{
+    return newNode(AST_SPREAD_EXPR, pos,
+                   "expression", expr,
+                   dst);
 }
 
 bool
@@ -2516,7 +2526,8 @@ ASTSerializer::expression(ParseNode *pn, Value *dst)
 
         return pn->isKind(PNK_NEW)
                ? builder.newExpression(callee, args, &pn->pn_pos, dst)
-               : builder.callExpression(callee, args, &pn->pn_pos, dst);
+
+            : builder.callExpression(callee, args, &pn->pn_pos, dst);
       }
 
       case PNK_DOT:
@@ -2555,11 +2566,18 @@ ASTSerializer::expression(ParseNode *pn, Value *dst)
         return builder.arrayExpression(elts, &pn->pn_pos, dst);
       }
 
+      case PNK_SPREAD:
+      {
+          Value expr;
+          return expression(pn->pn_kid, &expr) &&
+                 builder.spreadExpression(expr, &pn->pn_pos, dst);
+      }
+
       case PNK_RC:
       {
         /* The parser notes any uninitialized properties by setting the PNX_DESTRUCT flag. */
         if (pn->pn_xflags & PNX_DESTRUCT) {
-            parser->reportErrorNumber(pn, JSREPORT_ERROR, JSMSG_BAD_OBJECT_INIT);
+            parser->reportError(pn, JSMSG_BAD_OBJECT_INIT);
             return false;
         }
         NodeVector elts(cx);
@@ -3214,7 +3232,7 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
 
     Parser parser(cx, /* prin = */ NULL, /* originPrin = */ NULL,
                   chars, length, filename, lineno, cx->findVersion(), 
-                  /* cfp = */ NULL, /* foldConstants = */ false, /* compileAndGo = */ false);
+                  /* foldConstants = */ false, /* compileAndGo = */ false);
     if (!parser.init())
         return JS_FALSE;
 

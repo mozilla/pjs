@@ -35,6 +35,7 @@
 #include "nsGUIEvent.h"
 #include "nsContentUtils.h"
 #include "nsRefreshDriver.h"
+#include "mozilla/Attributes.h"
 
 class nsRange;
 class nsIDragService;
@@ -183,9 +184,8 @@ public:
 
   //nsIViewObserver interface
 
-  virtual void Paint(nsIView* aViewToPaint, nsIWidget* aWidget,
-                     const nsRegion& aDirtyRegion, const nsIntRegion& aIntDirtyRegion,
-                     bool aWillSendDidPaint);
+  virtual void Paint(nsIView* aViewToPaint, const nsRegion& aDirtyRegion,
+                     PaintType aType, bool aWillSendDidPaint);
   virtual nsresult HandleEvent(nsIFrame*       aFrame,
                                nsGUIEvent*     aEvent,
                                bool            aDontRetargetEvents,
@@ -199,7 +199,7 @@ public:
   virtual bool ShouldIgnoreInvalidation();
   virtual void WillPaint(bool aWillSendDidPaint);
   virtual void DidPaint();
-  virtual void ScheduleViewManagerFlush();
+  virtual void ScheduleViewManagerFlush(PRUint32 aFlags = 0);
   virtual void DispatchSynthMouseMove(nsGUIEvent *aEvent, bool aFlushOnHoverChange);
   virtual void ClearMouseCaptureOnView(nsIView* aView);
   virtual bool IsVisible();
@@ -323,6 +323,9 @@ public:
                            size_t *aPresContextSize);
   size_t SizeOfTextRuns(nsMallocSizeOfFun aMallocSizeOf) const;
 
+  virtual void AddInvalidateHiddenPresShellObserver(nsRefreshDriver *aDriver);
+
+
   // This data is stored as a content property (nsGkAtoms::scrolling) on
   // mContentToScrollTo when we have a pending ScrollIntoView.
   struct ScrollIntoViewData {
@@ -430,7 +433,7 @@ protected:
   friend class nsPresShellEventCB;
 
   bool mCaretEnabled;
-#ifdef NS_DEBUG
+#ifdef DEBUG
   nsStyleSet* CloneStyleSet(nsStyleSet* aSet);
   bool VerifyIncrementalReflow();
   bool mInVerifyReflow;
@@ -596,7 +599,7 @@ protected:
   // Check if aEvent is a mouse event and record the mouse location for later
   // synth mouse moves.
   void RecordMouseLocation(nsGUIEvent* aEvent);
-  class nsSynthMouseMoveEvent : public nsARefreshObserver {
+  class nsSynthMouseMoveEvent MOZ_FINAL : public nsARefreshObserver {
   public:
     nsSynthMouseMoveEvent(PresShell* aPresShell, bool aFromScroll)
       : mPresShell(aPresShell), mFromScroll(aFromScroll) {
@@ -767,6 +770,12 @@ protected:
   bool                      mLastRootReflowHadUnconstrainedHeight : 1;
   bool                      mNoDelayedMouseEvents : 1;
   bool                      mNoDelayedKeyEvents : 1;
+
+  // False if calls to Paint with the retaining manager can be handled
+  // with an empty transaction, True if we require painting and a layer
+  // tree update.
+  bool                      mPaintRequired : 1;
+
 
   // We've been disconnected from the document.  We will refuse to paint the
   // document until either our timer fires or all frames are constructed.

@@ -41,8 +41,6 @@
 
 /************************************************************************/
 
-#define JS_Assert MOZ_Assert
-
 #ifdef __cplusplus
 namespace JS {
 
@@ -673,6 +671,14 @@ ObjectValue(JSObject &obj)
 }
 
 static JS_ALWAYS_INLINE Value
+ObjectValueCrashOnTouch()
+{
+    Value v;
+    v.setObject(*reinterpret_cast<JSObject *>(0x42));
+    return v;
+}
+
+static JS_ALWAYS_INLINE Value
 MagicValue(JSWhyMagic why)
 {
     Value v;
@@ -1159,6 +1165,8 @@ class AutoVectorRooter : protected AutoGCRooter
     T &operator[](size_t i) { return vector[i]; }
     const T &operator[](size_t i) const { return vector[i]; }
 
+    JS::Handle<T> handleAt(size_t i) const { return JS::Handle<T>::fromMarkedLocation(&vector[i]); }
+
     const T *begin() const { return vector.begin(); }
     T *begin() { return vector.begin(); }
 
@@ -1396,27 +1404,13 @@ typedef JSBool
  *  JSRESOLVE_QUALIFIED   a qualified property id: obj.id or obj[id], not id
  *  JSRESOLVE_ASSIGNING   obj[id] is on the left-hand side of an assignment
  *  JSRESOLVE_DETECTING   'if (o.p)...' or similar detection opcode sequence
- *  JSRESOLVE_DECLARING   var, const, or function prolog declaration opcode
  *
  * The *objp out parameter, on success, should be null to indicate that id
  * was not resolved; and non-null, referring to obj or one of its prototypes,
- * if id was resolved.
+ * if id was resolved.  The hook may assume *objp is null on entry.
  *
  * This hook instead of JSResolveOp is called via the JSClass.resolve member
  * if JSCLASS_NEW_RESOLVE is set in JSClass.flags.
- *
- * Setting JSCLASS_NEW_RESOLVE and JSCLASS_NEW_RESOLVE_GETS_START further
- * extends this hook by passing in the starting object on the prototype chain
- * via *objp.  Thus a resolve hook implementation may define the property id
- * being resolved in the object in which the id was first sought, rather than
- * in a prototype object whose class led to the resolve hook being called.
- *
- * When using JSCLASS_NEW_RESOLVE_GETS_START, the resolve hook must therefore
- * null *objp to signify "not resolved".  With only JSCLASS_NEW_RESOLVE and no
- * JSCLASS_NEW_RESOLVE_GETS_START, the hook can assume *objp is null on entry.
- * This is not good practice, but enough existing hook implementations count
- * on it that we can't break compatibility by passing the starting object in
- * *objp without a new JSClass flag.
  */
 typedef JSBool
 (* JSNewResolveOp)(JSContext *cx, JSHandleObject obj, JSHandleId id, unsigned flags,
@@ -1670,16 +1664,6 @@ typedef JSPrincipals *
  */
 typedef JSBool
 (* JSCSPEvalChecker)(JSContext *cx);
-
-/*
- * Security callbacks for pushing and popping context principals. These are only
- * temporarily necessary and will hopefully be gone again in a matter of weeks.
- */
-typedef JSBool
-(* JSPushContextPrincipalOp)(JSContext *cx, JSPrincipals *principals);
-
-typedef JSBool
-(* JSPopContextPrincipalOp)(JSContext *cx);
 
 /*
  * Callback used to ask the embedding for the cross compartment wrapper handler
@@ -2884,6 +2868,13 @@ class JS_PUBLIC_API(JSAutoEnterCompartment)
 
     bool entered() const { return state != STATE_UNENTERED; }
 
+    /*
+     * In general, consumers should try to avoid calling leave() explicitly,
+     * and defer to the destructor by scoping the JSAutoEnterCompartment
+     * appropriately. Sometimes, though, it's unavoidable.
+     */
+    void leave();
+
     ~JSAutoEnterCompartment();
 };
 
@@ -3345,7 +3336,7 @@ JSVAL_TRACE_KIND(jsval v)
  * kind argument is one of JSTRACE_OBJECT, JSTRACE_STRING or a tag denoting
  * internal implementation-specific traversal kind. In the latter case the only
  * operations on thing that the callback can do is to call JS_TraceChildren or
- * DEBUG-only JS_PrintTraceThingInfo.
+ * JS_GetTraceThingInfo.
  *
  * If eagerlyTraceWeakMaps is true, when we trace a WeakMap visit all
  * of its mappings.  This should be used in cases where the tracer
@@ -3475,14 +3466,14 @@ JS_TraceChildren(JSTracer *trc, void *thing, JSGCTraceKind kind);
 extern JS_PUBLIC_API(void)
 JS_TraceRuntime(JSTracer *trc);
 
-#ifdef DEBUG
-
 extern JS_PUBLIC_API(void)
-JS_PrintTraceThingInfo(char *buf, size_t bufsize, JSTracer *trc,
-                       void *thing, JSGCTraceKind kind, JSBool includeDetails);
+JS_GetTraceThingInfo(char *buf, size_t bufsize, JSTracer *trc,
+                     void *thing, JSGCTraceKind kind, JSBool includeDetails);
 
 extern JS_PUBLIC_API(const char *)
 JS_GetTraceEdgeName(JSTracer *trc, char *buffer, int bufferSize);
+
+#ifdef DEBUG
 
 /*
  * DEBUG-only method to dump the object graph of heap-allocated things.
@@ -3648,10 +3639,7 @@ struct JSClass {
 #define JSCLASS_NEW_ENUMERATE           (1<<1)  /* has JSNewEnumerateOp hook */
 #define JSCLASS_NEW_RESOLVE             (1<<2)  /* has JSNewResolveOp hook */
 #define JSCLASS_PRIVATE_IS_NSISUPPORTS  (1<<3)  /* private is (nsISupports *) */
-#define JSCLASS_NEW_RESOLVE_GETS_START  (1<<4)  /* JSNewResolveOp gets starting
-                                                   object in prototype chain
-                                                   passed in via *objp in/out
-                                                   parameter */
+/* (1<<4) is unused */
 #define JSCLASS_IMPLEMENTS_BARRIERS     (1<<5)  /* Correctly implements GC read
                                                    and write barriers */
 #define JSCLASS_DOCUMENT_OBSERVER       (1<<6)  /* DOM document observer */
@@ -3810,7 +3798,6 @@ JS_IdToValue(JSContext *cx, jsid id, jsval *vp);
 #define JSRESOLVE_QUALIFIED     0x01    /* resolve a qualified property id */
 #define JSRESOLVE_ASSIGNING     0x02    /* resolve on the left of assignment */
 #define JSRESOLVE_DETECTING     0x04    /* 'if (o.p)...' or '(o.p) ?...:...' */
-#define JSRESOLVE_DECLARING     0x08    /* var, const, or function prolog op */
 
 /*
  * Invoke the [[DefaultValue]] hook (see ES5 8.6.2) with the provided hint on
@@ -3935,10 +3922,7 @@ extern JS_PUBLIC_API(JSBool)
 JS_GetObjectId(JSContext *cx, JSObject *obj, jsid *idp);
 
 extern JS_PUBLIC_API(JSObject *)
-JS_NewGlobalObject(JSContext *cx, JSClass *clasp);
-
-extern JS_PUBLIC_API(JSObject *)
-JS_NewCompartmentAndGlobalObject(JSContext *cx, JSClass *clasp, JSPrincipals *principals);
+JS_NewGlobalObject(JSContext *cx, JSClass *clasp, JSPrincipals *principals);
 
 extern JS_PUBLIC_API(JSObject *)
 JS_NewObject(JSContext *cx, JSClass *clasp, JSObject *proto, JSObject *parent);
@@ -4349,8 +4333,6 @@ struct JSSecurityCallbacks {
     JSSubsumePrincipalsOp      subsumePrincipals;
     JSObjectPrincipalsFinder   findObjectPrincipals;
     JSCSPEvalChecker           contentSecurityPolicyAllows;
-    JSPushContextPrincipalOp   pushContextPrincipal;
-    JSPopContextPrincipalOp    popContextPrincipal;
 };
 
 extern JS_PUBLIC_API(void)
@@ -5681,10 +5663,6 @@ extern JS_PUBLIC_API(JSObject *)
 JS_NewObjectForConstructor(JSContext *cx, JSClass *clasp, const jsval *vp);
 
 /************************************************************************/
-
-#ifdef DEBUG
-#define JS_GC_ZEAL 1
-#endif
 
 #ifdef JS_GC_ZEAL
 #define JS_DEFAULT_ZEAL_FREQ 100

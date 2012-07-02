@@ -4,7 +4,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsXBLInsertionPoint.h"
-#include "nsContentUtils.h"
 #include "nsXBLBinding.h"
 
 nsXBLInsertionPoint::nsXBLInsertionPoint(nsIContent* aParentElement,
@@ -24,7 +23,7 @@ nsXBLInsertionPoint::~nsXBLInsertionPoint()
   }
 }
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(nsXBLInsertionPoint)
+NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(nsXBLInsertionPoint)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_NATIVE(nsXBLInsertionPoint)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMARRAY(mElements)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mDefaultContentTemplate)

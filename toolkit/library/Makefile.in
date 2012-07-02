@@ -348,18 +348,14 @@ EXTRA_DSO_LDOPTS += \
   $(NULL)
 
 ifdef MOZ_NATIVE_JPEG
-EXTRA_DSO_LDOPTS += $(JPEG_LIBS)
+EXTRA_DSO_LDOPTS += $(MOZ_JPEG_LIBS)
 endif
 
 ifdef MOZ_NATIVE_PNG
-EXTRA_DSO_LDOPTS += $(PNG_LIBS)
+EXTRA_DSO_LDOPTS += $(MOZ_PNG_LIBS)
 endif
 
-ifdef MOZ_NATIVE_ZLIB
-EXTRA_DSO_LDOPTS += $(ZLIB_LIBS)
-else
 EXTRA_DSO_LDOPTS += $(MOZ_ZLIB_LIBS)
-endif
 
 ifdef MOZ_NATIVE_HUNSPELL
 EXTRA_DSO_LDOPTS += $(MOZ_HUNSPELL_LIBS)
@@ -457,7 +453,7 @@ ifeq ($(MOZ_WIDGET_TOOLKIT),cocoa)
 CXXFLAGS += $(TK_CFLAGS)
 OS_LIBS += \
   -framework SystemConfiguration \
-  -framework QuickTime \
+  -framework QTKit \
   -framework IOKit \
   -F/System/Library/PrivateFrameworks -framework CoreUI \
   $(TK_LIBS) \
@@ -474,6 +470,7 @@ OS_LIBS += \
   -framework IOKit \
   -framework Foundation \
   -framework AppKit \
+  -framework Security \
   $(NULL)
 endif
 endif
@@ -536,10 +533,7 @@ endif
 endif
 
 ifeq ($(OS_ARCH),WINNT)
-OS_LIBS += $(call EXPAND_LIBNAME,shell32 ole32 version winspool comdlg32 imm32 msimg32 shlwapi psapi ws2_32 dbghelp rasapi32 rasdlg iphlpapi uxtheme setupapi secur32 sensorsapi portabledeviceguids windowscodecs)
-ifdef MOZ_CRASHREPORTER
-OS_LIBS += $(call EXPAND_LIBNAME,wininet)
-endif
+OS_LIBS += $(call EXPAND_LIBNAME,shell32 ole32 version winspool comdlg32 imm32 msimg32 shlwapi psapi ws2_32 dbghelp rasapi32 rasdlg iphlpapi uxtheme setupapi secur32 sensorsapi portabledeviceguids windowscodecs wininet)
 ifdef ACCESSIBILITY
 OS_LIBS += $(call EXPAND_LIBNAME,oleacc)
 endif
@@ -553,6 +547,7 @@ EXTRA_DSO_LDOPTS += \
   -DELAYLOAD:comdlg32.dll \
   -DELAYLOAD:winspool.drv \
   -DELAYLOAD:secur32.dll \
+  -DELAYLOAD:wininet.dll \
   $(NULL)
 
 # See nsDllMain for an explanation

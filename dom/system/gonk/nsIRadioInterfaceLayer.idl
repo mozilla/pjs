@@ -62,30 +62,29 @@ interface nsIRILTelephonyCallback : nsISupports
                    in AString error);
 };
 
-[scriptable, uuid(66a55943-e63b-4731-aece-9c04bfc14019)]
+[scriptable, uuid(8a711703-1ee5-4675-9d9a-0b188e944cfe)]
 interface nsIRILDataCallInfo : nsISupports
 {
-  readonly attribute unsigned long callState;
+  /**
+   * Current data call state, one of the
+   * nsINetworkInterface::NETWORK_STATE_* constants.
+   */
+  readonly attribute unsigned long state;
   readonly attribute AString cid;
   readonly attribute AString apn;
+  readonly attribute AString ifname;
 };
 
-[scriptable, uuid(cea91bcb-3cfb-42bb-8638-dae89e8870fc)]
+[scriptable, uuid(5bcac053-c245-46f0-bb45-d0039bfb89f5)]
 interface nsIRILDataCallback : nsISupports
 {
   /**
    * Notified when a data call changes state.
    *
-   * @param cid
-   *        The CID of the data call.
-   * @param interfaceName
-   *        Name of the associated network interface.
-   * @param dataState
-   *        One of the nsIRadioInterfaceLayer::DATACALL_STATE_* values.
+   * @param dataCall
+   *        A nsIRILDataCallInfo object.
    */
-  void dataCallStateChanged(in AString cid,
-                            in AString interfaceName,
-                            in unsigned short callState);
+  void dataCallStateChanged(in nsIRILDataCallInfo dataCall);
 
   /**
    * Called when nsIRadioInterfaceLayer is asked to enumerate the current
@@ -148,7 +147,81 @@ interface nsIRILContentHelper : nsIMobileConnectionProvider
   attribute bool speakerEnabled;
 };
 
-[scriptable, uuid(fa923335-4cbd-40d7-8d4a-5689a6db2b6d)]
+[scriptable, uuid(fd9e8b38-b839-4d56-8482-3bf1f5c8f2ee)]
+interface nsIICCRecords : nsISupports
+{
+  /**
+   * Mobile Subscriber ISDN Number
+   */
+  readonly attribute DOMString msisdn;
+
+  /**
+   * Administrative Data
+   */
+  readonly attribute jsval ad;
+
+  /**
+   * International Mobile Subscriber Identity
+   */
+  readonly attribute DOMString imsi;
+
+  /**
+   * Mobile Country Code
+   */
+  readonly attribute unsigned short mcc;
+
+  /**
+   * Mobile Network Code
+   */
+  readonly attribute unsigned short mnc;
+
+  /**
+   * USIM Service Table
+   */
+  readonly attribute jsval ust;
+
+  /**
+   * Abbreviated dialling numbers
+   */
+  readonly attribute jsval adn;
+
+  /**
+   * Fixed Dialling Numbers
+   */
+  readonly attribute jsval fdn;
+};
+
+[scriptable, uuid(1b47459d-d0bc-4e91-8509-cc106054b9ee)]
+interface nsICellLocation : nsISupports
+{
+  /**
+   * Location Area Code
+   */
+  readonly attribute unsigned short lac;
+
+  /**
+   * Cell Identity
+   */
+  readonly attribute unsigned long cid;
+};
+
+[scriptable, uuid(a6f6977e-f4ee-42b4-ae79-798c8c47c360)]
+interface nsIRilContext : nsISupports
+{
+  readonly attribute DOMString radioState;
+
+  readonly attribute DOMString cardState;
+
+  readonly attribute nsIICCRecords icc;
+
+  readonly attribute nsICellLocation cell;
+
+  readonly attribute nsIDOMMozMobileConnectionInfo voice;
+
+  readonly attribute nsIDOMMozMobileConnectionInfo data;
+};
+
+[scriptable, uuid(8b649965-6687-46a8-88fa-a5495ce90735)]
 interface nsIRadioInterfaceLayer : nsISupports
 {
   const unsigned short CALL_STATE_UNKNOWN = 0;
@@ -164,19 +237,12 @@ interface nsIRadioInterfaceLayer : nsISupports
   const unsigned short CALL_STATE_DISCONNECTED = 10;
   const unsigned short CALL_STATE_INCOMING = 11;
 
-  // Keep consistent with GECKO_DATACALL_STATE_* values in ril_consts.js
-  const unsigned short DATACALL_STATE_UNKNOWN = 0;
-  const unsigned short DATACALL_STATE_CONNECTING = 1;
-  const unsigned short DATACALL_STATE_CONNECTED = 2;
-  const unsigned short DATACALL_STATE_DISCONNECTING = 3;
-  const unsigned short DATACALL_STATE_DISCONNECTED = 4;
-
   /**
    * Activates or deactivates radio power.
    */
   void setRadioEnabled(in bool value);
 
-  readonly attribute jsval radioState;
+  readonly attribute nsIRilContext rilContext;
 
   /**
    * PDP APIs

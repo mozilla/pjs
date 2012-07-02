@@ -143,21 +143,11 @@ struct JSFunction : public JSObject
     }
 
 #if JS_BITS_PER_WORD == 32
-# ifdef JS_THREADSAFE
     static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT2_BACKGROUND;
     static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT4_BACKGROUND;
-# else
-    static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT2;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT4;
-# endif
 #else
-# ifdef JS_THREADSAFE
     static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT4_BACKGROUND;
     static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT8_BACKGROUND;
-# else
-    static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT4;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT8;
-# endif
 #endif
 
     inline void trace(JSTracer *trc);
@@ -228,21 +218,6 @@ extern JSFunction *
 js_DefineFunction(JSContext *cx, js::HandleObject obj, js::HandleId id, JSNative native,
                   unsigned nargs, unsigned flags,
                   js::gc::AllocKind kind = JSFunction::FinalizeKind);
-
-/*
- * Flags for js_ValueToFunction and js_ReportIsNotFunction.
- */
-#define JSV2F_CONSTRUCT         INITIAL_CONSTRUCT
-#define JSV2F_SEARCH_STACK      0x10000
-
-extern JSFunction *
-js_ValueToFunction(JSContext *cx, const js::Value *vp, unsigned flags);
-
-extern JSObject *
-js_ValueToCallableObject(JSContext *cx, js::Value *vp, unsigned flags);
-
-extern void
-js_ReportIsNotFunction(JSContext *cx, const js::Value *vp, unsigned flags);
 
 namespace js {
 

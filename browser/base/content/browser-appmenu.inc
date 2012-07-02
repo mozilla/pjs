@@ -162,7 +162,7 @@
                     key="key_inspect"/>
           <menuitem id="appmenu_responsiveUI"
                     hidden="true"
-                    label="&responsiveUI.label;"
+                    label="&responsiveDesignTool.label;"
                     type="checkbox"
                     command="Tools:ResponsiveUI"
                     key="key_responsiveUI"/>
@@ -187,6 +187,7 @@
                     command="Tools:Scratchpad"/>
           <menuitem id="appmenu_styleeditor"
                     hidden="true"
+                    type="checkbox"
                     label="&styleeditor.label;"
                     key="key_styleeditor"
                     command="Tools:StyleEditor"/>

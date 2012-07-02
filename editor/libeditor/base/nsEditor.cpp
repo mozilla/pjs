@@ -71,7 +71,6 @@
 #include "nsISelectionDisplay.h"
 #include "nsIInlineSpellChecker.h"
 #include "nsINameSpaceManager.h"
-#include "nsIHTMLDocument.h"
 #include "nsIParserService.h"
 
 #include "nsITransferable.h"
@@ -2732,22 +2731,21 @@ NS_IMETHODIMP nsEditor::DeleteText(nsIDOMCharacterData *aElement,
 }
 
 
-NS_IMETHODIMP nsEditor::CreateTxnForDeleteText(nsIDOMCharacterData *aElement,
-                                               PRUint32             aOffset,
-                                               PRUint32             aLength,
-                                               DeleteTextTxn      **aTxn)
+nsresult
+nsEditor::CreateTxnForDeleteText(nsIDOMCharacterData* aElement,
+                                 PRUint32             aOffset,
+                                 PRUint32             aLength,
+                                 DeleteTextTxn**      aTxn)
 {
   NS_ENSURE_TRUE(aElement, NS_ERROR_NULL_POINTER);
 
   nsRefPtr<DeleteTextTxn> txn = new DeleteTextTxn();
 
-  nsresult rv = txn->Init(this, aElement, aOffset, aLength, &mRangeUpdater);
-  if (NS_SUCCEEDED(rv))
-  {
-    txn.forget(aTxn);
-  }
+  nsresult res = txn->Init(this, aElement, aOffset, aLength, &mRangeUpdater);
+  NS_ENSURE_SUCCESS(res, res);
 
-  return rv;
+  txn.forget(aTxn);
+  return NS_OK;
 }
 
 
@@ -3536,18 +3534,15 @@ nsEditor::GetLeftmostChild(nsIDOMNode *aCurrentNode,
   return resultNode.forget();
 }
 
-bool 
-nsEditor::IsBlockNode(nsIDOMNode *aNode)
+bool
+nsEditor::IsBlockNode(nsIDOMNode* aNode)
 {
-  // stub to be overridden in nsHTMLEditor.
-  // screwing around with the class hierarchy here in order
-  // to not duplicate the code in GetNextNode/GetPrevNode
-  // across both nsEditor/nsHTMLEditor.  
-  return false;
+  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
+  return IsBlockNode(node);
 }
 
-bool 
-nsEditor::IsBlockNode(nsINode *aNode)
+bool
+nsEditor::IsBlockNode(nsINode* aNode)
 {
   // stub to be overridden in nsHTMLEditor.
   // screwing around with the class hierarchy here in order
@@ -4333,7 +4328,7 @@ nsEditor::DeleteSelectionImpl(EDirection aAction,
   nsresult res = GetSelection(getter_AddRefs(selection));
   NS_ENSURE_SUCCESS(res, res);
   nsRefPtr<EditAggregateTxn> txn;
-  nsCOMPtr<nsIDOMNode> deleteNode;
+  nsCOMPtr<nsINode> deleteNode;
   PRInt32 deleteCharOffset = 0, deleteCharLength = 0;
   res = CreateTxnForDeleteSelection(aAction, getter_AddRefs(txn),
                                     getter_AddRefs(deleteNode),
@@ -4353,7 +4348,7 @@ nsEditor::DeleteSelectionImpl(EDirection aAction,
         mActionListeners[i]->WillDeleteText(deleteCharData, deleteCharOffset, 1);
     else
       for (i = 0; i < mActionListeners.Count(); i++)
-        mActionListeners[i]->WillDeleteNode(deleteNode);
+        mActionListeners[i]->WillDeleteNode(deleteNode->AsDOMNode());
 
     // Delete the specified amount
     res = DoTransaction(txn);  
@@ -4367,7 +4362,7 @@ nsEditor::DeleteSelectionImpl(EDirection aAction,
         mActionListeners[i]->DidDeleteText(deleteCharData, deleteCharOffset, 1, res);
     else
       for (i = 0; i < mActionListeners.Count(); i++)
-        mActionListeners[i]->DidDeleteNode(deleteNode, res);
+        mActionListeners[i]->DidDeleteNode(deleteNode->AsDOMNode(), res);
   }
 
   return res;
@@ -4378,25 +4373,25 @@ NS_IMETHODIMP
 nsEditor::DeleteSelectionAndCreateNode(const nsAString& aTag,
                                            nsIDOMNode ** aNewNode)
 {
-  nsCOMPtr<nsIDOMNode> parentSelectedNode;
-  PRInt32 offsetOfNewNode;
-  nsresult result = DeleteSelectionAndPrepareToCreateNode(parentSelectedNode,
-                                                          offsetOfNewNode);
+  nsresult result = DeleteSelectionAndPrepareToCreateNode();
   NS_ENSURE_SUCCESS(result, result);
 
+  nsRefPtr<Selection> selection = GetSelection();
+  NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
+
+  nsCOMPtr<nsINode> node = selection->GetAnchorNode();
+  PRInt32 offset = selection->GetAnchorOffset();
+
   nsCOMPtr<nsIDOMNode> newNode;
-  result = CreateNode(aTag, parentSelectedNode, offsetOfNewNode,
+  result = CreateNode(aTag, node->AsDOMNode(), offset,
                       getter_AddRefs(newNode));
-  // XXX: ERROR_HANDLING  check result, and make sure aNewNode is set correctly in success/failure cases
+  // XXX: ERROR_HANDLING  check result, and make sure aNewNode is set correctly
+  // in success/failure cases
   *aNewNode = newNode;
   NS_IF_ADDREF(*aNewNode);
 
   // we want the selection to be just after the new node
-  nsCOMPtr<nsISelection> selection;
-  result = GetSelection(getter_AddRefs(selection));
-  NS_ENSURE_SUCCESS(result, result);
-  NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
-  return selection->Collapse(parentSelectedNode, offsetOfNewNode+1);
+  return selection->Collapse(node, offset + 1);
 }
 
 
@@ -4443,86 +4438,55 @@ nsEditor::IsIMEComposing() {
   return mIsIMEComposing;
 }
 
-NS_IMETHODIMP
-nsEditor::DeleteSelectionAndPrepareToCreateNode(nsCOMPtr<nsIDOMNode> &parentSelectedNode, PRInt32& offsetOfNewNode)
+nsresult
+nsEditor::DeleteSelectionAndPrepareToCreateNode()
 {
-  nsresult result=NS_ERROR_NOT_INITIALIZED;
-  nsCOMPtr<nsISelection> selection;
-  result = GetSelection(getter_AddRefs(selection));
-  NS_ENSURE_SUCCESS(result, result);
+  nsresult res;
+  nsRefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
 
   if (!selection->Collapsed()) {
-    result = DeleteSelection(nsIEditor::eNone, nsIEditor::eStrip);
-    if (NS_FAILED(result)) {
-      return result;
-    }
-    // get the new selection
-    result = GetSelection(getter_AddRefs(selection));
-    if (NS_FAILED(result)) {
-      return result;
-    }
+    res = DeleteSelection(nsIEditor::eNone, nsIEditor::eStrip);
+    NS_ENSURE_SUCCESS(res, res);
 
-    nsCOMPtr<nsIDOMNode> selectedNode;
-    selection->GetAnchorNode(getter_AddRefs(selectedNode));
-    // no selection is ok.
-    // if there is a selection, it must be collapsed
-    if (selectedNode && !selection->Collapsed()) {
-      result = selection->CollapseToEnd();
-      NS_ENSURE_SUCCESS(result, result);
+    MOZ_ASSERT(selection->Collapsed(),
+               "Selection not collapsed after delete");
+  }
+
+  // If the selection is a chardata node, split it if necessary and compute
+  // where to put the new node
+  nsCOMPtr<nsINode> node = selection->GetAnchorNode();
+  MOZ_ASSERT(node, "Selection has no ranges in it");
+
+  if (node && node->IsNodeOfType(nsINode::eDATA_NODE)) {
+    NS_ASSERTION(node->GetNodeParent(),
+                 "It's impossible to insert into chardata with no parent -- "
+                 "fix the caller");
+    NS_ENSURE_STATE(node->GetNodeParent());
+
+    PRInt32 offset = selection->GetAnchorOffset();
+
+    if (offset == 0) {
+      res = selection->Collapse(node->GetNodeParent(),
+                                node->GetNodeParent()->IndexOf(node));
+      MOZ_ASSERT(NS_SUCCEEDED(res));
+      NS_ENSURE_SUCCESS(res, res);
+    } else if (offset == (PRInt32)node->Length()) {
+      res = selection->Collapse(node->GetNodeParent(),
+                                node->GetNodeParent()->IndexOf(node) + 1);
+      MOZ_ASSERT(NS_SUCCEEDED(res));
+      NS_ENSURE_SUCCESS(res, res);
+    } else {
+      nsCOMPtr<nsIDOMNode> tmp;
+      res = SplitNode(node->AsDOMNode(), offset, getter_AddRefs(tmp));
+      NS_ENSURE_SUCCESS(res, res);
+      res = selection->Collapse(node->GetNodeParent(),
+                                node->GetNodeParent()->IndexOf(node));
+      MOZ_ASSERT(NS_SUCCEEDED(res));
+      NS_ENSURE_SUCCESS(res, res);
     }
   }
-  // split the selected node
-  PRInt32 offsetOfSelectedNode;
-  result = selection->GetAnchorNode(getter_AddRefs(parentSelectedNode));
-  if (NS_SUCCEEDED(result) && NS_SUCCEEDED(selection->GetAnchorOffset(&offsetOfSelectedNode)) && parentSelectedNode)
-  {
-    nsCOMPtr<nsIDOMNode> selectedNode;
-    PRUint32 selectedNodeContentCount=0;
-    nsCOMPtr<nsIDOMCharacterData>selectedParentNodeAsText;
-    selectedParentNodeAsText = do_QueryInterface(parentSelectedNode);
-
-    offsetOfNewNode = offsetOfSelectedNode;
-    
-    /* if the selection is a text node, split the text node if necessary
-       and compute where to put the new node
-    */
-    if (selectedParentNodeAsText) 
-    { 
-      PRInt32 indexOfTextNodeInParent;
-      selectedNode = do_QueryInterface(parentSelectedNode);
-      selectedNode->GetParentNode(getter_AddRefs(parentSelectedNode));
-      selectedParentNodeAsText->GetLength(&selectedNodeContentCount);
-      GetChildOffset(selectedNode, parentSelectedNode, indexOfTextNodeInParent);
-
-      if ((offsetOfSelectedNode!=0) && (((PRUint32)offsetOfSelectedNode)!=selectedNodeContentCount))
-      {
-        nsCOMPtr<nsIDOMNode> newSiblingNode;
-        result = SplitNode(selectedNode, offsetOfSelectedNode, getter_AddRefs(newSiblingNode));
-        // now get the node's offset in its parent, and insert the new tag there
-        if (NS_SUCCEEDED(result)) {
-          result = GetChildOffset(selectedNode, parentSelectedNode, offsetOfNewNode);
-        }
-      }
-      else 
-      { // determine where to insert the new node
-        if (0==offsetOfSelectedNode) {
-          offsetOfNewNode = indexOfTextNodeInParent; // insert new node as previous sibling to selection parent
-        }
-        else {                 // insert new node as last child
-          GetChildOffset(selectedNode, parentSelectedNode, offsetOfNewNode);
-          offsetOfNewNode++;    // offsets are 0-based, and we need the index of the new node
-        }
-      }
-    }
-    // Here's where the new node was inserted
-  }
-#ifdef DEBUG
-  else {
-    printf("InsertLineBreak into an empty document is not yet supported\n");
-  }
-#endif
-  return result;
+  return NS_OK;
 }
 
 
@@ -4712,88 +4676,65 @@ nsEditor::CreateTxnForRemoveStyleSheet(nsCSSStyleSheet* aSheet, RemoveStyleSheet
 }
 
 
-NS_IMETHODIMP
-nsEditor::CreateTxnForDeleteSelection(nsIEditor::EDirection aAction,
-                                      EditAggregateTxn ** aTxn,
-                                      nsIDOMNode ** aNode,
-                                      PRInt32 *aOffset,
-                                      PRInt32 *aLength)
+nsresult
+nsEditor::CreateTxnForDeleteSelection(EDirection aAction,
+                                      EditAggregateTxn** aTxn,
+                                      nsINode** aNode,
+                                      PRInt32* aOffset,
+                                      PRInt32* aLength)
 {
-  NS_ENSURE_TRUE(aTxn, NS_ERROR_NULL_POINTER);
+  MOZ_ASSERT(aTxn);
   *aTxn = nsnull;
 
-  nsRefPtr<EditAggregateTxn> aggTxn;
-  nsCOMPtr<nsISelectionController> selCon;
-  GetSelectionController(getter_AddRefs(selCon));
-  NS_ENSURE_TRUE(selCon, NS_ERROR_NOT_INITIALIZED);
-  nsCOMPtr<nsISelection> selection;
-  nsresult result = selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-                                         getter_AddRefs(selection));
-  if ((NS_SUCCEEDED(result)) && selection)
-  {
-    // Check whether the selection is collapsed and we should do nothing:
-    if (selection->Collapsed() && aAction == eNone)
-      return NS_OK;
+  nsRefPtr<Selection> selection = GetSelection();
+  NS_ENSURE_STATE(selection);
 
-    // allocate the out-param transaction
-    aggTxn = new EditAggregateTxn();
+  // Check whether the selection is collapsed and we should do nothing:
+  if (selection->Collapsed() && aAction == eNone) {
+    return NS_OK;
+  }
 
-    nsCOMPtr<nsISelectionPrivate>selPrivate(do_QueryInterface(selection));
-    nsCOMPtr<nsIEnumerator> enumerator;
-    result = selPrivate->GetEnumerator(getter_AddRefs(enumerator));
-    if (NS_SUCCEEDED(result) && enumerator)
-    {
-      for (enumerator->First(); NS_OK!=enumerator->IsDone(); enumerator->Next())
-      {
-        nsCOMPtr<nsISupports> currentItem;
-        result = enumerator->CurrentItem(getter_AddRefs(currentItem));
-        if ((NS_SUCCEEDED(result)) && (currentItem))
-        {
-          nsCOMPtr<nsIDOMRange> range( do_QueryInterface(currentItem) );
-          bool isCollapsed;
-          range->GetCollapsed(&isCollapsed);
-          if (!isCollapsed)
-          {
-            nsRefPtr<DeleteRangeTxn> txn = new DeleteRangeTxn();
-            if (txn)
-            {
-              txn->Init(this, range, &mRangeUpdater);
-              aggTxn->AppendChild(txn);
-            }
-            else
-              result = NS_ERROR_OUT_OF_MEMORY;
-          }
-          // Same with range as with selection; if it is collapsed and action
-          // is eNone, do nothing.
-          else if (aAction != eNone)
-          { // we have an insertion point.  delete the thing in front of it or behind it, depending on aAction
-            result = CreateTxnForDeleteInsertionPoint(range, aAction, aggTxn, aNode, aOffset, aLength);
-          }
-        }
-      }
+  // allocate the out-param transaction
+  nsRefPtr<EditAggregateTxn> aggTxn = new EditAggregateTxn();
+
+  nsSelectionIterator iter(selection);
+  for (iter.First(); iter.IsDone() != NS_OK; iter.Next()) {
+    nsRefPtr<nsRange> range = iter.CurrentItem();
+    NS_ENSURE_STATE(range);
+
+    // Same with range as with selection; if it is collapsed and action
+    // is eNone, do nothing.
+    if (!range->Collapsed()) {
+      nsRefPtr<DeleteRangeTxn> txn = new DeleteRangeTxn();
+      txn->Init(this, range, &mRangeUpdater);
+      aggTxn->AppendChild(txn);
+    } else if (aAction != eNone) {
+      // we have an insertion point.  delete the thing in front of it or
+      // behind it, depending on aAction
+      nsresult res = CreateTxnForDeleteInsertionPoint(range, aAction, aggTxn,
+                                                      aNode, aOffset, aLength);
+      NS_ENSURE_SUCCESS(res, res);
     }
   }
 
-  // Only set the outparam if building the txn was a success, otherwise
-  // we let the aggregation txn be destroyed when the refptr goes out of scope
-  if (NS_SUCCEEDED(result))
-  {
-    aggTxn.forget(aTxn);
-  }
+  aggTxn.forget(aTxn);
 
-  return result;
+  return NS_OK;
 }
 
 nsresult
-nsEditor::CreateTxnForDeleteCharacter(nsIDOMCharacterData  *aData,
-                                      PRUint32              aOffset,
-                                      nsIEditor::EDirection aDirection,
-                                      DeleteTextTxn       **aTxn)
+nsEditor::CreateTxnForDeleteCharacter(nsIDOMCharacterData* aData,
+                                      PRUint32             aOffset,
+                                      EDirection           aDirection,
+                                      DeleteTextTxn**      aTxn)
 {
   NS_ASSERTION(aDirection == eNext || aDirection == ePrevious,
                "invalid direction");
   nsAutoString data;
   aData->GetData(data);
+  NS_ASSERTION(data.Length(), "Trying to delete from a zero-length node");
+  NS_ENSURE_STATE(data.Length());
+
   PRUint32 segOffset = aOffset, segLength = 1;
   if (aDirection == eNext) {
     if (segOffset + 1 < data.Length() &&
@@ -4816,185 +4757,177 @@ nsEditor::CreateTxnForDeleteCharacter(nsIDOMCharacterData  *aData,
   return CreateTxnForDeleteText(aData, segOffset, segLength, aTxn);
 }
 
-//XXX: currently, this doesn't handle edge conditions because GetNext/GetPrior are not implemented
-NS_IMETHODIMP
-nsEditor::CreateTxnForDeleteInsertionPoint(nsIDOMRange          *aRange, 
-                                           nsIEditor::EDirection aAction,
-                                           EditAggregateTxn     *aTxn,
-                                           nsIDOMNode          **aNode,
-                                           PRInt32              *aOffset,
-                                           PRInt32              *aLength)
+//XXX: currently, this doesn't handle edge conditions because GetNext/GetPrior
+//are not implemented
+nsresult
+nsEditor::CreateTxnForDeleteInsertionPoint(nsRange*          aRange,
+                                           EDirection        aAction,
+                                           EditAggregateTxn* aTxn,
+                                           nsINode**         aNode,
+                                           PRInt32*          aOffset,
+                                           PRInt32*          aLength)
 {
-  NS_ASSERTION(aAction != eNone, "invalid action");
+  MOZ_ASSERT(aAction != eNone);
+
+  nsresult res;
 
   // get the node and offset of the insertion point
-  nsCOMPtr<nsIDOMNode> node;
-  nsresult result = aRange->GetStartContainer(getter_AddRefs(node));
-  NS_ENSURE_SUCCESS(result, result);
+  nsCOMPtr<nsINode> node = aRange->GetStartParent();
+  NS_ENSURE_STATE(node);
 
-  PRInt32 offset;
-  result = aRange->GetStartOffset(&offset);
-  NS_ENSURE_SUCCESS(result, result);
+  PRInt32 offset = aRange->StartOffset();
 
-  // determine if the insertion point is at the beginning, middle, or end of the node
-  nsCOMPtr<nsIDOMCharacterData> nodeAsText = do_QueryInterface(node);
-  nsCOMPtr<nsINode> inode = do_QueryInterface(node);
-  MOZ_ASSERT(inode);
+  // determine if the insertion point is at the beginning, middle, or end of
+  // the node
+  nsCOMPtr<nsIDOMCharacterData> nodeAsCharData = do_QueryInterface(node);
 
-  PRUint32 count = inode->Length();
+  PRUint32 count = node->Length();
 
   bool isFirst = (0 == offset);
   bool isLast  = (count == (PRUint32)offset);
 
-  // XXX: if isFirst && isLast, then we'll need to delete the node 
+  // XXX: if isFirst && isLast, then we'll need to delete the node
   //      as well as the 1 child
 
   // build a transaction for deleting the appropriate data
   // XXX: this has to come from rule section
-  if ((ePrevious==aAction) && (true==isFirst))
-  { // we're backspacing from the beginning of the node.  Delete the first thing to our left
-    nsCOMPtr<nsIDOMNode> priorNode;
-    result = GetPriorNode(node, true, address_of(priorNode));
-    if ((NS_SUCCEEDED(result)) && priorNode)
-    { // there is a priorNode, so delete its last child (if text content, delete the last char.)
-      // if it has no children, delete it
-      nsCOMPtr<nsIDOMCharacterData> priorNodeAsText = do_QueryInterface(priorNode);
-      if (priorNodeAsText)
-      {
-        PRUint32 length=0;
-        priorNodeAsText->GetLength(&length);
-        if (0<length)
-        {
-          nsRefPtr<DeleteTextTxn> txn;
-          result = CreateTxnForDeleteCharacter(priorNodeAsText, length,
-                                               ePrevious, getter_AddRefs(txn));
-          if (NS_SUCCEEDED(result)) {
-            aTxn->AppendChild(txn);
-            NS_ADDREF(*aNode = priorNode);
-            *aOffset = txn->GetOffset();
-            *aLength = txn->GetNumCharsToDelete();
-          }
-        }
-        else
-        { // XXX: can you have an empty text node?  If so, what do you do?
-          printf("ERROR: found a text node with 0 characters\n");
-          result = NS_ERROR_UNEXPECTED;
-        }
-      }
-      else
-      { // priorNode is not text, so tell it's parent to delete it
-        nsRefPtr<DeleteElementTxn> txn;
-        result = CreateTxnForDeleteElement(priorNode, getter_AddRefs(txn));
-        if (NS_SUCCEEDED(result)) {
-          aTxn->AppendChild(txn);
-          NS_ADDREF(*aNode = priorNode);
-        }
-      }
-    }
-  }
-  else if ((nsIEditor::eNext==aAction) && (true==isLast))
-  { // we're deleting from the end of the node.  Delete the first thing to our right
-    nsCOMPtr<nsIDOMNode> nextNode;
-    result = GetNextNode(node, true, address_of(nextNode));
-    if ((NS_SUCCEEDED(result)) && nextNode)
-    { // there is a nextNode, so delete it's first child (if text content, delete the first char.)
-      // if it has no children, delete it
-      nsCOMPtr<nsIDOMCharacterData> nextNodeAsText = do_QueryInterface(nextNode);
-      if (nextNodeAsText)
-      {
-        PRUint32 length=0;
-        nextNodeAsText->GetLength(&length);
-        if (0<length)
-        {
-          nsRefPtr<DeleteTextTxn> txn;
-          result = CreateTxnForDeleteCharacter(nextNodeAsText, 0, eNext,
-                                               getter_AddRefs(txn));
-          if (NS_SUCCEEDED(result)) {
-            aTxn->AppendChild(txn);
-            NS_ADDREF(*aNode = nextNode);
-            *aOffset = txn->GetOffset();
-            *aLength = txn->GetNumCharsToDelete();
-          }
-        }
-        else
-        { // XXX: can you have an empty text node?  If so, what do you do?
-          printf("ERROR: found a text node with 0 characters\n");
-          result = NS_ERROR_UNEXPECTED;
-        }
-      }
-      else
-      { // nextNode is not text, so tell its parent to delete it
-        nsRefPtr<DeleteElementTxn> txn;
-        result = CreateTxnForDeleteElement(nextNode, getter_AddRefs(txn));
-        if (NS_SUCCEEDED(result)) {
-          aTxn->AppendChild(txn);
-          NS_ADDREF(*aNode = nextNode);
-        }
-      }
-    }
-  }
-  else
-  {
-    if (nodeAsText)
-    { // we have text, so delete a char at the proper offset
+  if (aAction == ePrevious && isFirst) {
+    // we're backspacing from the beginning of the node.  Delete the first
+    // thing to our left
+    nsCOMPtr<nsIContent> priorNode = GetPriorNode(node, true);
+    NS_ENSURE_STATE(priorNode);
+
+    // there is a priorNode, so delete its last child (if chardata, delete the
+    // last char). if it has no children, delete it
+    nsCOMPtr<nsIDOMCharacterData> priorNodeAsCharData =
+      do_QueryInterface(priorNode);
+    if (priorNodeAsCharData) {
+      PRUint32 length = priorNode->Length();
+      // Bail out for empty chardata XXX: Do we want to do something else?
+      NS_ENSURE_STATE(length);
       nsRefPtr<DeleteTextTxn> txn;
-      result = CreateTxnForDeleteCharacter(nodeAsText, offset, aAction,
-                                           getter_AddRefs(txn));
-      if (NS_SUCCEEDED(result)) {
-        aTxn->AppendChild(txn);
-        NS_ADDREF(*aNode = node);
-        *aOffset = txn->GetOffset();
-        *aLength = txn->GetNumCharsToDelete();
-      }
+      res = CreateTxnForDeleteCharacter(priorNodeAsCharData, length,
+                                        ePrevious, getter_AddRefs(txn));
+      NS_ENSURE_SUCCESS(res, res);
+
+      *aOffset = txn->GetOffset();
+      *aLength = txn->GetNumCharsToDelete();
+      aTxn->AppendChild(txn);
+    } else {
+      // priorNode is not chardata, so tell its parent to delete it
+      nsRefPtr<DeleteElementTxn> txn;
+      res = CreateTxnForDeleteElement(priorNode->AsDOMNode(),
+                                      getter_AddRefs(txn));
+      NS_ENSURE_SUCCESS(res, res);
+
+      aTxn->AppendChild(txn);
     }
-    else
-    { // we're either deleting a node or some text, need to dig into the next/prev node to find out
-      nsCOMPtr<nsIDOMNode> selectedNode;
-      if (ePrevious==aAction)
-      {
-        result = GetPriorNode(node, offset, true, address_of(selectedNode));
-      }
-      else if (eNext==aAction)
-      {
-        result = GetNextNode(node, offset, true, address_of(selectedNode));
-      }
-      if (NS_FAILED(result)) { return result; }
-      if (selectedNode) 
-      {
-        nsCOMPtr<nsIDOMCharacterData> selectedNodeAsText =
-                                             do_QueryInterface(selectedNode);
-        if (selectedNodeAsText)
-        { // we are deleting from a text node, so do a text deletion
-          PRUint32 position = 0;    // default for forward delete
-          if (ePrevious==aAction)
-          {
-            selectedNodeAsText->GetLength(&position);
-          }
-          nsRefPtr<DeleteTextTxn> delTextTxn;
-          result = CreateTxnForDeleteCharacter(selectedNodeAsText, position,
-                                               aAction,
-                                               getter_AddRefs(delTextTxn));
-          if (NS_FAILED(result))  { return result; }
-          if (!delTextTxn) { return NS_ERROR_NULL_POINTER; }
-          aTxn->AppendChild(delTextTxn);
-          NS_ADDREF(*aNode = selectedNode);
-          *aOffset = delTextTxn->GetOffset();
-          *aLength = delTextTxn->GetNumCharsToDelete();
-        }
-        else
-        {
-          nsRefPtr<DeleteElementTxn> delElementTxn;
-          result = CreateTxnForDeleteElement(selectedNode,
-                                             getter_AddRefs(delElementTxn));
-          if (NS_FAILED(result))  { return result; }
-          if (!delElementTxn) { return NS_ERROR_NULL_POINTER; }
-          aTxn->AppendChild(delElementTxn);
-          NS_ADDREF(*aNode = selectedNode);
-        }
-      }
-    }
+
+    NS_ADDREF(*aNode = priorNode);
+
+    return NS_OK;
   }
-  return result;
+
+  if (aAction == eNext && isLast) {
+    // we're deleting from the end of the node.  Delete the first thing to our
+    // right
+    nsCOMPtr<nsIContent> nextNode = GetNextNode(node, true);
+    NS_ENSURE_STATE(nextNode);
+
+    // there is a nextNode, so delete its first child (if chardata, delete the
+    // first char). if it has no children, delete it
+    nsCOMPtr<nsIDOMCharacterData> nextNodeAsCharData =
+      do_QueryInterface(nextNode);
+    if (nextNodeAsCharData) {
+      PRUint32 length = nextNode->Length();
+      // Bail out for empty chardata XXX: Do we want to do something else?
+      NS_ENSURE_STATE(length);
+      nsRefPtr<DeleteTextTxn> txn;
+      res = CreateTxnForDeleteCharacter(nextNodeAsCharData, 0, eNext,
+                                        getter_AddRefs(txn));
+      NS_ENSURE_SUCCESS(res, res);
+
+      *aOffset = txn->GetOffset();
+      *aLength = txn->GetNumCharsToDelete();
+      aTxn->AppendChild(txn);
+    } else {
+      // nextNode is not chardata, so tell its parent to delete it
+      nsRefPtr<DeleteElementTxn> txn;
+      res = CreateTxnForDeleteElement(nextNode->AsDOMNode(),
+                                      getter_AddRefs(txn));
+      NS_ENSURE_SUCCESS(res, res);
+      aTxn->AppendChild(txn);
+    }
+
+    NS_ADDREF(*aNode = nextNode);
+
+    return NS_OK;
+  }
+
+  if (nodeAsCharData) {
+    // we have chardata, so delete a char at the proper offset
+    nsRefPtr<DeleteTextTxn> txn;
+    res = CreateTxnForDeleteCharacter(nodeAsCharData, offset, aAction,
+                                      getter_AddRefs(txn));
+    NS_ENSURE_SUCCESS(res, res);
+
+    aTxn->AppendChild(txn);
+    NS_ADDREF(*aNode = node);
+    *aOffset = txn->GetOffset();
+    *aLength = txn->GetNumCharsToDelete();
+  } else {
+    // we're either deleting a node or chardata, need to dig into the next/prev
+    // node to find out
+    nsCOMPtr<nsINode> selectedNode;
+    if (aAction == ePrevious) {
+      selectedNode = GetPriorNode(node, offset, true);
+    } else if (aAction == eNext) {
+      selectedNode = GetNextNode(node, offset, true);
+    }
+
+    while (selectedNode &&
+           selectedNode->IsNodeOfType(nsINode::eDATA_NODE) &&
+           !selectedNode->Length()) {
+      // Can't delete an empty chardata node (bug 762183)
+      if (aAction == ePrevious) {
+        selectedNode = GetPriorNode(selectedNode, true);
+      } else if (aAction == eNext) {
+        selectedNode = GetNextNode(selectedNode, true);
+      }
+    }
+    NS_ENSURE_STATE(selectedNode);
+
+    nsCOMPtr<nsIDOMCharacterData> selectedNodeAsCharData =
+      do_QueryInterface(selectedNode);
+    if (selectedNodeAsCharData) {
+      // we are deleting from a chardata node, so do a character deletion
+      PRUint32 position = 0;
+      if (aAction == ePrevious) {
+        position = selectedNode->Length();
+      }
+      nsRefPtr<DeleteTextTxn> delTextTxn;
+      res = CreateTxnForDeleteCharacter(selectedNodeAsCharData, position,
+                                        aAction, getter_AddRefs(delTextTxn));
+      NS_ENSURE_SUCCESS(res, res);
+      NS_ENSURE_TRUE(delTextTxn, NS_ERROR_NULL_POINTER);
+
+      aTxn->AppendChild(delTextTxn);
+      *aOffset = delTextTxn->GetOffset();
+      *aLength = delTextTxn->GetNumCharsToDelete();
+    } else {
+      nsRefPtr<DeleteElementTxn> delElementTxn;
+      res = CreateTxnForDeleteElement(selectedNode->AsDOMNode(),
+                                      getter_AddRefs(delElementTxn));
+      NS_ENSURE_SUCCESS(res, res);
+      NS_ENSURE_TRUE(delElementTxn, NS_ERROR_NULL_POINTER);
+
+      aTxn->AppendChild(delElementTxn);
+    }
+
+    NS_ADDREF(*aNode = selectedNode);
+  }
+
+  return NS_OK;
 }
 
 nsresult 

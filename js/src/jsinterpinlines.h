@@ -94,6 +94,44 @@ ComputeThis(JSContext *cx, StackFrame *fp)
 }
 
 /*
+ * Every possible consumer of MagicValue(JS_OPTIMIZED_ARGUMENTS) (as determined
+ * by ScriptAnalysis::needsArgsObj) must check for these magic values and, when
+ * one is received, act as if the value were the function's ArgumentsObject.
+ * Additionally, it is possible that, after 'arguments' was copied into a
+ * temporary, the arguments object has been created a some other failed guard
+ * that called JSScript::argumentsOptimizationFailed. In this case, it is
+ * always valid (and necessary) to replace JS_OPTIMIZED_ARGUMENTS with the real
+ * arguments object.
+ */
+static inline bool
+IsOptimizedArguments(StackFrame *fp, Value *vp)
+{
+    if (vp->isMagic(JS_OPTIMIZED_ARGUMENTS) && fp->script()->needsArgsObj())
+        *vp = ObjectValue(fp->argsObj());
+    return vp->isMagic(JS_OPTIMIZED_ARGUMENTS);
+}
+
+/*
+ * One optimized consumer of MagicValue(JS_OPTIMIZED_ARGUMENTS) is f.apply.
+ * However, this speculation must be guarded before calling 'apply' in case it
+ * is not the builtin Function.prototype.apply.
+ */
+static inline bool
+GuardFunApplyArgumentsOptimization(JSContext *cx)
+{
+    FrameRegs &regs = cx->regs();
+    if (IsOptimizedArguments(regs.fp(), &regs.sp[-1])) {
+        CallArgs args = CallArgsFromSp(GET_ARGC(regs.pc), regs.sp);
+        if (!IsNativeFunction(args.calleev(), js_fun_apply)) {
+            if (!JSScript::argumentsOptimizationFailed(cx, regs.fp()->script()))
+                return false;
+            regs.sp[-1] = ObjectValue(regs.fp()->argsObj());
+        }
+    }
+    return true;
+}
+
+/*
  * Return an object on which we should look for the properties of |value|.
  * This helps us implement the custom [[Get]] method that ES5's GetValue
  * algorithm uses for primitive values, without actually constructing the
@@ -125,7 +163,8 @@ ValuePropertyBearer(JSContext *cx, StackFrame *fp, const Value &v, int spindex)
 }
 
 inline bool
-NativeGet(JSContext *cx, JSObject *obj, JSObject *pobj, const Shape *shape, unsigned getHow, Value *vp)
+NativeGet(JSContext *cx, Handle<JSObject*> obj, Handle<JSObject*> pobj, const Shape *shape,
+          unsigned getHow, Value *vp)
 {
     if (shape->isDataDescriptor() && shape->hasDefaultGetter()) {
         /* Fast path for Object instance properties. */
@@ -165,7 +204,7 @@ GetPropertyGenericMaybeCallXML(JSContext *cx, JSOp op, HandleObject obj, HandleI
 }
 
 inline bool
-GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp)
+GetPropertyOperation(JSContext *cx, JSScript *script, jsbytecode *pc, Value &lval, Value *vp)
 {
     JS_ASSERT(vp != &lval);
 
@@ -177,7 +216,7 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
             *vp = Int32Value(lval.toString()->length());
             return true;
         }
-        if (lval.isMagic(JS_OPTIMIZED_ARGUMENTS)) {
+        if (IsOptimizedArguments(cx->fp(), &lval)) {
             *vp = Int32Value(cx->fp()->numActualArgs());
             return true;
         }
@@ -200,7 +239,7 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
             }
 
             if (obj->isTypedArray()) {
-                *vp = Int32Value(TypedArray::getLength(obj));
+                *vp = Int32Value(TypedArray::length(obj));
                 return true;
             }
         }
@@ -211,9 +250,9 @@ GetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, Value *vp
         return false;
 
     PropertyCacheEntry *entry;
-    JSObject *obj2;
+    Rooted<JSObject*> obj2(cx);
     PropertyName *name;
-    JS_PROPERTY_CACHE(cx).test(cx, pc, obj.reference(), obj2, entry, name);
+    JS_PROPERTY_CACHE(cx).test(cx, pc, obj.reference(), obj2.reference(), entry, name);
     if (!name) {
         AssertValidPropertyCacheHit(cx, obj, obj2, entry);
         if (!NativeGet(cx, obj, obj2, entry->prop, JSGET_CACHE_RESULT, vp))
@@ -289,7 +328,7 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
             } else {
                 RootedValue rref(cx, rval);
                 bool strict = cx->stack.currentScript()->strictModeCode;
-                if (!js_NativeSet(cx, obj, shape, false, strict, rref.address()))
+                if (!js_NativeSet(cx, obj, obj, shape, false, strict, rref.address()))
                     return false;
             }
             return true;
@@ -308,10 +347,10 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
         unsigned defineHow = (op == JSOP_SETNAME)
                              ? DNP_CACHE_RESULT | DNP_UNQUALIFIED
                              : DNP_CACHE_RESULT;
-        if (!baseops::SetPropertyHelper(cx, obj, id, defineHow, rref.address(), strict))
+        if (!baseops::SetPropertyHelper(cx, obj, obj, id, defineHow, rref.address(), strict))
             return false;
     } else {
-        if (!obj->setGeneric(cx, id, rref.address(), strict))
+        if (!obj->setGeneric(cx, obj, id, rref.address(), strict))
             return false;
     }
 
@@ -319,7 +358,7 @@ SetPropertyOperation(JSContext *cx, jsbytecode *pc, const Value &lval, const Val
 }
 
 inline bool
-NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
+NameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, Value *vp)
 {
     RootedObject obj(cx, cx->stack.currentScriptedScopeChain());
 
@@ -336,9 +375,9 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
         obj = &obj->global();
 
     PropertyCacheEntry *entry;
-    JSObject *obj2;
+    Rooted<JSObject*> obj2(cx);
     RootedPropertyName name(cx);
-    JS_PROPERTY_CACHE(cx).test(cx, pc, obj.reference(), obj2, entry, name.reference());
+    JS_PROPERTY_CACHE(cx).test(cx, pc, obj.reference(), obj2.reference(), entry, name.reference());
     if (!name) {
         AssertValidPropertyCacheHit(cx, obj, obj2, entry);
         if (!NativeGet(cx, obj, obj2, entry->prop, 0, vp))
@@ -347,7 +386,7 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
     }
 
     JSProperty *prop;
-    if (!FindPropertyHelper(cx, name, true, obj, obj.address(), &obj2, &prop))
+    if (!FindPropertyHelper(cx, name, true, obj, obj.address(), obj2.address(), &prop))
         return false;
     if (!prop) {
         /* Kludge to allow (typeof foo == "undefined") tests. */
@@ -364,11 +403,12 @@ NameOperation(JSContext *cx, jsbytecode *pc, Value *vp)
 
     /* Take the slow path if prop was not found in a native object. */
     if (!obj->isNative() || !obj2->isNative()) {
-        if (!obj->getGeneric(cx, RootedId(cx, NameToId(name)), vp))
+        Rooted<jsid> id(cx, NameToId(name));
+        if (!obj->getGeneric(cx, id, vp))
             return false;
     } else {
         Shape *shape = (Shape *)prop;
-        JSObject *normalized = obj;
+        Rooted<JSObject*> normalized(cx, obj);
         if (normalized->getClass() == &WithClass && !shape->hasDefaultGetter())
             normalized = &normalized->asWith().object();
         if (!NativeGet(cx, normalized, obj2, shape, 0, vp))
@@ -635,8 +675,8 @@ GetObjectElementOperation(JSContext *cx, JSOp op, HandleObject obj, const Value 
             if (!obj->getSpecial(cx, obj, special, res))
                 return false;
         } else {
-            JSAtom *name;
-            if (!js_ValueToAtom(cx, *res, &name))
+            JSAtom *name = ToAtom(cx, *res);
+            if (!name)
                 return false;
 
             if (name->isIndex(&index)) {
@@ -654,7 +694,7 @@ GetObjectElementOperation(JSContext *cx, JSOp op, HandleObject obj, const Value 
 }
 
 static JS_ALWAYS_INLINE bool
-GetElementOperation(JSContext *cx, JSOp op, const Value &lref, const Value &rref, Value *res)
+GetElementOperation(JSContext *cx, JSOp op, Value &lref, const Value &rref, Value *res)
 {
     JS_ASSERT(op == JSOP_GETELEM || op == JSOP_CALLELEM);
 
@@ -670,8 +710,21 @@ GetElementOperation(JSContext *cx, JSOp op, const Value &lref, const Value &rref
         }
     }
 
-    if (lref.isMagic(JS_OPTIMIZED_ARGUMENTS))
-        return NormalArgumentsObject::optimizedGetElem(cx, cx->fp(), rref, res);
+    StackFrame *fp = cx->fp();
+    if (IsOptimizedArguments(fp, &lref)) {
+        if (rref.isInt32()) {
+            int32_t i = rref.toInt32();
+            if (i >= 0 && uint32_t(i) < fp->numActualArgs()) {
+                *res = fp->unaliasedActual(i);
+                return true;
+            }
+        }
+
+        if (!JSScript::argumentsOptimizationFailed(cx, fp->script()))
+            return false;
+
+        lref = ObjectValue(fp->argsObj());
+    }
 
     bool isObject = lref.isObject();
     RootedObject obj(cx, ValueToObject(cx, lref));
@@ -690,7 +743,7 @@ GetElementOperation(JSContext *cx, JSOp op, const Value &lref, const Value &rref
 }
 
 static JS_ALWAYS_INLINE bool
-SetObjectElementOperation(JSContext *cx, JSObject *obj, HandleId id, const Value &value, bool strict)
+SetObjectElementOperation(JSContext *cx, Handle<JSObject*> obj, HandleId id, const Value &value, bool strict)
 {
     types::TypeScript::MonitorAssign(cx, obj, id);
 
@@ -719,7 +772,7 @@ SetObjectElementOperation(JSContext *cx, JSObject *obj, HandleId id, const Value
     } while (0);
 
     RootedValue tmp(cx, value);
-    return obj->setGeneric(cx, id, tmp.address(), strict);
+    return obj->setGeneric(cx, obj, id, tmp.address(), strict);
 }
 
 #define RELATIONAL_OP(OP)                                                     \
@@ -772,20 +825,6 @@ GreaterThanOrEqualOperation(JSContext *cx, const Value &lhs, const Value &rhs, b
 }
 
 #undef RELATIONAL_OP
-
-static inline bool
-GuardFunApplySpeculation(JSContext *cx, FrameRegs &regs)
-{
-    if (regs.sp[-1].isMagic(JS_OPTIMIZED_ARGUMENTS)) {
-        CallArgs args = CallArgsFromSp(GET_ARGC(regs.pc), regs.sp);
-        if (!IsNativeFunction(args.calleev(), js_fun_apply)) {
-            if (!JSScript::applySpeculationFailed(cx, regs.fp()->script()))
-                return false;
-            regs.sp[-1] = ObjectValue(regs.fp()->argsObj());
-        }
-    }
-    return true;
-}
 
 }  /* namespace js */
 

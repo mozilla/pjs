@@ -58,7 +58,7 @@
 
 #define NSCAP_FEATURE_USE_BASE
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   #define NSCAP_FEATURE_TEST_DONTQUERY_CASES
   #undef NSCAP_FEATURE_USE_BASE
 //#define NSCAP_FEATURE_TEST_NONNULL_QUERY_SUCCEEDS
@@ -742,6 +742,7 @@ class nsCOMPtr MOZ_FINAL
           // of T.
         {
           NS_ASSERTION(rhs, "Null pointer passed to forget!");
+          NSCAP_LOG_RELEASE(this, mRawPtr);
           *rhs = get();
           mRawPtr = 0;
         }

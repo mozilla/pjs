@@ -277,7 +277,6 @@ MarionetteDriverActor.prototype = {
       //add this to seenItems so we can guarantee the user will get winId as this window's id
       this.curBrowser.elementManager.seenItems[winId] = win;
     }
-    this.browsers[winId] = browser;
   },
 
   /**
@@ -438,12 +437,12 @@ MarionetteDriverActor.prototype = {
    * @return Sandbox
    *        Returns the sandbox
    */
-  createExecuteSandbox: function MDA_createExecuteSandbox(aWindow, marionette, args) {
+  createExecuteSandbox: function MDA_createExecuteSandbox(aWindow, marionette, args, specialPowers) {
     try {
       args = this.curBrowser.elementManager.convertWrappedArguments(args, aWindow);
     }
     catch(e) {
-      this.sendError(e.message, e.num, e.stack);
+      this.sendError(e.message, e.code, e.stack);
       return;
     }
 
@@ -457,12 +456,14 @@ MarionetteDriverActor.prototype = {
       _chromeSandbox[fn] = marionette[fn].bind(marionette);
     });
 
-    loader.loadSubScript("chrome://specialpowers/content/specialpowersAPI.js",
-                         _chromeSandbox);
-    loader.loadSubScript("chrome://specialpowers/content/SpecialPowersObserverAPI.js",
-                         _chromeSandbox);
-    loader.loadSubScript("chrome://specialpowers/content/ChromePowers.js",
-                         _chromeSandbox);
+    if (specialPowers == true) {
+      loader.loadSubScript("chrome://specialpowers/content/specialpowersAPI.js",
+                           _chromeSandbox);
+      loader.loadSubScript("chrome://specialpowers/content/SpecialPowersObserverAPI.js",
+                           _chromeSandbox);
+      loader.loadSubScript("chrome://specialpowers/content/ChromePowers.js",
+                           _chromeSandbox);
+    }
 
     return _chromeSandbox;
   },
@@ -541,7 +542,7 @@ MarionetteDriverActor.prototype = {
 
     let curWindow = this.getCurrentWindow();
     let marionette = new Marionette(this, curWindow, "chrome", this.marionetteLog, this.marionettePerf);
-    let _chromeSandbox = this.createExecuteSandbox(curWindow, marionette, aRequest.args);
+    let _chromeSandbox = this.createExecuteSandbox(curWindow, marionette, aRequest.args, aRequest.specialPowers);
     if (!_chromeSandbox)
       return;
 
@@ -688,7 +689,7 @@ MarionetteDriverActor.prototype = {
       chromeAsyncReturnFunc(marionette.generate_results(), 0);
     }
 
-    let _chromeSandbox = this.createExecuteSandbox(curWindow, marionette, aRequest.args);
+    let _chromeSandbox = this.createExecuteSandbox(curWindow, marionette, aRequest.args, aRequest.specialPowers);
     if (!_chromeSandbox)
       return;
 
@@ -822,9 +823,11 @@ MarionetteDriverActor.prototype = {
           //enable Marionette in that browser window
           this.startBrowser(foundWin, false);
         }
-        utils.window = foundWin;
+        else {
+          utils.window = foundWin;
+          this.curBrowser = this.browsers[winId];
+        }
         foundWin.focus();
-        this.curBrowser = this.browsers[winId];
         this.sendOk();
         return;
       }
@@ -918,7 +921,7 @@ MarionetteDriverActor.prototype = {
         this.sendOk();
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -941,7 +944,7 @@ MarionetteDriverActor.prototype = {
         id = this.curBrowser.elementManager.find(this.getCurrentWindow(),aRequest, notify, false);
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
         return;
       }
     }
@@ -965,7 +968,7 @@ MarionetteDriverActor.prototype = {
         id = this.curBrowser.elementManager.find(this.getCurrentWindow(), aRequest, notify, true);
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
         return;
       }
     }
@@ -990,7 +993,7 @@ MarionetteDriverActor.prototype = {
         this.sendOk();
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1013,7 +1016,7 @@ MarionetteDriverActor.prototype = {
         this.sendResponse(utils.getElementAttribute(el, aRequest.name));
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1039,7 +1042,7 @@ MarionetteDriverActor.prototype = {
         this.sendResponse(lines);
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1061,7 +1064,7 @@ MarionetteDriverActor.prototype = {
         this.sendResponse(utils.isElementDisplayed(el));
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1089,7 +1092,7 @@ MarionetteDriverActor.prototype = {
         }
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1120,7 +1123,7 @@ MarionetteDriverActor.prototype = {
         }
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1145,7 +1148,7 @@ MarionetteDriverActor.prototype = {
         this.sendOk();
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1174,7 +1177,7 @@ MarionetteDriverActor.prototype = {
         this.sendOk();
       }
       catch (e) {
-        this.sendError(e.message, e.num, e.stack);
+        this.sendError(e.message, e.code, e.stack);
       }
     }
     else {
@@ -1262,7 +1265,7 @@ MarionetteDriverActor.prototype = {
       cb(message.result);
     }
     catch(e) {
-      this.sendError(e.message, e.num, e.stack);
+      this.sendError(e.message, e.code, e.stack);
       return;
     }
   },
@@ -1271,7 +1274,7 @@ MarionetteDriverActor.prototype = {
     if (this.context == "chrome") {
       let file;
       if (this.importedScripts.exists()) {
-        file = FileUtils.openFileOutputStream(this.importedScripts, FileUtils.MODE_APPEND);
+        file = FileUtils.openFileOutputStream(this.importedScripts, FileUtils.MODE_APPEND | FileUtils.MODE_WRONLY);
       }
       else {
         file = FileUtils.openFileOutputStream(this.importedScripts, FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE);

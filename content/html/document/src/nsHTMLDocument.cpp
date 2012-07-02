@@ -42,6 +42,7 @@
 #include "nsContentList.h"
 #include "nsDOMError.h"
 #include "nsIPrincipal.h"
+#include "nsJSPrincipals.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsAttrName.h"
 #include "nsNodeUtils.h"
@@ -1555,6 +1556,13 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
 
   SetReadyStateInternal(nsIDocument::READYSTATE_LOADING);
 
+  // After changing everything around, make sure that the principal on the
+  // document's compartment exactly matches NodePrincipal().
+  DebugOnly<JSObject*> wrapper = GetWrapperPreserveColor();
+  MOZ_ASSERT_IF(wrapper,
+                JS_GetCompartmentPrincipals(js::GetObjectCompartment(wrapper)) ==
+                nsJSPrincipals::get(NodePrincipal()));
+
   NS_ENSURE_SUCCESS(rv, rv);
   return CallQueryInterface(this, aReturn);
 }
@@ -2865,8 +2873,8 @@ static const struct MidasCommand gMidasCommandTable[] = {
   { "cut",           "cmd_cut",             "", true,  false },
   { "copy",          "cmd_copy",            "", true,  false },
   { "paste",         "cmd_paste",           "", true,  false },
-  { "delete",        "cmd_delete",          "", true,  false },
-  { "forwarddelete", "cmd_forwardDelete",   "", true,  false },
+  { "delete",        "cmd_deleteCharBackward", "", true,  false },
+  { "forwarddelete", "cmd_deleteCharForward", "", true,  false },
   { "selectall",     "cmd_selectAll",       "", true,  false },
   { "undo",          "cmd_undo",            "", true,  false },
   { "redo",          "cmd_redo",            "", true,  false },
@@ -3178,6 +3186,13 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
        cmdToDispatch.EqualsLiteral("cmd_paragraphState")) &&
       paramStr.IsEmpty()) {
     // Invalid value, return false
+    return NS_OK;
+  }
+
+  // Return false for disabled commands (bug 760052)
+  bool enabled = false;
+  cmdMgr->IsCommandEnabled(cmdToDispatch.get(), window, &enabled);
+  if (!enabled) {
     return NS_OK;
   }
 

@@ -8,7 +8,6 @@
 #include "nsSVGUseElement.h"
 #include "nsIDOMSVGGElement.h"
 #include "nsGkAtoms.h"
-#include "nsIDOMDocument.h"
 #include "nsSVGSVGElement.h"
 #include "nsIDOMSVGSymbolElement.h"
 #include "nsIDocument.h"
@@ -369,6 +368,17 @@ nsSVGUseElement::DestroyAnonymousContent()
   nsContentUtils::DestroyAnonymousContent(&mClone);
 }
 
+bool
+nsSVGUseElement::OurWidthAndHeightAreUsed() const
+{
+  if (mClone) {
+    nsCOMPtr<nsIDOMSVGSVGElement>    svg    = do_QueryInterface(mClone);
+    nsCOMPtr<nsIDOMSVGSymbolElement> symbol = do_QueryInterface(mClone);
+    return svg || symbol;
+  }
+  return false;
+}
+
 //----------------------------------------------------------------------
 // implementation helpers
 
@@ -377,6 +387,7 @@ nsSVGUseElement::SyncWidthOrHeight(nsIAtom* aName)
 {
   NS_ASSERTION(aName == nsGkAtoms::width || aName == nsGkAtoms::height,
                "The clue is in the function name");
+  NS_ASSERTION(OurWidthAndHeightAreUsed(), "Don't call this");
 
   if (!mClone) {
     return;

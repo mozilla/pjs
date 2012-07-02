@@ -174,12 +174,7 @@
       */
 
      let projectLargeInt = function projectLargeInt(x) {
-       if (ctypes.Int64.hi(x)) {
-         throw new Error("Number too large " + x +
-             "(signed, hi: " + ctypes.Int64.hi(x) +
-                 ", lo:" + ctypes.Int64.lo(x) + ")");
-       }
-       return ctypes.Int64.lo(x);
+       return parseInt(x.toString(), 10);
      };
      let projectLargeUInt = function projectLargeUInt(x) {
        if (ctypes.UInt64.hi(x)) {
@@ -223,7 +218,47 @@
        LOG("Projected as a regular number");
        return projectValue;
      };
+     exports.OS.Shared.projectValue = projectValue;
 
+
+
+     /**
+      * Get the appropriate type for an unsigned int of the given size.
+      *
+      * This function is useful to define types such as |mode_t| whose
+      * actual width depends on the OS/platform.
+      *
+      * @param {number} size The number of bytes requested.
+      */
+     Types.uintn_t = function uintn_t(size) {
+       switch (size) {
+       case 1: return Types.uint8_t;
+       case 2: return Types.uint16_t;
+       case 4: return Types.uint32_t;
+       case 8: return Types.uint64_t;
+       default:
+         throw new Error("Cannot represent unsigned integers of " + size + " bytes");
+       }
+     };
+
+     /**
+      * Get the appropriate type for an signed int of the given size.
+      *
+      * This function is useful to define types such as |mode_t| whose
+      * actual width depends on the OS/platform.
+      *
+      * @param {number} size The number of bytes requested.
+      */
+     Types.intn_t = function intn_t(size) {
+       switch (size) {
+       case 1: return Types.int8_t;
+       case 2: return Types.int16_t;
+       case 4: return Types.int32_t;
+       case 8: return Types.int64_t;
+       default:
+         throw new Error("Cannot represent integers of " + size + " bytes");
+       }
+     };
 
      /**
       * Actual implementation of common C types.
@@ -285,6 +320,34 @@
                 projector(ctypes.unsigned_int, false));
 
      /**
+      * A C integer (8-bits).
+      */
+     Types.int8_t =
+       new Type("int8_t",
+                ctypes.int8_t,
+                projectValue);
+
+     Types.uint8_t =
+       new Type("uint8_t",
+                ctypes.uint8_t,
+                projectValue);
+
+     /**
+      * A C integer (16-bits).
+      *
+      * Also known as WORD under Windows.
+      */
+     Types.int16_t =
+       new Type("int16_t",
+                ctypes.int16_t,
+                projectValue);
+
+     Types.uint16_t =
+       new Type("uint16_t",
+                ctypes.uint16_t,
+                projectValue);
+
+     /**
       * A C integer (32-bits).
       *
       * Also known as DWORD under Windows.
@@ -298,6 +361,19 @@
        new Type("uint32_t",
                 ctypes.uint32_t,
                 projectValue);
+
+     /**
+      * A C integer (64-bits).
+      */
+     Types.int64_t =
+       new Type("int64_t",
+                ctypes.int64_t,
+                projectLargeInt);
+
+     Types.uint64_t =
+       new Type("uint64_t",
+                ctypes.uint64_t,
+                projectLargeUInt);
 
      /**
       * A C integer.
@@ -318,15 +394,6 @@
                 function projectBool(x) {
                   return !!(x.value);
                 });
-
-     /**
-      * A file access mode
-      * Implemented as a C integer.
-      */
-     Types.mode_t =
-       new Type("mode_t",
-                ctypes.int,
-                projector(ctypes.int, true));
 
      /**
       * A user identifier.
@@ -432,5 +499,75 @@
        }
      };
      exports.OS.Shared.declareFFI = declareFFI;
+
+
+     /**
+      * Specific tools that don't really fit anywhere.
+      */
+     let _aux = {};
+     exports.OS.Shared._aux = _aux;
+
+     /**
+      * Utility function shared by implementations of |OS.File.open|:
+      * extract read/write/trunc/create/existing flags from a |mode|
+      * object.
+      *
+      * @param {*=} mode An object that may contain fields |read|,
+      * |write|, |truncate|, |create|, |existing|. These fields
+      * are interpreted only if true-ish.
+      * @return {{read:bool, write:bool, trunc:bool, create:bool,
+      * existing:bool}} an object recapitulating the options set
+      * by |mode|.
+      * @throws {TypeError} If |mode| contains other fields, or
+      * if it contains both |create| and |truncate|, or |create|
+      * and |existing|.
+      */
+     _aux.normalizeOpenMode = function normalizeOpenMode(mode) {
+       let result = {
+         read: false,
+         write: false,
+         trunc: false,
+         create: false,
+         existing: false
+       };
+       for (let key in mode) {
+         if (!mode[key]) continue; // Only interpret true-ish keys
+         switch (key) {
+         case "read":
+           result.read = true;
+           break;
+         case "write":
+           result.write = true;
+           break;
+         case "truncate": // fallthrough
+         case "trunc":
+           result.trunc = true;
+           result.write = true;
+           break;
+         case "create":
+           result.create = true;
+           result.write = true;
+           break;
+         case "existing": // fallthrough
+         case "exist":
+           result.existing = true;
+           break;
+         default:
+           throw new TypeError("Mode " + key + " not understood");
+         }
+       }
+       // Reject opposite modes
+       if (result.existing && result.create) {
+         throw new TypeError("Cannot specify both existing:true and create:true");
+       }
+       if (result.trunc && result.create) {
+         throw new TypeError("Cannot specify both trunc:true and create:true");
+       }
+       // Handle read/write
+       if (!result.write) {
+         result.read = true;
+       }
+       return result;
+     };
    })(this);
 }

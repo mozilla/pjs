@@ -62,10 +62,17 @@ BrowserElementChild.prototype = {
 
     BrowserElementPromptService.mapWindowToBrowserElementChild(content, this);
 
+    docShell.isBrowserFrame = true;
     docShell.QueryInterface(Ci.nsIWebProgress)
             .addProgressListener(this._progressListener,
                                  Ci.nsIWebProgress.NOTIFY_LOCATION |
+                                 Ci.nsIWebProgress.NOTIFY_SECURITY |
                                  Ci.nsIWebProgress.NOTIFY_STATE_WINDOW);
+
+    // This is necessary to get security web progress notifications.
+    var securityUI = Cc['@mozilla.org/secure_browser_ui;1']
+                       .createInstance(Ci.nsISecureBrowserUI);
+    securityUI.init(content);
 
     // A mozbrowser iframe contained inside a mozapp iframe should return false
     // for nsWindowUtils::IsPartOfApp (unless the mozbrowser iframe is itself
@@ -87,6 +94,12 @@ BrowserElementChild.prototype = {
       windowUtils.setIsApp(false);
     }
 
+    // A cache of the menuitem dom objects keyed by the id we generate
+    // and pass to the embedder
+    this._ctxHandlers = {};
+    // Counter of contextmenu events fired
+    this._ctxCounter = 0;
+
     addEventListener('DOMTitleChanged',
                      this._titleChangedHandler.bind(this),
                      /* useCapture = */ true,
@@ -104,7 +117,12 @@ BrowserElementChild.prototype = {
 
     addMsgListener("get-screenshot", this._recvGetScreenshot);
     addMsgListener("set-visible", this._recvSetVisible);
+    addMsgListener("get-can-go-back", this._recvCanGoBack);
+    addMsgListener("get-can-go-forward", this._recvCanGoForward);
+    addMsgListener("go-back", this._recvGoBack);
+    addMsgListener("go-forward", this._recvGoForward);
     addMsgListener("unblock-modal-prompt", this._recvStopWaiting);
+    addMsgListener("fire-ctx-callback", this._recvFireCtxCallback);
 
     let els = Cc["@mozilla.org/eventlistenerservice;1"]
                 .getService(Ci.nsIEventListenerService);
@@ -122,6 +140,9 @@ BrowserElementChild.prototype = {
                                /* useCapture = */ true);
     els.addSystemEventListener(global, 'DOMWindowClose',
                                this._closeHandler.bind(this),
+                               /* useCapture = */ false);
+    els.addSystemEventListener(global, 'contextmenu',
+                               this._contextmenuHandler.bind(this),
                                /* useCapture = */ false);
   },
 
@@ -301,6 +322,61 @@ BrowserElementChild.prototype = {
     e.preventDefault();
   },
 
+  _contextmenuHandler: function(e) {
+    debug("Got contextmenu");
+
+    if (e.defaultPrevented) {
+      return;
+    }
+
+    e.preventDefault();
+
+    this._ctxCounter++;
+    this._ctxHandlers = {};
+
+    var elem = e.target;
+    var menuData = {systemTargets: [], contextmenu: null};
+    var ctxMenuId = null;
+
+    while (elem && elem.hasAttribute) {
+      var ctxData = this._getSystemCtxMenuData(elem);
+      if (ctxData) {
+        menuData.systemTargets.push({
+          nodeName: elem.nodeName,
+          data: ctxData
+        });
+      }
+
+      if (!ctxMenuId && elem.hasAttribute('contextmenu')) {
+        ctxMenuId = elem.getAttribute('contextmenu');
+      }
+      elem = elem.parentNode;
+    }
+
+    if (ctxMenuId) {
+      var menu = e.target.ownerDocument.getElementById(ctxMenuId);
+      if (menu) {
+        menuData.contextmenu = this._buildMenuObj(menu, '');
+      }
+    }
+    sendAsyncMsg('contextmenu', menuData);
+  },
+
+  _getSystemCtxMenuData: function(elem) {
+    if ((elem instanceof Ci.nsIDOMHTMLAnchorElement && elem.href) ||
+        (elem instanceof Ci.nsIDOMHTMLAreaElement && elem.href)) {
+      return elem.href;
+    }
+    if (elem instanceof Ci.nsIImageLoadingContent && elem.currentURI) {
+      return elem.currentURI.spec;
+    }
+    if ((elem instanceof Ci.nsIDOMHTMLMediaElement) ||
+        (elem instanceof Ci.nsIDOMHTMLImageElement)) {
+      return elem.currentSrc || elem.src;
+    }
+    return false;
+  },
+
   _recvGetScreenshot: function(data) {
     debug("Received getScreenshot message: (" + data.json.id + ")");
     var canvas = content.document
@@ -313,14 +389,82 @@ BrowserElementChild.prototype = {
                    content.innerHeight, "rgb(255,255,255)");
     sendAsyncMsg('got-screenshot', {
       id: data.json.id,
-      screenshot: canvas.toDataURL("image/png")
+      rv: canvas.toDataURL("image/png")
     });
+  },
+
+  _recvFireCtxCallback: function(data) {
+    debug("Received fireCtxCallback message: (" + data.json.menuitem + ")");
+    // We silently ignore if the embedder uses an incorrect id in the callback
+    if (data.json.menuitem in this._ctxHandlers) {
+      this._ctxHandlers[data.json.menuitem].click();
+      this._ctxHandlers = {};
+    } else {
+      debug("Ignored invalid contextmenu invokation");
+    }
+  },
+
+  _buildMenuObj: function(menu, idPrefix) {
+    function maybeCopyAttribute(src, target, attribute) {
+      if (src.getAttribute(attribute)) {
+        target[attribute] = src.getAttribute(attribute);
+      }
+    }
+
+    var menuObj = {type: 'menu', items: []};
+    maybeCopyAttribute(menu, menuObj, 'label');
+
+    for (var i = 0, child; child = menu.children[i++];) {
+      if (child.nodeName === 'MENU') {
+        menuObj.items.push(this._buildMenuObj(child, idPrefix + i + '_'));
+      } else if (child.nodeName === 'MENUITEM') {
+        var id = this._ctxCounter + '_' + idPrefix + i;
+        var menuitem = {id: id, type: 'menuitem'};
+        maybeCopyAttribute(child, menuitem, 'label');
+        maybeCopyAttribute(child, menuitem, 'icon');
+        this._ctxHandlers[id] = child;
+        menuObj.items.push(menuitem);
+      }
+    }
+    return menuObj;
   },
 
   _recvSetVisible: function(data) {
     debug("Received setVisible message: (" + data.json.visible + ")");
     if (docShell.isActive !== data.json.visible) {
       docShell.isActive = data.json.visible;
+    }
+  },
+
+  _recvCanGoBack: function(data) {
+    var webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+    sendAsyncMsg('got-can-go-back', {
+      id: data.json.id,
+      rv: webNav.canGoBack
+    });
+  },
+
+  _recvCanGoForward: function(data) {
+    var webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+    sendAsyncMsg('got-can-go-forward', {
+      id: data.json.id,
+      rv: webNav.canGoForward
+    });
+  },
+
+  _recvGoBack: function(data) {
+    try {
+      docShell.QueryInterface(Ci.nsIWebNavigation).goBack();
+    } catch(e) {
+      // Silently swallow errors; these happen when we can't go back.
+    }
+  },
+
+  _recvGoForward: function(data) {
+    try {
+      docShell.QueryInterface(Ci.nsIWebNavigation).goForward();
+    } catch(e) {
+      // Silently swallow errors; these happen when we can't go forward.
     }
   },
 
@@ -368,13 +512,46 @@ BrowserElementChild.prototype = {
 
       if (stateFlags & Ci.nsIWebProgressListener.STATE_STOP) {
         sendAsyncMsg('loadend');
+
+        if (status == Cr.NS_OK) {
+          return;
+        }
+
+        // TODO See nsDocShell::DisplayLoadError for a list of all the error
+        // codes (the status param) we should eventually handle here.
+        sendAsyncMsg('error', {type: 'other'});
       }
+    },
+
+    onSecurityChange: function(webProgress, request, state) {
+      if (webProgress != docShell) {
+        return;
+      }
+
+      var stateDesc;
+      if (state & Ci.nsIWebProgressListener.STATE_IS_SECURE) {
+        stateDesc = 'secure';
+      }
+      else if (state & Ci.nsIWebProgressListener.STATE_IS_BROKEN) {
+        stateDesc = 'broken';
+      }
+      else if (state & Ci.nsIWebProgressListener.STATE_IS_INSECURE) {
+        stateDesc = 'insecure';
+      }
+      else {
+        debug("Unexpected securitychange state!");
+        stateDesc = '???';
+      }
+
+      // XXX Until bug 764496 is fixed, this will always return false.
+      var isEV = !!(state & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL);
+
+      sendAsyncMsg('securitychange', {state: stateDesc, extendedValidation: isEV});
     },
 
     onStatusChange: function(webProgress, request, status, message) {},
     onProgressChange: function(webProgress, request, curSelfProgress,
                                maxSelfProgress, curTotalProgress, maxTotalProgress) {},
-    onSecurityChange: function(webProgress, request, aState) {}
   },
 };
 

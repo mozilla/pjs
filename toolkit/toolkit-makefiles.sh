@@ -457,6 +457,7 @@ MAKEFILES_xulapp="
   toolkit/components/viewconfig/Makefile
   toolkit/components/viewsource/Makefile
   toolkit/devtools/Makefile
+  toolkit/identity/Makefile
   toolkit/locales/Makefile
   toolkit/mozapps/downloads/Makefile
   toolkit/mozapps/extensions/Makefile
@@ -576,7 +577,6 @@ elif [ "$MOZ_WIDGET_TOOLKIT" = "cocoa" ]; then
   add_makefiles "
     content/xbl/builtin/mac/Makefile
     dom/plugins/ipc/interpose/Makefile
-    dom/system/cocoa/Makefile
     image/decoders/icon/mac/Makefile
     intl/locale/src/mac/Makefile
     netwerk/system/mac/Makefile
@@ -869,6 +869,8 @@ if [ "$ENABLE_TESTS" ]; then
     toolkit/content/tests/chrome/rtltest/Makefile
     toolkit/content/tests/widgets/Makefile
     toolkit/devtools/debugger/tests/Makefile
+    toolkit/identity/tests/Makefile
+    toolkit/identity/tests/chrome/Makefile
     toolkit/mozapps/downloads/tests/Makefile
     toolkit/mozapps/downloads/tests/chrome/Makefile
     toolkit/mozapps/extensions/test/Makefile
@@ -1127,7 +1129,6 @@ fi
 
 if [ "$MOZ_B2G_RIL" ]; then
   add_makefiles "
-    dom/system/b2g/Makefile
     dom/telephony/Makefile
     dom/wifi/Makefile
     ipc/ril/Makefile
@@ -1331,7 +1332,7 @@ if [ "$MOZ_UPDATER" ]; then
     modules/libmar/src/Makefile
     modules/libmar/tool/Makefile
   "
-  if [ ! "$SYSTEM_BZ2" ]; then
+  if [ ! "$MOZ_NATIVE_BZ2" ]; then
     add_makefiles "
       modules/libbz2/Makefile
       modules/libbz2/src/Makefile
@@ -1466,14 +1467,14 @@ if [ "$MOZ_PSM" ]; then
   "
 fi
 
-if [ ! "$SYSTEM_JPEG" ]; then
+if [ ! "$MOZ_NATIVE_JPEG" ]; then
   add_makefiles "
     media/libjpeg/Makefile
     media/libjpeg/simd/Makefile
   "
 fi
 
-if [ ! "$SYSTEM_ZLIB" ]; then
+if [ ! "$MOZ_NATIVE_ZLIB" ]; then
   add_makefiles "
     modules/zlib/Makefile
     modules/zlib/src/Makefile
@@ -1486,7 +1487,7 @@ if [ "$MOZ_UPDATE_PACKAGING" ]; then
   "
 fi
 
-if [ ! "$SYSTEM_PNG" ]; then
+if [ ! "$MOZ_NATIVE_PNG" ]; then
   add_makefiles "
     media/libpng/Makefile
   "
@@ -1615,6 +1616,12 @@ if [ "$MOZ_SYDNEYAUDIO" ]; then
     media/libsydneyaudio/include/Makefile
     media/libsydneyaudio/src/Makefile
   "
+fi
+
+if [ "$MOZ_WEBRTC" ]; then
+ add_makefiles "
+   media/webrtc/Makefile
+ "
 fi
 
 if [ "$MOZ_SPEEX_RESAMPLER" ]; then

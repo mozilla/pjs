@@ -12,7 +12,7 @@
   <script type="text/javascript;version=1.7">
     function testSteps()
     {
-      let request = mozIndexedDB.open(window.location.pathname, 1);
+      let request = indexedDB.open(window.location.pathname, 1);
       request.onerror = errorHandler;
       request.onupgradeneeded = grabEventAndContinueHandler;
       request.onsuccess = grabEventAndContinueHandler;
@@ -41,7 +41,7 @@
 
         request = objectStore.put({ id: 5, index: 6 });
         request.onsuccess = unexpectedSuccessHandler;
-        request.onerror = new ExpectError("ConstraintError");
+        request.onerror = new ExpectError("ConstraintError", true);
         event = yield;
 
         event.preventDefault();
@@ -58,7 +58,7 @@
 
           request = cursor.update(cursor.value);
           request.onsuccess = unexpectedSuccessHandler;
-          request.onerror = new ExpectError("ConstraintError");
+          request.onerror = new ExpectError("ConstraintError", true);
         };
 
         yield;

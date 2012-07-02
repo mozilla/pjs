@@ -35,6 +35,7 @@
 #include "nsXBLProtoImpl.h"
 #include "nsCRT.h"
 #include "nsContentUtils.h"
+#include "nsTextFragment.h"
 
 #include "nsIScriptContext.h"
 #include "nsIScriptError.h"
@@ -227,7 +228,7 @@ private:
 PRUint32 nsXBLInsertionPointEntry::gRefCnt = 0;
 nsFixedSizeAllocator* nsXBLInsertionPointEntry::kPool;
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(nsXBLInsertionPointEntry)
+NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(nsXBLInsertionPointEntry)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_NATIVE(nsXBLInsertionPointEntry)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mInsertionParent)
   if (tmp->mDefaultContent) {

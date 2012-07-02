@@ -37,6 +37,7 @@
 #include "nsCCUncollectableMarker.h"
 #include "nsIContentIterator.h"
 #include "nsIDocumentEncoder.h"
+#include "nsTextFragment.h"
 
 // for IBMBIDI
 #include "nsFrameTraversal.h"
@@ -85,10 +86,8 @@ using namespace mozilla;
 //#define DEBUG_TABLE 1
 
 static NS_DEFINE_IID(kCContentIteratorCID, NS_CONTENTITERATOR_CID);
-static NS_DEFINE_IID(kCSubtreeIteratorCID, NS_SUBTREEITERATOR_CID);
 
 //PROTOTYPES
-class nsSelectionIterator;
 class nsFrameSelection;
 class nsAutoScrollTimer;
 
@@ -144,35 +143,6 @@ public:
   { 
     if (mSelection) mSelection->EndBatchChanges();
   }
-};
-
-class nsSelectionIterator : public nsIBidirectionalEnumerator
-{
-public:
-/*BEGIN nsIEnumerator interfaces
-see the nsIEnumerator for more details*/
-
-  NS_DECL_ISUPPORTS
-
-  NS_DECL_NSIENUMERATOR
-
-  NS_DECL_NSIBIDIRECTIONALENUMERATOR
-
-/*END nsIEnumerator interfaces*/
-/*BEGIN Helper Methods*/
-  nsRange* CurrentItem();
-/*END Helper Methods*/
-private:
-  friend class mozilla::Selection;
-
-  //lame lame lame if delete from document goes away then get rid of this unless its debug
-  friend class nsFrameSelection;
-
-  nsSelectionIterator(Selection*);
-  virtual ~nsSelectionIterator();
-  PRInt32     mIndex;
-  Selection* mDomSelection;
-  SelectionType mType;
 };
 
 class nsAutoScrollTimer : public nsITimerCallback
@@ -1300,7 +1270,8 @@ nsFrameSelection::MaintainSelection(nsSelectionAmount aAmount)
   const nsRange* anchorFocusRange =
     mDomSelections[index]->GetAnchorFocusRange();
   if (anchorFocusRange) {
-    return anchorFocusRange->CloneRange(getter_AddRefs(mMaintainRange));
+    mMaintainRange = anchorFocusRange->CloneRange();
+    return NS_OK;
   }
 
   mMaintainRange = nsnull;
@@ -4009,97 +3980,79 @@ Selection::SelectAllFramesForContent(nsIContentIterator* aInnerIter,
   return NS_ERROR_FAILURE;
 }
 
-//the idea of this helper method is to select, deselect "top to bottom" traversing through the frames
+/**
+ * The idea of this helper method is to select, deselect "top to bottom"
+ * traversing through the frames
+ */
 nsresult
 Selection::selectFrames(nsPresContext* aPresContext, nsRange* aRange,
                         bool aFlags)
 {
   if (!mFrameSelection || !aPresContext || !aPresContext->GetPresShell()) {
-    return NS_OK; // nothing to do
+    // nothing to do
+    return NS_OK;
   }
-  if (!aRange) {
-    return NS_ERROR_NULL_POINTER;
-  }
+  MOZ_ASSERT(aRange);
 
   if (mFrameSelection->GetTableCellSelection()) {
     nsINode* node = aRange->GetCommonAncestor();
-    nsCOMPtr<nsIContent> content = do_QueryInterface(node);
-    nsIFrame* frame = content ? content->GetPrimaryFrame()
-                              : aPresContext->FrameManager()->GetRootFrame();
+    nsIFrame* frame = node->IsContent() ? node->AsContent()->GetPrimaryFrame()
+                                : aPresContext->FrameManager()->GetRootFrame();
     if (frame) {
       frame->InvalidateFrameSubtree();
     }
     return NS_OK;
   }
 
-  nsresult result;
-  nsCOMPtr<nsIContentIterator> iter = do_CreateInstance(
-                                              kCSubtreeIteratorCID,
-                                              &result);
-  if (NS_FAILED(result))
-    return result;
+  nsCOMPtr<nsIContentIterator> iter = NS_NewContentSubtreeIterator();
+  iter->Init(aRange);
 
-  nsCOMPtr<nsIContentIterator> inneriter = do_CreateInstance(
-                                              kCContentIteratorCID,
-                                              &result);
+  // Loop through the content iterator for each content node; for each text
+  // node, call SetSelected on it:
+  nsCOMPtr<nsIContent> content = do_QueryInterface(aRange->GetStartParent());
+  NS_ENSURE_STATE(content);
 
-  if ((NS_SUCCEEDED(result)) && iter) {
-    result = iter->Init(aRange);
+  // We must call first one explicitly
+  if (content->IsNodeOfType(nsINode::eTEXT)) {
+    nsIFrame* frame = content->GetPrimaryFrame();
+    // The frame could be an SVG text frame, in which case we'll ignore it.
+    if (frame && frame->GetType() == nsGkAtoms::textFrame) {
+      nsTextFrame* textFrame = static_cast<nsTextFrame*>(frame);
+      PRUint32 startOffset = aRange->StartOffset();
+      PRUint32 endOffset;
+      if (aRange->GetEndParent() == content) {
+        endOffset = aRange->EndOffset();
+      } else {
+        endOffset = content->Length();
+      }
+      textFrame->SetSelectedRange(startOffset, endOffset, aFlags, mType);
+    }
+  }
 
-    // loop through the content iterator for each content node
-    // for each text node, call SetSelected on it:
-    nsCOMPtr<nsIContent> content = do_QueryInterface(aRange->GetStartParent());
+  iter->First();
+  nsCOMPtr<nsIContentIterator> inneriter = NS_NewContentIterator();
+  for (iter->First(); !iter->IsDone(); iter->Next()) {
+    content = do_QueryInterface(iter->GetCurrentNode());
+    SelectAllFramesForContent(inneriter, content, aFlags);
+  }
 
-    // we must call first one explicitly
-    if (!content)
-      return NS_ERROR_UNEXPECTED;
+  // We must now do the last one if it is not the same as the first
+  if (aRange->GetEndParent() != aRange->GetStartParent()) {
+    nsresult res;
+    content = do_QueryInterface(aRange->GetEndParent(), &res);
+    NS_ENSURE_SUCCESS(res, res);
+    NS_ENSURE_TRUE(content, res);
 
     if (content->IsNodeOfType(nsINode::eTEXT)) {
       nsIFrame* frame = content->GetPrimaryFrame();
-      // The frame could be an SVG text frame, in which case we'll ignore
-      // it.
-      if (frame && frame->GetType() == nsGkAtoms::textFrame)
-      {
+      // The frame could be an SVG text frame, in which case we'll ignore it.
+      if (frame && frame->GetType() == nsGkAtoms::textFrame) {
         nsTextFrame* textFrame = static_cast<nsTextFrame*>(frame);
-        PRUint32 startOffset = aRange->StartOffset();
-        PRUint32 endOffset;
-        if (aRange->GetEndParent() == content) {
-          endOffset = aRange->EndOffset();
-        } else {
-          endOffset = content->GetText()->GetLength();
-        }
-        textFrame->SetSelectedRange(startOffset, endOffset, aFlags, mType);
-      }
-    }
-
-    iter->First();
-    while (!iter->IsDone()) {
-      content = do_QueryInterface(iter->GetCurrentNode());
-      SelectAllFramesForContent(inneriter, content, aFlags);
-      iter->Next();
-    }
-
-    //we must now do the last one  if it is not the same as the first
-    if (aRange->GetEndParent() != aRange->GetStartParent())
-    {
-      content = do_QueryInterface(aRange->GetEndParent(), &result);
-      if (NS_FAILED(result) || !content)
-        return result;
-
-      if (content->IsNodeOfType(nsINode::eTEXT))
-      {
-        nsIFrame* frame = content->GetPrimaryFrame();
-        // The frame could be an SVG text frame, in which case we'll
-        // ignore it.
-        if (frame && frame->GetType() == nsGkAtoms::textFrame)
-        {
-          nsTextFrame* textFrame = static_cast<nsTextFrame*>(frame);
-          textFrame->SetSelectedRange(0, aRange->EndOffset(), aFlags, mType);
-        }
+        textFrame->SetSelectedRange(0, aRange->EndOffset(), aFlags, mType);
       }
     }
   }
-  return result;
+  return NS_OK;
 }
 
 
@@ -4825,11 +4778,7 @@ Selection::Extend(nsINode* aParentNode, PRInt32 aOffset)
   PRInt32 anchorOffset = GetAnchorOffset();
   PRInt32 focusOffset = GetFocusOffset();
 
-  nsRefPtr<nsRange> range;
-  res = mAnchorFocusRange->CloneRange(getter_AddRefs(range));
-  if (NS_FAILED(res))
-    return res;
-  //range = mAnchorFocusRange;
+  nsRefPtr<nsRange> range = mAnchorFocusRange->CloneRange();
 
   nsINode* startNode = range->GetStartParent();
   nsINode* endNode = range->GetEndParent();

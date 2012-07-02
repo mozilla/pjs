@@ -633,23 +633,11 @@ NS_IMETHODIMP nsPluginInstanceOwner::InvalidateRect(NPRect *invalidRect)
   }
 #endif
 
-  nsPresContext* presContext = mObjectFrame->PresContext();
-  nsRect rect(presContext->DevPixelsToAppUnits(invalidRect->left),
-              presContext->DevPixelsToAppUnits(invalidRect->top),
-              presContext->DevPixelsToAppUnits(invalidRect->right - invalidRect->left),
-              presContext->DevPixelsToAppUnits(invalidRect->bottom - invalidRect->top));
-  if (container) {
-    gfxIntSize newSize = container->GetCurrentSize();
-    if (newSize != oldSize) {
-      // The image size has changed - invalidate the old area too, bug 635405.
-      nsRect oldRect = nsRect(0, 0,
-                              presContext->DevPixelsToAppUnits(oldSize.width),
-                              presContext->DevPixelsToAppUnits(oldSize.height));
-      rect.UnionRect(rect, oldRect);
-    }
-  }
-  rect.MoveBy(mObjectFrame->GetContentRectRelativeToSelf().TopLeft());
-  mObjectFrame->InvalidateLayer(rect, nsDisplayItem::TYPE_PLUGIN);
+  nsIntRect rect(invalidRect->left,
+                 invalidRect->top,
+                 invalidRect->right - invalidRect->left,
+                 invalidRect->bottom - invalidRect->top);
+  mObjectFrame->InvalidateLayer(nsDisplayItem::TYPE_PLUGIN, &rect);
   return NS_OK;
 }
 
@@ -662,7 +650,7 @@ NS_IMETHODIMP
 nsPluginInstanceOwner::RedrawPlugin()
 {
   if (mObjectFrame) {
-    mObjectFrame->InvalidateLayer(mObjectFrame->GetContentRectRelativeToSelf(), nsDisplayItem::TYPE_PLUGIN);
+    mObjectFrame->InvalidateLayer(nsDisplayItem::TYPE_PLUGIN);
   }
   return NS_OK;
 }
@@ -734,7 +722,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
   }
 
   return rv;
-#elif (defined(MOZ_WIDGET_GTK2) || defined(MOZ_WIDGET_QT)) && defined(MOZ_X11)
+#elif (defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)) && defined(MOZ_X11)
   // X11 window managers want the toplevel window for WM_TRANSIENT_FOR.
   nsIWidget* win = mObjectFrame->GetNearestWidget();
   if (!win)
@@ -2432,7 +2420,7 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const nsGUIEvent& anEvent)
         nsIntPoint rootPoint(-1,-1);
         if (widget)
           rootPoint = anEvent.refPoint + widget->WidgetToScreenOffset();
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
         Window root = GDK_ROOT_WINDOW();
 #elif defined(MOZ_WIDGET_QT)
         Window root = RootWindowOfScreen(DefaultScreenOfDisplay(mozilla::DefaultXDisplay()));
@@ -2520,7 +2508,7 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const nsGUIEvent& anEvent)
       if (anEvent.pluginEvent)
         {
           XKeyEvent &event = pluginEvent.xkey;
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
           event.root = GDK_ROOT_WINDOW();
           event.time = anEvent.time;
           const GdkEventKey* gdkEvent =
@@ -3046,17 +3034,11 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
   aContext->Translate(pluginRect.TopLeft());
 
   Renderer renderer(window, this, pluginSize, pluginDirtyRect);
-#ifdef MOZ_WIDGET_GTK2
-  // This is the visual used by the widgets, 24-bit if available.
-  GdkVisual* gdkVisual = gdk_rgb_get_visual();
-  Visual* visual = gdk_x11_visual_get_xvisual(gdkVisual);
-  Screen* screen =
-    gdk_x11_screen_get_xscreen(gdk_visual_get_screen(gdkVisual));
-#else
+
   Display* dpy = mozilla::DefaultXDisplay();
   Screen* screen = DefaultScreenOfDisplay(dpy);
   Visual* visual = DefaultVisualOfScreen(screen);
-#endif
+
   renderer.Draw(aContext, nsIntSize(window->width, window->height),
                 rendererFlags, screen, visual, nsnull);
 }
@@ -3774,7 +3756,7 @@ void nsPluginInstanceOwner::SetFrame(nsObjectFrame *aFrame)
       mObjectFrame->PrepForDrawing(mWidget);
     }
     mObjectFrame->FixupWindow(mObjectFrame->GetContentRectRelativeToSelf().Size());
-    mObjectFrame->Invalidate(mObjectFrame->GetContentRectRelativeToSelf());
+    mObjectFrame->InvalidateFrame();
 
     // Scroll position listening is only required for Carbon event model plugins on Mac OS X.
 #if defined(XP_MACOSX) && !defined(NP_NO_QUICKDRAW)

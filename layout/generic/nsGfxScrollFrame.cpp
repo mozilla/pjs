@@ -16,6 +16,7 @@
 #include "nsGfxScrollFrame.h"
 #include "nsGkAtoms.h"
 #include "nsINameSpaceManager.h"
+#include "nsContentList.h"
 #include "nsIDocument.h"
 #include "nsFontMetrics.h"
 #include "nsIDocumentObserver.h"
@@ -51,6 +52,7 @@
 #include "nsSMILKeySpline.h"
 #include "nsSubDocumentFrame.h"
 #include "nsSVGOuterSVGFrame.h"
+#include "mozilla/Attributes.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -153,94 +155,6 @@ nsIAtom*
 nsHTMLScrollFrame::GetType() const
 {
   return nsGkAtoms::scrollFrame; 
-}
-
-void
-nsHTMLScrollFrame::InvalidateInternal(const nsRect& aDamageRect,
-                                      nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                      PRUint32 aFlags)
-{
-  if (aForChild) {
-    if (aForChild == mInner.mScrolledFrame) {
-      nsRect damage = aDamageRect + nsPoint(aX, aY);
-      // This is the damage rect that we're going to pass up to our parent.
-      nsRect parentDamage;
-      if (mInner.IsIgnoringViewportClipping()) {
-        parentDamage = damage;
-      } else {
-        // If we're using a displayport, we might be displaying an area
-        // different than our scroll port and the damage needs to be
-        // clipped to that instead.
-        nsRect displayport;
-        bool usingDisplayport = nsLayoutUtils::GetDisplayPort(GetContent(),
-                                                                &displayport);
-        if (usingDisplayport) {
-          parentDamage.IntersectRect(damage, displayport);
-        } else {
-          parentDamage.IntersectRect(damage, mInner.mScrollPort);
-        }
-      }
-
-      if (IsScrollingActive()) {
-        // This is the damage rect that we're going to pass up and
-        // only request invalidation of ThebesLayers for.
-        // damage is now in our coordinate system, which means it was
-        // translated using the current scroll position. Adjust it to
-        // reflect the scroll position at last paint, since that's what
-        // the ThebesLayers are currently set up for.
-        // This should not be clipped to the scrollport since ThebesLayers
-        // can contain content outside the scrollport that may need to be
-        // invalidated.
-        nsRect thebesLayerDamage = damage + GetScrollPosition() - mInner.mScrollPosAtLastPaint;
-        if (parentDamage.IsEqualInterior(thebesLayerDamage)) {
-          // This single call will take care of both rects
-          nsContainerFrame::InvalidateInternal(parentDamage, 0, 0, aForChild, aFlags);
-        } else {
-          // Invalidate rects separately
-          if (!(aFlags & INVALIDATE_NO_THEBES_LAYERS)) {
-            nsContainerFrame::InvalidateInternal(thebesLayerDamage, 0, 0, aForChild,
-                                                 aFlags | INVALIDATE_ONLY_THEBES_LAYERS);
-          }
-          if (!(aFlags & INVALIDATE_ONLY_THEBES_LAYERS) && !parentDamage.IsEmpty()) {
-            nsContainerFrame::InvalidateInternal(parentDamage, 0, 0, aForChild,
-                                                 aFlags | INVALIDATE_NO_THEBES_LAYERS);
-          }
-        }
-      } else {
-        if (!parentDamage.IsEmpty()) {
-          nsContainerFrame::InvalidateInternal(parentDamage, 0, 0, aForChild, aFlags);
-        }
-      }
-
-      if (mInner.mIsRoot && !parentDamage.IsEqualInterior(damage)) {
-        // Make sure we notify our prescontext about invalidations outside
-        // viewport clipping.
-        // This is important for things that are snapshotting the viewport,
-        // possibly outside the scrolled bounds.
-        // We don't need to propagate this any further up, though. Anyone who
-        // cares about scrolled-out-of-view invalidates had better be listening
-        // to our window directly.
-        PresContext()->NotifyInvalidation(damage, aFlags);
-      }
-      return;
-    } else if (aForChild == mInner.mHScrollbarBox) {
-      if (!mInner.mHasHorizontalScrollbar) {
-        // Our scrollbars may send up invalidations even when they're collapsed,
-        // because we just size a collapsed scrollbar to empty and some
-        // descendants may be non-empty. Suppress that invalidation here.
-        return;
-      }
-    } else if (aForChild == mInner.mVScrollbarBox) {
-      if (!mInner.mHasVerticalScrollbar) {
-        // Our scrollbars may send up invalidations even when they're collapsed,
-        // because we just size a collapsed scrollbar to empty and some
-        // descendants may be non-empty. Suppress that invalidation here.
-        return;
-      }
-    }
-  }
- 
-  nsContainerFrame::InvalidateInternal(aDamageRect, aX, aY, aForChild, aFlags);
 }
 
 /**
@@ -908,8 +822,6 @@ nsHTMLScrollFrame::Reflow(nsPresContext*           aPresContext,
       state.mContentsOverflowAreas + mInner.mScrolledFrame->GetPosition());
   }
 
-  CheckInvalidateSizeChange(aDesiredSize);
-
   FinishReflowWithAbsoluteFrames(aPresContext, aDesiredSize, aReflowState, aStatus);
 
   if (!InInitialReflow() && !mInner.mHadNonInitialReflow) {
@@ -929,7 +841,7 @@ nsHTMLScrollFrame::Reflow(nsPresContext*           aPresContext,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 NS_IMETHODIMP
 nsHTMLScrollFrame::GetFrameName(nsAString& aResult) const
 {
@@ -1092,63 +1004,6 @@ nsXULScrollFrame::GetType() const
   return nsGkAtoms::scrollFrame; 
 }
 
-void
-nsXULScrollFrame::InvalidateInternal(const nsRect& aDamageRect,
-                                     nscoord aX, nscoord aY, nsIFrame* aForChild,
-                                     PRUint32 aFlags)
-{
-  if (aForChild == mInner.mScrolledFrame) {
-    nsRect damage = aDamageRect + nsPoint(aX, aY);
-    // This is the damage rect that we're going to pass up to our parent.
-    nsRect parentDamage;
-    // If we're using a displayport, we might be displaying an area
-    // different than our scroll port and the damage needs to be
-    // clipped to that instead.
-    nsRect displayport;
-    bool usingDisplayport = nsLayoutUtils::GetDisplayPort(GetContent(),
-                                                            &displayport);
-    if (usingDisplayport) {
-      parentDamage.IntersectRect(damage, displayport);
-    } else {
-      parentDamage.IntersectRect(damage, mInner.mScrollPort);
-    }
-
-    if (IsScrollingActive()) {
-      // This is the damage rect that we're going to pass up and
-      // only request invalidation of ThebesLayers for.
-      // damage is now in our coordinate system, which means it was
-      // translated using the current scroll position. Adjust it to
-      // reflect the scroll position at last paint, since that's what
-      // the ThebesLayers are currently set up for.
-      // This should not be clipped to the scrollport since ThebesLayers
-      // can contain content outside the scrollport that may need to be
-      // invalidated.
-      nsRect thebesLayerDamage = damage + GetScrollPosition() - mInner.mScrollPosAtLastPaint;
-      if (parentDamage.IsEqualInterior(thebesLayerDamage)) {
-        // This single call will take care of both rects
-        nsBoxFrame::InvalidateInternal(parentDamage, 0, 0, aForChild, aFlags);
-      } else {
-        // Invalidate rects separately
-        if (!(aFlags & INVALIDATE_NO_THEBES_LAYERS)) {
-          nsBoxFrame::InvalidateInternal(thebesLayerDamage, 0, 0, aForChild,
-                                         aFlags | INVALIDATE_ONLY_THEBES_LAYERS);
-        }
-        if (!(aFlags & INVALIDATE_ONLY_THEBES_LAYERS) && !parentDamage.IsEmpty()) {
-          nsBoxFrame::InvalidateInternal(parentDamage, 0, 0, aForChild,
-                                         aFlags | INVALIDATE_NO_THEBES_LAYERS);
-        }
-      }
-    } else {
-      if (!parentDamage.IsEmpty()) {
-        nsBoxFrame::InvalidateInternal(parentDamage, 0, 0, aForChild, aFlags);
-      }
-    }
-    return;
-  }
-  
-  nsBoxFrame::InvalidateInternal(aDamageRect, aX, aY, aForChild, aFlags);
-}
-
 nscoord
 nsXULScrollFrame::GetBoxAscent(nsBoxLayoutState& aState)
 {
@@ -1248,7 +1103,7 @@ nsXULScrollFrame::GetMaxSize(nsBoxLayoutState& aState)
   return maxSize;
 }
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 NS_IMETHODIMP
 nsXULScrollFrame::GetFrameName(nsAString& aResult) const
 {
@@ -1281,7 +1136,7 @@ const double kCurrentVelocityWeighting = 0.25;
 const double kStopDecelerationWeighting = 0.4;
 
 // AsyncScroll has ref counting.
-class nsGfxScrollFrameInner::AsyncScroll : public nsARefreshObserver {
+class nsGfxScrollFrameInner::AsyncScroll MOZ_FINAL : public nsARefreshObserver {
 public:
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
@@ -1553,7 +1408,7 @@ IsSmoothScrollingEnabled()
   return Preferences::GetBool(SMOOTH_SCROLL_PREF_NAME, false);
 }
 
-class ScrollFrameActivityTracker : public nsExpirationTracker<nsGfxScrollFrameInner,4> {
+class ScrollFrameActivityTracker MOZ_FINAL : public nsExpirationTracker<nsGfxScrollFrameInner,4> {
 public:
   // Wait for 3-4s between scrolls before we remove our layers.
   // That's 4 generations of 1s each.
@@ -1663,6 +1518,9 @@ nsGfxScrollFrameInner::AsyncScrollCallback(void* anInstance, mozilla::TimeStamp 
   // Apply desired destination range since this is the last step of scrolling.
   self->mAsyncScroll = nsnull;
   self->ScrollToImpl(self->mDestination, range);
+  // We are done scrolling, set our destination to wherever we actually ended
+  // up scrolling to.
+  self->mDestination = self->GetScrollPosition();
 }
 
 void
@@ -1710,6 +1568,9 @@ nsGfxScrollFrameInner::ScrollToWithOrigin(nsPoint aScrollPosition,
     // async-scrolling process and do an instant scroll.
     mAsyncScroll = nsnull;
     ScrollToImpl(mDestination, range);
+    // We are done scrolling, set our destination to wherever we actually ended
+    // up scrolling to.
+    mDestination = GetScrollPosition();
     return;
   }
 
@@ -1730,6 +1591,9 @@ nsGfxScrollFrameInner::ScrollToWithOrigin(nsPoint aScrollPosition,
       mAsyncScroll = nsnull;
       // Observer setup failed. Scroll the normal way.
       ScrollToImpl(mDestination, range);
+      // We are done scrolling, set our destination to wherever we actually
+      // ended up scrolling to.
+      mDestination = GetScrollPosition();
       return;
     }
   }
@@ -1810,7 +1674,7 @@ InvalidateFixedBackgroundFramesFromList(nsDisplayListBuilder* aBuilder,
         item->IsVaryingRelativeToMovingFrame(aBuilder, aMovingFrame)) {
       if (FrameLayerBuilder::NeedToInvalidateFixedDisplayItem(aBuilder, item)) {
         // FrameLayerBuilder does not take care of scrolling this one
-        f->Invalidate(item->GetVisibleRect() - item->ToReferenceFrame());
+        f->InvalidateFrame();
       }
     }
   }
@@ -1908,34 +1772,23 @@ void nsGfxScrollFrameInner::ScrollVisual(nsPoint aOldScrolledFramePos)
   AdjustViews(mScrolledFrame);
   // We need to call this after fixing up the view positions
   // to be consistent with the frame hierarchy.
-  PRUint32 flags = nsIFrame::INVALIDATE_REASON_SCROLL_REPAINT;
+  bool invalidate = false;
   bool canScrollWithBlitting = CanScrollWithBlitting(mOuter);
   mOuter->RemoveStateBits(NS_SCROLLFRAME_INVALIDATE_CONTENTS_ON_SCROLL);
   if (IsScrollingActive()) {
     if (!canScrollWithBlitting) {
       MarkInactive();
     } else {
-      flags |= nsIFrame::INVALIDATE_NO_THEBES_LAYERS;
+      invalidate = true;
     }
   }
   if (canScrollWithBlitting) {
     MarkActive();
   }
 
-  nsRect invalidateRect, displayport;
-  if (IsIgnoringViewportClipping()) {
-    nsRect visualOverflow = mScrolledFrame->GetVisualOverflowRect();
-    invalidateRect.UnionRect(visualOverflow + mScrolledFrame->GetPosition(),
-            visualOverflow + aOldScrolledFramePos);
-  } else {
-    invalidateRect =
-      (nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), &displayport)) ?
-      displayport : mScrollPort;
-  }
+  mOuter->SchedulePaint();
 
-  mOuter->InvalidateWithFlags(invalidateRect, flags);
-
-  if (flags & nsIFrame::INVALIDATE_NO_THEBES_LAYERS) {
+  if (invalidate) {
     nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(mOuter);
     nsRect update =
       GetScrollPortRect() + mOuter->GetOffsetToCrossDoc(displayRoot);
@@ -3134,28 +2987,6 @@ nsXULScrollFrame::LayoutScrollArea(nsBoxLayoutState& aState,
     ClampAndSetBounds(aState, childRect, aScrollPosition, true);
   }
 
-  nsRect finalRect = mInner.mScrolledFrame->GetRect();
-  nsRect finalVisOverflow = mInner.mScrolledFrame->GetVisualOverflowRect();
-  // The position of the scrolled frame shouldn't change, but if it does or
-  // the position of the overflow rect changes just invalidate both the old
-  // and new overflow rect.
-  if (originalRect.TopLeft() != finalRect.TopLeft() ||
-      originalVisOverflow.TopLeft() != finalVisOverflow.TopLeft())
-  {
-    // The old overflow rect needs to be adjusted if the frame's position
-    // changed.
-    mInner.mScrolledFrame->Invalidate(
-      originalVisOverflow + originalRect.TopLeft() - finalRect.TopLeft());
-    mInner.mScrolledFrame->Invalidate(finalVisOverflow);
-  } else if (!originalVisOverflow.IsEqualInterior(finalVisOverflow)) {
-    // If the overflow rect changed then invalidate the difference between the
-    // old and new overflow rects.
-    mInner.mScrolledFrame->CheckInvalidateSizeChange(
-      originalRect, originalVisOverflow, finalRect.Size());
-    mInner.mScrolledFrame->InvalidateRectDifference(
-      originalVisOverflow, finalVisOverflow);
-  }
-
   aState.SetLayoutFlags(oldflags);
 
 }
@@ -3566,40 +3397,6 @@ nsGfxScrollFrameInner::ReflowCallbackCanceled()
   mPostedReflowCallback = false;
 }
 
-static void LayoutAndInvalidate(nsBoxLayoutState& aState,
-                                nsIFrame* aBox, const nsRect& aRect,
-                                bool aScrollbarIsBeingHidden)
-{
-  // When a child box changes shape of position, the parent
-  // is responsible for invalidation; the overflow rect must be invalidated
-  // to make sure to catch any overflow.
-  // We invalidate the parent (i.e. the scrollframe) directly, because
-  // invalidates coming from scrollbars are suppressed by nsHTMLScrollFrame when
-  // mHasVScrollbar/mHasHScrollbar is false, and this is called after those
-  // flags have been set ... if a scrollbar is being hidden, we still need
-  // to invalidate the scrollbar area here.
-  // But we also need to invalidate the scrollbar itself in case it has
-  // its own layer; we need to ensure that layer is updated.
-  bool rectChanged = !aBox->GetRect().IsEqualInterior(aRect);
-  if (rectChanged) {
-    if (aScrollbarIsBeingHidden) {
-      aBox->GetParent()->Invalidate(aBox->GetVisualOverflowRect() +
-                                    aBox->GetPosition());
-    } else {
-      aBox->InvalidateFrameSubtree();
-    }
-  }
-  nsBoxFrame::LayoutChildAt(aState, aBox, aRect);
-  if (rectChanged) {
-    if (aScrollbarIsBeingHidden) {
-      aBox->GetParent()->Invalidate(aBox->GetVisualOverflowRect() +
-                                    aBox->GetPosition());
-    } else {
-      aBox->InvalidateFrameSubtree();
-    }
-  }
-}
-
 bool
 nsGfxScrollFrameInner::UpdateOverflow()
 {
@@ -3694,7 +3491,7 @@ nsGfxScrollFrameInner::LayoutScrollbars(nsBoxLayoutState& aState,
     }
 
     if (mScrollCornerBox) {
-      LayoutAndInvalidate(aState, mScrollCornerBox, r, false);
+      nsBoxFrame::LayoutChildAt(aState, mScrollCornerBox, r);
     }
 
     if (hasResizer) {
@@ -3717,11 +3514,11 @@ nsGfxScrollFrameInner::LayoutScrollbars(nsBoxLayoutState& aState,
           r.y = aContentArea.YMost() - r.height;
       }
 
-      LayoutAndInvalidate(aState, mResizerBox, r, false);
+      nsBoxFrame::LayoutChildAt(aState, mResizerBox, r);
     }
     else if (mResizerBox) {
       // otherwise lay out the resizer with an empty rectangle
-      LayoutAndInvalidate(aState, mResizerBox, nsRect(), false);
+      nsBoxFrame::LayoutChildAt(aState, mResizerBox, nsRect());
     }
   }
 
@@ -3735,7 +3532,7 @@ nsGfxScrollFrameInner::LayoutScrollbars(nsBoxLayoutState& aState,
     mVScrollbarBox->GetMargin(margin);
     vRect.Deflate(margin);
     AdjustScrollbarRectForResizer(mOuter, presContext, vRect, hasResizer, true);
-    LayoutAndInvalidate(aState, mVScrollbarBox, vRect, !mHasVerticalScrollbar);
+    nsBoxFrame::LayoutChildAt(aState, mVScrollbarBox, vRect);
   }
 
   if (mHScrollbarBox) {
@@ -3747,7 +3544,7 @@ nsGfxScrollFrameInner::LayoutScrollbars(nsBoxLayoutState& aState,
     mHScrollbarBox->GetMargin(margin);
     hRect.Deflate(margin);
     AdjustScrollbarRectForResizer(mOuter, presContext, hRect, hasResizer, false);
-    LayoutAndInvalidate(aState, mHScrollbarBox, hRect, !mHasHorizontalScrollbar);
+    nsBoxFrame::LayoutChildAt(aState, mHScrollbarBox, hRect);
   }
 
   // may need to update fixed position children of the viewport,

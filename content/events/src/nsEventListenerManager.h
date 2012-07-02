@@ -29,7 +29,13 @@ class nsEventTargetChainItem;
 class nsPIDOMWindow;
 class nsCxPusher;
 class nsIEventListenerInfo;
-class nsIDocument;
+
+typedef enum
+{
+    eNativeListener = 0,
+    eJSEventListener,
+    eWrappedJSListener
+} nsListenerType;
 
 struct nsListenerStruct
 {
@@ -37,17 +43,17 @@ struct nsListenerStruct
   PRUint32                      mEventType;
   nsCOMPtr<nsIAtom>             mTypeAtom;
   PRUint16                      mFlags;
+  PRUint8                       mListenerType;
   bool                          mHandlerIsString;
-  bool                          mWrappedJS;
 
   nsIJSEventListener* GetJSListener() const {
-    return (mFlags & NS_PRIV_EVENT_FLAG_SCRIPT) ?
+    return (mListenerType == eJSEventListener) ?
       static_cast<nsIJSEventListener *>(mListener.get()) : nsnull;
   }
 
   ~nsListenerStruct()
   {
-    if ((mFlags & NS_PRIV_EVENT_FLAG_SCRIPT) && mListener) {
+    if ((mListenerType == eJSEventListener) && mListener) {
       static_cast<nsIJSEventListener*>(mListener.get())->Disconnect();
     }
   }
@@ -259,7 +265,9 @@ public:
   /**
    * Set the "inline" event listener for aEventName to |v|.  This
    * might actually remove the event listener, depending on the value
-   * of |v|.
+   * of |v|.  Note that on entry to this function cx and aScope might
+   * not be in the same compartment, though cx and v are guaranteed to
+   * be in the same compartment.
    */
   nsresult SetJSEventListenerToJsval(nsIAtom *aEventName, JSContext *cx,
                                      JSObject *aScope, const jsval &v);

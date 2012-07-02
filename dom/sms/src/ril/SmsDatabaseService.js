@@ -142,7 +142,7 @@ SmsDatabaseService.prototype = {
       callback(null, db);
     }
 
-    let request = GLOBAL_SCOPE.mozIndexedDB.open(DB_NAME, DB_VERSION);
+    let request = GLOBAL_SCOPE.indexedDB.open(DB_NAME, DB_VERSION);
     request.onsuccess = function (event) {
       if (DEBUG) debug("Opened database:", DB_NAME, DB_VERSION);
       gotDB(event.target.result);
@@ -347,9 +347,11 @@ SmsDatabaseService.prototype = {
    */
 
   saveReceivedMessage: function saveReceivedMessage(sender, body, date) {
+    let receiver = this.mRIL.rilContext.icc ? this.mRIL.rilContext.icc.msisdn : null;
+
     let message = {delivery:  DELIVERY_RECEIVED,
                    sender:    sender,
-                   receiver:  this.mRIL.radioState.msisdn, 
+                   receiver:  receiver,
                    body:      body,
                    timestamp: date,
                    read:      FILTER_READ_UNREAD};
@@ -357,8 +359,10 @@ SmsDatabaseService.prototype = {
   },
 
   saveSentMessage: function saveSentMessage(receiver, body, date) {
+    let sender = this.mRIL.rilContext.icc ? this.mRIL.rilContext.icc.msisdn : null;
+
     let message = {delivery:  DELIVERY_SENT,
-                   sender:    this.mRIL.radioState.msisdn,
+                   sender:    sender,
                    receiver:  receiver,
                    body:      body,
                    timestamp: date,

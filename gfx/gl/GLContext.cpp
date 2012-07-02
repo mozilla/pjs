@@ -41,7 +41,7 @@ const ContextFormat ContextFormat::BasicRGBA32Format(ContextFormat::BasicRGBA32)
 #define MAX_SYMBOL_LENGTH 128
 #define MAX_SYMBOL_NAMES 5
 
-// should match the order of GLExtensions
+// should match the order of GLExtensions, and be null-terminated.
 static const char *sExtensionNames[] = {
     "GL_EXT_framebuffer_object",
     "GL_ARB_framebuffer_object",
@@ -66,6 +66,9 @@ static const char *sExtensionNames[] = {
     "GL_OES_standard_derivatives",
     "GL_EXT_texture_filter_anisotropic",
     "GL_EXT_texture_compression_s3tc",
+    "GL_EXT_texture_compression_dxt1",
+    "GL_ANGLE_texture_compression_dxt3",
+    "GL_ANGLE_texture_compression_dxt5",
     "GL_EXT_framebuffer_blit",
     "GL_ANGLE_framebuffer_blit",
     "GL_EXT_framebuffer_multisample",
@@ -74,7 +77,9 @@ static const char *sExtensionNames[] = {
     "GL_ARB_robustness",
     "GL_EXT_robustness",
     "GL_ARB_sync",
-    NULL
+    "GL_OES_EGL_image",
+    "GL_OES_EGL_sync",
+    nsnull
 };
 
 /*
@@ -461,6 +466,20 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
                 mSymbols.fGetSynciv = nsnull;
             }
         }
+
+        if (IsExtensionSupported(OES_EGL_image)) {
+            SymLoadStruct imageSymbols[] = {
+                { (PRFuncPtr*) &mSymbols.fImageTargetTexture2D, { "EGLImageTargetTexture2DOES", nsnull } },
+                { nsnull, { nsnull } },
+            };
+
+            if (!LoadSymbols(&imageSymbols[0], trygl, prefix)) {
+                NS_ERROR("GL supports OES_EGL_image without supplying its functions.");
+
+                MarkExtensionUnsupported(OES_EGL_image);
+                mSymbols.fImageTargetTexture2D = nsnull;
+            }
+        }
        
         // Load developer symbols, don't fail if we can't find them.
         SymLoadStruct auxSymbols[] = {
@@ -515,50 +534,25 @@ void
 GLContext::InitExtensions()
 {
     MakeCurrent();
-    const GLubyte *extensions = fGetString(LOCAL_GL_EXTENSIONS);
+    const char* extensions = (const char*)fGetString(LOCAL_GL_EXTENSIONS);
     if (!extensions)
         return;
 
-    char *exts = strdup((char *)extensions);
-
 #ifdef DEBUG
-    static bool once = false;
+    // If DEBUG, then be verbose the first time we're run.
+    static bool firstVerboseRun = true;
 #else
-    const bool once = true;
+    // Non-DEBUG, so never spew.
+    const bool firstVerboseRun = false;
 #endif
 
-    if (DebugMode() && !once) {
-        printf_stderr("GL extensions: %s\n", exts);
-    }
-
-    char *s = exts;
-    bool done = false;
-    while (!done) {
-        char *space = strchr(s, ' ');
-        if (space) {
-            *space = '\0';
-        } else {
-            done = true;
-        }
-
-        for (int i = 0; sExtensionNames[i]; ++i) {
-            if (strcmp(s, sExtensionNames[i]) == 0) {
-                if (DebugMode() && !once) {
-                    printf_stderr("Found extension %s\n", s);
-                }
-                mAvailableExtensions[i] = 1;
-            }
-        }
-
-        s = space+1;
-    }
-
-    free(exts);
+    mAvailableExtensions.Load(extensions, sExtensionNames, firstVerboseRun);
 
 #ifdef DEBUG
-    once = true;
+    firstVerboseRun = false;
 #endif
 }
+
 
 // Take texture data in a given buffer and copy it into a larger buffer,
 // padding out the edge pixels for filtering if necessary
@@ -1284,7 +1278,12 @@ GLContext::ChooseGLFormats(ContextFormat& aCF)
     GLFormats formats;
 
     if (aCF.alpha) {
-        formats.texColor = LOCAL_GL_RGBA;
+        if (mIsGLES2 && IsExtensionSupported(EXT_texture_format_BGRA8888)) {
+            formats.texColor = LOCAL_GL_BGRA;
+        } else {
+            formats.texColor = LOCAL_GL_RGBA;
+        }
+
         if (mIsGLES2 && !IsExtensionSupported(OES_rgb8_rgba8)) {
             formats.rbColor = LOCAL_GL_RGBA4;
             aCF.red = aCF.green = aCF.blue = aCF.alpha = 4;
@@ -2264,7 +2263,6 @@ GLContext::UploadSurfaceToTexture(gfxASurface *aSurface,
     }
 
     GLenum format;
-    GLenum internalformat;
     GLenum type;
     PRInt32 pixelSize = gfxASurface::BytePerPixelFromFormat(imageSurface->Format());
     ShaderProgramType shader;
@@ -2302,8 +2300,6 @@ GLContext::UploadSurfaceToTexture(gfxASurface *aSurface,
 
     PRInt32 stride = imageSurface->Stride();
 
-    internalformat = mIsGLES2 ? format : LOCAL_GL_RGBA;
-
     nsIntRegionRectIterator iter(paintRegion);
     const nsIntRect *iterRect;
 
@@ -2335,7 +2331,7 @@ GLContext::UploadSurfaceToTexture(gfxASurface *aSurface,
         } else {
             TexImage2D(LOCAL_GL_TEXTURE_2D,
                        0,
-                       internalformat,
+                       format,
                        iterRect->width,
                        iterRect->height,
                        stride,
@@ -2372,7 +2368,7 @@ GLContext::TexImage2D(GLenum target, GLint level, GLint internalformat,
 {
     if (mIsGLES2) {
 
-        NS_ASSERTION(format == internalformat,
+        NS_ASSERTION(format == (GLenum)internalformat,
                     "format and internalformat not the same for glTexImage2D on GLES2");
 
         if (!CanUploadNonPowerOfTwo()
@@ -2953,11 +2949,9 @@ RemoveNamesFromArray(GLContext *aOrigin, GLsizei aCount, GLuint *aNames, nsTArra
         if (name == 0)
             continue;
 
-        bool found = false;
         for (PRUint32 i = 0; i < aArray.Length(); ++i) {
             if (aArray[i].name == name) {
                 aArray.RemoveElementAt(i);
-                found = true;
                 break;
             }
         }

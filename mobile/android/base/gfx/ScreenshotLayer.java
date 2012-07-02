@@ -27,6 +27,7 @@ import java.nio.FloatBuffer;
 
 public class ScreenshotLayer extends SingleTileLayer {
     private static final int SCREENSHOT_SIZE_LIMIT = 1048576;
+    private static final int BYTES_FOR_16BPP = 2;
     private ScreenshotImage mImage;
     // Size of the image buffer
     private IntSize mBufferSize;
@@ -35,6 +36,7 @@ public class ScreenshotLayer extends SingleTileLayer {
     private IntSize mImageSize;
     // Whether we have an up-to-date image to draw
     private boolean mHasImage;
+    private static String LOGTAG = "GeckoScreenshot";
 
     public static int getMaxNumPixels() {
         return SCREENSHOT_SIZE_LIMIT;
@@ -44,6 +46,19 @@ public class ScreenshotLayer extends SingleTileLayer {
         mHasImage = false;
     }
 
+    void setBitmap(ByteBuffer data, int width, int height, Rect rect) {
+        mImageSize = new IntSize(width, height);
+        if (IntSize.isPowerOfTwo(width) && IntSize.isPowerOfTwo(height)) {
+            mBufferSize = mImageSize;
+            mHasImage = true;
+            mImage.setBitmap(data, width, height, CairoImage.FORMAT_RGB16_565, rect);
+        } else {
+            Bitmap b = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+            b.copyPixelsFromBuffer(data);
+            setBitmap(b);
+        }
+    }
+    
     void setBitmap(Bitmap bitmap) {
         mImageSize = new IntSize(bitmap.getWidth(), bitmap.getHeight());
         int width = IntSize.nextPowerOfTwo(bitmap.getWidth());
@@ -71,7 +86,7 @@ public class ScreenshotLayer extends SingleTileLayer {
     public static ScreenshotLayer create(Bitmap bitmap) {
         IntSize size = new IntSize(bitmap.getWidth(), bitmap.getHeight());
         // allocate a buffer that can hold our max screenshot size
-        ByteBuffer buffer = GeckoAppShell.allocateDirectBuffer(SCREENSHOT_SIZE_LIMIT * 2);
+        ByteBuffer buffer = GeckoAppShell.allocateDirectBuffer(SCREENSHOT_SIZE_LIMIT * BYTES_FOR_16BPP);
         // construct the screenshot layer
         ScreenshotLayer sl =  new ScreenshotLayer(new ScreenshotImage(buffer, size.width, size.height, CairoImage.FORMAT_RGB16_565), size);
         // paint the passed in bitmap into the buffer
@@ -116,7 +131,28 @@ public class ScreenshotLayer extends SingleTileLayer {
             }
         }
 
-        void setBitmap(Bitmap bitmap, int width, int height, int format) {
+        void copyBuffer(ByteBuffer src, ByteBuffer dst, Rect rect, int stride) {
+            int start = (rect.top * stride) + (rect.left * BYTES_FOR_16BPP);
+            int end = ((rect.bottom - 1) * stride) + (rect.right * BYTES_FOR_16BPP);
+            // clamp stuff just to be safe
+            start = Math.max(0, Math.min(dst.limit(), Math.min(src.limit(), start)));
+            end = Math.max(start, Math.min(dst.limit(), Math.min(src.capacity(), end)));
+            dst.position(start);
+            src.position(start).limit(end);
+            // This allocates a lot of memory and can fail sometimes. Handling the
+            // exception is better than crashing.
+            try {
+              dst.put(src);
+            } catch (java.lang.OutOfMemoryError e) {}
+        }
+
+        synchronized void setBitmap(ByteBuffer data, int width, int height, int format, Rect rect) {
+            mSize = new IntSize(width, height);
+            mFormat = format;
+            copyBuffer(data.asReadOnlyBuffer(), mBuffer.duplicate(), rect, width * BYTES_FOR_16BPP);
+        }
+
+        synchronized void setBitmap(Bitmap bitmap, int width, int height, int format) {
             Bitmap tmp;
             mSize = new IntSize(width, height);
             mFormat = format;
@@ -138,10 +174,10 @@ public class ScreenshotLayer extends SingleTileLayer {
         }
 
         @Override
-        public ByteBuffer getBuffer() { return mBuffer; }
+        synchronized public ByteBuffer getBuffer() { return mBuffer; }
         @Override
-        public IntSize getSize() { return mSize; }
+        synchronized public IntSize getSize() { return mSize; }
         @Override
-        public int getFormat() { return mFormat; }
+        synchronized public int getFormat() { return mFormat; }
     }
 }

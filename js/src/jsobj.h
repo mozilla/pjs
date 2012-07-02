@@ -105,7 +105,8 @@ inline bool
 LookupProperty(JSContext *cx, HandleObject obj, PropertyName *name,
                JSObject **objp, JSProperty **propp)
 {
-    return LookupProperty(cx, obj, RootedId(cx, NameToId(name)), objp, propp);
+    Rooted<jsid> id(cx, NameToId(name));
+    return LookupProperty(cx, obj, id, objp, propp);
 }
 
 extern JS_FRIEND_API(JSBool)
@@ -113,8 +114,16 @@ LookupElement(JSContext *cx, HandleObject obj, uint32_t index,
               JSObject **objp, JSProperty **propp);
 
 extern JSBool
-DefineProperty(JSContext *cx, HandleObject obj, HandleId id, const js::Value *value,
+DefineGeneric(JSContext *cx, HandleObject obj, HandleId id, const js::Value *value,
                JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
+
+inline JSBool
+DefineProperty(JSContext *cx, HandleObject obj, PropertyName *name, const js::Value *value,
+               JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs)
+{
+    Rooted<jsid> id(cx, NameToId(name));
+    return DefineGeneric(cx, obj, id, value, getter, setter, attrs);
+}
 
 extern JSBool
 DefineElement(JSContext *cx, HandleObject obj, uint32_t index, const js::Value *value,
@@ -142,19 +151,20 @@ extern JSBool
 GetPropertyDefault(JSContext *cx, HandleObject obj, HandleId id, const Value &def, Value *vp);
 
 extern JSBool
-SetPropertyHelper(JSContext *cx, HandleObject obj, HandleId id, unsigned defineHow,
-                  Value *vp, JSBool strict);
+SetPropertyHelper(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
+                  unsigned defineHow, Value *vp, JSBool strict);
 
 inline bool
-SetPropertyHelper(JSContext *cx, HandleObject obj, PropertyName *name, unsigned defineHow,
-                  Value *vp, JSBool strict)
+SetPropertyHelper(JSContext *cx, HandleObject obj, HandleObject receiver, PropertyName *name,
+                  unsigned defineHow, Value *vp, JSBool strict)
 {
-    return SetPropertyHelper(cx, obj, RootedId(cx, NameToId(name)), defineHow, vp, strict);
+    Rooted<jsid> id(cx, NameToId(name));
+    return SetPropertyHelper(cx, obj, receiver, id, defineHow, vp, strict);
 }
 
 extern JSBool
-SetElementHelper(JSContext *cx, HandleObject obj, uint32_t index, unsigned defineHow,
-                 Value *vp, JSBool strict);
+SetElementHelper(JSContext *cx, HandleObject obj, HandleObject Receiver, uint32_t index,
+                 unsigned defineHow, Value *vp, JSBool strict);
 
 extern JSType
 TypeOf(JSContext *cx, HandleObject obj);
@@ -699,6 +709,7 @@ struct JSObject : public js::ObjectImpl
     void freeSlot(JSContext *cx, uint32_t slot);
 
   public:
+    static bool reportReadOnly(JSContext *cx, jsid id, unsigned report = JSREPORT_ERROR);
     bool reportNotConfigurable(JSContext* cx, jsid id, unsigned report = JSREPORT_ERROR);
     bool reportNotExtensible(JSContext *cx, unsigned report = JSREPORT_ERROR);
 
@@ -814,10 +825,14 @@ struct JSObject : public js::ObjectImpl
     inline JSBool getElement(JSContext *cx, uint32_t index, js::Value *vp);
     inline JSBool getSpecial(JSContext *cx, js::SpecialId sid, js::Value *vp);
 
-    inline JSBool setGeneric(JSContext *cx, js::HandleId id, js::Value *vp, JSBool strict);
-    inline JSBool setProperty(JSContext *cx, js::PropertyName *name, js::Value *vp, JSBool strict);
-    inline JSBool setElement(JSContext *cx, uint32_t index, js::Value *vp, JSBool strict);
-    inline JSBool setSpecial(JSContext *cx, js::SpecialId sid, js::Value *vp, JSBool strict);
+    inline JSBool setGeneric(JSContext *cx, js::Handle<JSObject*> receiver, js::HandleId id,
+                             js::Value *vp, JSBool strict);
+    inline JSBool setProperty(JSContext *cx, js::Handle<JSObject*> receiver,
+                              js::PropertyName *name, js::Value *vp, JSBool strict);
+    inline JSBool setElement(JSContext *cx, js::Handle<JSObject*> receiver, uint32_t index,
+                             js::Value *vp, JSBool strict);
+    inline JSBool setSpecial(JSContext *cx, js::Handle<JSObject*> receiver, js::SpecialId sid,
+                             js::Value *vp, JSBool strict);
 
     JSBool nonNativeSetProperty(JSContext *cx, js::HandleId id, js::Value *vp, JSBool strict);
     JSBool nonNativeSetElement(JSContext *cx, uint32_t index, js::Value *vp, JSBool strict);
@@ -1140,8 +1155,8 @@ DefineNativeProperty(JSContext *cx, HandleObject obj, PropertyName *name, const 
                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs,
                      unsigned flags, int shortid, unsigned defineHow = 0)
 {
-    return DefineNativeProperty(cx, obj, RootedId(cx, NameToId(name)),
-                                value, getter, setter, attrs, flags,
+    Rooted<jsid> id(cx, NameToId(name));
+    return DefineNativeProperty(cx, obj, id, value, getter, setter, attrs, flags,
                                 shortid, defineHow);
 }
 
@@ -1156,7 +1171,8 @@ inline bool
 LookupPropertyWithFlags(JSContext *cx, HandleObject obj, PropertyName *name, unsigned flags,
                         JSObject **objp, JSProperty **propp)
 {
-    return LookupPropertyWithFlags(cx, obj, RootedId(cx, NameToId(name)), flags, objp, propp);
+    Rooted<jsid> id(cx, NameToId(name));
+    return LookupPropertyWithFlags(cx, obj, id, flags, objp, propp);
 }
 
 /*
@@ -1220,12 +1236,12 @@ const unsigned JSGET_CACHE_RESULT = 1; // from a caching interpreter opcode
  * scope containing shape unlocked.
  */
 extern JSBool
-js_NativeGet(JSContext *cx, JSObject *obj, JSObject *pobj, const js::Shape *shape, unsigned getHow,
-             js::Value *vp);
+js_NativeGet(JSContext *cx, js::Handle<JSObject*> obj, js::Handle<JSObject*> pobj,
+             const js::Shape *shape, unsigned getHow, js::Value *vp);
 
 extern JSBool
-js_NativeSet(JSContext *cx, JSObject *obj, const js::Shape *shape, bool added,
-             bool strict, js::Value *vp);
+js_NativeSet(JSContext *cx, js::Handle<JSObject*> obj, js::Handle<JSObject*> receiver,
+             const js::Shape *shape, bool added, bool strict, js::Value *vp);
 
 namespace js {
 
@@ -1253,7 +1269,8 @@ GetMethod(JSContext *cx, HandleObject obj, HandleId id, unsigned getHow, Value *
 inline bool
 GetMethod(JSContext *cx, HandleObject obj, PropertyName *name, unsigned getHow, Value *vp)
 {
-    return GetMethod(cx, obj, RootedId(cx, NameToId(name)), getHow, vp);
+    Rooted<jsid> id(cx, NameToId(name));
+    return GetMethod(cx, obj, id, getHow, vp);
 }
 
 /*
@@ -1399,6 +1416,23 @@ Throw(JSContext *cx, jsid id, unsigned errorNumber);
 
 extern bool
 Throw(JSContext *cx, JSObject *obj, unsigned errorNumber);
+
+/*
+ * Helper function. To approximate a call to the [[DefineOwnProperty]] internal
+ * method described in ES5, first call this, then call JS_DefinePropertyById.
+ *
+ * JS_DefinePropertyById by itself does not enforce the invariants on
+ * non-configurable properties when obj->isNative(). This function performs the
+ * relevant checks (specified in ES5 8.12.9 [[DefineOwnProperty]] steps 1-11),
+ * but only if obj is native.
+ *
+ * The reason for the messiness here is that ES5 uses [[DefineOwnProperty]] as
+ * a sort of extension point, but there is no hook in js::Class,
+ * js::ProxyHandler, or the JSAPI with precisely the right semantics for it.
+ */
+extern bool
+CheckDefineProperty(JSContext *cx, HandleObject obj, HandleId id, HandleValue value,
+                    PropertyOp getter, StrictPropertyOp setter, unsigned attrs);
 
 }  /* namespace js */
 

@@ -272,14 +272,6 @@ nsImageLoadingContent::OnStopDecode(imgIRequest* aRequest,
   NS_ABORT_IF_FALSE(aRequest == mCurrentRequest,
                     "One way or another, we should be current by now");
 
-  if (mCurrentRequestNeedsResetAnimation) {
-    nsCOMPtr<imgIContainer> container;
-    mCurrentRequest->GetImage(getter_AddRefs(container));
-    if (container)
-      container->ResetAnimation();
-    mCurrentRequestNeedsResetAnimation = false;
-  }
-
   // We just loaded all the data we're going to get. If we're visible and
   // haven't done an initial paint (*), we want to make sure the image starts
   // decoding immediately, for two reasons:
@@ -579,6 +571,7 @@ nsImageLoadingContent::LoadImageWithChannel(nsIChannel* aChannel,
                          getter_AddRefs(req));
   if (NS_SUCCEEDED(rv)) {
     TrackImage(req);
+    ResetAnimationIfNeeded();
   } else {
     // If we don't have a current URI, we might as well store this URI so people
     // know what we tried (and failed) to load.
@@ -746,6 +739,7 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
                                  getter_AddRefs(req));
   if (NS_SUCCEEDED(rv)) {
     TrackImage(req);
+    ResetAnimationIfNeeded();
 
     // Handle cases when we just ended up with a pending request but it's
     // already done.  In that situation we have to synchronously switch that
@@ -1020,14 +1014,49 @@ nsImageLoadingContent::PreparePendingRequest()
   return mPendingRequest;
 }
 
+namespace {
+
+class ImageRequestAutoLock
+{
+public:
+  ImageRequestAutoLock(imgIRequest* aRequest)
+    : mRequest(aRequest)
+  {
+    if (mRequest) {
+      mRequest->LockImage();
+    }
+  }
+
+  ~ImageRequestAutoLock()
+  {
+    if (mRequest) {
+      mRequest->UnlockImage();
+    }
+  }
+
+private:
+  nsCOMPtr<imgIRequest> mRequest;
+};
+
+} // anonymous namespace
+
 void
 nsImageLoadingContent::MakePendingRequestCurrent()
 {
   MOZ_ASSERT(mPendingRequest);
+
+  // Lock mCurrentRequest for the duration of this method.  We do this because
+  // PrepareCurrentRequest() might unlock mCurrentRequest.  If mCurrentRequest
+  // and mPendingRequest are both requests for the same image, unlocking
+  // mCurrentRequest before we lock mPendingRequest can cause the lock count
+  // to go to 0 and the image to be discarded!
+  ImageRequestAutoLock autoLock(mCurrentRequest);
+
   PrepareCurrentRequest() = mPendingRequest;
   mPendingRequest = nsnull;
   mCurrentRequestNeedsResetAnimation = mPendingRequestNeedsResetAnimation;
   mPendingRequestNeedsResetAnimation = false;
+  ResetAnimationIfNeeded();
 }
 
 void
@@ -1090,6 +1119,18 @@ nsImageLoadingContent::GetRegisteredFlagForRequest(imgIRequest* aRequest)
     return &mPendingRequestRegistered;
   } else {
     return nsnull;
+  }
+}
+
+void
+nsImageLoadingContent::ResetAnimationIfNeeded()
+{
+  if (mCurrentRequest && mCurrentRequestNeedsResetAnimation) {
+    nsCOMPtr<imgIContainer> container;
+    mCurrentRequest->GetImage(getter_AddRefs(container));
+    if (container)
+      container->ResetAnimation();
+    mCurrentRequestNeedsResetAnimation = false;
   }
 }
 

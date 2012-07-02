@@ -36,33 +36,23 @@
 #ifdef XP_WIN
 #include "nsHTMLWin32ObjectAccessible.h"
 #endif
-#include "TextLeafAccessible.h"
+#include "TextLeafAccessibleWrap.h"
 
 #ifdef DEBUG
 #include "Logging.h"
 #endif
 
-#include "nsCURILoader.h"
-#include "nsEventStates.h"
-#include "nsIContentViewer.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMHTMLAreaElement.h"
-#include "nsIDOMHTMLLegendElement.h"
 #include "nsIDOMHTMLObjectElement.h"
-#include "nsIDOMHTMLOptGroupElement.h"
-#include "nsIDOMHTMLOptionElement.h"
 #include "nsIDOMXULElement.h"
-#include "nsIHTMLDocument.h"
 #include "nsImageFrame.h"
-#include "nsILink.h"
 #include "nsIObserverService.h"
 #include "nsLayoutUtils.h"
 #include "nsNPAPIPluginInstance.h"
-#include "nsISupportsUtils.h"
 #include "nsObjectFrame.h"
-#include "nsTextFragment.h"
 #include "mozilla/FunctionTimer.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/Util.h"
 
@@ -415,7 +405,7 @@ nsAccessibilityService::CreateTextLeafAccessible(nsIContent* aContent,
                                                  nsIPresShell* aPresShell)
 {
   Accessible* accessible =
-    new TextLeafAccessible(aContent, GetDocAccessible(aPresShell));
+    new TextLeafAccessibleWrap(aContent, GetDocAccessible(aPresShell));
   NS_ADDREF(accessible);
   return accessible;
 }
@@ -1819,8 +1809,30 @@ nsAccessibilityService::CreateAccessibleForXULTree(nsIContent* aContent,
 // Services
 ////////////////////////////////////////////////////////////////////////////////
 
-mozilla::a11y::FocusManager*
-mozilla::a11y::FocusMgr()
+namespace mozilla {
+namespace a11y {
+
+FocusManager*
+FocusMgr()
 {
   return nsAccessibilityService::gAccessibilityService;
+}
+
+EPlatformDisabledState
+PlatformDisabledState()
+{
+  static int disabledState = 0xff;
+
+  if (disabledState == 0xff) {
+    disabledState = Preferences::GetInt("accessibility.force_disabled", 0);
+    if (disabledState < ePlatformIsForceEnabled)
+      disabledState = ePlatformIsForceEnabled;
+    else if (disabledState > ePlatformIsDisabled)
+      disabledState = ePlatformIsDisabled;
+  }
+
+  return (EPlatformDisabledState)disabledState;
+}
+
+}
 }

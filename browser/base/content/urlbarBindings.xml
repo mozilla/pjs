@@ -550,7 +550,7 @@
 
             Cc["@mozilla.org/widget/clipboardhelper;1"]
               .getService(Ci.nsIClipboardHelper)
-              .copyString(val);
+              .copyString(val, document);
           },
           supportsCommand: function(aCommand) {
             switch (aCommand) {
@@ -624,6 +624,8 @@
           }
         ]]></body>
       </method>
+
+      <property name="maxRows" onget="return this.popup.maxResults;"/>
 
       <property name="textValue"
                 onget="return this.value;">
@@ -751,7 +753,7 @@
 
         Cc["@mozilla.org/widget/clipboardhelper;1"]
           .getService(Ci.nsIClipboardHelper)
-          .copyStringToClipboard(val, Ci.nsIClipboard.kSelectionClipboard);
+          .copyStringToClipboard(val, Ci.nsIClipboard.kSelectionClipboard, document);
       ]]></handler>
     </handlers>
 

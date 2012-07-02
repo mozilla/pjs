@@ -27,7 +27,7 @@ nsAbsoluteContainingBlock::SetInitialChildList(nsIFrame*       aDelegatingFrame,
                                                nsFrameList&    aChildList)
 {
   NS_PRECONDITION(GetChildListID() == aListID, "unexpected child list name");
-#ifdef NS_DEBUG
+#ifdef DEBUG
   nsFrame::VerifyDirtyBitSet(aChildList);
 #endif
   mAbsoluteFrames.SetFrames(aChildList);
@@ -42,7 +42,7 @@ nsAbsoluteContainingBlock::AppendFrames(nsIFrame*      aDelegatingFrame,
   NS_ASSERTION(GetChildListID() == aListID, "unexpected child list");
 
   // Append the frames to our list of absolutely positioned frames
-#ifdef NS_DEBUG
+#ifdef DEBUG
   nsFrame::VerifyDirtyBitSet(aFrameList);
 #endif
   mAbsoluteFrames.AppendFrames(nsnull, aFrameList);
@@ -66,7 +66,7 @@ nsAbsoluteContainingBlock::InsertFrames(nsIFrame*      aDelegatingFrame,
   NS_ASSERTION(!aPrevFrame || aPrevFrame->GetParent() == aDelegatingFrame,
                "inserting after sibling frame with different parent");
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   nsFrame::VerifyDirtyBitSet(aFrameList);
 #endif
   mAbsoluteFrames.InsertFrames(nsnull, aPrevFrame, aFrameList);
@@ -456,23 +456,6 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
     nsContainerFrame::PositionChildViews(aKidFrame);
   }
 
-  if (oldRect.TopLeft() != rect.TopLeft() || 
-      (aDelegatingFrame->GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
-    // The frame moved
-    aKidFrame->GetParent()->Invalidate(oldOverflowRect);
-    aKidFrame->InvalidateFrameSubtree();
-  } else if (oldRect.Size() != rect.Size()) {
-    // Invalidate the area where the frame changed size.
-    nscoord innerWidth = NS_MIN(oldRect.width, rect.width);
-    nscoord innerHeight = NS_MIN(oldRect.height, rect.height);
-    nscoord outerWidth = NS_MAX(oldRect.width, rect.width);
-    nscoord outerHeight = NS_MAX(oldRect.height, rect.height);
-    aKidFrame->GetParent()->Invalidate(
-        nsRect(rect.x + innerWidth, rect.y, outerWidth - innerWidth, outerHeight));
-    // Invalidate the horizontal strip
-    aKidFrame->GetParent()->Invalidate(
-        nsRect(rect.x, rect.y + innerHeight, outerWidth, outerHeight - innerHeight));
-  }
   aKidFrame->DidReflow(aPresContext, &kidReflowState, NS_FRAME_REFLOW_FINISHED);
 
 #ifdef DEBUG

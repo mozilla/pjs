@@ -5,6 +5,7 @@
 webidl_base = $(topsrcdir)/dom/webidl
 
 webidl_files = \
+  CanvasRenderingContext2D.webidl \
   Function.webidl \
   EventListener.webidl \
   EventTarget.webidl \
@@ -15,7 +16,10 @@ webidl_files = \
   $(NULL)
 
 ifdef ENABLE_TESTS
-test_webidl_files := TestCodeGen.webidl
+test_webidl_files := \
+  TestCodeGen.webidl \
+  TestDictionary.webidl \
+  $(NULL)
 else
 test_webidl_files := $(NULL)
 endif

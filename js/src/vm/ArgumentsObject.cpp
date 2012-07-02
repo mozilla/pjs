@@ -203,7 +203,7 @@ ArgSetter(JSContext *cx, HandleObject obj, HandleId id, JSBool strict, Value *vp
      */
     RootedValue value(cx);
     return baseops::DeleteGeneric(cx, obj, id, value.address(), false) &&
-           baseops::DefineProperty(cx, obj, id, vp, NULL, NULL, JSPROP_ENUMERATE);
+           baseops::DefineGeneric(cx, obj, id, vp, NULL, NULL, JSPROP_ENUMERATE);
 }
 
 static JSBool
@@ -233,56 +233,11 @@ args_resolve(JSContext *cx, HandleObject obj, HandleId id, unsigned flags,
     }
 
     Value undef = UndefinedValue();
-    if (!baseops::DefineProperty(cx, argsobj, id, &undef, ArgGetter, ArgSetter, attrs))
+    if (!baseops::DefineGeneric(cx, argsobj, id, &undef, ArgGetter, ArgSetter, attrs))
         return JS_FALSE;
 
     *objp = argsobj;
     return true;
-}
-
-bool
-NormalArgumentsObject::optimizedGetElem(JSContext *cx, StackFrame *fp, const Value &elem, Value *vp)
-{
-    JS_ASSERT(!fp->script()->needsArgsObj());
-
-    /* Fast path: no need to convert to id when elem is already an int in range. */
-    if (elem.isInt32()) {
-        int32_t i = elem.toInt32();
-        if (i >= 0 && uint32_t(i) < fp->numActualArgs()) {
-            *vp = fp->unaliasedActual(i);
-            return true;
-        }
-    }
-
-    /* Slow path: create and canonicalize an id, then emulate args_resolve. */
-
-    jsid id;
-    if (!ValueToId(cx, elem, &id))
-        return false;
-
-    if (JSID_IS_INT(id)) {
-        int32_t i = JSID_TO_INT(id);
-        if (i >= 0 && uint32_t(i) < fp->numActualArgs()) {
-            *vp = fp->unaliasedActual(i);
-            return true;
-        }
-    }
-
-    if (id == NameToId(cx->runtime->atomState.lengthAtom)) {
-        *vp = Int32Value(fp->numActualArgs());
-        return true;
-    }
-
-    if (id == NameToId(cx->runtime->atomState.calleeAtom)) {
-        *vp = ObjectValue(fp->callee());
-        return true;
-    }
-
-    JSObject *proto = fp->global().getOrCreateObjectPrototype(cx);
-    if (!proto)
-        return false;
-
-    return proto->getGeneric(cx, RootedId(cx, id), vp);
 }
 
 static JSBool
@@ -361,7 +316,7 @@ StrictArgSetter(JSContext *cx, HandleObject obj, HandleId id, JSBool strict, Val
      */
     RootedValue value(cx);
     return baseops::DeleteGeneric(cx, argsobj, id, value.address(), strict) &&
-           baseops::SetPropertyHelper(cx, argsobj, id, 0, vp, strict);
+           baseops::SetPropertyHelper(cx, argsobj, argsobj, id, 0, vp, strict);
 }
 
 static JSBool
@@ -396,7 +351,7 @@ strictargs_resolve(JSContext *cx, HandleObject obj, HandleId id, unsigned flags,
     }
 
     Value undef = UndefinedValue();
-    if (!baseops::DefineProperty(cx, argsobj, id, &undef, getter, setter, attrs))
+    if (!baseops::DefineGeneric(cx, argsobj, id, &undef, getter, setter, attrs))
         return false;
 
     *objp = argsobj;

@@ -78,6 +78,7 @@ DeclMarker(Object, DebugScopeObject)
 DeclMarker(Object, GlobalObject)
 DeclMarker(Object, JSObject)
 DeclMarker(Object, JSFunction)
+DeclMarker(Object, ScopeObject)
 DeclMarker(Script, JSScript)
 DeclMarker(Shape, Shape)
 DeclMarker(String, JSAtom)
@@ -146,6 +147,9 @@ MarkValueRootRange(JSTracer *trc, Value *begin, Value *end, const char *name)
 {
     MarkValueRootRange(trc, end - begin, begin, name);
 }
+
+void
+MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name);
 
 bool
 IsValueMarked(Value *v);

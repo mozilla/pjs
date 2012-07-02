@@ -11,7 +11,8 @@
 #include "mozilla/ModuleUtils.h"
 #include "nsIXPConnect.h"
 #include "mozilla/Services.h"
-#include "jsapi.h" 
+#include "jsapi.h"
+#include "jsfriendapi.h"
 #include "nsStringGlue.h"
 #include "nsITelemetry.h"
 #include "nsIFile.h"
@@ -37,7 +38,7 @@ public:
   AutoHashtable(uint32_t initSize = PL_DHASH_MIN_SIZE);
   ~AutoHashtable();
   typedef bool (*ReflectEntryFunc)(EntryType *entry, JSContext *cx, JSObject *obj);
-  bool ReflectHashtable(ReflectEntryFunc entryFunc, JSContext *cx, JSObject *obj);
+  bool ReflectIntoJS(ReflectEntryFunc entryFunc, JSContext *cx, JSObject *obj);
 private:
   struct EnumeratorArgs {
     JSContext *cx;
@@ -76,8 +77,8 @@ AutoHashtable<EntryType>::ReflectEntryStub(EntryType *entry, void *arg)
  */
 template<typename EntryType>
 bool
-AutoHashtable<EntryType>::ReflectHashtable(ReflectEntryFunc entryFunc,
-                                           JSContext *cx, JSObject *obj)
+AutoHashtable<EntryType>::ReflectIntoJS(ReflectEntryFunc entryFunc,
+                                        JSContext *cx, JSObject *obj)
 {
   EnumeratorArgs args = { cx, obj, entryFunc };
   uint32_t num = this->EnumerateEntries(ReflectEntryStub, static_cast<void*>(&args));
@@ -563,7 +564,7 @@ TelemetryImpl::AddSQLInfo(JSContext *cx, JSObject *rootObj, bool mainThread,
     (mainThread ? mSlowSQLOnMainThread : mSlowSQLOnOtherThread);
   AutoHashtable<SlowSQLEntryType>::ReflectEntryFunc reflectFunction =
     (includePrivateStrings ? ReflectPrivateSql : ReflectPublicSql);
-  if(!sqlMap.ReflectHashtable(reflectFunction, cx, statsObj)) {
+  if(!sqlMap.ReflectIntoJS(reflectFunction, cx, statsObj)) {
     return false;
   }
 
@@ -936,7 +937,7 @@ TelemetryImpl::AddonReflector(AddonEntryType *entry,
   JS::AutoObjectRooter r(cx, subobj);
 
   AddonHistogramMapType *map = entry->mData;
-  if (!(map->ReflectHashtable(AddonHistogramReflector, cx, subobj)
+  if (!(map->ReflectIntoJS(AddonHistogramReflector, cx, subobj)
         && JS_DefineProperty(cx, obj,
                              PromiseFlatCString(addonId).get(),
                              OBJECT_TO_JSVAL(subobj), NULL, NULL,
@@ -956,7 +957,7 @@ TelemetryImpl::GetAddonHistogramSnapshots(JSContext *cx, jsval *ret)
   }
   JS::AutoObjectRooter r(cx, obj);
 
-  if (!mAddonMap.ReflectHashtable(AddonReflector, cx, obj)) {
+  if (!mAddonMap.ReflectIntoJS(AddonReflector, cx, obj)) {
     return NS_ERROR_FAILURE;
   }
   *ret = OBJECT_TO_JSVAL(obj);

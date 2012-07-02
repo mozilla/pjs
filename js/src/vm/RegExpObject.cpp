@@ -97,14 +97,16 @@ RegExpObjectBuilder::clone(Handle<RegExpObject *> other, Handle<RegExpObject *> 
     RegExpFlag staticsFlags = res->getFlags();
     if ((origFlags & staticsFlags) != staticsFlags) {
         RegExpFlag newFlags = RegExpFlag(origFlags | staticsFlags);
-        return build(Rooted<JSAtom *>(cx, other->getSource()), newFlags);
+        Rooted<JSAtom *> source(cx, other->getSource());
+        return build(source, newFlags);
     }
 
     RegExpGuard g;
     if (!other->getShared(cx, &g))
         return NULL;
 
-    return build(RootedAtom(cx, other->getSource()), *g);
+    Rooted<JSAtom *> source(cx, other->getSource());
+    return build(source, *g);
 }
 
 /* MatchPairs */
@@ -145,7 +147,7 @@ RegExpCode::reportYarrError(JSContext *cx, TokenStream *ts, ErrorCode error)
 #define COMPILE_EMSG(__code, __msg)                                                              \
       case JSC::Yarr::__code:                                                                    \
         if (ts)                                                                                  \
-            ReportCompileErrorNumber(cx, ts, NULL, JSREPORT_ERROR, __msg);                       \
+            ts->reportError(__msg);                                                              \
         else                                                                                     \
             JS_ReportErrorFlagsAndNumberUC(cx, JSREPORT_ERROR, js_GetErrorMessage, NULL, __msg); \
         return
@@ -560,29 +562,26 @@ RegExpCompartment::get(JSContext *cx, JSAtom *keyAtom, JSAtom *source, RegExpFla
         return true;
     }
 
-    RegExpShared *shared = cx->runtime->new_<RegExpShared>(cx->runtime, flags);
+    ScopedDeletePtr<RegExpShared> shared(cx->new_<RegExpShared>(cx->runtime, flags));
     if (!shared)
-        goto error;
+        return false;
 
     if (!shared->compile(cx, source))
-        goto error;
+        return false;
 
     /* Re-lookup in case there was a GC. */
-    if (!map_.relookupOrAdd(p, key, shared))
-        goto error;
+    if (!map_.relookupOrAdd(p, key, shared)) {
+        js_ReportOutOfMemory(cx);
+        return false;
+    }
 
     /*
      * Since 'error' deletes 'shared', only guard 'shared' on success. This is
      * safe since 'shared' cannot be deleted by GC until after the call to
-     * map_.add() directly above.
+     * map_.relookupOrAdd() directly above.
      */
-    g->init(*shared);
+    g->init(*shared.forget());
     return true;
-
-  error:
-    Foreground::delete_(shared);
-    js_ReportOutOfMemory(cx);
-    return false;
 }
 
 bool
@@ -621,14 +620,12 @@ RegExpCompartment::get(JSContext *cx, JSAtom *atom, JSString *opt, RegExpGuard *
 /* Functions */
 
 JSObject *
-js::CloneRegExpObject(JSContext *cx, JSObject *obj, JSObject *proto)
+js::CloneRegExpObject(JSContext *cx, JSObject *obj_, JSObject *proto_)
 {
-    JS_ASSERT(obj->isRegExp());
-    JS_ASSERT(proto->isRegExp());
-
     RegExpObjectBuilder builder(cx);
-    return builder.clone(Rooted<RegExpObject*>(cx, &obj->asRegExp()),
-                         Rooted<RegExpObject*>(cx, &proto->asRegExp()));
+    Rooted<RegExpObject*> regex(cx, &obj_->asRegExp());
+    Rooted<RegExpObject*> proto(cx, &proto_->asRegExp());
+    return builder.clone(regex, proto);
 }
 
 bool

@@ -14,7 +14,7 @@
  * http://www.w3.org/TR/DOM-Level-2-Style
  */
 
-[builtinclass, scriptable, uuid(08fd9493-9276-4861-9b16-add2653e2f53)]
+[builtinclass, scriptable, uuid(bb40a531-d92b-44d6-a543-cfc25054d5eb)]
 interface nsIDOMCSS2Properties : nsISupports
 {
            attribute DOMString        background;
@@ -498,9 +498,6 @@ interface nsIDOMCSS2Properties : nsISupports
            attribute DOMString        MozColumnWidth;
                                         // raises(DOMException) on setting
 
-           attribute DOMString        MozColumnFill;
-                                        // raises(DOMException) on setting
-
            attribute DOMString        MozColumnGap;
                                         // raises(DOMException) on setting
 
@@ -633,6 +630,24 @@ interface nsIDOMCSS2Properties : nsISupports
                                         // raises(DOMException) on setting
 
            attribute DOMString        MozHyphens;
+                                        // raises(DOMException) on setting
+
+           attribute DOMString        transform;
+                                        // raises(DOMException) on setting
+
+           attribute DOMString        transformOrigin;
+                                        // raises(DOMException) on setting 
+
+           attribute DOMString        perspective;
+                                        // raises(DOMException) on setting
+
+           attribute DOMString        perspectiveOrigin;
+                                        // raises(DOMException) on setting
+
+           attribute DOMString        backfaceVisibility;
+                                        // raises(DOMException) on setting
+
+           attribute DOMString        transformStyle;
                                         // raises(DOMException) on setting
 
            attribute DOMString        MozTransform;

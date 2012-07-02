@@ -257,18 +257,18 @@ protected:
                                        DeleteElementTxn ** aTxn);
 
 
-  NS_IMETHOD CreateTxnForDeleteSelection(EDirection aAction,
-                                         EditAggregateTxn ** aTxn,
-                                         nsIDOMNode ** aNode,
-                                         PRInt32 *aOffset,
-                                         PRInt32 *aLength);
+  nsresult CreateTxnForDeleteSelection(EDirection aAction,
+                                       EditAggregateTxn** aTxn,
+                                       nsINode** aNode,
+                                       PRInt32* aOffset,
+                                       PRInt32* aLength);
 
-  NS_IMETHOD CreateTxnForDeleteInsertionPoint(nsIDOMRange         *aRange, 
-                                              EDirection aAction, 
-                                              EditAggregateTxn *aTxn,
-                                              nsIDOMNode ** aNode,
-                                              PRInt32 *aOffset,
-                                              PRInt32 *aLength);
+  nsresult CreateTxnForDeleteInsertionPoint(nsRange* aRange, 
+                                            EDirection aAction, 
+                                            EditAggregateTxn* aTxn,
+                                            nsINode** aNode,
+                                            PRInt32* aOffset,
+                                            PRInt32* aLength);
 
 
   /** create a transaction for inserting aStringToInsert into aTextNode
@@ -296,15 +296,15 @@ protected:
 
 //  NS_IMETHOD DeleteRange(nsIDOMRange *aRange);
 
-  NS_IMETHOD CreateTxnForDeleteText(nsIDOMCharacterData *aElement,
-                                    PRUint32             aOffset,
-                                    PRUint32             aLength,
-                                    DeleteTextTxn      **aTxn);
+  nsresult CreateTxnForDeleteText(nsIDOMCharacterData* aElement,
+                                  PRUint32             aOffset,
+                                  PRUint32             aLength,
+                                  DeleteTextTxn**      aTxn);
 
-  nsresult CreateTxnForDeleteCharacter(nsIDOMCharacterData  *aData,
-                                       PRUint32              aOffset,
-                                       nsIEditor::EDirection aDirection,
-                                       DeleteTextTxn       **aTxn);
+  nsresult CreateTxnForDeleteCharacter(nsIDOMCharacterData* aData,
+                                       PRUint32             aOffset,
+                                       EDirection           aDirection,
+                                       DeleteTextTxn**      aTxn);
 	
   NS_IMETHOD CreateTxnForSplitNode(nsIDOMNode *aNode,
                                    PRUint32    aOffset,
@@ -314,8 +314,15 @@ protected:
                                   nsIDOMNode  *aRightNode,
                                   JoinElementTxn **aTxn);
 
-  NS_IMETHOD DeleteSelectionAndPrepareToCreateNode(nsCOMPtr<nsIDOMNode> &parentSelectedNode, 
-                                                   PRInt32& offsetOfNewNode);
+  /**
+   * This method first deletes the selection, if it's not collapsed.  Then if
+   * the selection lies in a CharacterData node, it splits it.  If the
+   * selection is at this point collapsed in a CharacterData node, it's
+   * adjusted to be collapsed right before or after the node instead (which is
+   * always possible, since the node was split).
+   */
+  nsresult DeleteSelectionAndPrepareToCreateNode();
+
 
   // called after a transaction is done successfully
   NS_IMETHOD DoAfterDoTransaction(nsITransaction *aTxn);
@@ -348,9 +355,10 @@ protected:
    */
   NS_IMETHOD ScrollSelectionIntoView(bool aScrollToAnchor);
 
+  // Convenience method; forwards to IsBlockNode(nsINode*).
+  bool IsBlockNode(nsIDOMNode* aNode);
   // stub.  see comment in source.                     
-  virtual bool IsBlockNode(nsIDOMNode *aNode);
-  virtual bool IsBlockNode(nsINode *aNode);
+  virtual bool IsBlockNode(nsINode* aNode);
   
   // helper for GetPriorNode and GetNextNode
   nsIContent* FindNextLeafNode(nsINode  *aCurrentNode,

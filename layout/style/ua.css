@@ -135,7 +135,6 @@
   -moz-column-width: inherit;
   -moz-column-gap: inherit;
   -moz-column-rule: inherit;
-  -moz-column-fill: inherit;
   /* Do not change these. nsCSSFrameConstructor depends on them to create a good
      frame tree. */
   position: static !important;
@@ -164,6 +163,12 @@
   /* Carry through our parent's height so that %-height children get
   their heights set */
   height: 100%;
+}
+
+*|*::-moz-anonymous-flex-item {
+  /* Anonymous blocks that wrap contiguous runs of inline non-replaced
+   * content inside of a flex container. */
+  display: block;
 }
 
 *|*::-moz-page-sequence, *|*::-moz-scrolled-page-sequence {

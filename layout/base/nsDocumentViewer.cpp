@@ -89,6 +89,7 @@
 #include "nsStyleSheetService.h"
 #include "nsURILoader.h"
 #include "nsRenderingContext.h"
+#include "nsILoadContext.h"
 
 #include "nsIPrompt.h"
 #include "imgIContainer.h" // image animation mode constants
@@ -159,7 +160,7 @@ static const char sPrintOptionsContractID[]         = "@mozilla.org/gfx/printset
 
 using namespace mozilla;
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
 
 #undef NOISY_VIEWER
 #else
@@ -437,9 +438,9 @@ protected:
   float                            mPrintPreviewZoom;
 #endif // NS_PRINT_PREVIEW
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   FILE* mDebugFile;
-#endif // NS_DEBUG
+#endif // DEBUG
 #endif // NS_PRINTING
 
   /* character set member data */
@@ -522,7 +523,7 @@ void DocumentViewerImpl::PrepareToStartLoad()
 #endif
   }
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   mDebugFile = nsnull;
 #endif
 
@@ -725,13 +726,6 @@ DocumentViewerImpl::InitPresentationStuff(bool aDoInitialReflow)
   mPresContext->SetMinFontSize(mMinFontSize);
 
   if (aDoInitialReflow) {
-    nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(mDocument);
-    if (htmlDoc) {
-      nsCOMPtr<nsIDOMHTMLFrameSetElement> frameset =
-        do_QueryInterface(mDocument->GetRootElement());
-      htmlDoc->SetIsFrameset(frameset != nsnull);
-    }
-
     nsCOMPtr<nsIPresShell> shellGrip = mPresShell;
     // Initial reflow
     mPresShell->InitialReflow(width, height);
@@ -2530,7 +2524,8 @@ NS_IMETHODIMP DocumentViewerImpl::CopyLinkLocation()
   NS_ENSURE_SUCCESS(rv, rv);
 
   // copy the href onto the clipboard
-  return clipboard->CopyString(locationText);
+  nsCOMPtr<nsIDOMDocument> doc = do_QueryInterface(mDocument);
+  return clipboard->CopyString(locationText, doc);
 }
 
 NS_IMETHODIMP DocumentViewerImpl::CopyImage(PRInt32 aCopyFlags)
@@ -2541,7 +2536,8 @@ NS_IMETHODIMP DocumentViewerImpl::CopyImage(PRInt32 aCopyFlags)
   // make noise if we're not in an image
   NS_ENSURE_TRUE(node, NS_ERROR_FAILURE);
 
-  return nsCopySupport::ImageCopy(node, aCopyFlags);
+  nsCOMPtr<nsILoadContext> loadContext(do_QueryReferent(mContainer));
+  return nsCopySupport::ImageCopy(node, loadContext, aCopyFlags);
 }
 
 
@@ -2603,7 +2599,7 @@ DocumentViewerImpl::Print(bool              aSilent,
 #ifdef NS_PRINTING
   nsCOMPtr<nsIPrintSettings> printSettings;
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
   nsresult rv = NS_ERROR_FAILURE;
 
   mDebugFile = aDebugFile;
@@ -2883,8 +2879,7 @@ DocumentViewerImpl::SetFullZoom(float aFullZoom)
 
     nsIFrame* rootFrame = shell->GetRootFrame();
     if (rootFrame) {
-      nsRect rect(nsPoint(0, 0), rootFrame->GetSize());
-      rootFrame->Invalidate(rect);
+      rootFrame->InvalidateFrame();
     }
     return NS_OK;
   }
@@ -3622,7 +3617,7 @@ DocumentViewerImpl::Print(nsIPrintSettings*       aPrintSettings,
                                   float(mDeviceContext->AppUnitsPerCSSInch()) /
                                   float(mDeviceContext->AppUnitsPerDevPixel()) /
                                   mPageZoom,
-#ifdef NS_DEBUG
+#ifdef DEBUG
                                   mDebugFile
 #else
                                   nsnull
@@ -3689,7 +3684,7 @@ DocumentViewerImpl::PrintPreview(nsIPrintSettings* aPrintSettings,
                                   float(mDeviceContext->AppUnitsPerCSSInch()) /
                                   float(mDeviceContext->AppUnitsPerDevPixel()) /
                                   mPageZoom,
-#ifdef NS_DEBUG
+#ifdef DEBUG
                                   mDebugFile
 #else
                                   nsnull

@@ -8,7 +8,7 @@
 
 #if defined(XP_UNIX)
 
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
 #include <gdk/gdkx.h>
 // we're using default display for now
 #define GET_NATIVE_WINDOW(aWidget) (EGLNativeWindowType)GDK_WINDOW_XID((GdkWindow *) aWidget->GetNativeData(NS_NATIVE_WINDOW))
@@ -34,6 +34,19 @@
 #include "AndroidBridge.h"
 #endif
 #include <android/log.h>
+#define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
+
+# if defined(MOZ_WIDGET_GONK)
+#  include "cutils/properties.h"
+#  include <ui/GraphicBuffer.h>
+
+using namespace android;
+
+# define EGL_NATIVE_BUFFER_ANDROID 0x3140
+# define EGL_IMAGE_PRESERVED_KHR   0x30D2
+
+# endif
+
 #endif
 
 #define GLES2_LIB "libGLESv2.so"
@@ -107,7 +120,7 @@ public:
 
 #include "gfxCrashReporterUtils.h"
 
-#ifdef MOZ_PLATFORM_MAEMO
+#if defined(MOZ_PLATFORM_MAEMO) || defined(MOZ_WIDGET_GONK)
 static bool gUseBackingSurface = true;
 #else
 static bool gUseBackingSurface = false;
@@ -131,8 +144,11 @@ static GLLibraryEGL sEGLLibrary;
     (_array).AppendElement(_k);                 \
 } while (0)
 
+#ifndef MOZ_JAVA_COMPOSITOR
 static EGLSurface
 CreateSurfaceForWindow(nsIWidget *aWidget, EGLConfig config);
+#endif
+
 static bool
 CreateConfig(EGLConfig* aConfig);
 #ifdef MOZ_X11
@@ -291,6 +307,14 @@ public:
 #endif
             }
 
+#ifdef MOZ_WIDGET_GONK
+        gUseBackingSurface = Preferences::GetBool("gfx.gralloc.enabled", false);
+        char propValue[PROPERTY_VALUE_MAX];
+        property_get("ro.build.version.sdk", propValue, "0");
+        if (atoi(propValue) < 15)
+            gUseBackingSurface = false;
+#endif
+
         bool current = MakeCurrent();
         if (!current) {
             gfx::LogFailure(NS_LITERAL_CSTRING(
@@ -436,16 +460,17 @@ public:
 #else
     virtual bool
     RenewSurface() {
-        ReleaseSurface();
-        EGLConfig config;
-
+        sEGLLibrary.fMakeCurrent(EGL_DISPLAY(), EGL_NO_SURFACE, EGL_NO_SURFACE,
+                                 EGL_NO_CONTEXT);
+        if (!mSurface) {
 #ifdef MOZ_JAVA_COMPOSITOR
-        mSurface = mozilla::AndroidBridge::Bridge()->ProvideEGLSurface();
+            mSurface = mozilla::AndroidBridge::Bridge()->ProvideEGLSurface();
 #else
-        CreateConfig(&config);
-        mSurface = CreateSurfaceForWindow(NULL, config);
+            EGLConfig config;
+            CreateConfig(&config);
+            mSurface = CreateSurfaceForWindow(NULL, config);
 #endif
-
+        }
         return sEGLLibrary.fMakeCurrent(EGL_DISPLAY(),
                                         mSurface, mSurface,
                                         mContext);
@@ -738,11 +763,33 @@ GLFormatForImage(gfxASurface::gfxImageFormat aFormat)
         return LOCAL_GL_RGBA;
     case gfxASurface::ImageFormatRGB16_565:
         return LOCAL_GL_RGB;
+    case gfxASurface::ImageFormatA8:
+        return LOCAL_GL_LUMINANCE;
     default:
         NS_WARNING("Unknown GL format for Image format");
     }
     return 0;
 }
+
+#ifdef MOZ_WIDGET_GONK
+static PixelFormat
+PixelFormatForImage(gfxASurface::gfxImageFormat aFormat)
+{
+    switch (aFormat) {
+    case gfxASurface::ImageFormatARGB32:
+        return PIXEL_FORMAT_RGBA_8888;
+    case gfxASurface::ImageFormatRGB24:
+        return PIXEL_FORMAT_RGBX_8888;
+    case gfxASurface::ImageFormatRGB16_565:
+        return PIXEL_FORMAT_RGB_565;
+    case gfxASurface::ImageFormatA8:
+        return PIXEL_FORMAT_L_8;
+    default:
+        MOZ_NOT_REACHED("Unknown gralloc pixel format for Image format");
+    }
+    return 0;
+}
+#endif
 
 static GLenum
 GLTypeForImage(gfxASurface::gfxImageFormat aFormat)
@@ -750,6 +797,7 @@ GLTypeForImage(gfxASurface::gfxImageFormat aFormat)
     switch (aFormat) {
     case gfxASurface::ImageFormatARGB32:
     case gfxASurface::ImageFormatRGB24:
+    case gfxASurface::ImageFormatA8:
         return LOCAL_GL_UNSIGNED_BYTE;
     case gfxASurface::ImageFormatRGB16_565:
         return LOCAL_GL_UNSIGNED_SHORT_5_6_5;
@@ -772,10 +820,10 @@ public:
         : TextureImage(aSize, aWrapMode, aContentType, aFlags)
         , mGLContext(aContext)
         , mUpdateFormat(gfxASurface::ImageFormatUnknown)
+        , mEGLImage(nsnull)
+        , mTexture(aTexture)
         , mSurface(nsnull)
         , mConfig(nsnull)
-        , mTexture(aTexture)
-        , mImageKHR(nsnull)
         , mTextureState(Created)
         , mBound(false)
         , mIsLocked(false)
@@ -783,11 +831,28 @@ public:
         mUpdateFormat = gfxPlatform::GetPlatform()->OptimalFormatForContent(GetContentType());
 
         if (gUseBackingSurface) {
+#ifdef MOZ_WIDGET_GONK
+            switch (mUpdateFormat) {
+            case gfxASurface::ImageFormatARGB32:
+                mShaderType = BGRALayerProgramType;
+                break;
+            case gfxASurface::ImageFormatRGB24:
+                mUpdateFormat = gfxASurface::ImageFormatARGB32;
+                mShaderType = BGRXLayerProgramType;
+                break;
+            case gfxASurface::ImageFormatRGB16_565:
+                mShaderType = RGBXLayerProgramType;
+                break;
+            default:
+                MOZ_NOT_REACHED("Unknown update format");
+            }
+#else
             if (mUpdateFormat != gfxASurface::ImageFormatARGB32) {
                 mShaderType = RGBXLayerProgramType;
             } else {
                 mShaderType = RGBALayerProgramType;
             }
+#endif
             Resize(aSize);
         } else {
             if (mUpdateFormat == gfxASurface::ImageFormatRGB16_565) {
@@ -822,19 +887,32 @@ public:
         }
     }
 
+    bool UsingDirectTexture()
+    {
+#ifdef MOZ_WIDGET_GONK
+        if (mGraphicBuffer != nsnull)
+            return true;
+#endif
+        return !!mBackingSurface;
+    }
+
     virtual void GetUpdateRegion(nsIntRegion& aForRegion)
     {
         if (mTextureState != Valid) {
             // if the texture hasn't been initialized yet, force the
             // client to paint everything
             aForRegion = nsIntRect(nsIntPoint(0, 0), mSize);
-        } else if (!mBackingSurface) {
-            // We can only draw a rectangle, not subregions due to
-            // the way that our texture upload functions work.  If
-            // needed, we /could/ do multiple texture uploads if we have
-            // non-overlapping rects, but that's a tradeoff.
-            aForRegion = nsIntRegion(aForRegion.GetBounds());
         }
+
+        if (UsingDirectTexture()) {
+            return;
+        }
+
+        // We can only draw a rectangle, not subregions due to
+        // the way that our texture upload functions work.  If
+        // needed, we /could/ do multiple texture uploads if we have
+        // non-overlapping rects, but that's a tradeoff.
+        aForRegion = nsIntRegion(aForRegion.GetBounds());
     }
 
     virtual gfxASurface* BeginUpdate(nsIntRegion& aRegion)
@@ -850,6 +928,14 @@ public:
             NS_ERROR("update outside of image");
             return NULL;
         }
+
+#ifdef MOZ_WIDGET_GONK
+        if (mGraphicBuffer != nsnull) {
+            mUpdateSurface = GetLockSurface();
+
+            return mUpdateSurface;
+        }
+#endif
 
         if (mBackingSurface) {
             if (sEGLLibrary.HasKHRLockSurface()) {
@@ -966,7 +1052,11 @@ public:
             region = aRegion;
         }
 
-        if (mBackingSurface && sEGLLibrary.HasKHRLockSurface()) {
+        if ((mBackingSurface && sEGLLibrary.HasKHRLockSurface())
+#ifdef MOZ_WIDGET_GONK
+            || (mGraphicBuffer != nsnull)
+#endif
+            ) {
             mUpdateSurface = GetLockSurface();
             if (mUpdateSurface) {
                 nsRefPtr<gfxContext> ctx = new gfxContext(mUpdateSurface);
@@ -998,9 +1088,21 @@ public:
             Resize(mSize);
         }
 
-        mGLContext->fActiveTexture(aTextureUnit);
-        mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
-        mGLContext->fActiveTexture(LOCAL_GL_TEXTURE0);
+#ifdef MOZ_WIDGET_GONK
+        if (UsingDirectTexture()) {
+            mGLContext->fActiveTexture(aTextureUnit);
+            mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
+            sEGLLibrary.fImageTargetTexture2DOES(LOCAL_GL_TEXTURE_2D, mEGLImage);
+            if (sEGLLibrary.fGetError() != LOCAL_EGL_SUCCESS) {
+               LOG("Could not set image target texture. ERROR (0x%04x)", sEGLLibrary.fGetError());
+            }
+        } else
+#endif
+        {
+            mGLContext->fActiveTexture(aTextureUnit);
+            mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
+            mGLContext->fActiveTexture(LOCAL_GL_TEXTURE0);
+        }
     }
 
     virtual GLuint GetTextureID() 
@@ -1022,13 +1124,13 @@ public:
             return;
 
         mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
-	
+    
         // Try to generate a backin surface first if we have the ability
         if (gUseBackingSurface) {
             CreateBackingSurface(gfxIntSize(aSize.width, aSize.height));
         }
 
-        if (!mBackingSurface) {
+        if (!UsingDirectTexture()) {
             // If we don't have a backing surface or failed to obtain one,
             // use the GL Texture failsafe
             mGLContext->fTexImage2D(LOCAL_GL_TEXTURE_2D,
@@ -1087,6 +1189,38 @@ public:
             return nsnull;
         }
 
+#ifdef MOZ_WIDGET_GONK
+        if (mGraphicBuffer != nsnull) {
+            // Unset the EGLImage target so that we don't get clashing locks
+            mGLContext->MakeCurrent(true);
+            mGLContext->fActiveTexture(LOCAL_GL_TEXTURE0);
+            mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
+            sEGLLibrary.fImageTargetTexture2DOES(LOCAL_GL_TEXTURE_2D, 0);
+            if (sEGLLibrary.fGetError() != LOCAL_EGL_SUCCESS) {
+                LOG("Could not set image target texture. ERROR (0x%04x)", sEGLLibrary.fGetError());
+                return false;
+            }
+
+            void *vaddr;
+            if (mGraphicBuffer->lock(GraphicBuffer::USAGE_SW_READ_OFTEN |
+                                     GraphicBuffer::USAGE_SW_WRITE_OFTEN,
+                                     &vaddr) != OK) {
+                LOG("Could not lock GraphicBuffer");
+                return false;
+            }
+
+            nsRefPtr<gfxImageSurface> surface =
+                new gfxImageSurface(reinterpret_cast<unsigned char *>(vaddr),
+                                    gfxIntSize(mSize.width, mSize.height),
+                                    mGraphicBuffer->getStride() * gfxUtils::ImageFormatToDepth(mUpdateFormat) / 8,
+                                    mUpdateFormat);
+
+            mIsLocked = true;
+
+            return surface.forget();
+        }
+#endif
+
         if (!sEGLLibrary.HasKHRLockSurface()) {
             NS_WARNING("GetLockSurface called, but no EGL_KHR_lock_surface extension!");
             return nsnull;
@@ -1103,7 +1237,7 @@ public:
             LOCAL_EGL_NONE
         };
 
-        sEGLLibrary.fLockSurfaceKHR(EGL_DISPLAY(), mSurface, lock_attribs);
+        sEGLLibrary.fLockSurface(EGL_DISPLAY(), mSurface, lock_attribs);
 
         mIsLocked = true;
 
@@ -1131,8 +1265,17 @@ public:
             return;
         }
 
-        sEGLLibrary.fUnlockSurfaceKHR(EGL_DISPLAY(), mSurface);
         mIsLocked = false;
+
+#ifdef MOZ_WIDGET_GONK
+        if (mGraphicBuffer != nsnull) {
+            mGraphicBuffer->unlock();
+
+            return;
+        }
+#endif
+
+        sEGLLibrary.fUnlockSurface(EGL_DISPLAY(), mSurface);
     }
 
     virtual already_AddRefed<gfxASurface> GetBackingSurface()
@@ -1174,6 +1317,15 @@ public:
 
     virtual void DestroyEGLSurface(void)
     {
+#ifdef MOZ_WIDGET_GONK
+        mGraphicBuffer.clear();
+
+        if (mEGLImage) {
+            sEGLLibrary.fDestroyImage(EGL_DISPLAY(), mEGLImage);
+            mEGLImage = nsnull;
+        }
+#endif
+
         if (!mSurface)
             return;
 
@@ -1201,21 +1353,21 @@ public:
         mConfig = nsnull;
 
         if (sEGLLibrary.HasKHRImagePixmap() && sEGLLibrary.HasKHRImageTexture2D()) {
-            mImageKHR =
-                sEGLLibrary.fCreateImageKHR(EGL_DISPLAY(),
-                                            EGL_NO_CONTEXT,
-                                            LOCAL_EGL_NATIVE_PIXMAP_KHR,
-                                            (EGLClientBuffer)xsurface->XDrawable(),
-                                            NULL);
+            mEGLImage =
+                sEGLLibrary.fCreateImage(EGL_DISPLAY(),
+                                         EGL_NO_CONTEXT,
+                                         LOCAL_EGL_NATIVE_PIXMAP_KHR,
+                                         (EGLClientBuffer)xsurface->XDrawable(),
+                                         nsnull);
 
-            if (!mImageKHR) {
+            if (!mEGLImage) {
                 printf_stderr("couldn't create EGL image: ERROR (0x%04x)\n", sEGLLibrary.fGetError());
                 return false;
             }
             mGLContext->fBindTexture(LOCAL_GL_TEXTURE_2D, mTexture);
-            sEGLLibrary.fImageTargetTexture2DOES(LOCAL_GL_TEXTURE_2D, mImageKHR);
-            sEGLLibrary.fDestroyImageKHR(EGL_DISPLAY(), mImageKHR);
-            mImageKHR = NULL;
+            mGLContext->fImageTargetTexture2D(LOCAL_GL_TEXTURE_2D, mEGLImage);
+            sEGLLibrary.fDestroyImage(EGL_DISPLAY(), mEGLImage);
+            mEGLImage = nsnull;
         } else {
             if (!CreateEGLSurface(xsurface)) {
                 printf_stderr("ProviderEGL Failed create EGL surface: ERROR (0x%04x)\n", sEGLLibrary.fGetError());
@@ -1229,8 +1381,38 @@ public:
         }
 
         mBackingSurface = xsurface;
+
+        return mBackingSurface != nsnull;
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+        if (gUseBackingSurface) {
+            mGLContext->MakeCurrent(true);
+            PixelFormat format = PixelFormatForImage(mUpdateFormat);
+            uint32_t usage = GraphicBuffer::USAGE_HW_TEXTURE |
+                             GraphicBuffer::USAGE_SW_READ_OFTEN |
+                             GraphicBuffer::USAGE_SW_WRITE_OFTEN;
+            mGraphicBuffer = new GraphicBuffer(aSize.width, aSize.height, format, usage);
+            if (mGraphicBuffer->initCheck() == OK) {
+                const int eglImageAttributes[] = { EGL_IMAGE_PRESERVED_KHR, LOCAL_EGL_TRUE,
+                                                   LOCAL_EGL_NONE, LOCAL_EGL_NONE };
+                mEGLImage = sEGLLibrary.fCreateImage(EGL_DISPLAY(),
+                                                        EGL_NO_CONTEXT,
+                                                        EGL_NATIVE_BUFFER_ANDROID,
+                                                        (EGLClientBuffer) mGraphicBuffer->getNativeBuffer(),
+                                                        eglImageAttributes);
+                if (!mEGLImage) {
+                    LOG("Could not create EGL images: ERROR (0x%04x)", sEGLLibrary.fGetError());
+                    return false;
+                }
+
+                return true;
+            }
+
+            LOG("GraphicBufferAllocator::alloc failed");
+            return false;
+        }
+#endif
         return mBackingSurface != nsnull;
     }
 
@@ -1241,12 +1423,16 @@ protected:
 
     nsIntRect mUpdateRect;
     ImageFormat mUpdateFormat;
+    bool mUsingDirectTexture;
     nsRefPtr<gfxASurface> mBackingSurface;
     nsRefPtr<gfxASurface> mUpdateSurface;
+#ifdef MOZ_WIDGET_GONK
+    sp<GraphicBuffer> mGraphicBuffer;
+#endif
+    EGLImage mEGLImage;
+    GLuint mTexture;
     EGLSurface mSurface;
     EGLConfig mConfig;
-    GLuint mTexture;
-    EGLImageKHR mImageKHR;
     TextureState mTextureState;
 
     bool mBound;
@@ -1278,11 +1464,10 @@ GLContextEGL::TileGenFunc(const nsIntSize& aSize,
   GLuint texture;
   fGenTextures(1, &texture);
 
-  fActiveTexture(LOCAL_GL_TEXTURE0);
-  fBindTexture(LOCAL_GL_TEXTURE_2D, texture);
-
   nsRefPtr<TextureImageEGL> teximage =
       new TextureImageEGL(texture, aSize, LOCAL_GL_CLAMP_TO_EDGE, aContentType, this, aFlags);
+  
+  teximage->BindTexture(LOCAL_GL_TEXTURE0);
 
   GLint texfilter = aFlags & TextureImage::UseNearestFilter ? LOCAL_GL_NEAREST : LOCAL_GL_LINEAR;
   fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MIN_FILTER, texfilter);
@@ -1391,14 +1576,12 @@ CreateConfig(EGLConfig* aConfig)
     }
 }
 
+// When MOZ_JAVA_COMPOSITOR is defined,
+// use mozilla::AndroidBridge::Bridge()->ProvideEGLSurface() instead.
+#ifndef MOZ_JAVA_COMPOSITOR
 static EGLSurface
 CreateSurfaceForWindow(nsIWidget *aWidget, EGLConfig config)
 {
-#ifdef MOZ_JAVA_COMPOSITOR
-    // Use mozilla::AndroidBridge::Bridge()->ProvideEGLSurface() instead.
-    NS_RUNTIMEABORT("CreateSurfaceForWindow should not be called on Native Fennec.");
-#endif
-
     EGLSurface surface;
 
 #ifdef DEBUG
@@ -1433,6 +1616,7 @@ CreateSurfaceForWindow(nsIWidget *aWidget, EGLConfig config)
 
     return surface;
 }
+#endif
 
 already_AddRefed<GLContext>
 GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
@@ -1471,6 +1655,9 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
 
         if (!glContext->Init())
             return nsnull;
+
+        glContext->MakeCurrent();
+        sEGLLibrary.LoadConfigSensitiveSymbols();
 
         glContext->SetIsDoubleBuffered(doubleBuffered);
 
@@ -1516,6 +1703,8 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
         return nsnull;
     }
 
+    glContext->MakeCurrent();
+    sEGLLibrary.LoadConfigSensitiveSymbols();
     glContext->SetIsDoubleBuffered(doubleBuffered);
 
     return glContext.forget();
@@ -1949,9 +2138,18 @@ GLContextProviderEGL::CreateForNativePixmapSurface(gfxASurface* aSurface)
 GLContext *
 GLContextProviderEGL::GetGlobalContext(const ContextFlags)
 {
+// Don't want a global context on Android as 1) share groups across 2 threads fail on many Tegra drivers (bug 759225)
+// and 2) some mobile devices have a very strict limit on global number of GL contexts (bug 754257)
 #ifdef MOZ_JAVA_COMPOSITOR
     return nsnull;
 #endif
+
+// Don't want a global context on Windows as we don't use it for WebGL surface sharing and it makes
+// context creation fail after a context loss (bug 764578)
+#ifdef XP_WIN
+    return nsnull;
+#endif
+
 
     static bool triedToCreateContext = false;
     if (!triedToCreateContext && !gGlobalContext) {

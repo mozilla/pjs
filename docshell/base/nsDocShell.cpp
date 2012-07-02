@@ -648,6 +648,7 @@ ConvertLoadTypeToNavigationType(PRUint32 aLoadType)
     case LOAD_NORMAL_REPLACE:
     case LOAD_LINK:
     case LOAD_STOP_CONTENT:
+    case LOAD_REPLACE_BYPASS_CACHE:
         result = nsIDOMPerformanceNavigation::TYPE_NAVIGATE;
         break;
     case LOAD_HISTORY:
@@ -786,7 +787,7 @@ nsDocShell::nsDocShell():
   // We're counting the number of |nsDocShells| to help find leaks
   ++gNumberOfDocShells;
   if (!PR_GetEnv("MOZ_QUIET")) {
-      printf("++DOCSHELL %p == %ld [id = %ld]\n", (void*) this,
+      printf("++DOCSHELL %p == %ld [id = %llu]\n", (void*) this,
              gNumberOfDocShells, mHistoryID);
   }
 #endif
@@ -815,7 +816,7 @@ nsDocShell::~nsDocShell()
     // We're counting the number of |nsDocShells| to help find leaks
     --gNumberOfDocShells;
     if (!PR_GetEnv("MOZ_QUIET")) {
-        printf("--DOCSHELL %p == %ld [id = %ld]\n", (void*) this,
+        printf("--DOCSHELL %p == %ld [id = %llu]\n", (void*) this,
                gNumberOfDocShells, mHistoryID);
     }
 #endif
@@ -1141,6 +1142,9 @@ ConvertDocShellLoadInfoToLoadType(nsDocShellInfoLoadType aDocShellLoadType)
     case nsIDocShellLoadInfo::loadPushState:
         loadType = LOAD_PUSHSTATE;
         break;
+    case nsIDocShellLoadInfo::loadReplaceBypassCache:
+        loadType = LOAD_REPLACE_BYPASS_CACHE;
+        break;
     default:
         NS_NOTREACHED("Unexpected nsDocShellInfoLoadType value");
     }
@@ -1208,6 +1212,9 @@ nsDocShell::ConvertLoadTypeToDocShellLoadInfo(PRUint32 aLoadType)
         break;
     case LOAD_PUSHSTATE:
         docShellLoadType = nsIDocShellLoadInfo::loadPushState;
+        break;
+    case LOAD_REPLACE_BYPASS_CACHE:
+        docShellLoadType = nsIDocShellLoadInfo::loadReplaceBypassCache;
         break;
     default:
         NS_NOTREACHED("Unexpected load type value");
@@ -5923,6 +5930,7 @@ nsDocShell::Embed(nsIContentViewer * aContentViewer,
     case LOAD_RELOAD_BYPASS_CACHE:
     case LOAD_RELOAD_BYPASS_PROXY:
     case LOAD_RELOAD_BYPASS_PROXY_AND_CACHE:
+    case LOAD_REPLACE_BYPASS_CACHE:
         updateHistory = false;
         break;
     default:
@@ -7928,10 +7936,10 @@ nsDocShell::CheckLoadingPermissions()
         }
 
         // Compare origins
-        bool equal;
-        sameOrigin = subjPrincipal->Equals(p, &equal);
+        bool subsumes;
+        sameOrigin = subjPrincipal->Subsumes(p, &subsumes);
         if (NS_SUCCEEDED(sameOrigin)) {
-            if (equal) {
+            if (subsumes) {
                 // Same origin, permit load
 
                 return sameOrigin;
@@ -9226,6 +9234,7 @@ nsresult nsDocShell::DoChannelLoad(nsIChannel * aChannel,
     case LOAD_RELOAD_BYPASS_CACHE:
     case LOAD_RELOAD_BYPASS_PROXY:
     case LOAD_RELOAD_BYPASS_PROXY_AND_CACHE:
+    case LOAD_REPLACE_BYPASS_CACHE:
         loadFlags |= nsIRequest::LOAD_BYPASS_CACHE |
                      nsIRequest::LOAD_FRESH_CONNECTION;
         break;
@@ -9849,17 +9858,6 @@ nsDocShell::AddState(nsIVariant *aData, const nsAString& aTitle,
         }
 
     } // end of same-origin check
-
-    nsCOMPtr<nsISHistory> sessionHistory = mSessionHistory;
-    if (!sessionHistory) {
-        // Get the handle to SH from the root docshell
-        GetRootSessionHistory(getter_AddRefs(sessionHistory));
-    }
-    NS_ENSURE_TRUE(sessionHistory, NS_ERROR_FAILURE);
-
-    nsCOMPtr<nsISHistoryInternal> shInternal =
-        do_QueryInterface(sessionHistory, &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
 
     // Step 3: Create a new entry in the session history. This will erase
     // all SHEntries after the new entry and make this entry the current
@@ -10566,7 +10564,7 @@ nsDocShell::SetHistoryEntry(nsCOMPtr<nsISHEntry> *aPtr, nsISHEntry *aEntry)
                 nsDocShell *rootDocShell = static_cast<nsDocShell*>
                                                       (rootIDocShell);
 
-#ifdef NS_DEBUG
+#ifdef DEBUG
                 nsresult rv =
 #endif
                 SetChildHistoryEntry(oldRootEntry, rootDocShell,
@@ -11991,7 +11989,7 @@ nsDocShell::SetIsBrowserFrame(bool aValue)
   // docshell-marked-as-browser-frame would have to distinguish between
   // newly-created browser frames and frames which went from true to false back
   // to true.)
-  NS_ENSURE_STATE(!mIsBrowserFrame);
+  NS_ENSURE_STATE(!mIsBrowserFrame || aValue);
 
   bool wasBrowserFrame = mIsBrowserFrame;
   mIsBrowserFrame = aValue;
