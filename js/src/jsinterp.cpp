@@ -2834,8 +2834,9 @@ BEGIN_CASE(JSOP_CALLLOCAL)
      * method JIT, and a GETLOCAL followed by POP is not considered to be
      * a use of the variable.
      */
-    if (regs.pc[JSOP_GETLOCAL_LENGTH] != JSOP_POP)
-        assertSameCompartment(cx, regs.sp[-1]);
+    //TODO: pjs disabled.
+    //if (regs.pc[JSOP_GETLOCAL_LENGTH] != JSOP_POP)
+    //    assertSameCompartment(cx, regs.sp[-1]);
 }
 END_CASE(JSOP_GETLOCAL)
 

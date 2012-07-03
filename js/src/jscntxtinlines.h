@@ -558,7 +558,8 @@ JSContext::setPendingException(js::Value v) {
     JS_ASSERT(!IsPoisonedValue(v));
     this->throwing = true;
     this->exception = v;
-    js::assertSameCompartment(this, v);
+    //TODO: pjs disabled.
+    //js::assertSameCompartment(this, v);
 }
 
 inline bool

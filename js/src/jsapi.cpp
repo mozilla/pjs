@@ -6557,7 +6557,8 @@ JS_SetPendingException(JSContext *cx, jsval v)
 {
     AssertNoGC(cx);
     CHECK_REQUEST(cx);
-    assertSameCompartment(cx, v);
+    //TODO: pjs disabled.
+    //assertSameCompartment(cx, v);
     cx->setPendingException(v);
 }
 

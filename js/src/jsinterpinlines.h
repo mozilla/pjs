@@ -689,7 +689,8 @@ GetObjectElementOperation(JSContext *cx, JSOp op, HandleObject obj, const Value 
         }
     }
 
-    assertSameCompartment(cx, *res);
+    //TODO: pjs disabled.
+    //assertSameCompartment(cx, *res);
     return true;
 }
 
