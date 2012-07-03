@@ -790,8 +790,8 @@ JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 					return JS_FALSE;
 				}
 
-//				resarr->setElement(cx, i, &OBJECT_TO_JSVAL(th->object()),
-//						false);
+				resarr->setElement(cx, resarr, i, &OBJECT_TO_JSVAL(th->object()),
+						false);
 				DEBUG("forked TaskHandle %p with parent context %p/g %p/c %p\n",
 						th, taskContext, taskContext->global(),
 						taskContext->global()->compartment());
