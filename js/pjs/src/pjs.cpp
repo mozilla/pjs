@@ -723,10 +723,9 @@ JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 	if (typedArray.isObject()) {
 		JSObject * arrObj = typedArray.toObjectOrNull();
 		if (arrObj->isTypedArray()) {
-			int length = TypedArray::getLength(arrObj);
-			ArrayBufferObject * arrayBufferObject = TypedArray::getBuffer(
-					arrObj);
-			uint32_t type = TypedArray::getType(arrObj);
+			uint32_t length = TypedArray::length(arrObj);
+			ArrayBufferObject * arrayBufferObject = TypedArray::buffer(arrObj);
+			uint32_t type = TypedArray::type(arrObj);
 			JSObject *(*JS_NewArrayWithBufferFn)(JSContext*, JSObject*,
 					uint32_t, int32_t);
 			switch (type) {
@@ -790,12 +789,9 @@ JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 				if (th == NULL) {
 					return JS_FALSE;
 				}
-//				views[i]->setSlot(DataViewObject::PJS_TASK_ID,
-//						OBJECT_TO_JSVAL(th->object()));
-				resarr->setElement(cx, i, &OBJECT_TO_JSVAL(th->object()),
-						false);
-//				if(i == 0)
-				JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(th->object()));
+
+//				resarr->setElement(cx, i, &OBJECT_TO_JSVAL(th->object()),
+//						false);
 				DEBUG("forked TaskHandle %p with parent context %p/g %p/c %p\n",
 						th, taskContext, taskContext->global(),
 						taskContext->global()->compartment());
@@ -1282,7 +1278,7 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
 	JS_SetOptions(cx, JSOPTION_VAROBJFIX | JSOPTION_METHODJIT);
 	JS_SetVersion(cx, JSVERSION_LATEST);
 	JS_SetErrorReporter(cx, reportError);
-	JSObject *global = JS_NewCompartmentAndGlobalObject(
+	JSObject *global = JS_NewGlobalObject(
 	/*JSContext *cx: */cx,
 	/*JSClass *clasp: */&Global::jsClass, /*JSPrincipals*/NULL);
 //	global->dump();
@@ -1443,7 +1439,7 @@ TaskContext *Runner::createTaskContext(TaskHandle *handle) {
 }
 
 TaskContext *Runner::createRootTaskContext(TaskHandle *handle) {
-	JSObject *global = JS_NewCompartmentAndGlobalObject(
+	JSObject *global = JS_NewGlobalObject(
 	/*JSContext *cx: */_cx,
 	/*JSClass *clasp: */&Global::jsClass, /*JSPrincipals*/NULL);
 	CrossCompartment cc(_cx, global);

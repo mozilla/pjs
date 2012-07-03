@@ -2360,7 +2360,8 @@ BEGIN_CASE(JSOP_CALLPROP)
     TypeScript::Monitor(cx, script, regs.pc, rval.reference());
 
     regs.sp[-1] = rval;
-    assertSameCompartment(cx, regs.sp[-1]);
+    //TODO: pjs disabled.
+    //assertSameCompartment(cx, regs.sp[-1]);
 }
 END_CASE(JSOP_GETPROP)
 
