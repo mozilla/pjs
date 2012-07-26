@@ -1466,7 +1466,8 @@ JSScript::ensureRanAnalysis(JSContext *cx, JSObject *scope)
     }
     if (!self->hasAnalysis() && !self->makeAnalysis(cx))
         return false;
-    JS_ASSERT(self->analysis()->ranBytecode());
+    //TODO: pjs disabled.
+//    JS_ASSERT(self->analysis()->ranBytecode());
     return true;
 }
 

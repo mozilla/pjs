@@ -3710,13 +3710,14 @@ DefinePropertyById(JSContext *cx, HandleObject obj, HandleId id, HandleValue val
 
     AssertNoGC(cx);
     CHECK_REQUEST(cx);
-    assertSameCompartment(cx, obj, id, value,
-                            (attrs & JSPROP_GETTER)
-                            ? JS_FUNC_TO_DATA_PTR(JSObject *, getter)
-                            : NULL,
-                            (attrs & JSPROP_SETTER)
-                            ? JS_FUNC_TO_DATA_PTR(JSObject *, setter)
-                            : NULL);
+    // TODO: pjs disabled.
+//    assertSameCompartment(cx, obj, id, value,
+//                            (attrs & JSPROP_GETTER)
+//                            ? JS_FUNC_TO_DATA_PTR(JSObject *, getter)
+//                            : NULL,
+//                            (attrs & JSPROP_SETTER)
+//                            ? JS_FUNC_TO_DATA_PTR(JSObject *, setter)
+//                            : NULL);
 
     JSAutoResolveFlags rf(cx, JSRESOLVE_QUALIFIED);
     if (flags != 0 && obj->isNative()) {

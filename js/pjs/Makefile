@@ -14,7 +14,7 @@ HEADERS=${wildcard ${SRC}/*.h}
 all: ${BUILD}/pjs
 
 ${MC}/js/src/configure:
-	cd ${MC}/js/src && autoconf-2.13
+	cd ${MC}/js/src && autoconf213
 
 ${BUILD}/MC: ${MC}/js/src/configure
 	mkdir -p ${BUILD}

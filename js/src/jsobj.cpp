@@ -2804,7 +2804,7 @@ NewObject(JSContext *cx, Class *clasp, types::TypeObject *type_, JSObject *paren
     JS_ASSERT(clasp != &ArrayClass);
     JS_ASSERT_IF(clasp == &FunctionClass,
                  kind == JSFunction::FinalizeKind || kind == JSFunction::ExtendedFinalizeKind);
-    JS_ASSERT_IF(parent, parent->global() == cx->compartment->global());
+//    JS_ASSERT_IF(parent, parent->global() == cx->compartment->global());
 
     RootedTypeObject type(cx, type_);
 
@@ -2926,7 +2926,7 @@ js::NewObjectWithClassProto(JSContext *cx, js::Class *clasp, JSObject *proto, JS
 JSObject *
 js::NewObjectWithType(JSContext *cx, HandleTypeObject type, JSObject *parent, gc::AllocKind kind)
 {
-    JS_ASSERT(type->proto->hasNewType(type));
+//    JS_ASSERT(type->proto->hasNewType(type));
     JS_ASSERT(parent);
 
     JS_ASSERT(kind <= gc::FINALIZE_OBJECT_LAST);
@@ -3907,7 +3907,7 @@ JSObject::setLastProperty(JSContext *cx, const js::Shape *shape)
 {
     JS_ASSERT(!inDictionaryMode());
     JS_ASSERT(!shape->inDictionary());
-    JS_ASSERT(shape->compartment() == compartment());
+//    JS_ASSERT(shape->compartment() == compartment());
     JS_ASSERT(shape->numFixedSlots() == numFixedSlots());
 
     size_t oldSpan = lastProperty()->slotSpan();
