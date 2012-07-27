@@ -94,7 +94,6 @@ public:
 	void releaseProxies();
 
 	bool wrap(Value *vp, bool isArg=false);
-	bool wraptemp(Value *vp, bool isArg=false);
 	bool wrapId(jsid *idp);
 	bool unwrap(Value *vp);
 
