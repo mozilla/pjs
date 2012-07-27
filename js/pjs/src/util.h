@@ -1,3 +1,6 @@
+#ifndef util_h___
+#define util_h___
+
 namespace pjs {
 
 class AutoLock
@@ -90,3 +93,5 @@ public:
 };
 
 }
+
+#endif /* util_h___ */

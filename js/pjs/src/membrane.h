@@ -83,15 +83,6 @@ private:
 
 	bool copyAndWrapProperties(JSObject *from, JSObject *to);
 
-	bool unwrap(Value *vp);
-
-	bool unwrapId(jsid *idp);
-	bool wrap(AutoIdVector &props);
-	bool wrap(PropertyOp *propp);
-	bool wrap(StrictPropertyOp *propp);
-	bool wrap(PropertyDescriptor *desc);
-	bool wrap(JSObject **objp);
-	bool wrap(HeapPtrAtom *objp);
 
 	static char *MEMBRANE;
 
@@ -105,6 +96,16 @@ public:
 	bool wrap(Value *vp, bool isArg=false);
 	bool wraptemp(Value *vp, bool isArg=false);
 	bool wrapId(jsid *idp);
+	bool unwrap(Value *vp);
+
+	bool unwrapId(jsid *idp);
+	bool wrap(AutoIdVector &props);
+	bool wrap(PropertyOp *propp);
+	bool wrap(StrictPropertyOp *propp);
+	bool wrap(PropertyDescriptor *desc);
+	bool wrap(JSObject **objp);
+	bool wrap(HeapPtrAtom *objp);
+
 
 	static bool IsCrossThreadWrapper(const JSObject *wrapper);
 

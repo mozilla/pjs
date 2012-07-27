@@ -41,12 +41,22 @@
 #include "ProxyRack.h"
 #include "membrane.h"
 #include "util.h"
+#include "pjs.h"
 
 #if 1
 #  define DEBUG(...)
 #else
 #  define DEBUG(...) fprintf(stderr, __VA_ARGS__)
 #endif
+
+#define PIERCE(cx, pre, op, post)      \
+    JS_BEGIN_MACRO                              \
+        AutoReadOnly ro(cx);                    \
+        bool ok = (pre) && (op);                \
+        return ok && (post);                    \
+    JS_END_MACRO
+
+#define NOTHING (true)
 
 namespace pjs {
 
@@ -79,32 +89,32 @@ ProxyRack::~ProxyRack() {
 
 bool ProxyRack::getPropertyDescriptor(JSContext* cx, JSObject* wrapper, jsid id,
 		bool set, PropertyDescriptor* desc) {
+
 	desc->obj = NULL;
-	;
-	JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id,
-			JSRESOLVE_QUALIFIED, desc);
-	//	PIERCE(cx,
-	//			unwrapId(&id),
-	//			JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id,
-	//			JSRESOLVE_QUALIFIED, desc),
-	//			wrap(desc));
-	return true;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+
+	DEBUG("%p.getPropertyDescriptor(wrapper=%p)\n", cx, wrapper);
+
+	PIERCE(cx, taskContext->getMembrane()->unwrapId(&id),
+			JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id, JSRESOLVE_QUALIFIED, desc),
+			taskContext->getMembrane()->wrap(desc));
 }
 
 bool ProxyRack::getOwnPropertyDescriptor(JSContext* cx, JSObject* wrapper,
 		jsid id, bool set, PropertyDescriptor* desc) {
 	AutoReadOnly ro(cx);
-	//	if (!unwrapId(&id))
-	//		return false;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	if (!taskContext->getMembrane()->unwrapId(&id))
+		return false;
 	RootedObject rwrapper(cx, wrappedObject(wrapper));
 	RootedId rid(cx, id);
 	desc->obj = NULL;
 	if (!GetOwnPropertyDescriptor(cx, rwrapper, rid, desc))
 		return false;
-
-	//	if (!wrap(desc))
-	//		return false;
+	if (!taskContext->getMembrane()->wrap(desc))
+		return false;
 	return true;
+
 }
 bool ProxyRack::defineProperty(JSContext* cx, JSObject* wrapper, jsid id,
 		PropertyDescriptor* desc) {
@@ -116,14 +126,10 @@ bool ProxyRack::defineProperty(JSContext* cx, JSObject* wrapper, jsid id,
 bool ProxyRack::getOwnPropertyNames(JSContext* cx, JSObject* wrapper,
 		AutoIdVector& props) {
 	jsid id = JSID_VOID;
-	GetPropertyNames(cx, wrappedObject(wrapper), JSITER_OWNONLY | JSITER_HIDDEN,
-			&props);
-	//	PIERCE(cx,
-	//			NOTHING,
-	//			GetPropertyNames(cx, wrappedObject(wrapper),
-	//			JSITER_OWNONLY | JSITER_HIDDEN, &props),
-	//			wrap(props));
-	return true;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	PIERCE(cx, NOTHING,
+			GetPropertyNames(cx, wrappedObject(wrapper), JSITER_OWNONLY | JSITER_HIDDEN, &props),
+			taskContext->getMembrane()->wrap(props));
 }
 
 bool ProxyRack::delete_(JSContext* cx, JSObject* wrapper, jsid id, bool* bp) {
@@ -132,12 +138,9 @@ bool ProxyRack::delete_(JSContext* cx, JSObject* wrapper, jsid id, bool* bp) {
 
 bool ProxyRack::enumerate(JSContext* cx, JSObject* wrapper,
 		AutoIdVector& props) {
-	GetPropertyNames(cx, wrappedObject(wrapper), 0, &props);
-	//	PIERCE(cx,
-	//			NOTHING,
-	//			GetPropertyNames(cx, wrappedObject(wrapper), 0, &props),
-	//			wrap(props));
-	return true;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	PIERCE(cx, NOTHING, GetPropertyNames(cx, wrappedObject(wrapper), 0, &props),
+			taskContext->getMembrane()->wrap(props));
 }
 
 bool ProxyRack::fix(JSContext* cx, JSObject* proxy, Value* vp) {
