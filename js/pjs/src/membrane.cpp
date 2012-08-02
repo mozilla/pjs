@@ -310,7 +310,6 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 				return true;
 		}
 
-
 	}
 
 	/* If we already have a wrapper for this value, use it. */
@@ -675,7 +674,7 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 			break;
 		case JSOP_NAMEINC:
 		case JSOP_SETNAME:
-			fprintf(stderr, "SETNAME Error: %s\n", getAtom(script, pc, cx));
+			fprintf(stderr, "SETNAME: %s\n", getAtom(script, pc, cx));
 		case JSOP_BINDNAME:
 			typesStack.popN(js_CodeSpec[op].nuses);
 			typesStack.push(GLOBAL);
@@ -702,6 +701,11 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
 				fprintf(stderr, "ASSIGN TO GLOBAL\n");
 			typesStack.push(assigned_type);
+			break;
+		case JSOP_GETPROP:
+			fprintf(stderr, "get prop??\n")
+			typesStack.popN(js_CodeSpec[op].nuses);
+			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
 			break;
 		case JSOP_CALL:
 
