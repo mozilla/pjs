@@ -290,9 +290,6 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 #define NOTHING (true)
 
 bool Membrane::wrap(Value *vp, bool isArg) {
-	fprintf(stderr, "--=WRAP=--\n");
-
-
 	JSContext *cx = _childCx;
 
 	JS_CHECK_RECURSION(cx, return false);
@@ -501,23 +498,23 @@ char *getAtom(JSScript *script, jsbytecode *pc, JSContext *cx) {
 void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 	JS_DumpBytecode(cx, fn->script());
 	BindingNames names(cx);
-	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
-			fn->script()->bindings.numVars());
+//	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
+//			fn->script()->bindings.numVars());
 	fn->script()->bindings.getLocalNameArray(cx, &names);
 	for (size_t i = 0;
 			i
 					< fn->script()->bindings.numArgs()
 							+ fn->script()->bindings.numVars(); i++) {
 		JSAtom *name = names[i].maybeAtom;
-		fprintf(stderr, "%s\n",
-				JS_EncodeString(cx, StringValue(name).toString()));
+//		fprintf(stderr, "%s\n",
+//				JS_EncodeString(cx, StringValue(name).toString()));
 
 	}
 //					fn->dump();
 
 	char * fun_source = JS_EncodeString(cx,
 			StringValue(fun_toStringHelper(cx, obj, 0)).toString());
-	fprintf(stderr, "%s\n", fun_source);
+//	fprintf(stderr, "%s\n", fun_source);
 
 	JSScript * script = fn->script();
 	unsigned length = script->length;
@@ -545,7 +542,7 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 		 * earlier bytecode if this bytecode has a loop backedge.
 		 */
 		nextOffset = successorOffset;
-		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
+//		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
 		switch (op) {
 		case JSOP_POPV:
 		case JSOP_LEAVEWITH:
@@ -678,6 +675,7 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 			break;
 		case JSOP_NAMEINC:
 		case JSOP_SETNAME:
+			fprintf(stderr, "SETNAME Error: %s\n", getAtom(script, pc, cx));
 		case JSOP_BINDNAME:
 			typesStack.popN(js_CodeSpec[op].nuses);
 			typesStack.push(GLOBAL);
