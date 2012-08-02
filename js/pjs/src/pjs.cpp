@@ -56,6 +56,7 @@
 #include "jsobj.h"
 #include "jsnum.h"
 #include "pjs.h"
+#include "vm/ArgumentsObject.h"
 
 extern size_t gMaxStackSize;
 
@@ -431,6 +432,68 @@ JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 	return JS_FALSE;
 }
 
+JSBool pjs_analyze(JSContext *cx, unsigned argc, jsval *vp) {
+
+	fprintf(stderr, "pjs_analyze\n");
+//	return true;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	jsval *argv = JS_ARGV(cx, vp);
+	// argv[0] contains "this"
+	// argv[1] contains "arguments"
+	JSObject* scope = JSVAL_TO_OBJECT(argv[0]);
+	JSObject* args = JSVAL_TO_OBJECT(argv[1]);
+
+	JS_ASSERT(args->isArguments());
+	ArgumentsObject* argObj = (ArgumentsObject*) args;
+	JSScript *script = argObj->containingScript();
+	JSFunction *fn = argObj->containingScript()->function();
+//	taskContext->getMembrane()->wrap(
+//			&OBJECT_TO_JSVAL(argObj->containingScript()->function()), false);
+
+
+
+//	JS_DumpBytecode(cx, script);
+	BindingNames names(cx);
+
+
+//	fprintf(stderr, "%d, %d\n", script->bindings.numArgs(),
+//			script->bindings.numVars());
+	script->bindings.getLocalNameArray(cx, &names);
+	for (size_t i = 0;
+			i < script->bindings.numArgs() + script->bindings.numVars(); i++) {
+		JSAtom *name = names[i].maybeAtom;
+//		fprintf(stderr, "%s\n",
+//				JS_EncodeString(cx, StringValue(name).toString()));
+
+	}
+//	fprintf(stderr, "args length %d\n", argObj->);
+	for (int i = 0; i < argObj->initialLength(); i++) {
+		Value arg = argObj->arg(i);
+		if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(argObj->arg(i)))) {
+			JSObject *obj = JSVAL_TO_OBJECT(argObj->arg(i));
+//			obj->dump();
+			if (obj->isProxy()) {
+				const JS::Value val = GetProxyPrivate(obj);
+				JSObject *obj2 = JSVAL_TO_OBJECT(val);
+				fprintf(stderr, "%p, %p\n", obj2, &obj2);
+				fprintf(stderr, "%p, %p\n", obj, &obj);
+				OBJECT_TO_JSVAL(obj).setObjectOrNull(obj2);
+//				argObj->arg(i).setObjectOrNull(obj2);
+			}
+//			if (obj->get)
+
+			//			taskContext->getMembrane()->wrap(&OBJECT_TO_JSVAL(obj), false);
+
+		}
+//		fprintf(stderr, "%s\n",
+//				JS_EncodeString(cx,
+//						StringValue(obj->atom).toString()));
+
+	}
+
+	return JS_TRUE;
+}
+
 JSBool oncompletion(JSContext *cx, unsigned argc, jsval *vp) {
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 	JSObject *func;
@@ -448,7 +511,8 @@ static JSFunctionSpec pjsGlobalFunctions[] = { JS_FN("print", print, 0, 0),
 		JS_FN("dumpObjects", dumpObjects, 0, 0),
 		JS_FN("assert", assert, 2, 0), JS_FN("fork", fork, 1, 0),
 				JS_FN("forkN", forkN, 1, 0),
-				JS_FN("oncompletion", oncompletion, 1, 0), JS_FS_END };
+				JS_FN("oncompletion", oncompletion, 1, 0),
+				JS_FN("pjs_analyze", pjs_analyze, 1, 0), JS_FS_END };
 
 // ______________________________________________________________________
 // Global impl
@@ -582,6 +646,7 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	if (!m->wrap(fn.addr())) {
 		return false;
 	}
+	m->analyzeFunction((JSFunction*)JSVAL_TO_OBJECT(*fn.addr()), JSVAL_TO_OBJECT(*fn.addr()), cx);
 	JS_ASSERT(ValueIsFunction(cx, fn.value()));
 
 	auto_arr<jsval> argv(new jsval[_argc]); // ensure it gets freed
@@ -655,8 +720,8 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 			jsval pval;
 			if (!JS_GetPropertyById(cx, parentGlobal, pid, &pval))
 				return false;
-			if (!m->wrap(&pval))
-				return false;
+//			if (!m->wrap(&pval))
+//				return false;
 			AutoReadOnly rw(cx, false);
 			if (!JS_SetPropertyById(cx, global, cid, &pval))
 				return false;

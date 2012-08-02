@@ -84,6 +84,7 @@ private:
 	bool copyAndWrapProperties(JSObject *from, JSObject *to);
 
 
+
 	static char *MEMBRANE;
 
 public:
@@ -94,7 +95,6 @@ public:
 	void releaseProxies();
 
 	bool wrap(Value *vp, bool isArg=false);
-	bool wraptemp(Value *vp, bool isArg=false);
 	bool wrapId(jsid *idp);
 	bool unwrap(Value *vp);
 
@@ -106,6 +106,7 @@ public:
 	bool wrap(JSObject **objp);
 	bool wrap(HeapPtrAtom *objp);
 
+	void analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx);
 
 	static bool IsCrossThreadWrapper(const JSObject *wrapper);
 

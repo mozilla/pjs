@@ -290,6 +290,8 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 #define NOTHING (true)
 
 bool Membrane::wrap(Value *vp, bool isArg) {
+	fprintf(stderr, "--=WRAP=--\n");
+
 
 	JSContext *cx = _childCx;
 
@@ -310,6 +312,8 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 			if (isArg /*|| obj->getSlot(DataViewObject::PJS_TASK_ID).asRawBits() == 1*/)
 				return true;
 		}
+
+
 	}
 
 	/* If we already have a wrapper for this value, use it. */
@@ -362,6 +366,7 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 	/* Split closures */
 	if (JS_ObjectIsFunction(cx, obj)) {
 		JSFunction *fn = obj->toFunction();
+//		analyzeFunction(fn, obj, cx);
 		JSObject *env;
 		if (!fn->isInterpreted()) {
 			if (fn->isNativeConstructor()) // Assuming all native constructors does not mutate the arguments.
@@ -443,153 +448,290 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 
 static PRLock* debugLock = PR_NewLock();
 
-bool Membrane::wraptemp(Value *vp, bool isArg) {
-
-	JSContext *cx = _childCx;
-
-	JS_CHECK_RECURSION(cx, return false);
-
-	if (!vp->isMarkable()) {
-		return true;
-	}
-
-	/* Unwrap incoming objects. */
-	if (vp->isObject()) {
-		JSObject *obj = &vp->toObject();
-		/* Translate StopIteration singleton. */
-		//NDM if (obj->isStopIteration())
-		//NDM    return js_FindClassObject(cx, NULL, JSProto_StopIteration, vp);
-		if (obj->isTypedArray()) {
-			if (isArg /*|| obj->getSlot(DataViewObject::PJS_TASK_ID).asRawBits() == 1*/)
-				return true;
-		}
-
-//		{
-//			AutoLock hold(debugLock);
-//			fprintf(stderr, "dump:\n");
-//		if(obj->isArray())
-//			obj->dump();
-//		}
-	}
-
-	/* If we already have a wrapper for this value, use it. */
-	WrapperMap::Ptr p = _map.lookup(*vp);
-	if (p.found()) {
-		*vp = p->value;
-		return true;
-	}
-
-	/* Copy strings */
-	if (vp->isString()) {
-		Value orig = *vp;
-		JSString *str = vp->toString();
-		const jschar *chars = str->getChars(cx);
-		if (!chars)
-			return false;
-
-		JSString *wrapped;
-		if (!str->isAtom()) {
-			wrapped = JS_NewUCStringCopyN(cx, chars, str->length());
-		} else {
-			wrapped = js_AtomizeChars(cx, chars, str->length());
-		}
-
-		if (!wrapped)
-			return false;
-
-#       ifdef DEBUG_DUMPS
-		{
-			char *c_str = JS_EncodeString(cx, wrapped);
-			DEBUG("Wrapping string %p to %p (%s) for %p->%p (%p)\n",
-					str, wrapped, c_str,
-					_parentCx, _childCx,
-					_childCompartment);
-			JS_free(cx, c_str);
-		}
-#       endif
-
-		vp->setString(wrapped);
-		return put(orig, *vp);
-	}
-
-	JSObject *obj = &vp->toObject();
-
-	if (obj == _parentGlobal) {
-		vp->setObject(*_childGlobal);
-		return true;
-	}
-
-	/* Split closures */
-	if (JS_ObjectIsFunction(cx, obj)) {
-		JSFunction *fn = obj->toFunction();
-		JSObject *env;
-		if (!fn->isInterpreted()) {
-			if (!isSafeNative(fn->native())) {
-				JS_ReportError(cx, "Cannot access native functions "
-						"from child tasks");
-				return false;
-			}
-			env = NULL;
-		} else {
-			env = fn->environment();
-			if (!wrap(&env))
-				return false;
-		}
-
-		JSObject *wrapper = JS_CloneFunctionObject(cx, obj, env);
-		JSFunction *cloned_fn = wrapper->toFunction();
-		wrap(&cloned_fn->atom); // FIXME: total hack
-		vp->setObject(*wrapper);
-		DEBUG("Wrapping fn %p/%p to %p/%p for %p->%p (%p)\n",
-				fn, fn->maybeScript(),
-				wrapper, wrapper->toFunction()->maybeScript(),
-				_parentCx, _childCx, _childCompartment);
-
-		if (!put(OBJECT_TO_JSVAL(obj), *vp))
-			return false;
-
-		// We now have to copy over any properties.  I do this *after*
-		// putting the wrapper into the table lest there is a
-		// recursive reference.
-		if (!copyAndWrapProperties(obj, wrapper))
-			return false;
-
-		// if (!JS_FreezeObject(cx, wrapper))
-		//    return false;
-
-		return true;
-	}
-
-	/*
-	 * Recurse to wrap the prototype. Long prototype chains will run out of
-	 * stack, causing an error in CHECK_RECURSE.
-	 *
-	 * Wrapping the proto before creating the new wrapper and adding it to the
-	 * cache helps avoid leaving a bad entry in the cache on OOM. But note that
-	 * if we wrapped both proto and parent, we would get infinite recursion
-	 * here (since Object.prototype->parent->proto leads to Object.prototype
-	 * itself).
-	 */
-	JSObject *proto = obj->getProto();
-	if (!wrap(&proto))
-		return false;
-
-// FIXME--using global as the parent parameter to New() here is
-// wrong but should work for now.  We should eventually proxy it.
-
-	JSObject *wrapper = this->_proxyRack->getProxyObject(cx, ObjectValue(*obj),
-			proto, _childGlobal, obj->isCallable() ? obj : NULL, NULL);
-////	JSObject *wrapper = NewProxyObject(cx, this, ObjectValue(*obj), proto,
-////			_childGlobal, obj->isCallable() ? obj : NULL, NULL);
-//
-//// increment the refcount of the proxy handler.
-////	_refCount++;
-	vp->setObject(*wrapper);
-	DEBUG("Wrapping obj %p to %p for %p->%p\n", obj, wrapper, _parentCx, _childCx);
-	return put(GetProxyPrivate(wrapper), *vp);
-}
-
 void Membrane::releaseProxies() {
 
 }
+
+enum StackType {
+	CONST, LOCAL, GLOBAL, UNDEFINED, ARGUMENT
+};
+
+class TypesStack {
+private:
+	Vector<StackType> * data;
+
+public:
+	TypesStack(JSContext* cx) {
+		data = new Vector<StackType>(cx);
+	}
+	void pushN(StackType stackType, unsigned int n) {
+		while (n > 0) {
+			data->append(stackType);
+			n--;
+		}
+	}
+	void push(StackType stackType) {
+		pushN(stackType, 1);
+	}
+	StackType pop() {
+		return data->popCopy();
+	}
+	void popN(unsigned int n) {
+		while (n > 0) {
+			data->popBack();
+			n--;
+		}
+	}
+	unsigned int length() {
+		return data->length();
+	}
+	~TypesStack() {
+		data->clearAndFree();
+	}
+};
+
+char *getAtom(JSScript *script, jsbytecode *pc, JSContext *cx) {
+	Value v = StringValue(script->getAtom(GET_UINT32_INDEX(pc)));
+	if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(v)))
+		JSObject * obj = JSVAL_TO_OBJECT(v);
+
+	return JS_EncodeString(cx, v.toString());
+}
+
+void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
+	JS_DumpBytecode(cx, fn->script());
+	BindingNames names(cx);
+	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
+			fn->script()->bindings.numVars());
+	fn->script()->bindings.getLocalNameArray(cx, &names);
+	for (size_t i = 0;
+			i
+					< fn->script()->bindings.numArgs()
+							+ fn->script()->bindings.numVars(); i++) {
+		JSAtom *name = names[i].maybeAtom;
+		fprintf(stderr, "%s\n",
+				JS_EncodeString(cx, StringValue(name).toString()));
+
+	}
+//					fn->dump();
+
+	char * fun_source = JS_EncodeString(cx,
+			StringValue(fun_toStringHelper(cx, obj, 0)).toString());
+	fprintf(stderr, "%s\n", fun_source);
+
+	JSScript * script = fn->script();
+	unsigned length = script->length;
+	TypesStack typesStack(cx);
+	unsigned offset, nextOffset = 0;
+	StackType assigned_type;
+
+	enum {
+		SAFE, UNSAFE, ARGSBASED
+	} funState;
+
+	funState = SAFE;
+
+	while (nextOffset < length) {
+		offset = nextOffset;
+		jsbytecode *pc = script->code + offset;
+
+		JSOp op = (JSOp) *pc;
+		JS_ASSERT(op < JSOP_LIMIT);
+		/* Immediate successor of this bytecode. */
+		unsigned successorOffset = offset + GetBytecodeLength(pc);
+
+		/*
+		 * Next bytecode to analyze.  This is either the successor, or is an
+		 * earlier bytecode if this bytecode has a loop backedge.
+		 */
+		nextOffset = successorOffset;
+		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
+		switch (op) {
+		case JSOP_POPV:
+		case JSOP_LEAVEWITH:
+		case JSOP_RETURN:
+		case JSOP_GOTO:
+		case JSOP_IFEQ:
+		case JSOP_IFNE:
+		case JSOP_POPN:
+		case JSOP_TABLESWITCH:
+		case JSOP_LOOKUPSWITCH:
+		case JSOP_ENDITER:
+		case JSOP_POP:
+		case JSOP_ENDINIT:
+		case JSOP_UNUSED15:
+		case JSOP_LEAVEFORLETIN:
+		case JSOP_LABEL:
+		case JSOP_UNUSED3:
+		case JSOP_LOOPHEAD:
+		case JSOP_THROW:
+		case JSOP_DEBUGGER:
+		case JSOP_GOSUB:
+		case JSOP_RETSUB:
+		case JSOP_LINENO:
+		case JSOP_CONDSWITCH:
+		case JSOP_DEFAULT:
+		case JSOP_ENUMELEM:
+		case JSOP_GETTER:
+		case JSOP_SETTER:
+		case JSOP_DEFFUN:
+		case JSOP_DEFCONST:
+		case JSOP_DEFVAR:
+		case JSOP_UNUSED31:
+		case JSOP_PICK:
+		case JSOP_TRY:
+		case JSOP_UNUSED8:
+		case JSOP_UNUSED9:
+		case JSOP_UNUSED10:
+		case JSOP_UNUSED11:
+		case JSOP_UNUSED12:
+		case JSOP_UNUSED13:
+		case JSOP_BACKPATCH:
+		case JSOP_BACKPATCH_POP:
+		case JSOP_THROWING:
+		case JSOP_SETRVAL:
+		case JSOP_RETRVAL:
+		case JSOP_DEFXMLNS:
+		case JSOP_UNUSED18:
+		case JSOP_UNUSED19:
+		case JSOP_UNUSED20:
+		case JSOP_STARTXML:
+		case JSOP_STARTXMLEXPR:
+		case JSOP_STOP:
+		case JSOP_LEAVEBLOCK:
+		case JSOP_UNUSED1:
+		case JSOP_UNUSED2:
+		case JSOP_GENERATOR:
+		case JSOP_ARRAYPUSH:
+		case JSOP_ENUMCONSTELEM:
+		case JSOP_UNUSED21:
+		case JSOP_UNUSED22:
+		case JSOP_UNUSED23:
+		case JSOP_UNUSED17:
+		case JSOP_UNUSED24:
+		case JSOP_UNUSED25:
+		case JSOP_UNUSED29:
+		case JSOP_UNUSED30:
+		case JSOP_LOOPENTRY:
+			typesStack.popN(js_CodeSpec[op].nuses);
+			break;
+
+		case JSOP_UNDEFINED:
+		case JSOP_ZERO:
+		case JSOP_ONE:
+		case JSOP_NULL:
+		case JSOP_FALSE:
+		case JSOP_TRUE:
+			typesStack.popN(js_CodeSpec[op].nuses);
+			typesStack.pushN(CONST, js_CodeSpec[op].ndefs);
+			break;
+		case JSOP_ARGUMENTS:
+		case JSOP_GETARG:
+			typesStack.popN(js_CodeSpec[op].nuses);
+			typesStack.pushN(ARGUMENT, js_CodeSpec[op].ndefs);
+			break;
+		case JSOP_OBJECT:
+
+		case JSOP_GETLOCAL:
+		case JSOP_UINT16:
+		case JSOP_NEWARRAY:
+		case JSOP_NEWOBJECT:
+		case JSOP_INCARG:
+		case JSOP_DECARG:
+		case JSOP_ARGINC:
+		case JSOP_ARGDEC:
+		case JSOP_INCLOCAL:
+		case JSOP_DECLOCAL:
+		case JSOP_LOCALINC:
+		case JSOP_LOCALDEC:
+		case JSOP_SETLOCAL:
+		case JSOP_INT8:
+			//TODO: get the index?
+		case JSOP_INT32:
+		case JSOP_NOT:
+		case JSOP_BITNOT:
+		case JSOP_NEG:
+		case JSOP_POS:
+		case JSOP_TYPEOF:
+		case JSOP_VOID:
+		case JSOP_BITOR:
+		case JSOP_BITXOR:
+		case JSOP_BITAND:
+		case JSOP_EQ:
+		case JSOP_NE:
+		case JSOP_LT:
+		case JSOP_LE:
+		case JSOP_GT:
+		case JSOP_GE:
+		case JSOP_LSH:
+		case JSOP_RSH:
+		case JSOP_URSH:
+		case JSOP_ADD:
+		case JSOP_SUB:
+		case JSOP_MUL:
+		case JSOP_DIV:
+		case JSOP_MOD:
+		case JSOP_NEWINIT:
+		case JSOP_INITPROP:
+			typesStack.popN(js_CodeSpec[op].nuses);
+			typesStack.push(LOCAL);
+			break;
+		case JSOP_NAMEINC:
+		case JSOP_SETNAME:
+		case JSOP_BINDNAME:
+			typesStack.popN(js_CodeSpec[op].nuses);
+			typesStack.push(GLOBAL);
+			break;
+		case JSOP_NAME:
+			fprintf(stderr, "%s\n", getAtom(script, pc, cx));
+			typesStack.push(GLOBAL);
+			break;
+		case JSOP_GETELEM:
+			typesStack.pop();
+			typesStack.push(typesStack.pop());
+			fprintf(stderr, "get element??\n");
+			break;
+		case JSOP_SETELEM:
+			typesStack.pop();
+			assigned_type = typesStack.pop();
+			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
+				fprintf(stderr, "ASSIGN TO GLOBAL\n");
+			typesStack.push(assigned_type);
+			break;
+		case JSOP_SETPROP:
+			typesStack.pop();
+			assigned_type = typesStack.pop();
+			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
+				fprintf(stderr, "ASSIGN TO GLOBAL\n");
+			typesStack.push(assigned_type);
+			break;
+		case JSOP_CALL:
+
+			fprintf(stderr, "call (argc: %d)\n", GET_ARGC(pc));
+			typesStack.popN(GET_ARGC(pc) + 2);
+			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+			break;
+		case JSOP_CALLNAME: // what is the called function?
+
+		default:
+			if (op > 0 and op < 228) {
+				if (js_CodeSpec[op].nuses > 0)
+					typesStack.popN(js_CodeSpec[op].nuses);
+				typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+//				fprintf(stderr, "Unimplemented\n");
+				break;
+			} else
+				fprintf(stderr, "unknown op code: %s\n", js_CodeName[op]);
+			funState = UNSAFE;
+			break;
+		}
+
+	}
+
+	if (funState == UNSAFE) {
+
+	}
+	fprintf(stderr, "\n");
+}
+
 }
