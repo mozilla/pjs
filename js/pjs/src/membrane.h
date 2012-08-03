@@ -106,7 +106,7 @@ public:
 	bool wrap(JSObject **objp);
 	bool wrap(HeapPtrAtom *objp);
 
-	void analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx);
+	bool analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx, int* argIDs);
 
 	static bool IsCrossThreadWrapper(const JSObject *wrapper);
 

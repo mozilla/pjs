@@ -49,7 +49,7 @@ f1 = fork(function(obj) {
 	// Code to be inserted.
 //	pjs_analyze(this, arguments);
 //	v = 6;
-//	obj[0] = 5;
+	obj[0] = 5;
  	return obj[8];
 }, instance);
 
@@ -62,7 +62,7 @@ f1 = fork(function(obj) {
 f3 = fork(function(obj) {
 	// Code to be inserted.
 //	pjs_analyze(this, arguments);
-//	obj[0] = 5;
+	obj[0] = 5;
 	return obj[8];
 }, anarray);
 //

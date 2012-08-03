@@ -494,19 +494,20 @@ char *getAtom(JSScript *script, jsbytecode *pc, JSContext *cx) {
 	return JS_EncodeString(cx, v.toString());
 }
 
-void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
-	JS_DumpBytecode(cx, fn->script());
+bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
+		int *argIDs) {
+//	JS_DumpBytecode(cx, fn->script());
 	BindingNames names(cx);
-//	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
-//			fn->script()->bindings.numVars());
+	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
+			fn->script()->bindings.numVars());
 	fn->script()->bindings.getLocalNameArray(cx, &names);
 	for (size_t i = 0;
 			i
 					< fn->script()->bindings.numArgs()
 							+ fn->script()->bindings.numVars(); i++) {
 		JSAtom *name = names[i].maybeAtom;
-//		fprintf(stderr, "%s\n",
-//				JS_EncodeString(cx, StringValue(name).toString()));
+		fprintf(stderr, "%s\n",
+				JS_EncodeString(cx, StringValue(name).toString()));
 
 	}
 //					fn->dump();
@@ -686,13 +687,16 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 		case JSOP_GETELEM:
 			typesStack.pop();
 			typesStack.push(typesStack.pop());
-			fprintf(stderr, "get element??\n");
+//			fprintf(stderr, "get element??\n");
 			break;
 		case JSOP_SETELEM:
 			typesStack.pop();
+			typesStack.pop();
 			assigned_type = typesStack.pop();
 			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
-				fprintf(stderr, "ASSIGN TO GLOBAL\n");
+				JS_ReportError(cx,
+						"Cannot define a property on a parent object");
+			return false;
 			typesStack.push(assigned_type);
 			break;
 		case JSOP_SETPROP:
@@ -703,8 +707,9 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 			typesStack.push(assigned_type);
 			break;
 		case JSOP_GETPROP:
-			fprintf(stderr, "get prop??\n")
-			typesStack.popN(js_CodeSpec[op].nuses);
+			assigned_type = typesStack.pop();
+			if (assigned_type == ARGUMENT)
+				argIDs[0] = 1;
 			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
 			break;
 		case JSOP_CALL:
@@ -733,7 +738,7 @@ void Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx) {
 	if (funState == UNSAFE) {
 
 	}
-	fprintf(stderr, "\n");
+	return true;
 }
 
 }

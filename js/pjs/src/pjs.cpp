@@ -450,11 +450,8 @@ JSBool pjs_analyze(JSContext *cx, unsigned argc, jsval *vp) {
 //	taskContext->getMembrane()->wrap(
 //			&OBJECT_TO_JSVAL(argObj->containingScript()->function()), false);
 
-
-
 //	JS_DumpBytecode(cx, script);
 	BindingNames names(cx);
-
 
 //	fprintf(stderr, "%d, %d\n", script->bindings.numArgs(),
 //			script->bindings.numVars());
@@ -643,10 +640,14 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	// Wrap the function:
 	int p = 0;
 	AutoValueRooter fn(cx, _toProxy[p++]);
+	int args[_argc];
+	if (!m->analyzeFunction((JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
+			JSVAL_TO_OBJECT(*fn.addr()), cx, args))
+		return false;
 	if (!m->wrap(fn.addr())) {
 		return false;
 	}
-	m->analyzeFunction((JSFunction*)JSVAL_TO_OBJECT(*fn.addr()), JSVAL_TO_OBJECT(*fn.addr()), cx);
+
 	JS_ASSERT(ValueIsFunction(cx, fn.value()));
 
 	auto_arr<jsval> argv(new jsval[_argc]); // ensure it gets freed
@@ -655,7 +656,8 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
 	for (int i = 0; i < _argc; i++) {
 		argv[i] = _toProxy[p++];
-		if (!m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
+		if (args[i] == 1
+				&& !m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
 			return JS_FALSE;
 	}
 
@@ -720,8 +722,8 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 			jsval pval;
 			if (!JS_GetPropertyById(cx, parentGlobal, pid, &pval))
 				return false;
-//			if (!m->wrap(&pval))
-//				return false;
+			if (!m->wrap(&pval))
+				return false;
 			AutoReadOnly rw(cx, false);
 			if (!JS_SetPropertyById(cx, global, cid, &pval))
 				return false;
