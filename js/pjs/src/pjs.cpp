@@ -633,7 +633,7 @@ void Closure::delRoots() {
 Closure::~Closure() {
 	delRoots();
 }
-static PRLock *debugLock = PR_NewLock();
+//static PRLock *debugLock = PR_NewLock();
 
 JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 		jsval *rval) {
@@ -656,6 +656,13 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
 	for (int i = 0; i < _argc; i++) {
 		argv[i] = _toProxy[p++];
+		if (args[i] == 2) {
+			if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(argv[i]))) {
+				JSObject *objArg = JSVAL_TO_OBJECT(argv[i]);
+				if (objArg->propertyCount() > 0)
+					args[i] = 1;
+			}
+		}
 		if (args[i] == 1
 				&& !m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
 			return JS_FALSE;
@@ -698,7 +705,7 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 		return false;
 	}
 
-	// add (proxied) globals
+// add (proxied) globals
 	{
 		AutoReadOnly ro(cx);
 		JSObject *parentGlobal = _parent->global();
@@ -736,12 +743,12 @@ JSBool ChildTaskHandle::execute(JSContext *cx, JSObject *global,
 
 ChildTaskHandle *ChildTaskHandle::create(JSContext *cx, TaskContext *parent,
 		auto_ptr<Closure> &closure) {
-	// To start, create the JS object representative:
+// To start, create the JS object representative:
 	JSObject *object = JS_NewObject(cx, &jsClass, NULL, NULL);
 	if (!object)
 		return NULL;
 
-	// Create C++ object:
+// Create C++ object:
 	ChildTaskHandle *th = new ChildTaskHandle(cx, parent, object, closure);
 	th->addRoot(cx);
 	return th;
@@ -804,27 +811,27 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, unsigned argc, jsval *vp) {
 			cx));
 	JSObject *self = JS_THIS_OBJECT(cx, vp);
 
-	// Is this a proxied task handle?
+// Is this a proxied task handle?
 	if (Membrane::IsCrossThreadWrapper(self)) {
 		JS_ReportError(cx, "all child tasks not yet completed");
 		return JS_FALSE;
 	}
 
-	// Sanity check
+// Sanity check
 // TODO: pjs disabled: sanity check no longer valid?
 //	if (!JS_InstanceOf(cx, self, &jsClass, NULL)) {
 //		JS_ReportError(cx, "expected TaskHandle as this");
 //		return JS_FALSE;
 //	}
 
-	// Check if the generation has completed:
+// Check if the generation has completed:
 	jsval ready = JS_GetReservedSlot(self, ReadySlot);
 	if (ready != JSVAL_TRUE) {
 		JS_ReportError(cx, "all child tasks not yet completed");
 		return JS_FALSE;
 	}
 
-	// If it has, there should be a value waiting for us:
+// If it has, there should be a value waiting for us:
 	*vp = JS_GetReservedSlot(self, ResultSlot);
 	return JS_TRUE;
 }
@@ -834,13 +841,13 @@ JSBool ChildTaskHandle::jsGet(JSContext *cx, unsigned argc, jsval *vp) {
 
 TaskContext *TaskContext::create(JSContext *cx, TaskHandle *aTask,
 		Runner *aRunner, JSObject *aGlobal) {
-	// To start, create the JS object representative:
+// To start, create the JS object representative:
 	JSObject *object = JS_NewObject(cx, &jsClass, NULL, NULL);
 	if (!object) {
 		return NULL;
 	}
 
-	// Create C++ object:
+// Create C++ object:
 	auto_ptr<TaskContext> tc(
 			new TaskContext(cx, aTask, aRunner, aGlobal, object));
 	if (!tc.get() || !tc->addRoot(cx)) {
@@ -904,8 +911,8 @@ void TaskContext::resume(Runner *runner) {
 
 	PJS_ASSERT_CX(cx, _checkCx);
 
-	// If we break from this loop, this task context has completed,
-	// either in error or successfully:
+// If we break from this loop, this task context has completed,
+// either in error or successfully:
 	while (true) {
 		rval = JSVAL_NULL;
 
@@ -943,13 +950,13 @@ void TaskContext::resume(Runner *runner) {
 		break;
 	}
 
-	// we have finished, notify parent.
+// we have finished, notify parent.
 	_taskHandle->onCompleted(runner, rval);
 	delRoot(cx);
-	// release the membrane to prevent it from getting deleted with the TaskContext
+// release the membrane to prevent it from getting deleted with the TaskContext
 	Membrane *m = _membrane.release();
-	// release the membrane proxies, so that they would get Garbage Collected.
-	// the membrane itself is deleted when all proxies are finalized.
+// release the membrane proxies, so that they would get Garbage Collected.
+// the membrane itself is deleted when all proxies are finalized.
 	if (m)
 		m->releaseProxies();
 	delete this;
@@ -1076,9 +1083,9 @@ void Runner::reawaken(TaskContext *ctx) {
 		_toReawaken.append(ctx);
 	}
 
-	// FIXME--This is kind of lame.  only the current runner has new
-	// work here, but there is no easy way to atomically check whether
-	// the current runner is idle and only signal in that case.
+// FIXME--This is kind of lame.  only the current runner has new
+// work here, but there is no easy way to atomically check whether
+// the current runner is idle and only signal in that case.
 	_threadPool->signalNewWork();
 }
 
@@ -1086,7 +1093,7 @@ void Runner::enqueueRootTask(RootTaskHandle *p) {
 	AutoLock hold(_runnerLock);
 	_toCreate.push_front(p);
 	_stats[PJS_TASK_ENQUEUED] += 1;
-	// no need to signal new work for the root task.
+// no need to signal new work for the root task.
 }
 
 void Runner::enqueueTasks(ChildTaskHandle **begin, ChildTaskHandle **end) {
@@ -1186,28 +1193,28 @@ void ThreadPool::start(void* arg) {
 void ThreadPool::signalNewWork() {
 	AutoLock hold(_tpLock);
 
-	// Increment work counter.  The low bit indicates whether there
-	// are idle (unsignaled) workers hanging around.  If there are,
-	// then notify.
+// Increment work counter.  The low bit indicates whether there
+// are idle (unsignaled) workers hanging around.  If there are,
+// then notify.
 	_workCounter++;
 	if (_idlingWorkers) {
 		PR_NotifyAllCondVar(_tpCondVar);
 		_idlingWorkers = false;
 	}
 
-	// I don't worry about overflow.  There is one bad case: if some
-	// worker reads the new work counter when it has value X, searches
-	// unsuccessfully for work, then idles while a whole lot of work
-	// comes in.  If there is just the right amount of work, the
-	// counter might roll-over and reach X again, thus deceiving the
-	// worker into thinking nothing had happened.  The worker would
-	// then go to sleep and (unless more work was produced, which it
-	// probably would be) never awake.  This seems rather unlikely so
-	// I am not overly concerned.  Even if it did happen, it would
-	// mean a loss of parallelism but not that PJs itself would
-	// completely stall. I am not sure if there is any way to prevent
-	// it that doesn't create bigger problems than the problem it's
-	// trying to solve.
+// I don't worry about overflow.  There is one bad case: if some
+// worker reads the new work counter when it has value X, searches
+// unsuccessfully for work, then idles while a whole lot of work
+// comes in.  If there is just the right amount of work, the
+// counter might roll-over and reach X again, thus deceiving the
+// worker into thinking nothing had happened.  The worker would
+// then go to sleep and (unless more work was produced, which it
+// probably would be) never awake.  This seems rather unlikely so
+// I am not overly concerned.  Even if it did happen, it would
+// mean a loss of parallelism but not that PJs itself would
+// completely stall. I am not sure if there is any way to prevent
+// it that doesn't create bigger problems than the problem it's
+// trying to solve.
 }
 
 workCounter_t ThreadPool::readWorkCounter() {

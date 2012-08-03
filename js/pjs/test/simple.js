@@ -20,9 +20,9 @@ f3 = fork(function(obj) {
 }, b);
 
 oncompletion(function() {
-//	print(f1.get());
-//	print(f2.get()); // should return an error.
-//	print(f3.get());
+	print(f1.get());
+	print(f2.get()); // should return an error or null.
+	print(f3.get()); // should return an error or null.
 	print(a[0]);
 	print(a[1]);
 });

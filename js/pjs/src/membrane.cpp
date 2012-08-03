@@ -448,33 +448,43 @@ void Membrane::releaseProxies() {
 
 }
 
-enum StackType {
+enum EntryType {
 	CONST, LOCAL, GLOBAL, UNDEFINED, ARGUMENT
+};
+
+class StackEntry {
+public:
+	EntryType type;
+	int index;
+	StackEntry(EntryType type, int index) :
+			type(type), index(index) {
+	}
 };
 
 class TypesStack {
 private:
-	Vector<StackType> * data;
+	Vector<StackEntry*> *data;
 
 public:
 	TypesStack(JSContext* cx) {
-		data = new Vector<StackType>(cx);
+		data = new Vector<StackEntry*>(cx);
 	}
-	void pushN(StackType stackType, unsigned int n) {
+	void pushN(EntryType type, unsigned int n, int index = -1) {
 		while (n > 0) {
-			data->append(stackType);
+			data->append(new StackEntry(type, index));
 			n--;
 		}
 	}
-	void push(StackType stackType) {
-		pushN(stackType, 1);
+	void push(EntryType type, int index = -1) {
+		pushN(type, 1, index);
 	}
-	StackType pop() {
+	StackEntry *pop() {
 		return data->popCopy();
 	}
 	void popN(unsigned int n) {
 		while (n > 0) {
 			data->popBack();
+//			free(entry);
 			n--;
 		}
 	}
@@ -497,19 +507,19 @@ char *getAtom(JSScript *script, jsbytecode *pc, JSContext *cx) {
 bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		int *argIDs) {
 //	JS_DumpBytecode(cx, fn->script());
-	BindingNames names(cx);
-	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
-			fn->script()->bindings.numVars());
-	fn->script()->bindings.getLocalNameArray(cx, &names);
-	for (size_t i = 0;
-			i
-					< fn->script()->bindings.numArgs()
-							+ fn->script()->bindings.numVars(); i++) {
-		JSAtom *name = names[i].maybeAtom;
-		fprintf(stderr, "%s\n",
-				JS_EncodeString(cx, StringValue(name).toString()));
-
-	}
+//	BindingNames names(cx);
+//	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
+//			fn->script()->bindings.numVars());
+//	fn->script()->bindings.getLocalNameArray(cx, &names);
+//	for (size_t i = 0;
+//			i
+//					< fn->script()->bindings.numArgs()
+//							+ fn->script()->bindings.numVars(); i++) {
+//		JSAtom *name = names[i].maybeAtom;
+//		fprintf(stderr, "%s\n",
+//				JS_EncodeString(cx, StringValue(name).toString()));
+//
+//	}
 //					fn->dump();
 
 	char * fun_source = JS_EncodeString(cx,
@@ -520,7 +530,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 	unsigned length = script->length;
 	TypesStack typesStack(cx);
 	unsigned offset, nextOffset = 0;
-	StackType assigned_type;
+	StackEntry *assigned_entry;
 
 	enum {
 		SAFE, UNSAFE, ARGSBASED
@@ -624,8 +634,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			break;
 		case JSOP_ARGUMENTS:
 		case JSOP_GETARG:
-			typesStack.popN(js_CodeSpec[op].nuses);
-			typesStack.pushN(ARGUMENT, js_CodeSpec[op].ndefs);
+			typesStack.push(ARGUMENT, GET_ARGNO(pc));
 			break;
 		case JSOP_OBJECT:
 
@@ -675,7 +684,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			break;
 		case JSOP_NAMEINC:
 		case JSOP_SETNAME:
-			fprintf(stderr, "SETNAME: %s\n", getAtom(script, pc, cx));
+//			fprintf(stderr, "SETNAME: %s\n", getAtom(script, pc, cx));
 		case JSOP_BINDNAME:
 			typesStack.popN(js_CodeSpec[op].nuses);
 			typesStack.push(GLOBAL);
@@ -685,35 +694,45 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			typesStack.push(GLOBAL);
 			break;
 		case JSOP_GETELEM:
-			typesStack.pop();
-			typesStack.push(typesStack.pop());
-//			fprintf(stderr, "get element??\n");
+			typesStack.popN(1);
+			assigned_entry = typesStack.pop();
+			typesStack.push(assigned_entry->type);
+			if (assigned_entry->type == GLOBAL
+					|| assigned_entry->type == ARGUMENT) {
+				argIDs[assigned_entry->index] = 2;
+			}
+			free(assigned_entry);
 			break;
 		case JSOP_SETELEM:
-			typesStack.pop();
-			typesStack.pop();
-			assigned_type = typesStack.pop();
-			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
+			typesStack.popN(js_CodeSpec[op].nuses - 1);
+			assigned_entry = typesStack.pop();
+			if (assigned_entry->type == GLOBAL
+					|| assigned_entry->type == ARGUMENT) {
 				JS_ReportError(cx,
-						"Cannot define a property on a parent object");
-			return false;
-			typesStack.push(assigned_type);
+						"%s:%d: Cannot define a property on a parent object",
+						script->filename, JS_PCToLineNumber(cx, script, pc));
+				return false;
+			}
+			typesStack.push(assigned_entry->type);
+			free(assigned_entry);
 			break;
 		case JSOP_SETPROP:
 			typesStack.pop();
-			assigned_type = typesStack.pop();
-			if (assigned_type == GLOBAL || assigned_type == ARGUMENT)
+			assigned_entry = typesStack.pop();
+			if (assigned_entry->type == GLOBAL
+					|| assigned_entry->type == ARGUMENT)
 				fprintf(stderr, "ASSIGN TO GLOBAL\n");
-			typesStack.push(assigned_type);
+			typesStack.push(assigned_entry->type);
+			free(assigned_entry);
 			break;
 		case JSOP_GETPROP:
-			assigned_type = typesStack.pop();
-			if (assigned_type == ARGUMENT)
-				argIDs[0] = 1;
+			assigned_entry = typesStack.pop();
+			if (assigned_entry->type == ARGUMENT)
+				argIDs[assigned_entry->index] = 1;
 			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+			free(assigned_entry);
 			break;
 		case JSOP_CALL:
-
 			fprintf(stderr, "call (argc: %d)\n", GET_ARGC(pc));
 			typesStack.popN(GET_ARGC(pc) + 2);
 			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
@@ -725,7 +744,6 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 				if (js_CodeSpec[op].nuses > 0)
 					typesStack.popN(js_CodeSpec[op].nuses);
 				typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
-//				fprintf(stderr, "Unimplemented\n");
 				break;
 			} else
 				fprintf(stderr, "unknown op code: %s\n", js_CodeName[op]);
