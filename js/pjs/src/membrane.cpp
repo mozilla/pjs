@@ -368,8 +368,8 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 			if (fn->isNativeConstructor()) // Assuming all native constructors does not mutate the arguments.
 				return true;
 			if (!isSafeNative(fn->native())) {
-				fprintf(stderr, "%s\n",
-						JS_EncodeString(cx, StringValue(fn->atom).toString()));
+//				fprintf(stderr, "%s\n",
+//						JS_EncodeString(cx, StringValue(fn->atom).toString()));
 				JS_ReportError(cx, "Cannot access native functions "
 						"from child tasks");
 				return false;
@@ -554,74 +554,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		nextOffset = successorOffset;
 //		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
 		switch (op) {
-		case JSOP_POPV:
-		case JSOP_LEAVEWITH:
-		case JSOP_RETURN:
-		case JSOP_GOTO:
-		case JSOP_IFEQ:
-		case JSOP_IFNE:
-		case JSOP_POPN:
-		case JSOP_TABLESWITCH:
-		case JSOP_LOOKUPSWITCH:
-		case JSOP_ENDITER:
-		case JSOP_POP:
-		case JSOP_ENDINIT:
-		case JSOP_UNUSED15:
-		case JSOP_LEAVEFORLETIN:
-		case JSOP_LABEL:
-		case JSOP_UNUSED3:
-		case JSOP_LOOPHEAD:
-		case JSOP_THROW:
-		case JSOP_DEBUGGER:
-		case JSOP_GOSUB:
-		case JSOP_RETSUB:
-		case JSOP_LINENO:
-		case JSOP_CONDSWITCH:
-		case JSOP_DEFAULT:
-		case JSOP_ENUMELEM:
-		case JSOP_GETTER:
-		case JSOP_SETTER:
-		case JSOP_DEFFUN:
-		case JSOP_DEFCONST:
-		case JSOP_DEFVAR:
-		case JSOP_UNUSED31:
-		case JSOP_PICK:
-		case JSOP_TRY:
-		case JSOP_UNUSED8:
-		case JSOP_UNUSED9:
-		case JSOP_UNUSED10:
-		case JSOP_UNUSED11:
-		case JSOP_UNUSED12:
-		case JSOP_UNUSED13:
-		case JSOP_BACKPATCH:
-		case JSOP_BACKPATCH_POP:
-		case JSOP_THROWING:
-		case JSOP_SETRVAL:
-		case JSOP_RETRVAL:
-		case JSOP_DEFXMLNS:
-		case JSOP_UNUSED18:
-		case JSOP_UNUSED19:
-		case JSOP_UNUSED20:
-		case JSOP_STARTXML:
-		case JSOP_STARTXMLEXPR:
-		case JSOP_STOP:
-		case JSOP_LEAVEBLOCK:
-		case JSOP_UNUSED1:
-		case JSOP_UNUSED2:
-		case JSOP_GENERATOR:
-		case JSOP_ARRAYPUSH:
-		case JSOP_ENUMCONSTELEM:
-		case JSOP_UNUSED21:
-		case JSOP_UNUSED22:
-		case JSOP_UNUSED23:
-		case JSOP_UNUSED17:
-		case JSOP_UNUSED24:
-		case JSOP_UNUSED25:
-		case JSOP_UNUSED29:
-		case JSOP_UNUSED30:
-		case JSOP_LOOPENTRY:
-			typesStack.popN(js_CodeSpec[op].nuses);
-			break;
+
 
 		case JSOP_UNDEFINED:
 		case JSOP_ZERO:
@@ -637,7 +570,6 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			typesStack.push(ARGUMENT, GET_ARGNO(pc));
 			break;
 		case JSOP_OBJECT:
-
 		case JSOP_GETLOCAL:
 		case JSOP_UINT16:
 		case JSOP_NEWARRAY:
@@ -690,7 +622,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			typesStack.push(GLOBAL);
 			break;
 		case JSOP_NAME:
-			fprintf(stderr, "%s\n", getAtom(script, pc, cx));
+//			fprintf(stderr, "%s\n", getAtom(script, pc, cx));
 			typesStack.push(GLOBAL);
 			break;
 		case JSOP_GETELEM:
@@ -721,7 +653,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			assigned_entry = typesStack.pop();
 			if (assigned_entry->type == GLOBAL
 					|| assigned_entry->type == ARGUMENT)
-				fprintf(stderr, "ASSIGN TO GLOBAL\n");
+//				fprintf(stderr, "ASSIGN TO GLOBAL\n");
 			typesStack.push(assigned_entry->type);
 			free(assigned_entry);
 			break;
@@ -733,11 +665,22 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			free(assigned_entry);
 			break;
 		case JSOP_CALL:
-			fprintf(stderr, "call (argc: %d)\n", GET_ARGC(pc));
 			typesStack.popN(GET_ARGC(pc) + 2);
 			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
 			break;
-		case JSOP_CALLNAME: // what is the called function?
+		case JSOP_DUP:
+			assigned_entry = typesStack.pop();
+			typesStack.push(assigned_entry->type, assigned_entry->index);
+			typesStack.push(assigned_entry->type, assigned_entry->index);
+			free(assigned_entry);
+			break;
+		case JSOP_CALLPROP:
+			assigned_entry = typesStack.pop();
+			if(assigned_entry->type == ARGUMENT)
+				argIDs[assigned_entry->index] = 1;
+			typesStack.push(assigned_entry->type, assigned_entry->index);
+						free(assigned_entry);
+			break;
 
 		default:
 			if (op > 0 and op < 228) {

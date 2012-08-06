@@ -7,17 +7,35 @@ b.__defineGetter__("p", function() {
 });
 
 f1 = fork(function(obj) {
-	return obj[3];
+	return obj[3]; // no proxy should be used here.
 }, a);
 
 f2 = fork(function(obj) {
-	obj[0] = 4;
+	obj[0] = 4; // rejected during the analysis.
 	return 0;
 }, a);
 
 f3 = fork(function(obj) {
-	return obj.p;
+	return obj.p; // proxied and error is printed during runtime.
+	obj.p();
+	obj().p;
 }, b);
+
+// XXX --- would require proxy due to indirect prop access
+//f4 = fork(function(obj) {
+//	return obj[0].p;
+//}, [b]);
+//
+//f5 = fork(function(obj) {
+//	foo = {};
+//	foo.p = 6;
+//}, [b]);
+//
+//f5 = fork(function(bool, obj) {
+//	foo = {};
+//	if (bool) { foo = obj; }
+//	foo.p = 6;
+//}, true, [b]);
 
 oncompletion(function() {
 	print(f1.get());
