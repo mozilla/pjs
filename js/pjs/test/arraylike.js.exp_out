@@ -1,2 +1,10 @@
-0
+instance[9] : has prototype true
+instance[8] : has prototype true
+test[8] : has prototype true
+anarray[8] : has prototype false
+asecondarray[8] : has prototype false
+null
+null
+undefined
+undefined
 0
