@@ -555,7 +555,6 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 //		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
 		switch (op) {
 
-
 		case JSOP_UNDEFINED:
 		case JSOP_ZERO:
 		case JSOP_ONE:
@@ -652,8 +651,12 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			typesStack.pop();
 			assigned_entry = typesStack.pop();
 			if (assigned_entry->type == GLOBAL
-					|| assigned_entry->type == ARGUMENT)
-//				fprintf(stderr, "ASSIGN TO GLOBAL\n");
+					|| assigned_entry->type == ARGUMENT) {
+				JS_ReportError(cx,
+						"%s:%d: Cannot define a property on a parent object",
+						script->filename, JS_PCToLineNumber(cx, script, pc));
+				return false;
+			}
 			typesStack.push(assigned_entry->type);
 			free(assigned_entry);
 			break;
@@ -676,17 +679,20 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			break;
 		case JSOP_CALLPROP:
 			assigned_entry = typesStack.pop();
-			if(assigned_entry->type == ARGUMENT)
+			if (assigned_entry->type == ARGUMENT)
 				argIDs[assigned_entry->index] = 1;
 			typesStack.push(assigned_entry->type, assigned_entry->index);
-						free(assigned_entry);
+			free(assigned_entry);
 			break;
 
 		default:
 			if (op > 0 and op < 228) {
 				if (js_CodeSpec[op].nuses > 0)
 					typesStack.popN(js_CodeSpec[op].nuses);
-				typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+				if (js_CodeSpec[op].ndefs > 0)
+					typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+				else
+					typesStack.pushN(UNDEFINED, GET_ARGC(pc));
 				break;
 			} else
 				fprintf(stderr, "unknown op code: %s\n", js_CodeName[op]);
