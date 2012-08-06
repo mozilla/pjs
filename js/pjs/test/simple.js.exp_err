@@ -1,0 +1,2 @@
+test/simple.js:5:Error: Cannot define a property on a parent object
+<no filename>:0:test/simple.js:14: Cannot define a property on a parent object
