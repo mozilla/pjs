@@ -309,7 +309,6 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 			if (isArg /*|| obj->getSlot(DataViewObject::PJS_TASK_ID).asRawBits() == 1*/)
 				return true;
 		}
-
 	}
 
 	/* If we already have a wrapper for this value, use it. */
@@ -479,12 +478,14 @@ public:
 		pushN(type, 1, index);
 	}
 	StackEntry *pop() {
-		return data->popCopy();
+		if (this->length() > 0)
+			return data->popCopy();
+		fprintf(stderr, "empty types stack\n");
+		return NULL;
 	}
 	void popN(unsigned int n) {
 		while (n > 0) {
-			data->popBack();
-//			free(entry);
+			free(pop());
 			n--;
 		}
 	}
@@ -532,17 +533,15 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 	unsigned offset, nextOffset = 0;
 	StackEntry *assigned_entry;
 
-	enum {
-		SAFE, UNSAFE, ARGSBASED
-	} funState;
-
-	funState = SAFE;
-
+	JSOp prevop = JSOP_NOP;
+//	fprintf(stderr, "\n");
 	while (nextOffset < length) {
+
 		offset = nextOffset;
 		jsbytecode *pc = script->code + offset;
 
 		JSOp op = (JSOp) *pc;
+		prevop = op;
 		JS_ASSERT(op < JSOP_LIMIT);
 		/* Immediate successor of this bytecode. */
 		unsigned successorOffset = offset + GetBytecodeLength(pc);
@@ -552,9 +551,8 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		 * earlier bytecode if this bytecode has a loop backedge.
 		 */
 		nextOffset = successorOffset;
-//		fprintf(stderr, "%s : %d\n", js_CodeName[op], typesStack.length());
-		switch (op) {
 
+		switch (op) {
 		case JSOP_UNDEFINED:
 		case JSOP_ZERO:
 		case JSOP_ONE:
@@ -583,7 +581,6 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		case JSOP_LOCALDEC:
 		case JSOP_SETLOCAL:
 		case JSOP_INT8:
-			//TODO: get the index?
 		case JSOP_INT32:
 		case JSOP_NOT:
 		case JSOP_BITNOT:
@@ -627,11 +624,9 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		case JSOP_GETELEM:
 			typesStack.popN(1);
 			assigned_entry = typesStack.pop();
-			typesStack.push(assigned_entry->type);
-			if (assigned_entry->type == GLOBAL
-					|| assigned_entry->type == ARGUMENT) {
+			typesStack.push(assigned_entry->type, assigned_entry->index);
+			if (assigned_entry->type == ARGUMENT)
 				argIDs[assigned_entry->index] = 2;
-			}
 			free(assigned_entry);
 			break;
 		case JSOP_SETELEM:
@@ -644,7 +639,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 						script->filename, JS_PCToLineNumber(cx, script, pc));
 				return false;
 			}
-			typesStack.push(assigned_entry->type);
+			typesStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_SETPROP:
@@ -657,14 +652,15 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 						script->filename, JS_PCToLineNumber(cx, script, pc));
 				return false;
 			}
-			typesStack.push(assigned_entry->type);
+			typesStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_GETPROP:
 			assigned_entry = typesStack.pop();
 			if (assigned_entry->type == ARGUMENT)
 				argIDs[assigned_entry->index] = 1;
-			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+			typesStack.pushN(assigned_entry->type, js_CodeSpec[op].ndefs,
+					assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_CALL:
@@ -687,24 +683,20 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 
 		default:
 			if (op > 0 and op < 228) {
-				if (js_CodeSpec[op].nuses > 0)
+				if (js_CodeSpec[op].nuses >= 0)
 					typesStack.popN(js_CodeSpec[op].nuses);
-				if (js_CodeSpec[op].ndefs > 0)
+				if (js_CodeSpec[op].ndefs >= 0)
 					typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
 				else
 					typesStack.pushN(UNDEFINED, GET_ARGC(pc));
 				break;
 			} else
 				fprintf(stderr, "unknown op code: %s\n", js_CodeName[op]);
-			funState = UNSAFE;
 			break;
 		}
-
+//		fprintf(stderr, "%s : %d\n", js_CodeName[prevop], typesStack.length());
 	}
 
-	if (funState == UNSAFE) {
-
-	}
 	return true;
 }
 

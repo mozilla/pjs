@@ -17,15 +17,13 @@ f2 = fork(function(obj) {
 
 f3 = fork(function(obj) {
 	return obj.p; // proxied and error is printed during runtime.
-	obj.p();
-	obj().p;
 }, b);
 
 // XXX --- would require proxy due to indirect prop access
-//f4 = fork(function(obj) {
-//	return obj[0].p;
-//}, [b]);
-//
+// f4 = fork(function(obj) {
+// 	return obj[0].p;
+// }, [b]);
+
 //f5 = fork(function(obj) {
 //	foo = {};
 //	foo.p = 6;
