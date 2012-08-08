@@ -339,25 +339,17 @@ JSBool fork(JSContext *cx, unsigned argc, jsval *vp) {
 }
 
 JSBool wrap(JSContext *cx, unsigned argc, jsval *vp) {
-//	//		if (!m->analyzeFunction((JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
-//	//				JSVAL_TO_OBJECT(*fn.addr()), cx, args))
-//	//			return false;
-//	//
-//	//			if (args[i] == 2) {
-//	//				if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(argv[i]))) {
-//	//					JSObject *objArg = JSVAL_TO_OBJECT(argv[i]);
-//	//					if (objArg->propertyCount() > 0)
-//	//						args[i] = 1;
-//	//				}
-//	//			}
-//	//			if (args[i] == 1
-//	//					&& !m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
-//	//				return JS_FALSE;
-//	//		}
-
+	int args[argc];
+	for (int i = 0; i < argc; i++)
+		args[i] = ArgSafe;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 	jsval *argv = JS_ARGV(cx, vp);
 	AutoValueRooter fn(cx, argv[0]);
-	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	if (!taskContext->getMembrane()->analyzeFunction(
+			(JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
+			JSVAL_TO_OBJECT(*fn.addr()), cx, args))
+		return false;
+
 	if (!taskContext->getMembrane()->wrap(fn.addr(), false))
 		return JS_FALSE;
 	JS_ASSERT(ValueIsFunction(cx, fn.value()));
@@ -368,8 +360,19 @@ JSBool wrap(JSContext *cx, unsigned argc, jsval *vp) {
 	AutoArrayRooter argvRoot(cx, argc, rargv.get()); // ensure it is rooted
 	for (int i = 0; i < (argc - 1); i++) {
 		rargv[i] = argv[i + 1];
-		if (!taskContext->getMembrane()->wrap(&rargv[i]))
-			return JS_FALSE;
+		if (args[i] == ArgPropertySafe) {
+			if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(rargv[i]))) {
+				JSObject *objArg = JSVAL_TO_OBJECT(rargv[i]);
+				if (objArg->propertyCount() > 0)
+					args[i] = ArgUnsafe;
+			}
+		}
+		//FIXME: check if context safe arguments are thread-local,
+		// if they are, remove the proxy
+		if (args[i] == ArgUnsafe || args[i] == ArgContextSafe) {
+			if (!taskContext->getMembrane()->wrap(&rargv[i]))
+				return JS_FALSE;
+		}
 	}
 
 	Value *res = new Value(); // TODO: ensure it gets freed??
@@ -615,7 +618,6 @@ void Closure::delRoots() {
 Closure::~Closure() {
 	delRoots();
 }
-//static PRLock *debugLock = PR_NewLock();
 
 JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 		jsval *rval) {
@@ -623,6 +625,8 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	int p = 0;
 	AutoValueRooter fn(cx, _toProxy[p++]);
 	int args[_argc];
+	for (int i = 0; i < _argc; i++)
+		args[i] = ArgSafe;
 	if (!m->analyzeFunction((JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
 			JSVAL_TO_OBJECT(*fn.addr()), cx, args))
 		return false;
@@ -638,14 +642,16 @@ JSBool Closure::execute(Membrane *m, JSContext *cx, JSObject *global,
 	AutoArrayRooter argvRoot(cx, _argc, argv.get()); // ensure it is rooted
 	for (int i = 0; i < _argc; i++) {
 		argv[i] = _toProxy[p++];
-		if (args[i] == 2) {
+		if (args[i] == ArgPropertySafe) {
 			if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(argv[i]))) {
 				JSObject *objArg = JSVAL_TO_OBJECT(argv[i]);
 				if (objArg->propertyCount() > 0)
-					args[i] = 1;
+					args[i] = ArgUnsafe;
 			}
 		}
-		if (args[i] == 1
+		// ContextSafe is unsafe at the fork closure level since the
+		// argument belongs to the parent.
+		if ((args[i] == ArgUnsafe || args[i] == ArgContextSafe)
 				&& !m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
 			return JS_FALSE;
 	}

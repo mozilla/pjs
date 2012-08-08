@@ -56,6 +56,13 @@ namespace pjs {
 using namespace js;
 using namespace std;
 
+enum ArgumentSafety {
+	ArgSafe, // regardless of its properties or its locality
+	ArgPropertySafe, // safe it has no getters.
+	ArgContextSafe, // safe if it is thread-local
+	ArgUnsafe // unsafe, should be proxied.
+};
+
 class Membrane {
 private:
 	// Maps from proxies in the parent space to wrapper object in
@@ -83,8 +90,6 @@ private:
 
 	bool copyAndWrapProperties(JSObject *from, JSObject *to);
 
-
-
 	static char *MEMBRANE;
 
 public:
@@ -94,7 +99,7 @@ public:
 	~Membrane();
 	void releaseProxies();
 
-	bool wrap(Value *vp, bool isArg=false);
+	bool wrap(Value *vp, bool isArg = false);
 	bool wrapId(jsid *idp);
 	bool unwrap(Value *vp);
 
@@ -106,12 +111,13 @@ public:
 	bool wrap(JSObject **objp);
 	bool wrap(HeapPtrAtom *objp);
 
-	bool analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx, int* argIDs);
+	bool analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
+			int* argIDs);
 
 	static bool IsCrossThreadWrapper(const JSObject *wrapper);
 
 //	const static int TYPED_ARRAY_NOWRAP_SLOT = 5;
-	// ______________________________________________________________________
+// ______________________________________________________________________
 };
 
 }

@@ -441,8 +441,6 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 	return put(GetProxyPrivate(wrapper), *vp);
 }
 
-static PRLock* debugLock = PR_NewLock();
-
 void Membrane::releaseProxies() {
 
 }
@@ -612,13 +610,11 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			break;
 		case JSOP_NAMEINC:
 		case JSOP_SETNAME:
-//			fprintf(stderr, "SETNAME: %s\n", getAtom(script, pc, cx));
 		case JSOP_BINDNAME:
 			typesStack.popN(js_CodeSpec[op].nuses);
 			typesStack.push(GLOBAL);
 			break;
 		case JSOP_NAME:
-//			fprintf(stderr, "%s\n", getAtom(script, pc, cx));
 			typesStack.push(GLOBAL);
 			break;
 		case JSOP_GETELEM:
@@ -626,31 +622,48 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			assigned_entry = typesStack.pop();
 			typesStack.push(assigned_entry->type, assigned_entry->index);
 			if (assigned_entry->type == ARGUMENT)
-				argIDs[assigned_entry->index] = 2;
+				argIDs[assigned_entry->index] =
+						argIDs[assigned_entry->index] == ArgSafe
+								|| argIDs[assigned_entry->index]
+										== ArgPropertySafe ?
+								ArgPropertySafe : ArgUnsafe;
 			free(assigned_entry);
 			break;
 		case JSOP_SETELEM:
 			typesStack.popN(js_CodeSpec[op].nuses - 1);
 			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == GLOBAL
-					|| assigned_entry->type == ARGUMENT) {
+			if (assigned_entry->type == GLOBAL) {
 				JS_ReportError(cx,
 						"%s:%d: Cannot define a property on a parent object",
 						script->filename, JS_PCToLineNumber(cx, script, pc));
+				free(assigned_entry);
 				return false;
 			}
+			if (assigned_entry->type == ARGUMENT)
+				argIDs[assigned_entry->index] =
+						argIDs[assigned_entry->index] == ArgSafe
+								|| argIDs[assigned_entry->index]
+										== ArgContextSafe ?
+								ArgContextSafe : ArgUnsafe;
 			typesStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_SETPROP:
 			typesStack.pop();
 			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == GLOBAL
-					|| assigned_entry->type == ARGUMENT) {
+			if (assigned_entry->type == GLOBAL) {
 				JS_ReportError(cx,
 						"%s:%d: Cannot define a property on a parent object",
 						script->filename, JS_PCToLineNumber(cx, script, pc));
+				free(assigned_entry);
 				return false;
+			}
+			if (assigned_entry->type == ARGUMENT) {
+				argIDs[assigned_entry->index] =
+						argIDs[assigned_entry->index] == ArgSafe
+								|| argIDs[assigned_entry->index]
+										== ArgContextSafe ?
+								ArgContextSafe : ArgUnsafe;
 			}
 			typesStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
@@ -658,7 +671,7 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		case JSOP_GETPROP:
 			assigned_entry = typesStack.pop();
 			if (assigned_entry->type == ARGUMENT)
-				argIDs[assigned_entry->index] = 1;
+				argIDs[assigned_entry->index] = ArgUnsafe;
 			typesStack.pushN(assigned_entry->type, js_CodeSpec[op].ndefs,
 					assigned_entry->index);
 			free(assigned_entry);

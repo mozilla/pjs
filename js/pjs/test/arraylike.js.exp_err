@@ -1,2 +1,2 @@
-<no filename>:0:test/arraylike.js:65: Cannot define a property on a parent object
-<no filename>:0:test/arraylike.js:52: Cannot define a property on a parent object
+test/arraylike.js:65:Error: Cannot define a property on a parent object
+test/arraylike.js:52:Error: Cannot define a property on a parent object
