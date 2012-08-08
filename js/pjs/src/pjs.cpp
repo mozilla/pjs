@@ -338,6 +338,47 @@ JSBool fork(JSContext *cx, unsigned argc, jsval *vp) {
 	return JS_TRUE;
 }
 
+JSBool wrap(JSContext *cx, unsigned argc, jsval *vp) {
+//	//		if (!m->analyzeFunction((JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
+//	//				JSVAL_TO_OBJECT(*fn.addr()), cx, args))
+//	//			return false;
+//	//
+//	//			if (args[i] == 2) {
+//	//				if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(argv[i]))) {
+//	//					JSObject *objArg = JSVAL_TO_OBJECT(argv[i]);
+//	//					if (objArg->propertyCount() > 0)
+//	//						args[i] = 1;
+//	//				}
+//	//			}
+//	//			if (args[i] == 1
+//	//					&& !m->wrap(&argv[i], this->_taskindex >= 0 ? true : false))
+//	//				return JS_FALSE;
+//	//		}
+
+	jsval *argv = JS_ARGV(cx, vp);
+	AutoValueRooter fn(cx, argv[0]);
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	if (!taskContext->getMembrane()->wrap(fn.addr(), false))
+		return JS_FALSE;
+	JS_ASSERT(ValueIsFunction(cx, fn.value()));
+
+	auto_arr<jsval> rargv(new jsval[argc]); // ensure it gets freed
+	if (!rargv.get())
+		return JS_FALSE;
+	AutoArrayRooter argvRoot(cx, argc, rargv.get()); // ensure it is rooted
+	for (int i = 0; i < (argc - 1); i++) {
+		rargv[i] = argv[i + 1];
+		if (!taskContext->getMembrane()->wrap(&rargv[i]))
+			return JS_FALSE;
+	}
+
+	Value *res = new Value(); // TODO: ensure it gets freed??
+	JS_CallFunctionValue(cx, taskContext->getGlobal(), fn.value(), argc - 1,
+			rargv.get(), res);
+	JS_SET_RVAL(cx, vp, *res);
+	return JS_TRUE;
+}
+
 JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
@@ -449,7 +490,8 @@ static JSFunctionSpec pjsGlobalFunctions[] = { JS_FN("print", print, 0, 0),
 		JS_FN("dumpObjects", dumpObjects, 0, 0),
 		JS_FN("assert", assert, 2, 0), JS_FN("fork", fork, 1, 0),
 				JS_FN("forkN", forkN, 1, 0),
-				JS_FN("oncompletion", oncompletion, 1, 0), JS_FS_END };
+				JS_FN("oncompletion", oncompletion, 1, 0),
+				JS_FN("wrap", wrap, 1, 0), JS_FS_END };
 
 // ______________________________________________________________________
 // Global impl

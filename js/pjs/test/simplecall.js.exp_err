@@ -1,0 +1,2 @@
+test/simplecall.js:5:Error: Cannot define a property on a parent object
+test/simplecall.js:18:Error: Cannot define a property on a parent object

@@ -403,6 +403,10 @@ public:
 		return _membrane.get();
 	}
 
+	JSObject *getGlobal() {
+		return _global;
+	}
+
 	static JSClass jsClass;
 };
 
