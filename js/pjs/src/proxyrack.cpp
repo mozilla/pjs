@@ -94,7 +94,6 @@ bool ProxyRack::getPropertyDescriptor(JSContext* cx, JSObject* wrapper, jsid id,
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
 	DEBUG("%p.getPropertyDescriptor(wrapper=%p)\n", cx, wrapper);
-
 	PIERCE(cx, taskContext->getMembrane()->unwrapId(&id),
 			JS_GetPropertyDescriptorById(cx, wrappedObject(wrapper), id, JSRESOLVE_QUALIFIED, desc),
 			taskContext->getMembrane()->wrap(desc));

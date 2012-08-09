@@ -277,7 +277,8 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 	return wrap(&desc->obj)
 			&& (!(desc->attrs & JSPROP_GETTER) || wrap(&desc->getter))
 			&& (!(desc->attrs & JSPROP_SETTER) || wrap(&desc->setter))
-			&& wrap(&desc->value);
+			//FIXME: do we need to wrap the desc value?
+			/*&& wrap(&desc->value)*/;
 }
 
 #define PIERCE(cx, pre, op, post)      \
