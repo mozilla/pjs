@@ -277,7 +277,8 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 	return wrap(&desc->obj)
 			&& (!(desc->attrs & JSPROP_GETTER) || wrap(&desc->getter))
 			&& (!(desc->attrs & JSPROP_SETTER) || wrap(&desc->setter))
-			&& wrap(&desc->value);
+			//FIXME: do we need to wrap the desc value?
+			/*&& wrap(&desc->value)*/;
 }
 
 #define PIERCE(cx, pre, op, post)      \
@@ -290,6 +291,7 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 #define NOTHING (true)
 
 bool Membrane::wrap(Value *vp, bool isArg) {
+
 	JSContext *cx = _childCx;
 
 	JS_CHECK_RECURSION(cx, return false);
@@ -361,14 +363,11 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 	/* Split closures */
 	if (JS_ObjectIsFunction(cx, obj)) {
 		JSFunction *fn = obj->toFunction();
-//		analyzeFunction(fn, obj, cx);
 		JSObject *env;
 		if (!fn->isInterpreted()) {
 			if (fn->isNativeConstructor()) // Assuming all native constructors does not mutate the arguments.
 				return true;
 			if (!isSafeNative(fn->native())) {
-//				fprintf(stderr, "%s\n",
-//						JS_EncodeString(cx, StringValue(fn->atom).toString()));
 				JS_ReportError(cx, "Cannot access native functions "
 						"from child tasks");
 				return false;

@@ -24,6 +24,7 @@
  * Contributor(s):
  *   Nicholas Matsakis <nmatsakis@mozilla.com>
  *   Donovan Preston <dpreston@mozilla.com>
+ *   Fadi Meawad <fmeawad@mozilla.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -62,14 +63,6 @@ extern size_t gMaxStackSize;
 
 using namespace js;
 using namespace std;
-
-#define PJS_CHECK_CX
-
-#ifdef PJS_CHECK_CX
-#  define PJS_ASSERT_CX(cx1, cx2) JS_ASSERT((cx1) == (cx2))
-#else
-#  define PJS_ASSERT_CX(cx1, cx2) do {} while(false)
-#endif
 
 #if 1
 #  define DEBUG(...) 
@@ -338,50 +331,6 @@ JSBool fork(JSContext *cx, unsigned argc, jsval *vp) {
 	return JS_TRUE;
 }
 
-JSBool wrap(JSContext *cx, unsigned argc, jsval *vp) {
-	int args[argc];
-	for (int i = 0; i < argc; i++)
-		args[i] = ArgSafe;
-	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
-	jsval *argv = JS_ARGV(cx, vp);
-	AutoValueRooter fn(cx, argv[0]);
-	if (!taskContext->getMembrane()->analyzeFunction(
-			(JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
-			JSVAL_TO_OBJECT(*fn.addr()), cx, args))
-		return false;
-
-	if (!taskContext->getMembrane()->wrap(fn.addr(), false))
-		return JS_FALSE;
-	JS_ASSERT(ValueIsFunction(cx, fn.value()));
-
-	auto_arr<jsval> rargv(new jsval[argc]); // ensure it gets freed
-	if (!rargv.get())
-		return JS_FALSE;
-	AutoArrayRooter argvRoot(cx, argc, rargv.get()); // ensure it is rooted
-	for (int i = 0; i < (argc - 1); i++) {
-		rargv[i] = argv[i + 1];
-		if (args[i] == ArgPropertySafe) {
-			if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(rargv[i]))) {
-				JSObject *objArg = JSVAL_TO_OBJECT(rargv[i]);
-				if (objArg->propertyCount() > 0)
-					args[i] = ArgUnsafe;
-			}
-		}
-		//FIXME: check if context safe arguments are thread-local,
-		// if they are, remove the proxy
-		if (args[i] == ArgUnsafe || args[i] == ArgContextSafe) {
-			if (!taskContext->getMembrane()->wrap(&rargv[i]))
-				return JS_FALSE;
-		}
-	}
-
-	Value *res = new Value(); // TODO: ensure it gets freed??
-	JS_CallFunctionValue(cx, taskContext->getGlobal(), fn.value(), argc - 1,
-			rargv.get(), res);
-	JS_SET_RVAL(cx, vp, *res);
-	return JS_TRUE;
-}
-
 JSBool forkN(JSContext *cx, unsigned argc, jsval *vp) {
 	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
 
@@ -486,6 +435,50 @@ JSBool oncompletion(JSContext *cx, unsigned argc, jsval *vp) {
 		return JS_FALSE;
 	}
 	taskContext->setOncompletion(cx, OBJECT_TO_JSVAL(func));
+	return JS_TRUE;
+}
+
+JSBool wrap(JSContext *cx, unsigned argc, jsval *vp) {
+	int args[argc];
+	for (int i = 0; i < argc; i++)
+		args[i] = ArgSafe;
+	TaskContext *taskContext = (TaskContext*) JS_GetContextPrivate(cx);
+	jsval *argv = JS_ARGV(cx, vp);
+	AutoValueRooter fn(cx, argv[0]);
+	if (!taskContext->getMembrane()->analyzeFunction(
+			(JSFunction*) JSVAL_TO_OBJECT(*fn.addr()),
+			JSVAL_TO_OBJECT(*fn.addr()), cx, args))
+		return false;
+
+	if (!taskContext->getMembrane()->wrap(fn.addr(), false))
+		return JS_FALSE;
+	JS_ASSERT(ValueIsFunction(cx, fn.value()));
+
+	auto_arr<jsval> rargv(new jsval[argc]); // ensure it gets freed
+	if (!rargv.get())
+		return JS_FALSE;
+	AutoArrayRooter argvRoot(cx, argc, rargv.get()); // ensure it is rooted
+	for (int i = 0; i < (argc - 1); i++) {
+		rargv[i] = argv[i + 1];
+		if (args[i] == ArgPropertySafe) {
+			if (JSVAL_IS_OBJECT_IMPL(JSVAL_TO_IMPL(rargv[i]))) {
+				JSObject *objArg = JSVAL_TO_OBJECT(rargv[i]);
+				if (objArg->propertyCount() > 0)
+					args[i] = ArgUnsafe;
+			}
+		}
+		//FIXME: check if context safe arguments are thread-local,
+		// if they are, remove the proxy
+		if (args[i] == ArgUnsafe || args[i] == ArgContextSafe) {
+			if (!taskContext->getMembrane()->wrap(&rargv[i]))
+				return JS_FALSE;
+		}
+	}
+
+	Value *res = new Value(); // TODO: ensure it gets freed??
+	JS_CallFunctionValue(cx, taskContext->getGlobal(), fn.value(), argc - 1,
+			rargv.get(), res);
+	JS_SET_RVAL(cx, vp, *res);
 	return JS_TRUE;
 }
 
