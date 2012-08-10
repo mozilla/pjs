@@ -277,8 +277,8 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 	return wrap(&desc->obj)
 			&& (!(desc->attrs & JSPROP_GETTER) || wrap(&desc->getter))
 			&& (!(desc->attrs & JSPROP_SETTER) || wrap(&desc->setter))
-			//FIXME: do we need to wrap the desc value?
-			/*&& wrap(&desc->value)*/;
+	//FIXME: do we need to wrap the desc value?
+	/*&& wrap(&desc->value)*/;
 }
 
 #define PIERCE(cx, pre, op, post)      \
@@ -392,9 +392,12 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 				wrapper, wrapper->toFunction()->maybeScript(),
 				_parentCx, _childCx, _childCompartment);
 
-//		uint32_t length = 0;
-//		void * data = JS_EncodeInterpretedFunction(_parentCx, obj, &length);
-//		wrapper = JS_DecodeInterpretedFunction(cx, data, length, NULL, NULL);
+		//XXX instead of cloning the functions, another way is to Encode
+		// them then Decode them, does not work on natives. It should be
+		// an easy trick to change context from one compartment to another.
+		// uint32_t length = 0;
+		// void * data = JS_EncodeInterpretedFunction(_parentCx, obj, &length);
+		// wrapper = JS_DecodeInterpretedFunction(cx, data, length, NULL, NULL);
 
 		if (!put(OBJECT_TO_JSVAL(obj), *vp))
 			return false;
@@ -425,16 +428,14 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 	if (!wrap(&proto))
 		return false;
 
-// FIXME--using global as the parent parameter to New() here is
-// wrong but should work for now.  We should eventually proxy it.
+	// FIXME--using global as the parent parameter to New() here is
+	// wrong but should work for now.  We should eventually proxy it.
 
 	JSObject *wrapper = this->_proxyRack->getProxyObject(cx, ObjectValue(*obj),
 			proto, _childGlobal, obj->isCallable() ? obj : NULL, NULL);
-////	JSObject *wrapper = NewProxyObject(cx, this, ObjectValue(*obj), proto,
-////			_childGlobal, obj->isCallable() ? obj : NULL, NULL);
-//
-//// increment the refcount of the proxy handler.
-////	_refCount++;
+	////XXX increment the refcount of the proxy handler.
+	////	_refCount++;
+
 	vp->setObject(*wrapper);
 	DEBUG("Wrapping obj %p to %p for %p->%p\n", obj, wrapper, _parentCx, _childCx);
 	return put(GetProxyPrivate(wrapper), *vp);
@@ -444,12 +445,12 @@ void Membrane::releaseProxies() {
 
 }
 
-enum EntryType {
-	CONST, LOCAL, GLOBAL, UNDEFINED, ARGUMENT
-};
-
 class StackEntry {
+
 public:
+	enum EntryType {
+		CONST, LOCAL, GLOBAL, UNDEFINED, ARGUMENT
+	};
 	EntryType type;
 	int index;
 	StackEntry(EntryType type, int index) :
@@ -457,23 +458,26 @@ public:
 	}
 };
 
-class TypesStack {
+class LocalityAnalysisStack {
 private:
 	Vector<StackEntry*> *data;
 
 public:
-	TypesStack(JSContext* cx) {
+	LocalityAnalysisStack(JSContext* cx) {
 		data = new Vector<StackEntry*>(cx);
 	}
-	void pushN(EntryType type, unsigned int n, int index = -1) {
+
+	void pushN(StackEntry::EntryType type, unsigned int n, int index = -1) {
 		while (n > 0) {
 			data->append(new StackEntry(type, index));
 			n--;
 		}
 	}
-	void push(EntryType type, int index = -1) {
+
+	void push(StackEntry::EntryType type, int index = -1) {
 		pushN(type, 1, index);
 	}
+
 	StackEntry *pop() {
 		if (this->length() > 0)
 			return data->popCopy();
@@ -489,7 +493,7 @@ public:
 	unsigned int length() {
 		return data->length();
 	}
-	~TypesStack() {
+	~LocalityAnalysisStack() {
 		data->clearAndFree();
 	}
 };
@@ -504,34 +508,14 @@ char *getAtom(JSScript *script, jsbytecode *pc, JSContext *cx) {
 
 bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		int *argIDs) {
-//	JS_DumpBytecode(cx, fn->script());
-//	BindingNames names(cx);
-//	fprintf(stderr, "%d, %d\n", fn->script()->bindings.numArgs(),
-//			fn->script()->bindings.numVars());
-//	fn->script()->bindings.getLocalNameArray(cx, &names);
-//	for (size_t i = 0;
-//			i
-//					< fn->script()->bindings.numArgs()
-//							+ fn->script()->bindings.numVars(); i++) {
-//		JSAtom *name = names[i].maybeAtom;
-//		fprintf(stderr, "%s\n",
-//				JS_EncodeString(cx, StringValue(name).toString()));
-//
-//	}
-//					fn->dump();
-
-	char * fun_source = JS_EncodeString(cx,
-			StringValue(fun_toStringHelper(cx, obj, 0)).toString());
-//	fprintf(stderr, "%s\n", fun_source);
 
 	JSScript * script = fn->script();
 	unsigned length = script->length;
-	TypesStack typesStack(cx);
+	LocalityAnalysisStack localityStack(cx);
 	unsigned offset, nextOffset = 0;
 	StackEntry *assigned_entry;
 
 	JSOp prevop = JSOP_NOP;
-//	fprintf(stderr, "\n");
 	while (nextOffset < length) {
 
 		offset = nextOffset;
@@ -556,12 +540,12 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		case JSOP_NULL:
 		case JSOP_FALSE:
 		case JSOP_TRUE:
-			typesStack.popN(js_CodeSpec[op].nuses);
-			typesStack.pushN(CONST, js_CodeSpec[op].ndefs);
+			localityStack.popN(js_CodeSpec[op].nuses);
+			localityStack.pushN(StackEntry::CONST, js_CodeSpec[op].ndefs);
 			break;
 		case JSOP_ARGUMENTS:
 		case JSOP_GETARG:
-			typesStack.push(ARGUMENT, GET_ARGNO(pc));
+			localityStack.push(StackEntry::ARGUMENT, GET_ARGNO(pc));
 			break;
 		case JSOP_OBJECT:
 		case JSOP_GETLOCAL:
@@ -604,23 +588,23 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 		case JSOP_MOD:
 		case JSOP_NEWINIT:
 		case JSOP_INITPROP:
-			typesStack.popN(js_CodeSpec[op].nuses);
-			typesStack.push(LOCAL);
+			localityStack.popN(js_CodeSpec[op].nuses);
+			localityStack.push(StackEntry::LOCAL);
 			break;
 		case JSOP_NAMEINC:
 		case JSOP_SETNAME:
 		case JSOP_BINDNAME:
-			typesStack.popN(js_CodeSpec[op].nuses);
-			typesStack.push(GLOBAL);
+			localityStack.popN(js_CodeSpec[op].nuses);
+			localityStack.push(StackEntry::GLOBAL);
 			break;
 		case JSOP_NAME:
-			typesStack.push(GLOBAL);
+			localityStack.push(StackEntry::GLOBAL);
 			break;
 		case JSOP_GETELEM:
-			typesStack.popN(1);
-			assigned_entry = typesStack.pop();
-			typesStack.push(assigned_entry->type, assigned_entry->index);
-			if (assigned_entry->type == ARGUMENT)
+			localityStack.popN(1);
+			assigned_entry = localityStack.pop();
+			localityStack.push(assigned_entry->type, assigned_entry->index);
+			if (assigned_entry->type == StackEntry::ARGUMENT)
 				argIDs[assigned_entry->index] =
 						argIDs[assigned_entry->index] == ArgSafe
 								|| argIDs[assigned_entry->index]
@@ -629,84 +613,84 @@ bool Membrane::analyzeFunction(JSFunction* fn, JSObject* obj, JSContext* cx,
 			free(assigned_entry);
 			break;
 		case JSOP_SETELEM:
-			typesStack.popN(js_CodeSpec[op].nuses - 1);
-			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == GLOBAL) {
+			localityStack.popN(js_CodeSpec[op].nuses - 1);
+			assigned_entry = localityStack.pop();
+			if (assigned_entry->type == StackEntry::GLOBAL) {
 				JS_ReportError(cx,
 						"%s:%d: Cannot define a property on a parent object",
 						script->filename, JS_PCToLineNumber(cx, script, pc));
 				free(assigned_entry);
 				return false;
 			}
-			if (assigned_entry->type == ARGUMENT)
+			if (assigned_entry->type == StackEntry::ARGUMENT)
 				argIDs[assigned_entry->index] =
 						argIDs[assigned_entry->index] == ArgSafe
 								|| argIDs[assigned_entry->index]
 										== ArgContextSafe ?
 								ArgContextSafe : ArgUnsafe;
-			typesStack.push(assigned_entry->type, assigned_entry->index);
+			localityStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_SETPROP:
-			typesStack.pop();
-			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == GLOBAL) {
+			localityStack.pop();
+			assigned_entry = localityStack.pop();
+			if (assigned_entry->type == StackEntry::GLOBAL) {
 				JS_ReportError(cx,
 						"%s:%d: Cannot define a property on a parent object",
 						script->filename, JS_PCToLineNumber(cx, script, pc));
 				free(assigned_entry);
 				return false;
 			}
-			if (assigned_entry->type == ARGUMENT) {
+			if (assigned_entry->type == StackEntry::ARGUMENT) {
 				argIDs[assigned_entry->index] =
 						argIDs[assigned_entry->index] == ArgSafe
 								|| argIDs[assigned_entry->index]
 										== ArgContextSafe ?
 								ArgContextSafe : ArgUnsafe;
 			}
-			typesStack.push(assigned_entry->type, assigned_entry->index);
+			localityStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_GETPROP:
-			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == ARGUMENT)
+			assigned_entry = localityStack.pop();
+			if (assigned_entry->type == StackEntry::ARGUMENT)
 				argIDs[assigned_entry->index] = ArgUnsafe;
-			typesStack.pushN(assigned_entry->type, js_CodeSpec[op].ndefs,
+			localityStack.pushN(assigned_entry->type, js_CodeSpec[op].ndefs,
 					assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_CALL:
-			typesStack.popN(GET_ARGC(pc) + 2);
-			typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+			localityStack.popN(GET_ARGC(pc) + 2);
+			localityStack.pushN(StackEntry::UNDEFINED, js_CodeSpec[op].ndefs);
 			break;
 		case JSOP_DUP:
-			assigned_entry = typesStack.pop();
-			typesStack.push(assigned_entry->type, assigned_entry->index);
-			typesStack.push(assigned_entry->type, assigned_entry->index);
+			assigned_entry = localityStack.pop();
+			localityStack.push(assigned_entry->type, assigned_entry->index);
+			localityStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 		case JSOP_CALLPROP:
-			assigned_entry = typesStack.pop();
-			if (assigned_entry->type == ARGUMENT)
+			assigned_entry = localityStack.pop();
+			if (assigned_entry->type == StackEntry::ARGUMENT)
 				argIDs[assigned_entry->index] = 1;
-			typesStack.push(assigned_entry->type, assigned_entry->index);
+			localityStack.push(assigned_entry->type, assigned_entry->index);
 			free(assigned_entry);
 			break;
 
 		default:
 			if (op > 0 and op < 228) {
 				if (js_CodeSpec[op].nuses >= 0)
-					typesStack.popN(js_CodeSpec[op].nuses);
+					localityStack.popN(js_CodeSpec[op].nuses);
 				if (js_CodeSpec[op].ndefs >= 0)
-					typesStack.pushN(UNDEFINED, js_CodeSpec[op].ndefs);
+					localityStack.pushN(StackEntry::UNDEFINED,
+							js_CodeSpec[op].ndefs);
 				else
-					typesStack.pushN(UNDEFINED, GET_ARGC(pc));
+					localityStack.pushN(StackEntry::UNDEFINED, GET_ARGC(pc));
 				break;
 			} else
 				fprintf(stderr, "unknown op code: %s\n", js_CodeName[op]);
 			break;
 		}
-//		fprintf(stderr, "%s : %d\n", js_CodeName[prevop], typesStack.length());
 	}
 
 	return true;

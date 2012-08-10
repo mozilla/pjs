@@ -961,11 +961,8 @@ Runner *Runner::create(ThreadPool *aThreadPool, int anIndex) {
 	JSObject *global = JS_NewGlobalObject(
 	/*JSContext *cx: */cx,
 	/*JSClass *clasp: */&Global::jsClass, /*JSPrincipals*/NULL);
-//	global->dump();
-//	fprintf(stderr,"\nbefore\n");
 	if (!JS_InitStandardClasses(cx, global))
 		return NULL;
-//	global->dump();
 	if (!ChildTaskHandle::initClass(cx, global))
 		return NULL;
 
