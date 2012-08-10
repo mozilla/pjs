@@ -277,8 +277,8 @@ bool Membrane::wrap(PropertyDescriptor *desc) {
 	return wrap(&desc->obj)
 			&& (!(desc->attrs & JSPROP_GETTER) || wrap(&desc->getter))
 			&& (!(desc->attrs & JSPROP_SETTER) || wrap(&desc->setter))
-			//FIXME: do we need to wrap the desc value?
-			/*&& wrap(&desc->value)*/;
+	//FIXME: do we need to wrap the desc value?
+	/*&& wrap(&desc->value)*/;
 }
 
 #define PIERCE(cx, pre, op, post)      \
@@ -368,8 +368,6 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 			if (fn->isNativeConstructor()) // Assuming all native constructors does not mutate the arguments.
 				return true;
 			if (!isSafeNative(fn->native())) {
-				fprintf(stderr, "%s\n",
-						JS_EncodeString(cx, StringValue(fn->atom).toString()));
 				JS_ReportError(cx, "Cannot access native functions "
 						"from child tasks");
 				return false;
@@ -394,6 +392,9 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 				wrapper, wrapper->toFunction()->maybeScript(),
 				_parentCx, _childCx, _childCompartment);
 
+		//XXX instead of cloning the functions, another way is to Encode
+		// them then Decode them, does not work on natives. It should be
+		// an easy trick to change context from one compartment to another.
 //		uint32_t length = 0;
 //		void * data = JS_EncodeInterpretedFunction(_parentCx, obj, &length);
 //		wrapper = JS_DecodeInterpretedFunction(cx, data, length, NULL, NULL);

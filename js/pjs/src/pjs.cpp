@@ -24,6 +24,7 @@
  * Contributor(s):
  *   Nicholas Matsakis <nmatsakis@mozilla.com>
  *   Donovan Preston <dpreston@mozilla.com>
+ *   Fadi Meawad <fmeawad@mozilla.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -61,14 +62,6 @@ extern size_t gMaxStackSize;
 
 using namespace js;
 using namespace std;
-
-#define PJS_CHECK_CX
-
-#ifdef PJS_CHECK_CX
-#  define PJS_ASSERT_CX(cx1, cx2) JS_ASSERT((cx1) == (cx2))
-#else
-#  define PJS_ASSERT_CX(cx1, cx2) do {} while(false)
-#endif
 
 #if 1
 #  define DEBUG(...) 
