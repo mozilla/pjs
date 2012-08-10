@@ -91,7 +91,7 @@ bool Membrane::IsCrossThreadWrapper(const JSObject *wrapper) {
 }
 
 JSBool Membrane::put(Value key, Value value) {
-	//TODO(fadi): restore rooter, or translate it into a JSArray.
+	//TODO: restore rooter, or translate it into a JSArray.
 //    if (_rooter == NULL) {
 //        _rooter = ProxyRooter::create(_childCx, 128, NULL);
 //        if (!_rooter)
@@ -433,11 +433,9 @@ bool Membrane::wrap(Value *vp, bool isArg) {
 
 	JSObject *wrapper = this->_proxyRack->getProxyObject(cx, ObjectValue(*obj),
 			proto, _childGlobal, obj->isCallable() ? obj : NULL, NULL);
-////	JSObject *wrapper = NewProxyObject(cx, this, ObjectValue(*obj), proto,
-////			_childGlobal, obj->isCallable() ? obj : NULL, NULL);
-//
-//// increment the refcount of the proxy handler.
+////XXX increment the refcount of the proxy handler.
 ////	_refCount++;
+
 	vp->setObject(*wrapper);
 	DEBUG("Wrapping obj %p to %p for %p->%p\n", obj, wrapper, _parentCx, _childCx);
 	return put(GetProxyPrivate(wrapper), *vp);
