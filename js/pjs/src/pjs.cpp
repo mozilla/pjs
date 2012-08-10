@@ -141,6 +141,10 @@ namespace pjs {
  * the parent task is thus pushed onto the runner's local queue and
  * the runner's lock is pulsed to reawaken if it is sleeping.
  *
+ * Currently we have for each runner a compartment and a Runtime,
+ * there is an extra compartment that contains the globals, to force
+ * proxy access from any runner including the one on the main thread.
+ *
  * Passing results around
  * ----------------------
  *
@@ -148,7 +152,8 @@ namespace pjs {
  * its return value is used as the result.  This return value is
  * (currently) encoded using structured clone.  When all children have
  * completed, the parent thread will declone the results from all
- * children before executing the `oncompletion()` handler.  
+ * children before executing the `oncompletion()` handler.
+ * forkN returns an array of return values.
  *
  * Garbage collection
  * ------------------
